@@ -1,15 +1,13 @@
 -- RoutePilot: route recording and AI control for Assetto Corsa CSP.
--- v0.2.5: guaranteed logging:
---   * the log file is created in the app folder IMMEDIATELY on the first
---     update frame (path verified by a real write, can't fail silently);
---   * every second a heartbeat line is flushed to disk, so even a hard
---     game crash leaves everything up to the last second in the file;
---   * a clean script release writes a SHUTDOWN marker — its absence
---     proves the exit was a crash, the last heartbeat shows the moment.
+-- v0.2.6: explicit "no AI cars" detection — if the session has no AI opponents,
+--         the log and the window status say so immediately (previously the app
+--         just sat idle with heartbeats, which looked like "it does nothing").
+-- v0.2.5: guaranteed logging (file created on first frame, 1s heartbeat,
+--         SHUTDOWN marker; crash leaves everything up to the last second).
 
 local Logger = require('logger')
 
-local APP_VERSION = "0.2.5"
+local APP_VERSION = "0.2.6"
 local STORAGE_PREFIX = "routepilot_route_"
 local SAMPLE_DISTANCE = 2.0
 local MAX_ROUTE_POINTS = 12000
@@ -27,6 +25,7 @@ local HEARTBEAT_INTERVAL = 1.0
 local state = {
   initialized = false,
   sessionScanned = false,
+  aiCount = -1,
   recording = false,
   autopilot = false,
   route = {},
@@ -483,7 +482,7 @@ local function startSelfTest()
     if car and car.isActive then carIndex = i; break end
   end
   if not carIndex then
-    state.selfTest.verdict = "Нет машин с индексом >= 1"
+    state.selfTest.verdict = "Нет машин с индексом >= 1 (добавь AI-соперников в сессию)"
     log("SELFTEST: no car with index >= 1, cars=%d", sim.carsCount)
     logFlush()
     return
@@ -556,7 +555,11 @@ end
 local function scanSession(sim)
   if state.sessionScanned or not sim or not sim.isLive then return end
   state.sessionScanned = true
+  if state.trackID == "" then
+    pcall(function() getTrackKey() end)
+  end
   log("SESSION: cars=%d track=%s", sim.carsCount, state.trackID)
+  local aiCount = 0
   for i = 0, sim.carsCount - 1 do
     local car = ac.getCar(i)
     if car then
@@ -564,7 +567,16 @@ local function scanSession(sim)
       pcall(function() name = ac.getCarName(i) end)
       log("CAR#%d: active=%s aiControlled=%s speed=%.1f name=%s",
         i, tostring(car.isActive), tostring(car.isAIControlled), car.speedKmh, name)
+      if car.isAIControlled then aiCount = aiCount + 1 end
     end
+  end
+  state.aiCount = aiCount
+  if aiCount == 0 then
+    log("WARNING: NO AI CARS in this session (cars=%d, only the player car). "
+      .. "RoutePilot controls AI opponents only. Add opponents in the CM session "
+      .. "setup (opponents/AI), restart the session, then record a route and "
+      .. "press 'Запустить автопилот'.", sim.carsCount)
+    state.status = "AI-машин нет! Добавь соперников в сетапе сессии (Content Manager) и перезапусти сессию."
   end
   logFlush()
 end
@@ -624,7 +636,8 @@ local function updateInner(dt)
         state.controlledCount, state.activeCount, state.slowingCount, state.updateErrors))
       logCarSnapshot()
     else
-      state.log:heartbeat(string.format("auto=OFF errors=%d", state.updateErrors))
+      state.log:heartbeat(string.format("auto=OFF aiCars=%d errors=%d",
+        state.aiCount, state.updateErrors))
     end
     logFlush()
   end
@@ -660,6 +673,12 @@ function script.windowMain(dt)
   ui.text("Точек маршрута: " .. tostring(#state.route)
     .. "   AI под управлением: " .. tostring(state.controlledCount))
   ui.text("Перехват активен (физика): " .. tostring(state.activeCount))
+  if state.aiCount == 0 then
+    ui.textColored("AI-машин в сессии НЕТ — добавь соперников в сетапе сессии!",
+      rgbm(1, 0.4, 0.3, 1))
+  else
+    ui.text("AI-машин в сессии: " .. tostring(state.aiCount))
+  end
   if state.updateErrors > 0 then
     ui.textColored("Ошибок update: " .. tostring(state.updateErrors) .. " (см. лог)", rgbm(1, 0.4, 0.3, 1))
   end
@@ -732,13 +751,18 @@ function script.windowMain(dt)
   else
     if ui.button("Запустить автопилот", vec2(ui.availableSpaceX(), 34)) then
       if #state.route >= 3 then
-        rebuildRoute()
-        state.ai = {}
-        state.autopilot = true
-        state.status = "Автопилот активен"
-        log("AUTOPILOT start: %d points, allCars=%s",
-          #state.route, tostring(state.controlAllCars))
-        logFlush()
+        if state.aiCount == 0 and not state.controlAllCars then
+          state.status = "AI-машин нет — сначала добавь соперников в сессию"
+          log("AUTOPILOT denied: no AI cars in session")
+        else
+          rebuildRoute()
+          state.ai = {}
+          state.autopilot = true
+          state.status = "Автопилот активен"
+          log("AUTOPILOT start: %d points, allCars=%s",
+            #state.route, tostring(state.controlAllCars))
+          logFlush()
+        end
       else
         state.status = "Сначала запиши или загрузи маршрут"
         log("AUTOPILOT denied: no route")
