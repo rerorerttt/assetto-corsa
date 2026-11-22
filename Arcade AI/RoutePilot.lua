@@ -213,7 +213,8 @@ local function addPoint(pos, car)
   if #state.nodes == 0 or flatDist(state.nodes[#state.nodes], pos) >= 0.75 then
     table.insert(state.nodes, vec3(pos.x, pos.y + 0.1, pos.z))
     local t = {
-      speed=math.max(0, car.speedMs or 0), steer=car.steer or 0,
+      speed=math.max(0, car.speedMs or 0),
+      steer=(car.steer or 0)/math.max(1, car.steerLock or 450),
       gas=car.gas or 0, brake=car.brake or 0, clutch=car.clutch or 0,
       handbrake=car.handbrake or 0, gear=car.gear or 0, rpm=car.rpm or 0,
       slipAngle=0, lateralSpeed=0, yawRate=0, rearSlip=0
@@ -690,10 +691,22 @@ local function updateLineCar(carIndex, car, dt)
   local speedError = targetSpeed - speed
   local rawGas = clamp(speedError * 0.35, 0, 1)
   local brake = clamp(-speedError * 0.45, 0, 1)
+  if reference then
+    if speedError >= 0 and type(reference.gas)=="number" then
+      rawGas = clamp(rawGas * 0.55 + reference.gas * 0.45, 0, 1)
+    elseif speedError < 0 and type(reference.brake)=="number" then
+      brake = math.max(brake, clamp(reference.brake * 0.35, 0, 1))
+    end
+  end
 
   -- Evaluate grip and rotation before applying throttle.
-  if reference and type(reference.yawRate)=="number" then
-    steer = clamp(steer + clamp((reference.yawRate-(p.yawRate or 0))*0.12,-0.22,0.22),-0.8,0.8)
+  if reference then
+    if type(reference.steer)=="number" then
+      steer = clamp(steer * 0.45 + reference.steer * 0.55, -0.8, 0.8)
+    end
+    if type(reference.yawRate)=="number" then
+      steer = clamp(steer + clamp((reference.yawRate-(p.yawRate or 0))*0.12,-0.22,0.22),-0.8,0.8)
+    end
   end
   local tractionLimit, correctedSteer, risk =
     updateAntiDonut(car, p, dt, steer, lineDist, reference)
