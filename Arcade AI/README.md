@@ -4,23 +4,24 @@ CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it
 
 ## Install
 
-Copy the `RoutePilot` folder into:
+Create this exact application directory:
 
 `assettocorsa/apps/lua/RoutePilot/`
 
-The folder must contain:
-- `manifest.ini`
+Copy these files directly into it (do not leave them inside an extra nested folder):
 - `RoutePilot.lua`
+- `manifest.ini`
+- `logger.lua`
 
-Enable RoutePilot in Content Manager's Lua Apps list and open it in a session.
+The Lua entry file name must match the app folder name: `RoutePilot/RoutePilot.lua`. The manifest registers the window callback `windowMain`, implemented as `script.windowMain(dt)` as required by CSP. Enable **Arcade AI** in Content Manager's Lua Apps list and open its window in a session.
 
 ## First use
 
 1. Drive the desired route with the player car.
-2. Press **Начать запись маршрута** before driving.
-3. Drive one full lap and press **Остановить запись**.
-4. Keep **Замкнутый маршрут (круг)** enabled for a lap route.
-5. Press **Сохранить маршрут этой трассы**.
+2. Press **ЗАПИСАТЬ ЛИНИЮ + ТЕЛЕМЕТРИЮ** before driving.
+3. Drive one full lap and press **ОСТАНОВИТЬ ЗАПИСЬ**.
+4. Keep **ЗАМКНУТЫЙ МАРШРУТ: ВКЛ** enabled for a lap route.
+5. Press **СОХРАНИТЬ ЛИНИЮ**.
 6. Add AI cars to the session and press **Запустить автопилот**.
 
 Routes are stored separately by full track ID using CSP `ac.storage` and are autoloaded when the app starts on a track with a saved route.
