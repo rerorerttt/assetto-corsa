@@ -952,7 +952,7 @@ local function drawWindowMain(dt)
   end
 end
 
-function windowMain(dt)
+function script.windowMain(dt)
   local ok, err = pcall(drawWindowMain, dt)
   if not ok then
     -- Keep the app window informative if one optional UI widget fails.
