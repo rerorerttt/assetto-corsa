@@ -2,8 +2,10 @@
 -- No stock AI fast lane is used. AI cars follow a route recorded by the player.
 -- Controls written: steering, throttle and brake only. Gearbox remains automatic.
 -- v0.2.0: car-following collision avoidance (front-car detection + safe speed).
+-- v0.2.1: fixed route autoload (script.onSessionStart does not exist for Lua apps,
+--         autoload moved to the first script.update call).
 
-local APP_VERSION = "0.2.0"
+local APP_VERSION = "0.2.1"
 local STORAGE_PREFIX = "routepilot_route_"
 local SAMPLE_DISTANCE = 2.0
 local MAX_ROUTE_POINTS = 12000
@@ -17,6 +19,7 @@ local MAX_ROAD_WHEEL_ANGLE = 0.55
 local FOLLOW_LATERAL = 2.4
 
 local state = {
+  initialized = false,
   recording = false,
   autopilot = false,
   route = {},
@@ -493,6 +496,20 @@ local function updateAutopilot(dt)
 end
 
 function script.update(dt)
+  -- One-time initialization: Lua apps have no script.onSessionStart callback,
+  -- so saved route for the current track is autoloaded on the first update.
+  if not state.initialized then
+    state.initialized = true
+    local ok, err = pcall(function()
+      getTrackKey()
+      loadRoute()
+    end)
+    if not ok then
+      state.status = "Ошибка автозагрузки: " .. tostring(err)
+      ac.error(state.status)
+    end
+  end
+
   local sim = ac.getSim()
   if not sim or not sim.isLive then return end
 
@@ -577,9 +594,4 @@ function script.windowMain(dt)
     ui.text("Записано точек: " .. tostring(#state.route))
   end
   ui.text("Коробка передач остаётся под управлением автомобиля.")
-end
-
-function script.onSessionStart()
-  getTrackKey()
-  loadRoute()
 end
