@@ -862,32 +862,7 @@ function script.update(dt)
   end
 end
 
-function windowMain(dt)
-  local player = ac.getCar(0)
-
-  local telemetryCount = 0
-  for _ in pairs(state.telemetry) do telemetryCount = telemetryCount + 1 end
-  ui.text(string.format("Точек: %d | телеметрия: %d | %s", #state.nodes, telemetryCount, state.status))
-  if logger and logger.path then
-    ui.text("Лог: " .. tostring(logger.path))
-  end
-
-  if ui.button(state.recording and "Стоп запись" or "Запись линии", vec2(150, 24)) then
-    state.recording = not state.recording
-    if state.recording then
-      state.nodes = {}
-      state.telemetry = {}
-      state.p = {}
-      state.status = "Запись линии + телеметрия..."
-    else
-      state.status = "Записано точек: " .. #state.nodes
-    end
-  end
-  ui.sameLine()
-  if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ", vec2(-1, 24)) then
-    state.loopRoute = not state.loopRoute
-  end
-
+local function drawRouteRadar(player)
   local canvas = vec2(300, 125)
   ui.invisibleButton("line_radar", canvas)
   local p0 = ui.getItemRectMin()
@@ -895,41 +870,95 @@ function windowMain(dt)
   ui.drawRectFilled(p0, p1, rgbm(0.1, 0.1, 0.12, 1), 4.0)
   ui.drawRect(p0, p1, rgbm(0.3, 0.3, 0.35, 1), 4.0)
 
-  if #state.nodes >= 2 then
-    local cx = player and player.position.x or state.nodes[1].x
-    local cz = player and player.position.z or state.nodes[1].z
-    local scale = 1.2
-    local mx = (p0.x + p1.x) * 0.5
-    local my = (p0.y + p1.y) * 0.5
-    local segs = state.loopRoute and #state.nodes or (#state.nodes - 1)
-    for i = 1, segs do
-      local a = state.nodes[i]
-      local b = state.nodes[(i % #state.nodes) + 1]
-      local x1 = mx + (a.x - cx) * scale
-      local y1 = my + (a.z - cz) * scale
-      local x2 = mx + (b.x - cx) * scale
-      local y2 = my + (b.z - cz) * scale
-      if x1 >= p0.x and x1 <= p1.x and y1 >= p0.y and y1 <= p1.y and
-         x2 >= p0.x and x2 <= p1.x and y2 >= p0.y and y2 <= p1.y then
-        ui.drawLine(vec2(x1, y1), vec2(x2, y2), rgbm(1.0, 0.85, 0.0, 0.9), 2.0)
-      end
-    end
-    ui.drawCircleFilled(vec2(mx, my), 4.5, rgbm(0.0, 0.8, 1.0, 1.0), 12)
+  if #state.nodes < 2 then
+    ui.setCursorScreenPos and ui.setCursorScreenPos(vec2(p0.x + 8, p0.y + 8))
+    ui.text("Линия ещё не записана")
+    return
   end
 
-  if ui.button("Сохранить", vec2(96, 24)) then saveLine() end
-  ui.sameLine()
-  if ui.button("Загрузить", vec2(96, 24)) then loadLine() end
-  ui.sameLine()
-  if ui.button("Очистить", vec2(-1, 24)) then
+  local cx = player and player.position.x or state.nodes[1].x
+  local cz = player and player.position.z or state.nodes[1].z
+  local scale = 1.2
+  local mx = (p0.x + p1.x) * 0.5
+  local my = (p0.y + p1.y) * 0.5
+  local segs = state.loopRoute and #state.nodes or (#state.nodes - 1)
+  for i = 1, segs do
+    local a = state.nodes[i]
+    local b = state.nodes[(i % #state.nodes) + 1]
+    local x1, y1 = mx + (a.x - cx) * scale, my + (a.z - cz) * scale
+    local x2, y2 = mx + (b.x - cx) * scale, my + (b.z - cz) * scale
+    if x1 >= p0.x and x1 <= p1.x and y1 >= p0.y and y1 <= p1.y and
+       x2 >= p0.x and x2 <= p1.x and y2 >= p0.y and y2 <= p1.y then
+      ui.drawLine(vec2(x1, y1), vec2(x2, y2), rgbm(1.0, 0.85, 0.0, 0.9), 2.0)
+    end
+  end
+  ui.drawCircleFilled(vec2(mx, my), 4.5, rgbm(0.0, 0.8, 1.0, 1.0), 12)
+end
+
+local function drawWindowMain(dt)
+  local player = ac.getCar(0)
+  local telemetryCount = 0
+  for _ in pairs(state.telemetry) do telemetryCount = telemetryCount + 1 end
+
+  ui.text("ROUTEPILOT  |  AI LINE + DRIVER TELEMETRY")
+  ui.text(string.format("Состояние: %s", state.status))
+  ui.text(string.format("Точки: %d    Профиль телеметрии: %d", #state.nodes, telemetryCount))
+  ui.text(string.format("Трасса: %s", getTrackTag()))
+  if logger and logger.path then ui.text("Лог: " .. tostring(logger.path)) end
+
+  if ui.button(state.recording and "ОСТАНОВИТЬ ЗАПИСЬ" or "ЗАПИСАТЬ ЛИНИЮ + ТЕЛЕМЕТРИЮ", vec2(-1, 28)) then
+    state.recording = not state.recording
+    if state.recording then
+      state.nodes = {}
+      state.telemetry = {}
+      state.p = {}
+      state.status = "Запись водителя: проезжай нужную траекторию"
+    else
+      state.status = string.format("Запись завершена: %d точек, %d профилей", #state.nodes, telemetryCount)
+    end
+  end
+
+  if ui.button(state.loopRoute and "ЗАМКНУТЫЙ МАРШРУТ: ВКЛ" or "ЗАМКНУТЫЙ МАРШРУТ: ВЫКЛ", vec2(-1, 24)) then
+    state.loopRoute = not state.loopRoute
+  end
+  if ui.button(state.enabled and "УПРАВЛЕНИЕ ИИ: ВКЛ" or "УПРАВЛЕНИЕ ИИ: ВЫКЛ", vec2(-1, 24)) then
+    state.enabled = not state.enabled
+    if not state.enabled then
+      for idx in pairs(state.p) do releaseCar(idx) end
+      state.status = "Управление ИИ отключено"
+    else
+      state.status = "Управление ИИ включено"
+    end
+  end
+
+  ui.separator()
+  local radarOK, radarError = pcall(drawRouteRadar, player)
+  if not radarOK then
+    ui.text("Радар временно недоступен: " .. tostring(radarError))
+  end
+
+  if ui.button("СОХРАНИТЬ ЛИНИЮ", vec2(-1, 26)) then saveLine() end
+  if ui.button("ЗАГРУЗИТЬ ЛИНИЮ", vec2(-1, 26)) then loadLine() end
+  if ui.button("ОЧИСТИТЬ ЗАПИСЬ", vec2(-1, 26)) then
     state.nodes = {}
     state.telemetry = {}
     state.p = {}
-    state.status = "Очищено"
+    state.status = "Запись очищена"
   end
 
-  state.speedMin = ui.slider("Мин. скорость", state.speedMin, 40, 180, "%.0f км/ч")
-  state.speedMax = ui.slider("Макс. скорость", state.speedMax, 60, 260, "%.0f км/ч")
+  if ui.slider then
+    state.speedMin = ui.slider("Мин. скорость ИИ", state.speedMin, 40, 180, "%.0f км/ч")
+    state.speedMax = ui.slider("Макс. скорость ИИ", state.speedMax, 60, 260, "%.0f км/ч")
+  end
+end
+
+function windowMain(dt)
+  local ok, err = pcall(drawWindowMain, dt)
+  if not ok then
+    -- Keep the app window informative if one optional UI widget fails.
+    pcall(ui.text, "ROUTEPILOT UI ERROR: " .. tostring(err))
+    pcall(ui.text, "Проверь CSP Lua Apps log для подробностей.")
+  end
 end
 
 if ac.onRelease then
