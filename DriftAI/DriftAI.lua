@@ -4,8 +4,7 @@
 -- controls (ac.overrideCarControls with combineAxis = false) and steers along
 -- the track geometry. No AI fast lane, no per-car setup, no track preparation.
 
-require('DriftAI/track')
-require('DriftAI/driver')
+local Driver = require('driver')
 
 local APP_VERSION = '1.0.0'
 local ACTIVE_CHECK_INTERVAL = 1.0 -- seconds between controls:active() checks
@@ -57,12 +56,16 @@ end
 
 local function startDrift()
   local sim = ac.getSim()
-  if not sim or not sim.isLive then
+  if not sim then
     state.status = 'Сессия не активна'
     return
   end
   if sim.isOnlineRace then
     state.status = 'Онлайн-сессии не поддерживаются'
+    return
+  end
+  if sim.isReplayActive then
+    state.status = 'Реплей: управление недоступно'
     return
   end
 
@@ -95,7 +98,8 @@ end
 
 function script.update(dt)
   local sim = ac.getSim()
-  if not sim or not sim.isLive or sim.isReplayActive then return end
+  if not sim or sim.isReplayActive or sim.isOnlineRace then return end
+  if sim.dt == 0 then return end -- paused
 
   if not state.running then
     state.lastScan = state.lastScan + dt
@@ -162,6 +166,12 @@ end
 
 -- ─────────────────── UI ───────────────────
 
+local function textColored(text, color)
+  ui.pushStyleColor(ui.StyleColor.Text, color)
+  ui.text(text)
+  ui.popStyleColor()
+end
+
 function script.windowMain(dt)
   ui.text('DriftAI  ' .. APP_VERSION)
   ui.pushFont(ui.Font.Small)
@@ -174,7 +184,7 @@ function script.windowMain(dt)
     .. '  ·  под контролем: ' .. tostring(state.appliedCount)
     .. '  ·  перехват активен: ' .. tostring(state.activeCount))
   ui.text('Сплайн трассы: ' .. (state.splineAvailable and 'есть (навигация по геометрии)'
-    or 'нет (резервный режим по лучам)'))
+    or 'нет (резервный режим)'))
   ui.separator()
 
   if state.running then
@@ -204,7 +214,7 @@ function script.windowMain(dt)
     local color = rgbm(0.4, 1, 0.6, 1)
     if driver.state == 'recover' then color = rgbm(1, 0.8, 0.2, 1) end
     if driver.state == 'lost' then color = rgbm(1, 0.4, 0.3, 1) end
-    ui.textColored(string.format('#%d %s — %s  %s  slip %.0f°',
+    textColored(string.format('#%d %s — %s  %s  slip %.0f°',
       carIndex, name, statusText(driver),
       car and (fmt(car.speedKmh) .. ' км/ч') or '--',
       math.deg(driver.slipAngle)), color)
