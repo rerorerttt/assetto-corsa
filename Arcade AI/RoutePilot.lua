@@ -32,6 +32,7 @@ local state = {
   followGap = 8.0,
   p = {},
   nodes = {},
+  telemetry = {},
   status = "Готов",
   logAccum = 0.0,
 }
@@ -90,28 +91,48 @@ local function getLineFilePath()
   return "line_" .. safeTag .. ".txt"
 end
 
-local function serializeNodes(nodes)
-  local lines = {}
+local TELEMETRY_HEADER = "ROUTEPILOT_LINE_V2"
+
+local function serializeNodes(nodes, telemetry)
+  local lines = { TELEMETRY_HEADER }
   for i = 1, #nodes do
-    local n = nodes[i]
-    table.insert(lines, string.format("%.4f %.4f %.4f", n.x, n.y, n.z))
+    local n, t = nodes[i], telemetry and telemetry[i] or nil
+    if t then
+      table.insert(lines, string.format(
+        "%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.0f %.1f %.3f %.3f %.4f %.4f",
+        n.x, n.y, n.z, t.speed or 0, t.steer or 0, t.gas or 0, t.brake or 0,
+        t.clutch or 0, t.handbrake or 0, t.gear or 0, t.rpm or 0,
+        t.slipAngle or 0, t.lateralSpeed or 0, t.yawRate or 0, t.rearSlip or 0
+      ))
+    else
+      table.insert(lines, string.format("%.4f %.4f %.4f", n.x, n.y, n.z))
+    end
   end
   return table.concat(lines, "\n")
 end
 
 local function parseNodes(raw)
   if type(raw) ~= "string" or raw == "" then return nil end
-  local loaded = {}
+  local loaded, telemetry, isV2 = {}, {}, false
   for line in string.gmatch(raw, "[^\r\n]+") do
-    local xs, ys, zs = string.match(line, "^%s*([%-0-9.]+)%s+([%-0-9.]+)%s+([%-0-9.]+)%s*$")
-    local x, y, z = tonumber(xs), tonumber(ys), tonumber(zs)
-    if x and y and z then
-      table.insert(loaded, vec3(x, y, z))
+    if line == TELEMETRY_HEADER then
+      isV2 = true
+    else
+      local v = {}
+      for token in string.gmatch(line, "%S+") do v[#v + 1] = tonumber(token) end
+      if #v >= 3 and v[1] and v[2] and v[3] then
+        loaded[#loaded + 1] = vec3(v[1], v[2], v[3])
+        if isV2 and #v >= 15 then
+          telemetry[#loaded] = {
+            speed=v[4], steer=v[5], gas=v[6], brake=v[7], clutch=v[8],
+            handbrake=v[9], gear=v[10], rpm=v[11], slipAngle=v[12],
+            lateralSpeed=v[13], yawRate=v[14], rearSlip=v[15]
+          }
+        end
+      end
     end
   end
-  if #loaded >= 2 then
-    return loaded
-  end
+  if #loaded >= 2 then return loaded, telemetry end
   return nil
 end
 
@@ -121,7 +142,7 @@ local function saveLine()
     return
   end
 
-  local data = serializeNodes(state.nodes)
+  local data = serializeNodes(state.nodes, state.telemetry)
   local wroteFile = false
   local path = getLineFilePath()
 
@@ -152,7 +173,7 @@ local function saveLine()
 end
 
 local function loadLine()
-  local loaded = nil
+  local loaded, loadedTelemetry = nil, {}
   local path = getLineFilePath()
 
   if io and io.open then
@@ -164,7 +185,7 @@ local function loadLine()
         return txt
       end)
       if okR and raw and raw ~= "" then
-        loaded = parseNodes(raw)
+        loaded, loadedTelemetry = parseNodes(raw)
       end
     end
   end
@@ -172,12 +193,13 @@ local function loadLine()
   if not loaded and ac.storage then
     local okS, rawSt = pcall(ac.storage, "RP_LINE_DATA_" .. getTrackTag())
     if okS and rawSt and rawSt ~= "" then
-      loaded = parseNodes(rawSt)
+      loaded, loadedTelemetry = parseNodes(rawSt)
     end
   end
 
   if loaded and #loaded >= 2 then
     state.nodes = loaded
+    state.telemetry = loadedTelemetry or {}
     state.p = {}
     state.status = string.format("Загружено: %d т.", #state.nodes)
     writeLog("LOAD_LINE count=%d track=%s", #state.nodes, getTrackTag())
@@ -187,9 +209,39 @@ local function loadLine()
   end
 end
 
-local function addPoint(pos)
-  if #state.nodes == 0 or flatDist(state.nodes[#state.nodes], pos) >= 3.0 then
+local function addPoint(pos, car)
+  if #state.nodes == 0 or flatDist(state.nodes[#state.nodes], pos) >= 0.75 then
     table.insert(state.nodes, vec3(pos.x, pos.y + 0.1, pos.z))
+    local t = {
+      speed=math.max(0, car.speedMs or 0), steer=car.steer or 0,
+      gas=car.gas or 0, brake=car.brake or 0, clutch=car.clutch or 0,
+      handbrake=car.handbrake or 0, gear=car.gear or 0, rpm=car.rpm or 0,
+      slipAngle=0, lateralSpeed=0, yawRate=0, rearSlip=0
+    }
+    if car.velocity and car.side and car.look then
+      local okS, sv = pcall(math.dot, car.velocity, car.side)
+      local okF, fv = pcall(math.dot, car.velocity, car.look)
+      if okS and type(sv)=="number" then t.lateralSpeed=sv end
+      if okF and type(fv)=="number" and t.speed>SLIP_SPEED_MIN then
+        t.slipAngle=math.deg(math.atan2(math.abs(t.lateralSpeed), math.max(0.1,math.abs(fv))))
+      end
+    end
+    if car.localAngularVelocity then
+      local okY, y = pcall(function() return car.localAngularVelocity.y end)
+      if okY and type(y)=="number" then t.yawRate=y end
+    end
+    if car.wheels then
+      local total, count = 0, 0
+      for wi=2,3 do
+        local w=car.wheels[wi]
+        if w then
+          local okN, nd=pcall(function() return w.ndSlip end)
+          if okN and type(nd)=="number" then total=total+math.abs(nd); count=count+1 end
+        end
+      end
+      if count>0 then t.rearSlip=total/count end
+    end
+    state.telemetry[#state.nodes]=t
   end
 end
 
@@ -467,7 +519,8 @@ local function followRouteSteer(car, p, speed, nodes)
   local angle = math.atan2(cross, dot)
   local steer = clamp(angle * 1.4, -0.8, 0.8)
 
-  return steer, curve, lineDist, targetX, targetZ
+  local reference = state.telemetry and state.telemetry[bestSeg] or nil
+  return steer, curve, lineDist, targetX, targetZ, reference
 end
 
 local function releaseCar(carIndex)
@@ -485,7 +538,7 @@ end
 -- Anti-donut controller:
 -- detects excessive lateral motion, rear wheelspin and uncontrolled yaw.
 -- Recovery stays active until the car has settled for a short period.
-local function updateAntiDonut(car, p, dt, routeSteer, lineDist)
+local function updateAntiDonut(car, p, dt, routeSteer, lineDist, reference)
   local slipAngle, lateralSpeed, yawRate, rearSlip = readMotionState(car)
 
   p.slipAngle = slipAngle
@@ -497,9 +550,15 @@ local function updateAntiDonut(car, p, dt, routeSteer, lineDist)
   local absYaw = math.abs(yawRate)
   local absSlipAngle = math.abs(slipAngle)
 
-  local angleRisk = smoothstep(SLIP_ANGLE_START, SLIP_ANGLE_FULL, absSlipAngle)
-  local lateralRisk = smoothstep(LATERAL_SLIP_START, LATERAL_SLIP_FULL, absLateral)
-  local yawRisk = smoothstep(YAW_RECOVERY_START, YAW_RECOVERY_FULL, absYaw)
+  local targetAngle = reference and math.abs(reference.slipAngle or 0) or 0
+  local targetLateral = reference and math.abs(reference.lateralSpeed or 0) or 0
+  local targetYaw = reference and math.abs(reference.yawRate or 0) or 0
+  local angleExcess = math.max(0, absSlipAngle-targetAngle-8.0)
+  local lateralExcess = math.max(0, absLateral-targetLateral-1.5)
+  local yawExcess = math.max(0, absYaw-targetYaw-0.35)
+  local angleRisk = smoothstep(SLIP_ANGLE_START, SLIP_ANGLE_FULL, angleExcess)
+  local lateralRisk = smoothstep(LATERAL_SLIP_START, LATERAL_SLIP_FULL, lateralExcess)
+  local yawRisk = smoothstep(YAW_RECOVERY_START, YAW_RECOVERY_FULL, yawExcess)
 
   local wheelRisk = 0
   if rearSlip then
@@ -511,8 +570,8 @@ local function updateAntiDonut(car, p, dt, routeSteer, lineDist)
   -- At very low speed the slip angle is unreliable.
   -- Yaw rate remains useful for detecting a car rotating on the spot.
   local spinAtLowSpeed = car.speedMs < 3.0 and absYaw > YAW_RECOVERY_START
-  local severeSlide = absSlipAngle > 28.0 or absLateral > 4.5
-  local severeWheelspin = rearSlip and rearSlip > 1.55
+  local severeSlide = angleExcess > 24.0 or lateralExcess > 4.5
+  local severeWheelspin = rearSlip and rearSlip > math.max(1.55, (reference and (reference.rearSlip or 0) or 0) + 0.65)
 
   if spinAtLowSpeed or severeSlide or severeWheelspin then
     p.recovering = true
@@ -597,7 +656,7 @@ local function updateLineCar(carIndex, car, dt)
   local offCenter = clamp((dRight - dLeft) / math.max(1, room), -1, 1)
 
   local speed = math.max(0, car.speedMs or 0)
-  local steer, curve, lineDist, targetX, targetZ =
+  local steer, curve, lineDist, targetX, targetZ, reference =
     followRouteSteer(car, p, speed, state.nodes)
 
   p.lastTargetX = targetX
@@ -610,7 +669,12 @@ local function updateLineCar(carIndex, car, dt)
     steer = clamp(steer * (1 - wBlend) + wallAvoid * wBlend, -0.8, 0.8)
   end
 
-  local targetSpeed = p.speed * clamp(1.0 - curve * 2.0, 0.45, 1.0)
+  local targetSpeed
+  if reference and type(reference.speed)=="number" then
+    targetSpeed = math.max(0, reference.speed)
+  else
+    targetSpeed = p.speed * clamp(1.0 - curve * 2.0, 0.45, 1.0)
+  end
   local wallSpeedCap = math.sqrt(math.max(0, 2 * BRAKE_ACCEL * math.max(0, dFwd - WALL_MARGIN)))
   if wallSpeedCap > 0 then
     targetSpeed = math.min(targetSpeed, wallSpeedCap)
@@ -628,8 +692,11 @@ local function updateLineCar(carIndex, car, dt)
   local brake = clamp(-speedError * 0.45, 0, 1)
 
   -- Evaluate grip and rotation before applying throttle.
+  if reference and type(reference.yawRate)=="number" then
+    steer = clamp(steer + clamp((reference.yawRate-(p.yawRate or 0))*0.12,-0.22,0.22),-0.8,0.8)
+  end
   local tractionLimit, correctedSteer, risk =
-    updateAntiDonut(car, p, dt, steer, lineDist)
+    updateAntiDonut(car, p, dt, steer, lineDist, reference)
 
   local desiredGas = math.min(rawGas, tractionLimit)
 
@@ -734,8 +801,8 @@ function script.update(dt)
   if not dt or dt <= 0 then return end
 
   local player = ac.getCar(0)
-  if state.recording and player then
-    addPoint(player.position)
+  if state.recording and player and not player.isAIControlled then
+    addPoint(player.position, player)
   end
 
   local sim = ac.getSim()
@@ -764,7 +831,9 @@ end
 function windowMain(dt)
   local player = ac.getCar(0)
 
-  ui.text(string.format("Точек: %d | %s", #state.nodes, state.status))
+  local telemetryCount = 0
+  for _ in pairs(state.telemetry) do telemetryCount = telemetryCount + 1 end
+  ui.text(string.format("Точек: %d | телеметрия: %d | %s", #state.nodes, telemetryCount, state.status))
   if logger and logger.path then
     ui.text("Лог: " .. tostring(logger.path))
   end
@@ -773,8 +842,9 @@ function windowMain(dt)
     state.recording = not state.recording
     if state.recording then
       state.nodes = {}
+      state.telemetry = {}
       state.p = {}
-      state.status = "Запись линии..."
+      state.status = "Запись линии + телеметрия..."
     else
       state.status = "Записано точек: " .. #state.nodes
     end
@@ -819,6 +889,7 @@ function windowMain(dt)
   ui.sameLine()
   if ui.button("Очистить", vec2(-1, 24)) then
     state.nodes = {}
+    state.telemetry = {}
     state.p = {}
     state.status = "Очищено"
   end
