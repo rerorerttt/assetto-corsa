@@ -1,21 +1,19 @@
 -- RoutePilot: free-drive AI control for Assetto Corsa CSP.
--- v0.3.0: FULL REBUILD around the proven FullThrottleAI pattern:
---   * the PLAYER car (#0) is intercepted when the built-in AI is enabled
---     (Ctrl+8) — exactly like FullThrottleAI does, but instead of just
---     flooring the gas, RoutePilot steers, wanders and drifts;
---   * works on any track or playground WITHOUT ai/fast_lane.ai and
---     WITHOUT any recorded route;
---   * driving style: lively wander (two sinusoids), own speed target,
---     periodic handbrake pulses + extra steer + full gas = drift;
---   * optional: also drive AI opponents the same way;
---   * crash-safe logging kept (routepilot_log.txt in the app folder).
---
--- The earlier 0.2.x never touched car #0, which is why it "did nothing"
--- from the player's point of view.
+-- v0.3.1: REMOVED the isAIControlled gate. Reference projects (nndrive) prove
+--         that ac.overrideCarControls(0) drives the player car DIRECTLY,
+--         every frame, WITHOUT Ctrl+8 and without any flag checks. The old
+--         gate made the app silently do nothing whenever the flag wasn't set
+--         — the exact "it stopped working" symptom. Now:
+--         * the button "Запустить автопилот" is the master switch;
+--         * while ON, the player car (#0) is driven every frame;
+--         * Ctrl+8 is optional (works the same with or without it);
+--         * when OFF (or on release), all overrides are zeroed and freed.
+-- v0.3.0: free-drive style: wander steering, speed target, handbrake drift
+--         pulses, collision avoidance, stuck detection; crash-safe logging.
 
 local Logger = require('logger')
 
-local APP_VERSION = "0.3.0"
+local APP_VERSION = "0.3.1"
 local HEARTBEAT_INTERVAL = 1.0
 local SELFTEST_SECONDS = 4.0
 local BRAKE_ACCEL = 7.0
@@ -25,8 +23,7 @@ local state = {
   initialized = false,
   sessionScanned = false,
   aiCount = 0,
-  -- master switch: when off, nothing is intercepted at all
-  active = false,
+  active = false,          -- master switch (the UI button)
   includeOpponents = false,
   speedMin = 50,   -- km/h
   speedMax = 110,  -- km/h
@@ -43,7 +40,7 @@ local state = {
   heartbeatTimer = 0,
   updateErrors = 0,
   lastError = "",
-  status = "Выключено (Ctrl+8 + кнопка автопилота)",
+  status = "Автопилот выключен",
 }
 
 -- ─────────────────── helpers ───────────────────
@@ -180,6 +177,7 @@ local function updateFreeCar(carIndex, car, dt)
   p.steer = p.steer + (steer - p.steer) * clamp(dt * 8, 0, 1)
   p.gas, p.brake = gas, brake
 
+  -- THE core mechanism, same as nndrive/FullThrottleAI: apply EVERY frame
   local ok, c = pcall(ac.overrideCarControls, carIndex)
   if ok and c then
     c.combineAxis = false
@@ -221,19 +219,14 @@ local function updateControl(dt)
   state.playerCaught = false
   local active = {}
 
-  -- THE PATTERN FROM FullThrottleAI: the player car can only be intercepted
-  -- while the built-in AI drives it (Ctrl+8). We take over from there.
+  -- v0.3.1: NO isAIControlled gate. The button is the switch. The player
+  -- car is intercepted directly, exactly like the proven nndrive pattern.
   local player = ac.getCar(0)
   if player then
-    local okAI, isAI = pcall(function() return player.isAIControlled end)
-    if okAI and isAI then
-      updateFreeCar(0, player, dt)
-      active[0] = true
-      state.playerCaught = true
-      state.controlledCount = state.controlledCount + 1
-    elseif state.p[0] then
-      releaseCar(0)   -- Ctrl+8 switched off: give the car back immediately
-    end
+    updateFreeCar(0, player, dt)
+    active[0] = true
+    state.playerCaught = true
+    state.controlledCount = state.controlledCount + 1
   end
 
   if state.includeOpponents then
@@ -271,27 +264,17 @@ local function startSelfTest()
     state.selfTest.verdict = "Сессия не активна"
     return
   end
-  -- prefer the player car WITH Ctrl+8 on (that's the interesting case)
-  local carIndex = nil
-  local player = ac.getCar(0)
-  local okAI, isAI = pcall(function() return player and player.isAIControlled end)
-  if okAI and isAI then
-    carIndex = 0
-  else
-    for i = 1, sim.carsCount - 1 do
-      local car = ac.getCar(i)
-      if car and car.isActive then carIndex = i; break end
-    end
-  end
-  if not carIndex then
-    state.selfTest.verdict = "Включи Ctrl+8 или добавь AI-соперников"
-    log("SELFTEST: no testable car (Ctrl+8 off, no AI opponents)")
+  -- test the player car directly — that's the car we drive
+  local carIndex = 0
+  local car = ac.getCar(0)
+  if not car then
+    state.selfTest.verdict = "Нет машины игрока"
     return
   end
   state.selfTest = { active = true, carIndex = carIndex, timer = SELFTEST_SECONDS,
     steerSeen = 0, brakeSeen = 0, appliedFrames = 0, verdict = nil }
-  state.status = "Тест перехвата: машина #" .. carIndex
-  log("SELFTEST start: car#%d, cmd brake=1.00 steer=0.80 for %.1f s", carIndex, SELFTEST_SECONDS)
+  state.status = "Тест перехвата: машина игрока"
+  log("SELFTEST start: car#0 (player), cmd brake=1.00 steer=0.80 for %.1f s", SELFTEST_SECONDS)
   logFlush()
 end
 
@@ -323,8 +306,8 @@ local function updateSelfTest(dt)
   if brakeSeen > 0.5 then st.brakeSeen = st.brakeSeen + 1 end
   if math.abs(steerSeen) > 0.3 then st.steerSeen = st.steerSeen + 1 end
   if st.appliedFrames % 10 == 1 then
-    log("SELFTEST car#%d: cmd(steer 0.80 brake 1.00) | car reports steer %.2f brake %.2f | %.1f km/h",
-      st.carIndex, steerSeen, brakeSeen, car.speedKmh)
+    log("SELFTEST car#%d: cmd(steer 0.80 brake 1.00) | car reports steer %.2f brake %.2f | %.1f km/h | active=%s",
+      st.carIndex, steerSeen, brakeSeen, car.speedKmh, tostring(c:active()))
   end
   if st.timer <= 0 then
     st.active = false
@@ -383,7 +366,6 @@ local function updateInner(dt)
       log("LOG ERROR: file could not be created: %s", tostring(state.log.writeError))
       ac.error("[RoutePilot] log file could not be created: " .. tostring(state.log.writeError))
     end
-    log("Tip: включи Ctrl+8 (встроенный ИИ) — RoutePilot возьмёт управление твоей машиной")
     logFlush()
   end
 
@@ -407,9 +389,9 @@ local function updateInner(dt)
     state.heartbeatTimer = 0
     if state.active then
       state.log:heartbeat(string.format(
-        "auto=ON playerCaught=%s ctrl8=%s controlled=%d active=%d errors=%d",
-        tostring(state.playerCaught), tostring(state.playerCaught),
-        state.controlledCount, state.activeCount, state.updateErrors))
+        "auto=ON playerCaught=%s controlled=%d active=%d errors=%d",
+        tostring(state.playerCaught), state.controlledCount,
+        state.activeCount, state.updateErrors))
       for carIndex, p in pairs(state.p) do
         local car = ac.getCar(carIndex)
         if car then
@@ -455,11 +437,11 @@ end
 
 function script.windowMain(dt)
   ui.text("RoutePilot  " .. APP_VERSION)
-  ui.text("AI-соперников: " .. tostring(state.aiCount)
-    .. "   Под управлением: " .. tostring(state.controlledCount))
-  ui.text("Перехват активен (физика): " .. tostring(state.activeCount))
-  ui.textColored("Ctrl+8 (встроенный ИИ): " .. (state.playerCaught and "ВКЛ — машина игрока под RoutePilot" or "выкл"),
-    state.playerCaught and rgbm(0.3, 1, 0.5, 1) or rgbm(1, 0.8, 0.2, 1))
+  ui.text("Под управлением: " .. tostring(state.controlledCount)
+    .. "   Перехват активен (физика): " .. tostring(state.activeCount))
+  if state.playerCaught then
+    ui.textColored("Твоя машина ведётся RoutePilot", rgbm(0.3, 1, 0.5, 1))
+  end
   if state.updateErrors > 0 then
     ui.textColored("Ошибок update: " .. tostring(state.updateErrors) .. " (см. лог)", rgbm(1, 0.4, 0.3, 1))
   end
@@ -489,10 +471,10 @@ function script.windowMain(dt)
       logFlush()
     end
   else
-    if ui.button("Запустить автопилот (Ctrl+8 = моя машина)", vec2(ui.availableSpaceX(), 34)) then
+    if ui.button("Запустить автопилот (моя машина)", vec2(ui.availableSpaceX(), 34)) then
       state.p = {}
       state.active = true
-      state.status = "Автопилот активен — жми Ctrl+8"
+      state.status = "Автопилот активен"
       log("AUTOPILOT start: free-drive, includeOpponents=%s",
         tostring(state.includeOpponents))
       logFlush()
@@ -500,7 +482,7 @@ function script.windowMain(dt)
   end
 
   ui.separator()
-  if ui.button("Тест перехвата (тормоза + руль, 4 с)", vec2(ui.availableSpaceX(), 28)) then
+  if ui.button("Тест перехвата (машина игрока, 4 с)", vec2(ui.availableSpaceX(), 28)) then
     startSelfTest()
   end
   if state.selfTest.active then
@@ -513,6 +495,6 @@ function script.windowMain(dt)
 
   ui.separator()
   ui.textWrapped("Статус: " .. state.status)
-  ui.textWrapped("Как пользоваться: 1) запусти автопилот, 2) включи Ctrl+8 — твоя машина начнёт сама гонять и дрифтить по площадке. 3) Ctrl+8 или кнопка — вернуть управление.")
+  ui.textWrapped("Кнопка = единственный выключатель. Ctrl+8 не обязателен: включи автопилот — машина сама поедет, будет вилять и дрифтить. Не забудь нажать кнопку (в логе должно появиться auto=ON).")
   ui.text("Лог: " .. (state.log and state.log.path or "создаётся…"))
 end
