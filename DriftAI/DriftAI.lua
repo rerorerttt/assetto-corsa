@@ -1,12 +1,19 @@
--- DriftAI main script.
+-- DriftAI main script (v1.1.0).
 -- Makes every AI car in an offline session drift around the track continuously:
 -- auto-detects AI cars, neutralizes the stock AI controller, fully overrides
 -- controls (ac.overrideCarControls with combineAxis = false) and steers along
 -- the track geometry. No AI fast lane, no per-car setup, no track preparation.
+--
+-- v1.1.0: at drift start the app scans the whole track once with physics
+-- raycasts (Bounds module) to fix the drivable area and wall distances;
+-- drivers use this map to decide how fast they can go and how long a drift
+-- arc fits before a wall, and manage throttle to keep the rear wheels
+-- spinning (wheelspin-targeted throttle in Driver).
 
 local Driver = require('driver')
+local Bounds = require('bounds')
 
-local APP_VERSION = '1.0.0'
+local APP_VERSION = '1.1.0'
 local ACTIVE_CHECK_INTERVAL = 1.0 -- seconds between controls:active() checks
 local SPAWN_SCAN_INTERVAL = 2.0   -- seconds between AI-car rescans
 
@@ -21,6 +28,8 @@ local state = {
   trackLengthM = 0,
   status = 'Готово. Нажми «Запустить дрифт».',
   splineAvailable = false,
+  mapReady = false,
+  mapProgress = 0,
   avgSlip = 0,
   showDebug = false,
 }
@@ -71,10 +80,18 @@ local function startDrift()
 
   config.trackLengthM = sim.trackLengthM or 0
   state.splineAvailable = ac.hasTrackSpline and ac.hasTrackSpline() or false
+
+  -- scan the whole track once with physics raycasts: drivable area + walls
+  config.bounds = Bounds.new(config.trackLengthM)
+  state.mapReady = config.bounds.ready
+  state.mapProgress = config.bounds:progressFraction()
+
   state.drivers = {}
   state.running = true
   state.lastScan = 0
-  state.status = 'Дрифт запущен'
+  state.status = state.mapReady
+    and 'Дрифт запущен (карта границ не нужна: трасса без сплайна)'
+    or 'Дрифт запущен: сканирую границы трассы…'
   ac.log('[DriftAI] started, track length: ' .. tostring(config.trackLengthM) .. ' m')
 end
 
@@ -112,6 +129,19 @@ function script.update(dt)
       end
     end
     return
+  end
+
+  -- build the boundary map over a few frames right after the start
+  if config.bounds and not config.bounds.ready then
+    config.bounds:buildStep()
+    state.mapProgress = config.bounds:progressFraction()
+    if config.bounds.ready then
+      state.mapReady = true
+      state.status = 'Карта границ готова: ' .. tostring(config.bounds.good)
+        .. ' точек. AI в деле.'
+      ac.log('[DriftAI] boundary map ready: ' .. tostring(config.bounds.good)
+        .. '/' .. tostring(config.bounds.total) .. ' samples')
+    end
   end
 
   -- rescan for new AI cars periodically
@@ -159,8 +189,9 @@ function script.update(dt)
 
   if state.appliedCount == 0 and state.aiCount == 0 then
     state.status = 'AI-машин нет. Добавь соперников в сетапе сессии.'
-  elseif state.appliedCount > 0 then
-    state.status = 'Дрифт: ' .. tostring(state.appliedCount) .. ' из ' .. tostring(state.aiCount) .. ' AI-машин'
+  elseif state.appliedCount > 0 and state.mapReady then
+    state.status = 'Дрифт: ' .. tostring(state.appliedCount) .. ' из '
+      .. tostring(state.aiCount) .. ' AI-машин'
   end
 end
 
@@ -183,8 +214,13 @@ function script.windowMain(dt)
   ui.text('AI-машин в сессии: ' .. tostring(state.aiCount)
     .. '  ·  под контролем: ' .. tostring(state.appliedCount)
     .. '  ·  перехват активен: ' .. tostring(state.activeCount))
-  ui.text('Сплайн трассы: ' .. (state.splineAvailable and 'есть (навигация по геометрии)'
-    or 'нет (резервный режим)'))
+  ui.text('Сплайн трассы: ' .. (state.splineAvailable and 'есть' or 'нет'))
+  if state.running and not state.mapReady then
+    ui.text('Карта границ: ' .. string.format('%.0f%%', state.mapProgress * 100)
+      .. ' (вертикальные коллизии + стены)')
+  else
+    ui.text('Карта границ: ' .. (state.mapReady and 'готова' or 'не запущена'))
+  end
   ui.separator()
 
   if state.running then
@@ -197,8 +233,10 @@ function script.windowMain(dt)
     end
   end
 
-  ui.textWrapped('После запуска приложение само найдёт все AI-машины, отключит их штатный '
-    .. 'AI-контроллер и поведёт каждую в управляемом заносе по геометрии трассы. '
+  ui.textWrapped('После запуска приложение само найдёт все AI-машины, отсканирует '
+    .. 'границы трассы лучами (проезжаемая поверхность, стены слева/справа/впереди), '
+    .. 'отключит штатный AI-контроллер и поведёт каждую машину в управляемом заносе: '
+    .. 'газ держит пробуксовку задних колёс, скорость планирует по расстоянию до стен. '
     .. 'Ничего настраивать не нужно.')
 
   ui.separator()
@@ -214,10 +252,13 @@ function script.windowMain(dt)
     local color = rgbm(0.4, 1, 0.6, 1)
     if driver.state == 'recover' then color = rgbm(1, 0.8, 0.2, 1) end
     if driver.state == 'lost' then color = rgbm(1, 0.4, 0.3, 1) end
-    textColored(string.format('#%d %s — %s  %s  slip %.0f°',
+    local extra = ''
+    if driver.rearSlip then extra = string.format('  букс %.2f', driver.rearSlip) end
+    if driver.wallAhead then extra = extra .. string.format('  стена %d м', driver.wallAhead) end
+    textColored(string.format('#%d %s — %s  %s  slip %.0f°%s',
       carIndex, name, statusText(driver),
       car and (fmt(car.speedKmh) .. ' км/ч') or '--',
-      math.deg(driver.slipAngle)), color)
+      math.deg(driver.slipAngle), extra), color)
   end
   if not any then
     ui.pushFont(ui.Font.Small)
@@ -235,6 +276,8 @@ function script.windowMain(dt)
     ui.textWrapped('Перехват: ac.overrideCarControls(i), combineAxis=false, '
       .. 'steer/gas/brake/handbrake/requestedGearIndex; штатный AI отключён '
       .. 'через physics.setAIAggression/setAICaution.')
+    ui.textWrapped('Карта: physics.raycastTrack, шаг 8 м; целевая пробуксовка 0.30; '
+      .. 'скорость = sqrt(2*a*(d_стены − 8 м)).')
     ui.popFont()
   end
 end
@@ -242,6 +285,8 @@ end
 function script.onSessionStart()
   state.drivers = {}
   state.running = false
+  state.mapReady = false
+  state.mapProgress = 0
   state.status = 'Новая сессия. Нажми «Запустить дрифт».'
   local sim = ac.getSim()
   if sim then config.trackLengthM = sim.trackLengthM or 0 end
