@@ -1,7 +1,9 @@
 -- RoutePilot: route recording and AI control for Assetto Corsa CSP.
--- v0.2.2: interception self-test, control-all-cars option, active-count.
+-- v0.2.3: text logging system (routepilot.log in the app folder):
+--         events, per-car written vs OBSERVED controls (to see whether the
+--         physics actually consumes the override), self-test details.
 
-local APP_VERSION = "0.2.2"
+local APP_VERSION = "0.2.3"
 local STORAGE_PREFIX = "routepilot_route_"
 local SAMPLE_DISTANCE = 2.0
 local MAX_ROUTE_POINTS = 12000
@@ -14,6 +16,12 @@ local WHEELBASE = 2.65
 local MAX_ROAD_WHEEL_ANGLE = 0.55
 local FOLLOW_LATERAL = 2.4
 local SELFTEST_SECONDS = 4.0
+
+-- logging
+local LOG_INTERVAL = 0.5   -- s between per-car status lines
+local LOG_FLUSH = 4.0      -- s between writes to disk
+local LOG_MAX_BYTES = 262144
+local LOG_FILE = ac.dirname() .. '/routepilot.log'
 
 local state = {
   initialized = false,
@@ -35,7 +43,53 @@ local state = {
   slowingCount = 0,
   selfTest = { active = false, carIndex = nil, timer = 0,
     steerSeen = 0, brakeSeen = 0, appliedFrames = 0, verdict = nil },
+  -- logging state
+  logBuffer = {},
+  logTimer = 0,
+  logFlushTimer = 0,
+  logLines = 0,
+  logWriteFail = nil,
+  lastWritten = {},
 }
+
+-- ─────────────────── logging ───────────────────
+
+local function logLine(msg)
+  local sim = ac.getSim()
+  local t = 0
+  if sim then t = sim.gameTime or 0 end
+  state.logBuffer[#state.logBuffer + 1] =
+    string.format("[%8.2fs] %s", t, msg)
+  state.logLines = state.logLines + 1
+end
+
+local function flushLog(force)
+  if #state.logBuffer == 0 and not force then return end
+  local ok, err = pcall(function()
+    local old = io.load(LOG_FILE, '') or ''
+    if #old > LOG_MAX_BYTES then
+      old = string.sub(old, #old - LOG_MAX_BYTES / 2)
+    end
+    local data = table.concat(state.logBuffer, "\n")
+    local combined = old ~= '' and old .. "\n" .. data or data
+    io.save(LOG_FILE, combined, true)
+  end)
+  if ok then
+    state.logBuffer = {}
+  else
+    state.logWriteFail = tostring(err)
+    if state.logLines < 50 then
+      ac.error("[RoutePilot] log write failed: " .. tostring(err))
+    end
+  end
+end
+
+local function logEvent(msg)
+  logLine(msg)
+  flushLog(true)
+end
+
+-- ─────────────────── helpers ───────────────────
 
 local function clamp(v, lo, hi)
   if v < lo then return lo end
@@ -159,17 +213,20 @@ local function saveRoute()
     state.status = "Ошибка сохранения: " .. tostring(err)
     ac.error(state.status)
   end
+  logEvent("saveRoute: " .. state.status)
 end
 
 local function loadRoute()
   local ok, data = pcall(function() return ac.storage[getTrackKey()] end)
   if not ok then
     state.status = "Ошибка чтения хранилища: " .. tostring(data)
+    logEvent("loadRoute ERROR: " .. state.status)
     return
   end
   local success, message = parseRoute(data)
   state.status = message
   if success then state.autopilot = false end
+  logEvent("loadRoute: " .. message)
 end
 
 local function addRecordPoint(car)
@@ -190,6 +247,7 @@ local function startRecording()
   state.lastRecordPosition = nil
   state.recording = true
   state.status = "Запись идёт — проедь нужную траекторию"
+  logEvent("startRecording")
   local car = ac.getCar(0)
   if car then addRecordPoint(car) end
 end
@@ -199,6 +257,7 @@ local function stopRecording()
   state.lastRecordPosition = nil
   rebuildRoute()
   state.status = "Запись остановлена: " .. tostring(#state.route) .. " точек"
+  logEvent("stopRecording: " .. tostring(#state.route) .. " points, closed=" .. tostring(state.closed))
 end
 
 local function findNearestRoutePoint(pos)
@@ -309,6 +368,8 @@ local function updateOneAI(carIndex, car, dt)
     local nearest = findNearestRoutePoint(car.position)
     runtime = { index = nearest, globalSearch = 0, steer = 0, slowing = false }
     state.ai[carIndex] = runtime
+    logEvent(string.format("adopt car #%d: isAIControlled=%s nearest=%d dist=%.1f",
+      carIndex, tostring(car.isAIControlled), nearest, math.sqrt(distance2(car.position, state.route[nearest]))))
   end
   runtime.globalSearch = runtime.globalSearch + dt
   local nearestIndex, distanceFromRoute
@@ -328,6 +389,7 @@ local function updateOneAI(carIndex, car, dt)
       controls.gas = 0
       controls.brake = 0.6
     end
+    state.lastWritten[carIndex] = { gas = 0, brake = 0.6, steer = 0, off = true }
     return
   end
 
@@ -363,12 +425,16 @@ local function updateOneAI(carIndex, car, dt)
   end
   runtime.steer = runtime.steer + (steer - runtime.steer) * clamp(dt * 7, 0, 1)
 
-  local controls = ac.overrideCarControls(carIndex)
-  if controls then
+  local ok, controls = pcall(ac.overrideCarControls, carIndex)
+  if ok and controls then
     controls.combineAxis = false
     controls.steer = runtime.steer
     controls.gas = gas
     controls.brake = brake
+    state.lastWritten[carIndex] = { gas = gas, brake = brake, steer = runtime.steer, off = false }
+  else
+    state.lastWritten[carIndex] = nil
+    logEvent(string.format("car #%d: overrideCarControls FAILED: %s", carIndex, tostring(controls)))
   end
 end
 
@@ -403,6 +469,23 @@ local function updateAutopilot(dt)
       state.activeCount = state.activeCount + 1
     end
   end
+
+  -- periodic per-car log line: written commands vs observed state
+  state.logTimer = state.logTimer + dt
+  if state.logTimer >= LOG_INTERVAL then
+    state.logTimer = 0
+    for carIndex in pairs(active) do
+      local car = ac.getCar(carIndex)
+      local w = state.lastWritten[carIndex]
+      if car and w then
+        logLine(string.format(
+          "car #%d spd=%.0fkmh | WROTE gas=%.2f brk=%.2f str=%.2f%s | OBSERVED gas=%.2f brk=%.2f str=%.2f",
+          carIndex, car.speedKmh or 0,
+          w.gas, w.brake, w.steer, w.off and " OFFROUTE" or "",
+          car.gas or 0, car.brake or 0, car.steer or 0))
+      end
+    end
+  end
 end
 
 -- Self-test: full brake + steer lock on the first controllable car for a few
@@ -420,12 +503,16 @@ local function startSelfTest()
   end
   if not carIndex then
     state.selfTest.verdict = "Нет машин с индексом >= 1"
+    logEvent("self-test: no cars with index >= 1, carsCount=" .. tostring(sim.carsCount))
     return
   end
   state.selfTest = { active = true, carIndex = carIndex, timer = SELFTEST_SECONDS,
     steerSeen = 0, brakeSeen = 0, appliedFrames = 0, verdict = nil }
+  local car = ac.getCar(carIndex)
+  logEvent(string.format("self-test START on car #%d (isAIControlled=%s isActive=%s spd=%.0fkmh)",
+    carIndex, tostring(car and car.isAIControlled), tostring(car and car.isActive),
+    car and car.speedKmh or 0))
   state.status = "Тест перехвата: машина #" .. carIndex
-  ac.log("[RoutePilot] self-test on car #" .. carIndex)
 end
 
 local function updateSelfTest(dt)
@@ -436,12 +523,15 @@ local function updateSelfTest(dt)
   if not car then
     st.active = false
     st.verdict = "Машина #" .. tostring(st.carIndex) .. " исчезла"
+    logEvent("self-test: car disappeared")
     return
   end
   local ok, controls = pcall(ac.overrideCarControls, st.carIndex)
   if not ok or not controls then
     st.active = false
     st.verdict = "overrideCarControls вернул nil — перехват недоступен"
+    logEvent("self-test FAIL: overrideCarControls -> nil (err: " .. tostring(controls) .. ")")
+    flushLog(true)
     return
   end
   controls.combineAxis = false
@@ -455,6 +545,7 @@ local function updateSelfTest(dt)
   if st.timer <= 0 then
     st.active = false
     local accepted = st.brakeSeen >= 10 or st.steerSeen >= 10
+    local activeNow = controls:active()
     if accepted then
       st.verdict = "ПЕРЕХВАТ РАБОТАЕТ: физика применила команды ("
         .. st.brakeSeen .. "/" .. st.appliedFrames .. ")"
@@ -462,28 +553,42 @@ local function updateSelfTest(dt)
       st.verdict = "ПЕРЕХВАТ НЕ РАБОТАЕТ: физика игнорирует команды ("
         .. st.brakeSeen .. " кадров из " .. st.appliedFrames .. ")"
     end
+    logEvent(string.format(
+      "self-test VERDICT: %s | brakeSeen=%d/%d steerSeen=%d controlsActive=%s | observed brake=%.2f steer=%.2f",
+      accepted and "ACCEPTED" or "REJECTED",
+      st.brakeSeen, st.appliedFrames, st.steerSeen, tostring(activeNow),
+      car.brake or 0, car.steer or 0))
     local ok2, controls2 = pcall(ac.overrideCarControls, st.carIndex)
     if ok2 and controls2 then
       controls2.brake = 0
       controls2.steer = 0
     end
     state.status = "Тест перехвата завершён"
-    ac.log("[RoutePilot] verdict: " .. tostring(st.verdict))
+    flushLog(true)
   end
 end
 
 function script.update(dt)
   if not state.initialized then
     state.initialized = true
+    local sim = ac.getSim()
+    logEvent(string.format("init: app v%s, track=%s, carsCount=%s, isLive=%s",
+      APP_VERSION, safeTrackID(ac.getTrackFullID("_")),
+      sim and tostring(sim.carsCount) or "?",
+      sim and tostring(sim.isLive) or "?"))
     local ok, err = pcall(function() getTrackKey(); loadRoute() end)
     if not ok then
       state.status = "Ошибка инициализации: " .. tostring(err)
       ac.error(state.status)
+      logEvent("init ERROR: " .. tostring(err))
     end
   end
+
   local sim = ac.getSim()
   if not sim or not sim.isLive then return end
+
   updateSelfTest(dt)
+
   if state.recording then
     local car = ac.getCar(0)
     if car then
@@ -494,12 +599,20 @@ function script.update(dt)
       end
     end
   end
+
   if state.autopilot then
     updateAutopilot(dt)
   else
     state.controlledCount = 0
     state.slowingCount = 0
     state.activeCount = 0
+  end
+
+  -- flush log to disk periodically
+  state.logFlushTimer = state.logFlushTimer + dt
+  if state.logFlushTimer >= LOG_FLUSH then
+    state.logFlushTimer = 0
+    flushLog()
   end
 end
 
@@ -531,6 +644,7 @@ function script.windowMain(dt)
   if gapChanged then state.followGap = gapValue end
   if ui.checkbox("Управлять всеми машинами (не только AI)", state.controlAllCars) then
     state.controlAllCars = not state.controlAllCars
+    logEvent("controlAllCars = " .. tostring(state.controlAllCars))
   end
 
   ui.separator()
@@ -553,6 +667,8 @@ function script.windowMain(dt)
       state.slowingCount = 0
       state.activeCount = 0
       state.status = "Автопилот выключен"
+      logEvent("autopilot STOP")
+      flushLog(true)
     end
   else
     if ui.button("Запустить автопилот", vec2(ui.availableSpaceX(), 34)) then
@@ -561,10 +677,29 @@ function script.windowMain(dt)
         state.ai = {}
         state.autopilot = true
         state.status = "Автопилот активен"
+        logEvent("autopilot START (points=" .. tostring(#state.route)
+          .. " closed=" .. tostring(state.closed) .. ")")
       else
         state.status = "Сначала запиши или загрузи маршрут"
       end
     end
+  end
+
+  ui.separator()
+  ui.pushFont(ui.Font.Small)
+  ui.textWrapped("Лог: " .. LOG_FILE)
+  ui.text("Строк в логе: " .. tostring(state.logLines)
+    .. (state.logWriteFail and ("   ОШИБКА ЗАПИСИ: " .. state.logWriteFail) or ""))
+  ui.popFont()
+  if ui.button("Записать лог сейчас", vec2(ui.availableSpaceX(), 26)) then
+    flushLog(true)
+  end
+  if ui.button("Очистить лог", vec2(ui.availableSpaceX(), 26)) then
+    local ok = pcall(function() io.save(LOG_FILE, '', true) end)
+    state.logBuffer = {}
+    state.logLines = 0
+    logEvent("log cleared")
+    flushLog(true)
   end
 
   ui.separator()
