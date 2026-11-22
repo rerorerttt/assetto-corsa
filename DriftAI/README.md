@@ -1,34 +1,47 @@
-# DriftAI
+# DriftAI v1.1.0
 
-Autonomous drift for every AI car in Assetto Corsa. CSP Lua App for Custom Shaders Patch 0.3.2-preview2 (build 4305) and newer.
+Автономный дрифт для всех AI-машин в Assetto Corsa. CSP Lua App для **Custom Shaders Patch 0.3.2-preview2** (build 4305) и новее.
 
-After a regular offline race session starts, the app automatically finds every AI-driven car, neutralizes its stock AI controller and keeps each car in a controlled slide along the track geometry.
+После запуска обычной офлайн-сессии приложение автоматически находит все машины под управлением AI, сканирует границы трассы, отключает штатный AI-контроллер и ведёт каждую машину в управляемом заносе: газ держит пробуксовку задних колёс, скорость планирует по расстоянию до стен.
 
-## Installation
+## Что нового в v1.1.0
 
-1. Install CSP 0.3.2-preview2 or newer (build 4305 required).
-2. Copy the DriftAI folder to assettocorsa/apps/lua/DriftAI.
-3. Enable the DriftAI app in Content Manager.
+- **Газ под пробуксовку**: контроллер читает фактический slip ratio задних колёс (`car.wheels[2]/[3].slipRatio`) и интегрирует газ к цели 0.30. Если на полном газу букса не хватает — сам просит пониженную передачу (`requestedGearIndex`).
+- **Карта границ при запуске**: сразу после старта приложение один раз сканирует трассу физическими лучами (`physics.raycastTrack`) — вертикальный луч подтверждает проезжаемую поверхность, горизонтальные измеряют стены слева/справа/впереди (шаг 8 м, строится за несколько кадров без фриза).
+- **Скорость по тормозному пути**: лимит скорости = `sqrt(2·a·(d_стены − 8 м))` — тормозной путь всегда вписывается в свободную дорогу. Если впереди ≥120 м свободно — машина держит длинный быстрый дрифт.
+- **Выше скорость**: вход в дрифт с 55 км/ч, жёсткий предел 150 км/ч, целевой угол скольжения 32°.
 
-## Usage
+## Установка
 
-1. Start any offline session (Practice or Race) and add AI opponents.
-2. Open the DriftAI app from the app panel.
-3. Press the start button. All AI cars begin to drift around the track.
-4. Press stop to hand the cars back to the stock AI.
+1. Установите CSP 0.3.2-preview2 или новее (build ≥ 4305).
+2. Скопируйте папку `DriftAI` в `assettocorsa/apps/lua/DriftAI`.
+3. Включите приложение DriftAI в Content Manager.
 
-## Architecture
+## Использование
 
-- manifest.ini: app registration, window, CSP requirements.
-- DriftAI.lua: lifecycle, AI scanner, control loop, UI.
-- driver.lua: per-car drift controller (state machine + PD).
-- track.lua: track-geometry navigation (spline + raycast fallback).
+1. Запустите офлайн-сессию и добавьте AI-соперников.
+2. Откройте DriftAI на панели приложений, нажмите «Запустить дрифт».
+3. Все AI-машины начнут дрифтить. «Остановить» — вернуть штатный AI.
 
-## Control interception
+## Файлы
 
-Commands reach the physics through ac.overrideCarControls(carIndex) with combineAxis = false (full input replacement, not combining). The stock AI is additionally neutralized with physics.setAIAggression, setAICaution and setAILevel at 0. Interception health is verified each second via CarControlsInput:active().
+| Файл | Назначение |
+|---|---|
+| `manifest.ini` | Регистрация приложения в CSP |
+| `DriftAI.lua` | Жизненный цикл, сканер AI, построение карты, UI |
+| `driver.lua` | Контроллер дрифта: пробуксовка, скорость, руление |
+| `bounds.lua` | Карта границ трассы (вертикальные коллизии + стены) |
+| `track.lua` | Навигация по геометрии трассы без fastline |
 
-## Limitations
+## Перехват управления (CSP 0.3.2-preview2)
 
-- Offline sessions only.
-- physics.* calls require scripting physics allowed by the track configuration, usually enabled by default.
+- `ac.overrideCarControls(i)` → `ac.CarControlsInput` — работает для AI-машин из Lua-приложений.
+- `combineAxis = false` — полная замена газа/тормоза/ручника вместо суммирования; `steer` заменяет всегда; `requestedGearIndex` — прямая передача.
+- `CarControlsInput:active()` — приложение каждую секунду проверяет, что физика потребляет команды.
+- Штатный AI нейтрализуется `physics.setAIAggression/setAICaution/setAILevel`, отъезд в боксы запрещён `physics.preventAIFromRetiring`.
+
+## Ограничения
+
+- Только офлайн-сессии (в онлайн CSP не даёт приложениям управлять чужими машинами).
+- `physics.*` требует `[_SCRIPTING_PHYSICS] ALLOW_TOOLS=1` в `surfaces.ini` трассы (обычно включено).
+- Тюнинговые константы (цель пробуксовки, скорости, запас до стены) — в начале `driver.lua`.
