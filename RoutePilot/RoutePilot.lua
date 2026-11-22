@@ -1,13 +1,17 @@
 -- RoutePilot: route recording and AI control for Assetto Corsa CSP.
--- v0.2.6: explicit "no AI cars" detection — if the session has no AI opponents,
---         the log and the window status say so immediately (previously the app
---         just sat idle with heartbeats, which looked like "it does nothing").
--- v0.2.5: guaranteed logging (file created on first frame, 1s heartbeat,
---         SHUTDOWN marker; crash leaves everything up to the last second).
+-- v0.2.7: restored the saved-route autoload at init (regression since 0.2.5:
+--         the track key was not computed before the session scan, so the log
+--         showed an empty track and the saved route was never loaded — the
+--         autopilot button would always answer "no route").
+-- v0.2.6: explicit "no AI cars" detection with a clear warning.
+-- v0.2.5: guaranteed logging (file created on first frame, 1 s heartbeat,
+--         SHUTDOWN marker; a crash leaves everything up to the last second).
+-- NOTE: RoutePilot controls AI OPPONENTS only (car indices >= 1). The player's
+--       car (#0) is never controlled by this app.
 
 local Logger = require('logger')
 
-local APP_VERSION = "0.2.6"
+local APP_VERSION = "0.2.7"
 local STORAGE_PREFIX = "routepilot_route_"
 local SAMPLE_DISTANCE = 2.0
 local MAX_ROUTE_POINTS = 12000
@@ -482,7 +486,7 @@ local function startSelfTest()
     if car and car.isActive then carIndex = i; break end
   end
   if not carIndex then
-    state.selfTest.verdict = "Нет машин с индексом >= 1 (добавь AI-соперников в сессию)"
+    state.selfTest.verdict = "Нет машин с индексом >= 1 (тест возможен только с AI-соперниками)"
     log("SELFTEST: no car with index >= 1, cars=%d", sim.carsCount)
     logFlush()
     return
@@ -573,10 +577,9 @@ local function scanSession(sim)
   state.aiCount = aiCount
   if aiCount == 0 then
     log("WARNING: NO AI CARS in this session (cars=%d, only the player car). "
-      .. "RoutePilot controls AI opponents only. Add opponents in the CM session "
-      .. "setup (opponents/AI), restart the session, then record a route and "
-      .. "press 'Запустить автопилот'.", sim.carsCount)
-    state.status = "AI-машин нет! Добавь соперников в сетапе сессии (Content Manager) и перезапусти сессию."
+      .. "RoutePilot controls AI opponents only — add opponents in the CM session "
+      .. "setup, restart the session, record a route and press 'Запустить автопилот'.", sim.carsCount)
+    state.status = "AI-машин нет! Добавь соперников в сетапе сессии"
   end
   logFlush()
 end
@@ -597,6 +600,13 @@ local function updateInner(dt)
     else
       log("LOG ERROR: file could not be created: %s", tostring(state.log.writeError))
       ac.error("[RoutePilot] log file could not be created: " .. tostring(state.log.writeError))
+    end
+    -- v0.2.7: compute the track key and autoload the saved route (regression fix)
+    local ok, err = pcall(function() getTrackKey(); loadRoute() end)
+    if not ok then
+      state.status = "Ошибка инициализации: " .. tostring(err)
+      ac.error(state.status)
+      log("INIT ERROR: %s", tostring(err))
     end
     logFlush()
   end
@@ -674,7 +684,7 @@ function script.windowMain(dt)
     .. "   AI под управлением: " .. tostring(state.controlledCount))
   ui.text("Перехват активен (физика): " .. tostring(state.activeCount))
   if state.aiCount == 0 then
-    ui.textColored("AI-машин в сессии НЕТ — добавь соперников в сетапе сессии!",
+    ui.textColored("AI-машин нет в сессии — добавь соперников в сетапе сессии (Content Manager)",
       rgbm(1, 0.4, 0.3, 1))
   else
     ui.text("AI-машин в сессии: " .. tostring(state.aiCount))
@@ -749,10 +759,10 @@ function script.windowMain(dt)
       logFlush()
     end
   else
-    if ui.button("Запустить автопилот", vec2(ui.availableSpaceX(), 34)) then
+    if ui.button("Запустить автопилот (AI-машины по маршруту)", vec2(ui.availableSpaceX(), 34)) then
       if #state.route >= 3 then
         if state.aiCount == 0 and not state.controlAllCars then
-          state.status = "AI-машин нет — сначала добавь соперников в сессию"
+          state.status = "AI-машин нет — управлять некому"
           log("AUTOPILOT denied: no AI cars in session")
         else
           rebuildRoute()
@@ -761,11 +771,12 @@ function script.windowMain(dt)
           state.status = "Автопилот активен"
           log("AUTOPILOT start: %d points, allCars=%s",
             #state.route, tostring(state.controlAllCars))
-          logFlush()
         end
+        logFlush()
       else
         state.status = "Сначала запиши или загрузи маршрут"
         log("AUTOPILOT denied: no route")
+        logFlush()
       end
     end
   end
@@ -773,5 +784,6 @@ function script.windowMain(dt)
   ui.separator()
   ui.textWrapped("Статус: " .. state.status)
   ui.text("Притормаживают: " .. tostring(state.slowingCount))
-  ui.text("Коробка передач остаётся под управлением автомобиля.")
+  ui.textWrapped("RoutePilot ведёт по маршруту AI-соперников (машины #1+). "
+    .. "Машина игрока (#0) не управляется. Коробка передач — автомат автомобиля.")
 end
