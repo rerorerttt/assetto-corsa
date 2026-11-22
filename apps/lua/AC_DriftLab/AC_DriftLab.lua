@@ -1,9 +1,9 @@
--- AC DriftLab 0.1.0
+-- AC DriftLab 0.1.1
 -- Experimental AI input and telemetry recorder for CSP Lua apps.
 -- Controls only steering, throttle and brake. Gearbox remains under AI control.
 
 local APP = "AC DriftLab"
-local VERSION = "0.1.0"
+local VERSION = "0.1.1"
 local selectedCar = 0
 local aiWasActive = false
 local running, status, lastError = false, "Ожидание", ""
