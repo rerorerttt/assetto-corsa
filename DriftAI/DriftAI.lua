@@ -1,20 +1,18 @@
--- DriftAI main script (v1.2.0).
+-- DriftAI main script (v1.2.1).
 -- Makes every AI car in an offline session drift around the track continuously:
 -- auto-detects AI cars, neutralizes the stock AI controller, fully overrides
 -- controls (ac.overrideCarControls with combineAxis = false) and steers along
 -- the track geometry. No AI fast lane, no per-car setup, no track preparation.
 --
--- v1.2.0: the boundary map is built AUTOMATICALLY at session start (first
--- script.update frames): the whole track is scanned once with physics
--- raycasts (vertical drivable-surface checks + wall distances), so by the
--- time the user presses "Start" the walls are already fixed and drivers can
--- plan high-speed long drifts immediately. Also: near-WOT default throttle
--- and deterministic drift entry in driver.lua.
+-- v1.2.1: the boundary map is built AUTOMATICALLY at session start — vertical
+-- physics raycasts fix the drivable surface and horizontal rays measure the
+-- walls, before the user presses anything. Drivers plan speed against the free
+-- corridor (bounds.lua) and manage throttle to keep the rear wheels spinning.
 
 local Driver = require('driver')
 local Bounds = require('bounds')
 
-local APP_VERSION = '1.2.0'
+local APP_VERSION = '1.2.1'
 local ACTIVE_CHECK_INTERVAL = 1.0 -- seconds between controls:active() checks
 local SPAWN_SCAN_INTERVAL = 2.0   -- seconds between AI-car rescans
 
@@ -27,11 +25,12 @@ local state = {
   lastActiveCheck = 0,
   lastScan = 0,
   trackLengthM = 0,
-  status = 'Ожидание сессии…',
+  status = 'Готово. Нажми «Запустить дрифт».',
   splineAvailable = false,
   mapReady = false,
   mapProgress = 0,
   avgSlip = 0,
+  avgSpeed = 0,
   showDebug = false,
 }
 
@@ -57,6 +56,7 @@ end
 
 local function statusText(d)
   if d.state == 'drift' then return 'ДРИФТ' end
+  if d.state == 'initiate' then return 'вход в занос' end
   if d.state == 'accelerate' then return 'разгон' end
   if d.state == 'recover' then return 'восстановление' end
   return 'поиск трассы'
@@ -64,36 +64,30 @@ end
 
 -- ─────────────────── boundary map lifecycle ───────────────────
 
--- Build the boundary map automatically at session start, before the user
--- presses anything: vertical rays confirm the drivable surface, horizontal
--- rays measure wall distances. Built over several frames, no hitch.
-local function ensureBoundsMap()
-  if config.bounds and config.bounds.ready then return end
+-- (Re)create the boundary map: fixes the drivable area with vertical
+-- collision rays and the wall distances with horizontal rays.
+local function initBounds()
   local sim = ac.getSim()
-  if not sim or not sim.trackLengthM or sim.trackLengthM <= 0 then return end
-
-  if not config.bounds then
-    config.trackLengthM = sim.trackLengthM
-    state.splineAvailable = ac.hasTrackSpline and ac.hasTrackSpline() or false
-    config.bounds = Bounds.new(config.trackLengthM)
-    state.mapReady = config.bounds.ready
-    state.mapProgress = config.bounds:progressFraction()
-    ac.log('[DriftAI] session start: building boundary map, track length '
+  config.trackLengthM = sim and sim.trackLengthM or 0
+  state.splineAvailable = ac.hasTrackSpline and ac.hasTrackSpline() or false
+  config.bounds = Bounds.new(config.trackLengthM)
+  state.mapReady = config.bounds.ready
+  state.mapProgress = config.bounds:progressFraction()
+  if not state.mapReady then
+    ac.log('[DriftAI] scanning track boundaries (vertical collisions + walls), length: '
       .. tostring(config.trackLengthM) .. ' m')
-    if config.bounds.ready then
-      state.status = 'Границы трассы зафиксированы. Нажми «Запустить дрифт».'
-    end
   end
+end
 
-  if not config.bounds.ready then
-    config.bounds:buildStep()
-    state.mapProgress = config.bounds:progressFraction()
-    if config.bounds.ready then
-      state.mapReady = true
-      ac.log('[DriftAI] boundary map ready: ' .. tostring(config.bounds.good)
-        .. '/' .. tostring(config.bounds.total) .. ' samples')
-      state.status = 'Границы трассы зафиксированы. Нажми «Запустить дрифт».'
-    end
+-- Build the next slice of the map every frame; instant on short tracks.
+local function buildBoundsStep(dt)
+  if not config.bounds or config.bounds.ready then return end
+  config.bounds:buildStep()
+  state.mapProgress = config.bounds:progressFraction()
+  if config.bounds.ready then
+    state.mapReady = true
+    ac.log('[DriftAI] boundary map ready: ' .. tostring(config.bounds.good)
+      .. '/' .. tostring(config.bounds.total) .. ' samples')
   end
 end
 
@@ -114,20 +108,16 @@ local function startDrift()
     return
   end
 
-  -- boundary map should already be building/ready from session start;
-  -- start it here as a fallback in case the session was loaded oddly
-  ensureBoundsMap()
+  -- the map is usually ready already (built at session start);
+  -- if not, start it now and drift begins once it is usable
+  if not config.bounds then initBounds() end
 
   state.drivers = {}
   state.running = true
   state.lastScan = 0
-  if config.bounds and config.bounds.ready then
-    state.status = 'Дрифт запущен (границы уже зафиксированы)'
-  elseif config.bounds then
-    state.status = 'Дрифт запущен: достраиваю границы трассы…'
-  else
-    state.status = 'Дрифт запущен (карта границ не нужна: трасса без сплайна)'
-  end
+  state.status = state.mapReady
+    and 'Дрифт запущен.'
+    or 'Дрифт запущен: жду карту границ трассы…'
   ac.log('[DriftAI] drift started')
 end
 
@@ -137,7 +127,7 @@ local function stopDrift()
   state.activeCount = 0
   state.appliedCount = 0
   state.status = 'Остановлено. AI вернулись к штатному поведению.'
-  ac.log('[DriftAI] stopped')
+  ac.log('[DriftAI] drift stopped')
 end
 
 local function adoptCar(carIndex)
@@ -154,11 +144,10 @@ function script.update(dt)
   if not sim or sim.isReplayActive or sim.isOnlineRace then return end
   if sim.dt == 0 then return end -- paused
 
-  -- session just went live: build the boundary map immediately, before
-  -- the user even opens the window or presses anything
-  if sim.isLive then
-    ensureBoundsMap()
-  end
+  -- build the boundary map automatically at session start,
+  -- way before the user starts the drift
+  if not config.bounds then initBounds() end
+  buildBoundsStep(dt)
 
   if not state.running then
     state.lastScan = state.lastScan + dt
@@ -167,26 +156,10 @@ function script.update(dt)
       local list = collectAICars()
       state.aiCount = #list
       if #list == 0 then
-        if not state.mapReady then
-          state.status = 'AI-машин нет; границы трассы сканируются…'
-        else
-          state.status = 'AI-машин нет. Добавь соперников в сетапе сессии.'
-        end
+        state.status = 'AI-машин нет. Добавь соперников в сетапе сессии.'
       end
     end
     return
-  end
-
-  -- build the boundary map over a few frames (fallback path)
-  if config.bounds and not config.bounds.ready then
-    config.bounds:buildStep()
-    state.mapProgress = config.bounds:progressFraction()
-    if config.bounds.ready then
-      state.mapReady = true
-      state.status = 'Границы трассы зафиксированы. AI в деле.'
-      ac.log('[DriftAI] boundary map ready: ' .. tostring(config.bounds.good)
-        .. '/' .. tostring(config.bounds.total) .. ' samples')
-    end
   end
 
   -- rescan for new AI cars periodically
@@ -207,20 +180,21 @@ function script.update(dt)
   end
 
   -- per-frame control of every AI car
-  local applied, slipSum, slipCount = 0, 0, 0
+  local applied, slipSum, slipCount, speedSum = 0, 0, 0, 0
   for carIndex, driver in pairs(state.drivers) do
     local car = ac.getCar(carIndex)
     if car and car.isActive then
       driver:update(car, dt)
       if driver:applyControls(dt) then applied = applied + 1 end
       slipSum = slipSum + math.abs(driver.slipAngle)
+      speedSum = speedSum + car.speedKmh
       slipCount = slipCount + 1
     end
   end
 
   -- verify the physics actually consumes the overrides (watchdog)
   state.lastActiveCheck = state.lastActiveCheck + dt
-  if state.lastActiveCheck >= ACTIVE_CHECK_INTERVAL then
+  if state.lastActiveCheck >= ACTIVE_CHECK_INTERVAL {
     state.lastActiveCheck = 0
     local active = 0
     for _, driver in pairs(state.drivers) do
@@ -230,7 +204,10 @@ function script.update(dt)
   end
 
   state.appliedCount = applied
-  if slipCount > 0 then state.avgSlip = math.deg(slipSum / slipCount) end
+  if slipCount > 0 then
+    state.avgSlip = math.deg(slipSum / slipCount)
+    state.avgSpeed = speedSum / slipCount
+  end
 
   if state.appliedCount == 0 and state.aiCount == 0 then
     state.status = 'AI-машин нет. Добавь соперников в сетапе сессии.'
@@ -256,13 +233,13 @@ function script.windowMain(dt)
   ui.separator()
 
   ui.textWrapped('Статус: ' .. state.status)
-  ui.text('AI-машин в сессии: ' .. tostring(state.aiCount)
+  ui.text('AI-машин: ' .. tostring(state.aiCount)
     .. '  ·  под контролем: ' .. tostring(state.appliedCount)
     .. '  ·  перехват активен: ' .. tostring(state.activeCount))
   ui.text('Сплайн трассы: ' .. (state.splineAvailable and 'есть' or 'нет'))
   if config.bounds and not config.bounds.ready then
     ui.text('Карта границ: ' .. string.format('%.0f%%', state.mapProgress * 100)
-      .. ' (вертикальные коллизии + стены)')
+      .. ' (фиксируется сразу при запуске игры)')
   else
     ui.text('Карта границ: ' .. (state.mapReady and 'готова' or 'ожидание сессии'))
   end
@@ -278,16 +255,16 @@ function script.windowMain(dt)
     end
   end
 
-  ui.textWrapped('Границы трассы фиксируются автоматически при старте сессии: '
-    .. 'вертикальные лучи подтверждают проезжаемую поверхность, горизонтальные '
-    .. 'измеряют стены слева/справа/впереди. После запуска приложение само '
-    .. 'найдёт все AI-машины, отключит штатный AI-контроллер и поведёт каждую '
-    .. 'в управляемом заносе: газ держит пробуксовку задних колёс (сам '
-    .. 'прибавляет и понижает передачу, если букса не хватает), скорость '
-    .. 'планирует по расстоянию до стен. Ничего настраивать не нужно.')
+  ui.textWrapped('Границы трассы фиксируются автоматически сразу при загрузке сессии '
+    .. '(вертикальные коллизии + стены). После запуска приложение само найдёт все '
+    .. 'AI-машины, отключит штатный AI-контроллер и поведёт каждую в управляемом заносе: '
+    .. 'газ держит пробуксовку задних колёс (сам прибавляет и понижает передачу, если '
+    .. 'букса не хватает), скорость планирует по свободному коридору — длинный быстрый '
+    .. 'дрифт на открытых участках, торможение до тесных мест.')
 
   ui.separator()
-  ui.text('Средний угол скольжения: ' .. fmt(state.avgSlip) .. '°')
+  ui.text('Средний угол скольжения: ' .. fmt(state.avgSlip) .. '°  ·  средняя скорость: '
+    .. fmt(state.avgSpeed) .. ' км/ч')
 
   ui.separator()
   ui.text('Машины:')
@@ -297,11 +274,13 @@ function script.windowMain(dt)
     local car = ac.getCar(carIndex)
     local name = car and ac.getCarName(carIndex) or ('#' .. carIndex)
     local color = rgbm(0.4, 1, 0.6, 1)
+    if driver.state == 'initiate' or driver.state == 'accelerate' then color = rgbm(0.6, 0.8, 1, 1) end
     if driver.state == 'recover' then color = rgbm(1, 0.8, 0.2, 1) end
     if driver.state == 'lost' then color = rgbm(1, 0.4, 0.3, 1) end
     local extra = ''
     if driver.rearSlip then extra = string.format('  букс %.2f', driver.rearSlip) end
-    if driver.wallAhead then extra = extra .. string.format('  стена %d м', driver.wallAhead) end
+    if driver.corridor then extra = extra .. string.format('  коридор %d м', driver.corridor) end
+    extra = extra .. string.format('  лимит %d', driver.limitKmh)
     textColored(string.format('#%d %s — %s  %s  slip %.0f°%s',
       carIndex, name, statusText(driver),
       car and (fmt(car.speedKmh) .. ' км/ч') or '--',
@@ -323,8 +302,12 @@ function script.windowMain(dt)
     ui.textWrapped('Перехват: ac.overrideCarControls(i), combineAxis=false, '
       .. 'steer/gas/brake/handbrake/requestedGearIndex; штатный AI отключён '
       .. 'через physics.setAIAggression/setAICaution.')
-    ui.textWrapped('Карта: physics.raycastTrack, шаг 8 м; целевая пробуксовка 0.30; '
-      .. 'скорость = sqrt(2*a*(d_стены − 8 м)).')
+    ui.textWrapped('Карта: physics.raycastTrack, шаг 8 м, строится сама при загрузке '
+      .. 'сессии; целевая пробуксовка 0.35; вход 70 км/ч, предел 170 км/ч; '
+      .. 'лимит скорости = sqrt(2*8*(коридор − 12 м)).')
     ui.popFont()
   end
 end
+
+-- Lua apps have no onSessionStart callback; the map is initialised lazily
+-- in script.update, which runs from the very first frame of the session.
