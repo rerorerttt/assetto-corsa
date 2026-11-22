@@ -25,6 +25,14 @@ Enable RoutePilot in Content Manager's Lua Apps list and open it in a session.
 
 Routes are stored separately by full track ID using CSP `ac.storage` and are autoloaded when the app starts on a track with a saved route.
 
+## Driver telemetry route recording (v0.3.0)
+
+The route recorder now stores a driver reference profile alongside each route point. Samples include speed, normalized steering (relative to the player's steering lock), throttle, brake, clutch, handbrake, gear, RPM, body slip angle, lateral velocity, yaw rate and rear-wheel normalized slip.
+
+AI cars use the saved profile as a feed-forward reference for steering, speed and pedals, with live route/yaw feedback and the existing spin/traction safeguards. Old three-column route files remain readable; saving them again writes the V2 format. Record a clean manual lap, stop recording, then save the route. The AI reads the profile from the same per-track route file.
+
+The recorded inputs are reference targets, not a deterministic replay: different cars, tyres, setups, grip and weather require live correction. The controller must be validated in-game and tuned from AI telemetry before being treated as stable.
+
 ## Current scope
 
 - Records player-car world X/Z coordinates and speed.
