@@ -194,7 +194,7 @@ function script.update(dt)
 
   -- verify the physics actually consumes the overrides (watchdog)
   state.lastActiveCheck = state.lastActiveCheck + dt
-  if state.lastActiveCheck >= ACTIVE_CHECK_INTERVAL {
+  if state.lastActiveCheck >= ACTIVE_CHECK_INTERVAL then
     state.lastActiveCheck = 0
     local active = 0
     for _, driver in pairs(state.drivers) do
