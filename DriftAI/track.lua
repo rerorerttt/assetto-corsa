@@ -11,7 +11,6 @@
 --
 -- The app never requires a custom fastline.ai and never writes track files.
 
-local math = require('math')
 local atan2, sqrt = math.atan2, math.sqrt
 
 local Track = {}
@@ -79,24 +78,16 @@ end
 
 local RAY_LENGTH = 40
 
----Sample local ground below/ahead of the car via physics raycasts.
----Returns a short polyline going forward from the car, or nil.
+---Sample local ground below the car via a physics raycast.
+---Returns true if the car is over a drivable physical surface.
 ---@param pos vec3 @car position
----@param dirX number @unit forward direction (x)
----@param dirZ number @unit forward direction (z)
----@return table? points polyline of {x, z}
-function Track.sampleAhead(pos, dirX, dirZ)
+---@return boolean
+function Track.groundBelow(pos)
   local ok, ray = pcall(render.createRay, pos + vec3(0, 1, 0), vec3(0, -1, 0), RAY_LENGTH)
-  if not ok or not ray then return nil end
+  if not ok or not ray then return false end
   local hitPos = vec3()
   local hitNormal = vec3()
-  local d = ray:physics(hitPos, hitNormal, false, false)
-  if d < 0 then return nil end
-  return {
-    { x = pos.x, z = pos.z },
-    { x = pos.x + dirX * 5, z = pos.z + dirZ * 5 },
-    { x = pos.x + dirX * 15, z = pos.z + dirZ * 15 }
-  }
+  return ray:physics(hitPos, hitNormal, false, false) >= 0
 end
 
 ---Target point ahead of the car for steering, plus half-width estimation.
