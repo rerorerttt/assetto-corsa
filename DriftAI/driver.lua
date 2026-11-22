@@ -12,11 +12,15 @@
 -- Stock AI is additionally neutralized with physics.setAIAggression/setAICaution/setAILevel
 -- (verified signatures from real-world apps: FullSendAI, Realistic Trackday).
 
-local Track = require('DriftAI/track')
+local Track = require('track')
 
-local math = require('math')
 local clamp = math.clamp
 local abs, max, min, atan2, rad = math.abs, math.max, math.min, math.atan2, math.rad
+
+local function sign(v)
+  if v > 0 then return 1 elseif v < 0 then return -1 end
+  return 0
+end
 
 -- ─────────────────── tunables ───────────────────
 
@@ -61,9 +65,8 @@ function Driver.new(carIndex, config)
   self.progress = nil
   self.lateral = 0
   self.driftDir = 0             -- -1 right drift, 1 left drift, 0 unset
-  self.driftDirLock = 0         -- time the drift direction stays forced
+  self.driftDirLock = 0          -- time the drift direction stays forced
   self.stuckTimer = 0
-  self.lastSpeed = 0
   self.driftTime = 0
   return self
 end
@@ -73,13 +76,12 @@ local function bodySlipAngle(car)
   -- car.look is the forward vector, car.velocity is world velocity in m/s.
   local v = car.velocity
   local speed = v:length()
-  if speed < 1.5 then return 0, 0 end
+  if speed < 1.5 then return 0 end
   local look = car.look
   local dx, dz = v.x / speed, v.z / speed
   local dot = clamp(look.x * dx + look.z * dz, -1, 1)
   local cross = look.z * dx - look.x * dz
-  local slip = atan2(cross, dot)
-  return slip, speed
+  return atan2(cross, dot)
 end
 
 -- Compute steering command from drift stabilisation + navigation.
@@ -151,7 +153,7 @@ end
 function Driver:update(car, dt)
   self.stateTime = self.stateTime + dt
 
-  local slip, speed = bodySlipAngle(car)
+  local slip = bodySlipAngle(car)
   self.prevSlipAngle = self.slipAngle
   self.slipAngle = slip
   self.slipRate = (slip - self.prevSlipAngle) / max(dt, 1e-3)
@@ -188,7 +190,7 @@ function Driver:update(car, dt)
       self.state = 'accelerate' -- re-initiate
       self.stateTime = 0
     end
-    -- spin-out guard: too much slip for too long
+    -- spin-out guard: too much slip
     if abs(slip) > rad(75) then
       self.state = 'recover'
       self.stateTime = 0
@@ -256,14 +258,14 @@ function Driver:update(car, dt)
     if halfWidth then
       local margin = halfWidth - 3.5
       if abs(self.lateral) > margin then
-        self.steer = clamp(self.steer - math.sign(self.lateral) * 0.25, -1, 1)
+        self.steer = clamp(self.steer - sign(self.lateral) * 0.25, -1, 1)
         brake = max(brake, 0.25)
       end
     end
 
   elseif self.state == 'recover' then
     -- counter-steer against the spin, brake moderately, then resume
-    self.steer = clamp(-math.sign(slip) * abs(slip) * 1.2, -1, 1)
+    self.steer = clamp(-sign(slip) * abs(slip) * 1.2, -1, 1)
     brake = clamp(0.3 + abs(slip) * 0.3, 0.2, 0.8)
     gas = 0
 
