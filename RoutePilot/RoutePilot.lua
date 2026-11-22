@@ -1,5 +1,5 @@
 -- RoutePilot.lua
--- RoutePilot 0.3 - Stable Route Following Controller
+-- RoutePilot 0.4 - Route Following, Collision Avoidance and AI Recovery
 -- CSP Lua Apps
 -- Controls: steering, throttle, brake only.
 -- Gearbox and transmission remain under vehicle control.
@@ -46,6 +46,21 @@ local CFG = {
   SPAWN_STABLE_TIME = 0.35,
   SPAWN_WAIT_TIMEOUT = 8.0,
 
+  RECOVERY_STUCK_TIME = 10.0,
+  RECOVERY_MIN_MOVE = 3.0,
+  RECOVERY_AIR_HEIGHT = 6.0,
+  RECOVERY_AIR_TIME = 10.0,
+  RECOVERY_OFF_ROUTE = 35.0,
+  RECOVERY_OFF_ROUTE_TIME = 2.0,
+  RECOVERY_COOLDOWN = 15.0,
+  RECOVERY_SAFE_GAP = 14.0,
+  RECOVERY_SEARCH_STEP = 16.0,
+  RECOVERY_SEARCH_COUNT = 12,
+
+  COLLISION_HORIZON = 4.0,
+  COLLISION_RADIUS = 6.5,
+  COLLISION_EMERGENCY_RADIUS = 3.2,
+
   LOG_INTERVAL = 1.0,
   MAX_ROUTE_POINTS = 50000,
 }
@@ -59,7 +74,6 @@ local state = {
   recording = false,
   loopRoute = true,
 
-  speedMin = 60,
   speedMax = 140,
 
   followGap = 8.0,
@@ -501,8 +515,6 @@ local function collectActiveAICars(sim)
 end
 
 local function teleportAICarsToRoute(aiCars)
-  -- Latch before native calls: even a partial failure must not trigger
-  -- a second mass teleport after the route is loaded again.
   state.spawnPerformed = true
 
   if type(physics) ~= "table" or type(physics.setAICarPosition) ~= "function" then
@@ -528,7 +540,6 @@ local function teleportAICarsToRoute(aiCars)
     metrics.length / (count + 1)
   )
 
-  -- Do not compress the grid below the safe minimum.
   if gap < CFG.SPAWN_MIN_GAP then
     state.status = "Недостаточно места для безопасной расстановки"
     writeLog(
@@ -550,7 +561,6 @@ local function teleportAICarsToRoute(aiCars)
       local nearestDistance, playerLineError =
         findRouteDistanceAtPosition(player.position, metrics)
 
-      -- Keep the first AI car one full interval ahead of the player.
       startDistance = nearestDistance + gap
 
       writeLog(
@@ -575,19 +585,21 @@ local function teleportAICarsToRoute(aiCars)
     tostring(metrics.loop)
   )
 
-  -- All native teleports are issued in one update. The route controller
-  -- resumes on the following frame, after the entire AI chain is positioned.
   for order = 1, count do
     local carIndex = aiCars[order]
     local routeDistance = startDistance + (order - 1) * gap
     local position, direction = sampleSpawnRoute(metrics, routeDistance)
 
     if position and direction then
+      -- Direction is inverted: the supplied vector must match the
+      -- backward axis used by CSP's AI positioning call.
+      local spawnDirection = vec3(-direction.x, -direction.y, -direction.z)
+
       local ok, result = pcall(
         physics.setAICarPosition,
         carIndex,
         position,
-        direction
+        spawnDirection
       )
 
       if ok and result ~= false then
@@ -602,9 +614,9 @@ local function teleportAICarsToRoute(aiCars)
           position.x,
           position.y,
           position.z,
-          direction.x,
-          direction.y,
-          direction.z
+          spawnDirection.x,
+          spawnDirection.y,
+          spawnDirection.z
         )
       else
         failed = failed + 1
@@ -681,7 +693,6 @@ local function updateStartupTeleport(sim, dt)
     return false
   end
 
-  -- Compare actual car indices, not only the number of cars.
   if roster ~= state.spawnLastRoster then
     state.spawnLastRoster = roster
     state.spawnStable = 0
@@ -727,9 +738,8 @@ end
 ------------------------------------------------------------
 
 local function newPersonality(carIndex)
-  local span = math.max(0, state.speedMax - state.speedMin)
-
-  local kmh = state.speedMin + span * 0.5
+  local kmh = state.speedMax
+  local car = ac.getCar(carIndex)
 
   local p = {
     segIdx = 1,
@@ -752,8 +762,16 @@ local function newPersonality(carIndex)
     previousLatVelocity = 0,
 
     stuck = 0,
+    moveAnchor = car and vec3(car.position.x, car.position.y, car.position.z) or nil,
+    moveTimer = 0,
+    airTimer = 0,
+    offRouteTimer = 0,
+    recoveryCooldown = 0,
+    recoveryCount = 0,
 
     lineDist = 0,
+    routeY = car and safeNumber(car.position.y) or 0,
+    collisionRisk = 0,
 
     targetX = 0,
     targetZ = 0,
@@ -765,8 +783,6 @@ local function newPersonality(carIndex)
 
     lastCurve = 0,
   }
-
-  local car = ac.getCar(carIndex)
 
   if car and #state.nodes >= 2 then
     local bestI = 1
@@ -879,7 +895,6 @@ local function findNearestSegment(car, p)
     end
   end
 
-  -- Recover if the vehicle has moved far from the expected segment.
   if bestDist > 20 * 20 then
     for i = 1, segmentCount do
       checkSegment(i)
@@ -888,7 +903,11 @@ local function findNearestSegment(car, p)
 
   p.segIdx = bestSeg
 
-  return bestSeg, bestT, math.sqrt(bestDist), segmentCount
+  local routeA = nodes[bestSeg]
+  local routeB = getSegmentEnd(bestSeg, count)
+  local routeY = lerp(routeA.y, routeB.y, bestT)
+
+  return bestSeg, bestT, math.sqrt(bestDist), segmentCount, routeY
 end
 
 ------------------------------------------------------------
@@ -1028,8 +1047,8 @@ local function planTargetSpeed(p, speed)
   local distance = 0
   local current = p.segIdx
 
-  -- Look ahead through upcoming corners.
-  for offset = 0, 12 do
+  -- Examine a longer section of the route, not only the next few points.
+  for offset = 0, 40 do
     local index = current + offset
 
     if state.loopRoute then
@@ -1047,7 +1066,8 @@ local function planTargetSpeed(p, speed)
         CFG.MAX_LATERAL_ACCEL / curvature
       )
 
-      -- Allow braking distance before reaching the corner.
+      -- Braking distance is calculated from the current position
+      -- to the upcoming corner.
       local safeSpeed = math.sqrt(
         cornerSpeed * cornerSpeed +
         2 * CFG.BRAKE_ACCEL * distance
@@ -1064,7 +1084,7 @@ local function planTargetSpeed(p, speed)
 
   p.lastCurve = maxCurve
 
-  return math.max(0, targetSpeed)
+  return math.max(0, math.min(targetSpeed, p.cruiseSpeed))
 end
 
 ------------------------------------------------------------
@@ -1077,7 +1097,6 @@ local function readVehicleDynamics(car, p, dt)
 
   local fx, fz = normalize2(look.x, look.z)
 
-  -- Local right direction.
   local rx = fz
   local rz = -fx
 
@@ -1087,7 +1106,6 @@ local function readVehicleDynamics(car, p, dt)
   local longitudinalVelocity = vx * fx + vz * fz
   local lateralVelocity = vx * rx + vz * rz
 
-  -- Actual direction of travel versus body direction.
   local slipAngle = math.atan2(
     lateralVelocity,
     math.max(0.5, longitudinalVelocity)
@@ -1111,7 +1129,6 @@ local function readVehicleDynamics(car, p, dt)
     safeNumber(car.speedMs, longitudinalVelocity)
   )
 
-  -- Approximate lateral acceleration from angular motion.
   local lateralAccel = math.abs(yawRate * speed)
 
   p.previousFx = fx
@@ -1188,13 +1205,7 @@ local function calculateSteering(car, p, speed, fx, fz)
     dirZ
   )
 
-  -- Basic route following.
   local routeSteer = angle * CFG.STEER_GAIN
-
-  -- Countersteering compensation.
-  -- When the vehicle moves sideways, the controller compensates
-  -- for the actual velocity direction instead of chasing the
-  -- route with the body heading alone.
   local slipCompensation = p.slipAngle * 0.62
 
   local steer = routeSteer + slipCompensation
@@ -1225,7 +1236,6 @@ local function filterSteering(p, target, dt)
     alpha
   )
 
-  -- Limit steering speed to suppress oscillation.
   local maxChange = CFG.STEER_RATE * dt
 
   local delta = filtered - p.steer
@@ -1248,43 +1258,89 @@ local function filterSteering(p, target, dt)
 end
 
 ------------------------------------------------------------
--- CAR FOLLOWING
+-- CAR FOLLOWING AND COLLISION PREDICTION
 ------------------------------------------------------------
 
 local function carAhead(carIndex, car)
   local fx, fz = normalize2(car.look.x, car.look.z)
-
   local sim = ac.getSim()
 
   if not sim then
-    return nil, nil
+    return nil, nil, math.huge
   end
 
   local bestGap = nil
   local bestSpeed = nil
+  local riskTarget = math.huge
+
+  local ownVx = safeNumber(car.velocity.x)
+  local ownVz = safeNumber(car.velocity.z)
+  local ownSpeed = math.max(0, safeNumber(car.speedMs))
 
   for i = 0, sim.carsCount - 1 do
     if i ~= carIndex then
       local other = ac.getCar(i)
 
       if other and other.isActive then
-        local dx = other.position.x - car.position.x
-        local dz = other.position.z - car.position.z
+        local dx = safeNumber(other.position.x) - safeNumber(car.position.x)
+        local dz = safeNumber(other.position.z) - safeNumber(car.position.z)
 
+        local distance = math.sqrt(dx * dx + dz * dz)
         local forward = dx * fx + dz * fz
+        local lateral = math.abs(dx * fz - dz * fx)
 
-        if forward > 0 and forward < 80 then
-          local lateral = math.abs(
-            dx * fz - dz * fx
-          )
+        local otherSpeed = math.max(0, safeNumber(other.speedMs))
+        local ovx = safeNumber(other.velocity.x)
+        local ovz = safeNumber(other.velocity.z)
 
-          if lateral <= CFG.FOLLOW_LATERAL then
-            if not bestGap or forward < bestGap then
-              bestGap = forward
-              bestSpeed = math.max(
-                0,
-                safeNumber(other.speedMs)
-              )
+        -- Standard following-distance check.
+        if forward > 0 and forward < 90 and lateral < CFG.FOLLOW_LATERAL + 1.5 then
+          if not bestGap or forward < bestGap then
+            bestGap = forward
+            bestSpeed = otherSpeed
+          end
+        end
+
+        -- Immediate collision danger, including stationary vehicles.
+        if distance <= 2.5 then
+          riskTarget = 0
+        end
+
+        -- Relative-motion prediction for side-by-side and crossing cars.
+        if distance < 100 then
+          local rvx = ownVx - ovx
+          local rvz = ownVz - ovz
+
+          local rv2 = rvx * rvx + rvz * rvz
+          local closing = dx * rvx + dz * rvz
+
+          if rv2 > 0.04 and closing > 0 then
+            local t = clamp(
+              closing / rv2,
+              0,
+              CFG.COLLISION_HORIZON
+            )
+
+            local cx = dx - rvx * t
+            local cz = dz - rvz * t
+
+            local closest = math.sqrt(cx * cx + cz * cz)
+
+            if closest < CFG.COLLISION_RADIUS then
+              local safe = 0
+
+              if closest > CFG.COLLISION_EMERGENCY_RADIUS then
+                local factor = clamp(
+                  (closest - CFG.COLLISION_EMERGENCY_RADIUS) /
+                  (CFG.COLLISION_RADIUS - CFG.COLLISION_EMERGENCY_RADIUS),
+                  0,
+                  1
+                )
+
+                safe = ownSpeed * factor
+              end
+
+              riskTarget = math.min(riskTarget, safe)
             end
           end
         end
@@ -1292,7 +1348,7 @@ local function carAhead(carIndex, car)
     end
   end
 
-  return bestGap, bestSpeed
+  return bestGap, bestSpeed, riskTarget
 end
 
 ------------------------------------------------------------
@@ -1314,10 +1370,6 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
     CFG.MAX_BRAKE
   )
 
-  local stability = p.stability
-
-  -- Progressive throttle reduction during loss of grip.
-  -- The more sideways the vehicle moves, the less power it receives.
   local throttleFactor = lerp(
     1.0,
     0.05,
@@ -1326,14 +1378,10 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
 
   gas = gas * throttleFactor
 
-  -- Do not apply aggressive braking simply because the car is
-  -- sliding. First reduce engine torque and allow the vehicle
-  -- to regain stability.
   if p.slipSeverity > 0.80 then
     gas = math.min(gas, 0.08)
   end
 
-  -- If speed is already below target, do not brake.
   if error >= 0 then
     brake = 0
   end
@@ -1366,6 +1414,248 @@ local function releaseCar(carIndex)
 end
 
 ------------------------------------------------------------
+-- AI RECOVERY: FREE ROUTE POSITION SEARCH
+------------------------------------------------------------
+
+local function isRecoverySpotFree(carIndex, position)
+  local sim = ac.getSim()
+
+  if not sim then
+    return false
+  end
+
+  for i = 0, sim.carsCount - 1 do
+    if i ~= carIndex then
+      local other = ac.getCar(i)
+
+      if other and other.isActive and
+         flatDist(position, other.position) < CFG.RECOVERY_SAFE_GAP then
+        return false
+      end
+    end
+  end
+
+  return true
+end
+
+local function findRecoverySpot(carIndex, car)
+  local metrics = buildSpawnRouteMetrics()
+
+  if not metrics then
+    return nil, nil, nil
+  end
+
+  local base = findRouteDistanceAtPosition(car.position, metrics)
+
+  -- Search forward on the route. Every candidate is checked against
+  -- the player and every active AI car.
+  for step = 1, CFG.RECOVERY_SEARCH_COUNT do
+    local distance = base + CFG.RECOVERY_SEARCH_STEP * step
+
+    if not metrics.loop then
+      distance = clamp(distance, 0, metrics.length)
+    end
+
+    local position, direction = sampleSpawnRoute(metrics, distance)
+
+    if position and direction and isRecoverySpotFree(carIndex, position) then
+      return position, direction, distance
+    end
+  end
+
+  -- On an open route, also search behind the current position.
+  if not metrics.loop then
+    for step = 1, CFG.RECOVERY_SEARCH_COUNT do
+      local distance = base - CFG.RECOVERY_SEARCH_STEP * step
+
+      if distance >= 0 then
+        local position, direction = sampleSpawnRoute(metrics, distance)
+
+        if position and direction and isRecoverySpotFree(carIndex, position) then
+          return position, direction, distance
+        end
+      end
+    end
+  end
+
+  return nil, nil, nil
+end
+
+------------------------------------------------------------
+-- AI RECOVERY: TELEPORT AND CONTROLLER RESET
+------------------------------------------------------------
+
+local function recoverAICar(carIndex, car, reason)
+  if type(physics) ~= "table" or type(physics.setAICarPosition) ~= "function" then
+    writeLog(
+      "RECOVERY_ABORT id=%d reason=%s api=unavailable",
+      carIndex,
+      reason
+    )
+
+    return false
+  end
+
+  local position, direction, routeDistance =
+    findRecoverySpot(carIndex, car)
+
+  if not position or not direction then
+    writeLog(
+      "RECOVERY_WAIT id=%d reason=%s no_free_route_spot",
+      carIndex,
+      reason
+    )
+
+    return false
+  end
+
+  -- Use the same direction convention as the startup grid.
+  local spawnDirection = vec3(
+    -direction.x,
+    -direction.y,
+    -direction.z
+  )
+
+  local ok, result = pcall(
+    physics.setAICarPosition,
+    carIndex,
+    position,
+    spawnDirection
+  )
+
+  if not ok or result == false then
+    writeLog(
+      "RECOVERY_FAILED id=%d reason=%s error=%s",
+      carIndex,
+      reason,
+      tostring(result)
+    )
+
+    return false
+  end
+
+  local previousRecoveries =
+    state.p[carIndex] and state.p[carIndex].recoveryCount or 0
+
+  state.p[carIndex] = nil
+  newPersonality(carIndex)
+
+  local p = state.p[carIndex]
+
+  if p then
+    p.recoveryCooldown = CFG.RECOVERY_COOLDOWN
+    p.recoveryCount = previousRecoveries + 1
+
+    p.moveAnchor = vec3(
+      position.x,
+      position.y,
+      position.z
+    )
+
+    p.moveTimer = 0
+    p.airTimer = 0
+    p.offRouteTimer = 0
+  end
+
+  state.status = string.format(
+    "Восстановление AI #%d: %s",
+    carIndex,
+    reason
+  )
+
+  writeLog(
+    "RECOVERY_SUCCESS id=%d reason=%s route_distance=%.2f pos=(%.2f,%.2f,%.2f)",
+    carIndex,
+    reason,
+    routeDistance,
+    position.x,
+    position.y,
+    position.z
+  )
+
+  return true
+end
+
+------------------------------------------------------------
+-- AI RECOVERY: STUCK, AIRBORNE AND OFF-ROUTE DETECTION
+------------------------------------------------------------
+
+local function updateRecoveryState(carIndex, car, p, dt, collisionHold)
+  p.recoveryCooldown = math.max(
+    0,
+    (p.recoveryCooldown or 0) - dt
+  )
+
+  local _, _, lineError, _, routeY =
+    findNearestSegment(car, p)
+
+  p.lineDist = lineError
+  p.routeY = routeY or safeNumber(car.position.y)
+
+  if not p.moveAnchor then
+    p.moveAnchor = vec3(
+      car.position.x,
+      car.position.y,
+      car.position.z
+    )
+
+    p.moveTimer = 0
+  end
+
+  -- Three metres of real chassis displacement resets the ten-second timer.
+  p.moveTimer = (p.moveTimer or 0) + dt
+
+  if flatDist(p.moveAnchor, car.position) >= CFG.RECOVERY_MIN_MOVE then
+    p.moveAnchor = vec3(
+      car.position.x,
+      car.position.y,
+      car.position.z
+    )
+
+    p.moveTimer = 0
+  end
+
+  -- Height is measured against the interpolated height of the route.
+  local height =
+    safeNumber(car.position.y) - safeNumber(p.routeY)
+
+  if height > CFG.RECOVERY_AIR_HEIGHT then
+    p.airTimer = (p.airTimer or 0) + dt
+  else
+    p.airTimer = 0
+  end
+
+  -- A severe route departure is recovered earlier than a normal stall.
+  if lineError > CFG.RECOVERY_OFF_ROUTE then
+    p.offRouteTimer = (p.offRouteTimer or 0) + dt
+  else
+    p.offRouteTimer = 0
+  end
+
+  if p.recoveryCooldown > 0 then
+    return false
+  end
+
+  local reason = nil
+
+  if p.airTimer >= CFG.RECOVERY_AIR_TIME then
+    reason = "airborne_10s"
+
+  elseif p.moveTimer >= CFG.RECOVERY_STUCK_TIME then
+    reason = collisionHold and "blocked_10s" or "stuck_10s"
+
+  elseif p.offRouteTimer >= CFG.RECOVERY_OFF_ROUTE_TIME then
+    reason = "off_route"
+  end
+
+  if reason then
+    return recoverAICar(carIndex, car, reason)
+  end
+
+  return false
+end
+
+------------------------------------------------------------
 -- MAIN AI CONTROL
 ------------------------------------------------------------
 
@@ -1383,10 +1673,8 @@ local function updateLineCar(carIndex, car, dt)
     dt
   )
 
-  -- 1. Detect vehicle instability.
   calculateStability(p)
 
-  -- 2. Calculate steering using the recorded route.
   local steerTarget = calculateSteering(
     car,
     p,
@@ -1395,31 +1683,25 @@ local function updateLineCar(carIndex, car, dt)
     fz
   )
 
-  -- 3. Smooth steering.
   local steer = filterSteering(
     p,
     steerTarget,
     dt
   )
 
-  -- 4. Calculate speed required for upcoming corners.
+  -- Calculate speed from upcoming route curvature.
   local targetSpeed = planTargetSpeed(p, speed)
 
-  -- 5. Avoid the vehicle ahead.
-  local gap, leaderSpeed = carAhead(
-    carIndex,
-    car
-  )
+  -- Check the car ahead and predict possible collisions.
+  local gap, leaderSpeed, collisionTarget =
+    carAhead(carIndex, car)
 
   if gap then
-    local safeSpeed = math.sqrt(
-      math.max(
-        0,
-        leaderSpeed * leaderSpeed +
-        2 * CFG.BRAKE_ACCEL *
-        math.max(0, gap - state.followGap)
-      )
-    )
+    local safeSpeed = math.sqrt(math.max(
+      0,
+      leaderSpeed * leaderSpeed +
+      2 * CFG.BRAKE_ACCEL * math.max(0, gap - state.followGap)
+    ))
 
     targetSpeed = math.min(
       targetSpeed,
@@ -1427,13 +1709,30 @@ local function updateLineCar(carIndex, car, dt)
     )
 
     if gap < state.followGap then
+      targetSpeed = math.min(
+        targetSpeed,
+        math.max(
+          0,
+          leaderSpeed - (state.followGap - gap) * 0.8
+        )
+      )
+    end
+
+    if gap < 2.5 then
       targetSpeed = 0
     end
   end
 
-  p.targetSpeed = targetSpeed
+  if collisionTarget and collisionTarget < math.huge then
+    targetSpeed = math.min(
+      targetSpeed,
+      collisionTarget
+    )
+  end
 
-  -- 6. Adapt throttle to grip and actual vehicle movement.
+  p.collisionRisk = collisionTarget and collisionTarget < math.huge
+    and math.max(0, speed - collisionTarget) or 0
+
   local gas, brake = calculateThrottle(
     p,
     speed,
@@ -1441,15 +1740,27 @@ local function updateLineCar(carIndex, car, dt)
     dt
   )
 
-  -- 7. Recover from a stationary vehicle without changing
-  -- gearbox, clutch or transmission state.
-  if speed < 0.5 then
-    p.stuck = p.stuck + dt
-  else
-    p.stuck = 0
+  -- Emergency braking for a predicted immediate collision.
+  if collisionTarget and collisionTarget <= 0.1 then
+    gas = 0
+    brake = math.max(brake, 0.65)
   end
 
-  -- 8. Send controls to the AI car.
+  local collisionHold =
+    (gap and gap < state.followGap + 1.0)
+    or (collisionTarget and collisionTarget <= 0.1)
+
+  -- Recovery is performed before sending the next control command.
+  if updateRecoveryState(
+    carIndex,
+    car,
+    p,
+    dt,
+    collisionHold
+  ) then
+    return
+  end
+
   local ok, controls = pcall(
     ac.overrideCarControls,
     carIndex
@@ -1464,12 +1775,10 @@ local function updateLineCar(carIndex, car, dt)
     controls.handbrake = 0
   end
 
-  p.lineDist = select(
-    3,
-    findNearestSegment(car, p)
-  )
-
   p.lastSteerTarget = steerTarget
+  p.targetSpeed = targetSpeed
+  p.gas = gas
+  p.brake = brake
 
   -- Do not override gear, clutch or transmission.
 end
@@ -1506,6 +1815,10 @@ local function recordSecondTelemetry(sim)
         "CURVATURE=%.5f " ..
         "TARGET_SPEED=%.2f " ..
         "LINE_ERROR=%.2f " ..
+        "AIR_TIMER=%.1f " ..
+        "STUCK_TIMER=%.1f " ..
+        "COLLISION_RISK=%.2f " ..
+        "RECOVERIES=%d " ..
         "SEGMENT=%d " ..
         "VELOCITY=(%.2f,%.2f) " ..
         "LOOK=(%.2f,%.2f)",
@@ -1534,6 +1847,11 @@ local function recordSecondTelemetry(sim)
         p.lastCurve,
         p.targetSpeed,
         p.lineDist,
+
+        p.airTimer or 0,
+        p.moveTimer or 0,
+        p.collisionRisk or 0,
+        p.recoveryCount or 0,
 
         p.segIdx,
 
@@ -1568,7 +1886,6 @@ function script.update(dt)
     return
   end
 
-  -- Avoid excessively large controller steps.
   dt = math.min(dt, 0.05)
 
   local sim = ac.getSim()
@@ -1584,8 +1901,9 @@ function script.update(dt)
     addPoint(player.position)
   end
 
-  -- Teleport the AI grid once, before the route-following controller starts.
+  -- Teleport the AI grid once, before route-following starts.
   local startupReady = true
+
   if state.enabled and state.loaded and #state.nodes >= 2 then
     startupReady = updateStartupTeleport(sim, dt)
   end
@@ -1595,19 +1913,23 @@ function script.update(dt)
     for idx in pairs(state.p) do
       releaseCar(idx)
     end
+
   elseif startupReady then
     for i = 0, sim.carsCount - 1 do
       local car = ac.getCar(i)
 
       if car and car.isActive and car.isAIControlled then
         updateLineCar(i, car, dt)
+
       elseif state.p[i] then
         releaseCar(i)
       end
     end
+
   else
     -- Preserve the existing player-car controller while AI slots settle.
     local playerCar = ac.getCar(0)
+
     if playerCar and playerCar.isActive and playerCar.isAIControlled then
       updateLineCar(0, playerCar, dt)
     end
@@ -1768,25 +2090,12 @@ function windowMain(dt)
     state.loaded = false
   end
 
-  state.speedMin = ui.slider(
-    "Мин. скорость",
-    state.speedMin,
-    40,
-    180,
-    "%.0f км/ч"
-  )
-
   state.speedMax = ui.slider(
     "Макс. скорость",
     state.speedMax,
     60,
     260,
     "%.0f км/ч"
-  )
-
-  state.speedMin = math.min(
-    state.speedMin,
-    state.speedMax
   )
 
   state.followGap = ui.slider(
