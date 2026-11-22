@@ -1,4 +1,4 @@
-# RoutePilot 0.1.0
+# RoutePilot 0.2.0
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
 
@@ -30,7 +30,12 @@ Routes are stored separately by full track ID using CSP `ac.storage`.
 - Records player-car world X/Z coordinates and speed.
 - Stores and loads routes per track/layout.
 - Uses a Pure Pursuit-style steering controller and a curvature/braking speed planner.
+- Car-following collision avoidance (v0.2.0): each AI car checks for the nearest car ahead in its own lane (lateral offset within 2.4 m) and limits its target speed to a safe value based on the gap and the leader's speed. Below the minimum gap (adjustable, 3–15 m) the car stops completely.
 - Controls only steering, throttle and brake. No gear, clutch, reverse or stock AI spline commands are issued.
 - Applies to active AI-controlled cars with index 1 and above.
 
-This is an initial controller implementation. It must be tested in-game on a clear track before use in traffic. The controller does not yet perform overtaking, collision avoidance, pit handling, or automatic recovery from a spin/off-track situation.
+## Known limitations
+
+- Car-following only prevents rear-ending the car directly ahead in the same lane; side-by-side contact during overtakes is not handled (no overtaking logic yet).
+- The window shows a counter of AI cars currently slowing down because of a car ahead.
+- This is an initial controller implementation. It must be tested in-game on a clear track before use in traffic. The controller does not yet perform overtaking, pit handling, or automatic recovery from a spin/off-track situation.
