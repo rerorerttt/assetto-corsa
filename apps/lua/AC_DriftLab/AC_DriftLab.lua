@@ -44,6 +44,8 @@ local targetSteer, targetGas, targetBrake = 0, 0, 0
 local maxSteer, maxGas, maxBrake = 0.58, 0.62, 0.38
 local maxSpeedKmh, maxYawRate = 75, 3.0
 local rngSeeded = false
+local autoStartLatched = false
+local chooseNextPhase
 
 local CTRL_NAME_PREFIX = "AcTools.CSP.NewBehaviour.CustomAI.CarControls"
 local DATA_NAME_PREFIX = "AcTools.CSP.NewBehaviour.CustomAI.Car"
@@ -210,6 +212,7 @@ end
 
 local function beginExperiment()
   if running then return end
+  autoStartLatched = true
   local car = ac.getCar(selectedCar)
   if not car or not car.isActive then
     status = "Выбранная машина неактивна"
@@ -248,7 +251,7 @@ local function beginExperiment()
   chooseNextPhase()
 end
 
-function chooseNextPhase()
+chooseNextPhase = function()
   phaseNumber = phaseNumber + 1
   phaseTime = 0
   local pick = math.random(1, 5)
@@ -410,11 +413,12 @@ end
 
 function script.update(dt)
   local delta = clamp(number(dt), 0, 0.1)
-  if autoStart and not running and not controlMap then
-    local car = ac.getCar(selectedCar)
-    if car and car.isActive and car.isAIControlled then
-      beginExperiment()
-    end
+  local watchedCar = ac.getCar(selectedCar)
+  if not autoStart or not watchedCar or not watchedCar.isAIControlled then
+    autoStartLatched = false
+  elseif not running and not controlMap and not autoStartLatched then
+    autoStartLatched = true
+    beginExperiment()
   end
 
   local ok, err = pcall(updateExperiment, delta)
@@ -430,7 +434,11 @@ function script.windowMain(dt)
   ui.text("Управление рулём, газом и тормозом. КПП остаётся автоматической.")
   ui.separator()
 
-  selectedCar = ui.slider("Индекс машины", selectedCar, 0, MAX_CARS, "%.0f", true)
+  local nextCar, carChanged = ui.slider("Индекс машины", selectedCar, 0, MAX_CARS, "%.0f", true)
+  if carChanged then
+    selectedCar = math.floor(nextCar + 0.5)
+    autoStartLatched = false
+  end
   autoStart = ui.checkbox("Автозапуск при включении AI Autopilot", autoStart)
 
   local car = ac.getCar(selectedCar)
