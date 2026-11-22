@@ -1,4 +1,3 @@
-
 -- RoutePilot.lua
 -- RoutePilot 0.3 - Stable Route Following Controller
 -- CSP Lua Apps
@@ -42,6 +41,11 @@ local CFG = {
 
   RECORD_DISTANCE = 3.0,
 
+  SPAWN_GAP = 22.0,
+  SPAWN_MIN_GAP = 14.0,
+  SPAWN_STABLE_TIME = 0.35,
+  SPAWN_WAIT_TIMEOUT = 8.0,
+
   LOG_INTERVAL = 1.0,
   MAX_ROUTE_POINTS = 50000,
 }
@@ -59,6 +63,12 @@ local state = {
   speedMax = 140,
 
   followGap = 8.0,
+
+  spawnDone = false,
+  spawnPerformed = false,
+  spawnWait = 0,
+  spawnStable = 0,
+  spawnLastRoster = "",
 
   nodes = {},
   p = {},
@@ -334,6 +344,13 @@ local function loadLine()
     state.p = {}
     state.loaded = true
 
+    if not state.spawnPerformed then
+      state.spawnDone = false
+      state.spawnWait = 0
+      state.spawnStable = 0
+      state.spawnLastRoster = ""
+    end
+
     state.status = string.format(
       "Загружено: %d точек",
       #loaded
@@ -352,6 +369,334 @@ local function loadLine()
   state.status = "Линия не найдена"
   state.loaded = false
 
+  return false
+end
+
+------------------------------------------------------------
+-- STARTUP AI TELEPORT
+------------------------------------------------------------
+
+local function buildSpawnRouteMetrics()
+  local count = #state.nodes
+  if count < 2 then return nil end
+
+  local segmentCount = state.loopRoute and count or count - 1
+  local segments = {}
+  local totalLength = 0
+
+  for i = 1, segmentCount do
+    local a = state.nodes[i]
+    local b = state.nodes[(i % count) + 1]
+    local length = flatDist(a, b)
+
+    if length > 0.05 then
+      segments[#segments + 1] = {
+        a = a,
+        b = b,
+        start = totalLength,
+        length = length
+      }
+      totalLength = totalLength + length
+    end
+  end
+
+  if #segments < 2 or totalLength < CFG.SPAWN_MIN_GAP * 2 then
+    return nil
+  end
+
+  return {
+    segments = segments,
+    length = totalLength,
+    loop = state.loopRoute
+  }
+end
+
+local function findRouteDistanceAtPosition(position, metrics)
+  local bestDistanceSq = math.huge
+  local bestRouteDistance = 0
+
+  for i = 1, #metrics.segments do
+    local seg = metrics.segments[i]
+    local a, b = seg.a, seg.b
+
+    local vx = b.x - a.x
+    local vz = b.z - a.z
+    local lenSq = vx * vx + vz * vz
+
+    if lenSq > 0.0001 then
+      local t = clamp(
+        ((position.x - a.x) * vx + (position.z - a.z) * vz) / lenSq,
+        0,
+        1
+      )
+
+      local px = a.x + vx * t
+      local pz = a.z + vz * t
+      local dx = position.x - px
+      local dz = position.z - pz
+      local distanceSq = dx * dx + dz * dz
+
+      if distanceSq < bestDistanceSq then
+        bestDistanceSq = distanceSq
+        bestRouteDistance = seg.start + seg.length * t
+      end
+    end
+  end
+
+  return bestRouteDistance, math.sqrt(bestDistanceSq)
+end
+
+local function sampleSpawnRoute(metrics, distance)
+  if metrics.loop then
+    distance = distance % metrics.length
+  else
+    distance = clamp(distance, 0, metrics.length)
+  end
+
+  for i = 1, #metrics.segments do
+    local seg = metrics.segments[i]
+    local finish = seg.start + seg.length
+
+    if distance <= finish or i == #metrics.segments then
+      local t = clamp((distance - seg.start) / seg.length, 0, 1)
+      local a, b = seg.a, seg.b
+
+      local position = vec3(
+        lerp(a.x, b.x, t),
+        lerp(a.y, b.y, t),
+        lerp(a.z, b.z, t)
+      )
+
+      local direction = vec3(
+        b.x - a.x,
+        b.y - a.y,
+        b.z - a.z
+      )
+
+      if direction:length() < 0.0001 then
+        return nil, nil
+      end
+
+      direction:normalize()
+      return position, direction
+    end
+  end
+
+  return nil, nil
+end
+
+local function collectActiveAICars(sim)
+  local cars = {}
+
+  -- Index 0 is the player's car. Only active AI cars are repositioned.
+  for i = 1, sim.carsCount - 1 do
+    local car = ac.getCar(i)
+
+    if car and car.isActive and car.isAIControlled then
+      cars[#cars + 1] = i
+    end
+  end
+
+  return cars
+end
+
+local function teleportAICarsToRoute(aiCars)
+  -- Latch before native calls: even a partial failure must not trigger
+  -- a second mass teleport after the route is loaded again.
+  state.spawnPerformed = true
+
+  if type(physics) ~= "table" or type(physics.setAICarPosition) ~= "function" then
+    state.status = "CSP: physics.setAICarPosition недоступна"
+    writeLog("SPAWN_ABORT reason=setAICarPosition_unavailable")
+    state.spawnDone = true
+    flushLog()
+    return
+  end
+
+  local metrics = buildSpawnRouteMetrics()
+  if not metrics then
+    state.status = "Ошибка: линия слишком короткая"
+    writeLog("SPAWN_ABORT reason=invalid_route points=%d", #state.nodes)
+    state.spawnDone = true
+    flushLog()
+    return
+  end
+
+  local count = #aiCars
+  local gap = math.min(
+    CFG.SPAWN_GAP,
+    metrics.length / (count + 1)
+  )
+
+  -- Do not compress the grid below the safe minimum.
+  if gap < CFG.SPAWN_MIN_GAP then
+    state.status = "Недостаточно места для безопасной расстановки"
+    writeLog(
+      "SPAWN_ABORT reason=route_too_short cars=%d route=%.1f gap=%.1f",
+      count,
+      metrics.length,
+      gap
+    )
+    state.spawnDone = true
+    flushLog()
+    return
+  end
+
+  local startDistance = 0
+
+  if metrics.loop then
+    local player = ac.getCar(0)
+    if player then
+      local nearestDistance, playerLineError =
+        findRouteDistanceAtPosition(player.position, metrics)
+
+      -- Keep the first AI car one full interval ahead of the player.
+      startDistance = nearestDistance + gap
+
+      writeLog(
+        "SPAWN_ANCHOR player_line_error=%.2f route_distance=%.2f",
+        playerLineError,
+        nearestDistance
+      )
+    else
+      startDistance = gap
+    end
+  end
+
+  local moved = 0
+  local failed = 0
+
+  writeLog(
+    "SPAWN_BEGIN cars=%d route=%.1f gap=%.1f start=%.1f loop=%s",
+    count,
+    metrics.length,
+    gap,
+    startDistance,
+    tostring(metrics.loop)
+  )
+
+  -- All native teleports are issued in one update. The route controller
+  -- resumes on the following frame, after the entire AI chain is positioned.
+  for order = 1, count do
+    local carIndex = aiCars[order]
+    local routeDistance = startDistance + (order - 1) * gap
+    local position, direction = sampleSpawnRoute(metrics, routeDistance)
+
+    if position and direction then
+      local ok, result = pcall(
+        physics.setAICarPosition,
+        carIndex,
+        position,
+        direction
+      )
+
+      if ok and result ~= false then
+        moved = moved + 1
+        state.p[carIndex] = nil
+
+        writeLog(
+          "SPAWN_CAR id=%d order=%d distance=%.2f pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f,%.3f)",
+          carIndex,
+          order,
+          routeDistance,
+          position.x,
+          position.y,
+          position.z,
+          direction.x,
+          direction.y,
+          direction.z
+        )
+      else
+        failed = failed + 1
+        writeLog(
+          "SPAWN_CAR_FAILED id=%d order=%d error=%s",
+          carIndex,
+          order,
+          tostring(result)
+        )
+      end
+    else
+      failed = failed + 1
+      writeLog("SPAWN_CAR_FAILED id=%d order=%d reason=invalid_sample", carIndex, order)
+    end
+  end
+
+  state.spawnDone = true
+
+  if failed == 0 then
+    state.status = string.format(
+      "ИИ расставлен: %d машин, интервал %.0f м",
+      moved,
+      gap
+    )
+  else
+    state.status = string.format(
+      "Телепортировано %d из %d; ошибок: %d",
+      moved,
+      count,
+      failed
+    )
+  end
+
+  writeLog(
+    "SPAWN_FINISH moved=%d failed=%d total=%d gap=%.2f",
+    moved,
+    failed,
+    count,
+    gap
+  )
+
+  flushLog()
+end
+
+local function updateStartupTeleport(sim, dt)
+  if state.spawnDone then return true end
+  if not state.loaded or state.recording or #state.nodes < 2 then return true end
+
+  state.spawnWait = state.spawnWait + dt
+
+  local aiCars = collectActiveAICars(sim)
+  local count = #aiCars
+  local rosterParts = {}
+
+  for i = 1, count do
+    rosterParts[i] = tostring(aiCars[i])
+  end
+
+  local roster = table.concat(rosterParts, ",")
+
+  if count == 0 then
+    state.spawnStable = 0
+    state.spawnLastRoster = ""
+
+    if state.spawnWait >= CFG.SPAWN_WAIT_TIMEOUT then
+      state.spawnDone = true
+      state.status = "ИИ-машины не обнаружены"
+      writeLog("SPAWN_SKIP reason=no_active_ai timeout=%.1f", state.spawnWait)
+      flushLog()
+      return true
+    end
+
+    state.status = "Ожидание загрузки ИИ-машин..."
+    return false
+  end
+
+  -- Compare actual car indices, not only the number of cars.
+  if roster ~= state.spawnLastRoster then
+    state.spawnLastRoster = roster
+    state.spawnStable = 0
+    state.status = string.format("Подготовка расстановки: %d ИИ", count)
+    return false
+  end
+
+  state.spawnStable = state.spawnStable + dt
+
+  if state.spawnStable < CFG.SPAWN_STABLE_TIME then
+    state.status = string.format("Подготовка расстановки: %d ИИ", count)
+    return false
+  end
+
+  teleportAICarsToRoute(aiCars)
   return false
 end
 
@@ -1239,12 +1584,18 @@ function script.update(dt)
     addPoint(player.position)
   end
 
+  -- Teleport the AI grid once, before the route-following controller starts.
+  local startupReady = true
+  if state.enabled and state.loaded and #state.nodes >= 2 then
+    startupReady = updateStartupTeleport(sim, dt)
+  end
+
   -- Disable AI control and release all overrides.
   if not state.enabled or #state.nodes < 2 then
     for idx in pairs(state.p) do
       releaseCar(idx)
     end
-  else
+  elseif startupReady then
     for i = 0, sim.carsCount - 1 do
       local car = ac.getCar(i)
 
@@ -1253,6 +1604,12 @@ function script.update(dt)
       elseif state.p[i] then
         releaseCar(i)
       end
+    end
+  else
+    -- Preserve the existing player-car controller while AI slots settle.
+    local playerCar = ac.getCar(0)
+    if playerCar and playerCar.isActive and playerCar.isAIControlled then
+      updateLineCar(0, playerCar, dt)
     end
   end
 
@@ -1297,6 +1654,7 @@ function windowMain(dt)
     if state.recording then
       state.nodes = {}
       state.p = {}
+      state.loaded = false
       state.status = "Запись линии..."
     else
       state.status = "Записано точек: " .. #state.nodes
