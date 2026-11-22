@@ -8,13 +8,10 @@
 --     in left/right/forward directions — vertical collisions (walls) stop
 --     the ray, giving true distances to obstacles;
 --   * stores per-sample: position, forward direction, distances left/right
---     and the largest open lateral (the "drift room").
+--     and the lateral "drift room".
 --
--- The drift AI then uses this map to:
---   * steer toward the widest part of the area (best drift line);
---   * plan speed by the distance to the nearest wall ahead
---     (v = sqrt(2 * a * (d - margin)));
---   * never launch a drift without enough run-off room.
+-- The drift AI uses live raycasts every frame for immediate wall reaction
+-- and this map for the overall geometry (best drift line planning).
 --
 -- All API calls are pcall-guarded: on tracks without a spline the map
 -- degrades to pure raycasts from the live car position (works on drift
@@ -64,7 +61,7 @@ function Bounds:_sampleAt(t)
   -- lift the origin above the surface for horizontal rays
   pos = vec3(pos.x, pos.y + RAY_HEIGHT, pos.z)
 
-  -- try to get the forward direction from the next point on the spline
+  -- forward direction from the next point on the spline
   local fwd = nil
   local okFwd, npos = pcall(ac.trackProgressToWorldCoordinate, (t + SAMPLE_STEP) % 1)
   if okFwd and npos then
@@ -87,13 +84,13 @@ function Bounds:_sampleAt(t)
   local dFwd = ray(pos, vec3(fwd.x, 0, fwd.z), RAY_LENGTH)
   if dLeft < 0 then dLeft = RAY_LENGTH end
   if dRight < 0 then dRight = RAY_LENGTH end
+  if dFwd < 0 then dFwd = RAY_LENGTH end
 
   -- spline sides as a secondary source (may be unavailable)
-  local sLeft, sRight = dLeft, dRight
   local okS, sides = pcall(ac.getTrackAISplineSides, t)
   if okS and sides and sides.x and sides.y then
-    sLeft = math.max(0, sides.x)
-    sRight = math.max(0, sides.y)
+    local sLeft = math.max(0, sides.x)
+    local sRight = math.max(0, sides.y)
     -- prefer the more conservative (closer) of the two sources
     dLeft = math.min(dLeft, sLeft)
     dRight = math.min(dRight, sRight)
@@ -130,7 +127,8 @@ function Bounds:update(dt)
   end
 end
 
--- Live fallback raycasts for tracks WITHOUT a spline (drift playgrounds).
+-- Live raycasts from the car (used EVERY FRAME for instant wall reaction;
+-- also the fallback for tracks without a spline).
 -- Returns: dLeft, dRight, dFwd (meters to nearest wall, RAY_LENGTH if none)
 function Bounds:liveRays(car)
   local pos = car.position
@@ -158,7 +156,7 @@ function Bounds:nearest(pos)
     local d = dx * dx + dz * dz
     if d < bestD then bestD, best = d, s end
   end
+  return best
 end
--- (note: the loop returns `best` via the `best` variable kept after the loop)
 
 return Bounds
