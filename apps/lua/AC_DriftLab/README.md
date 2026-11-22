@@ -1,37 +1,32 @@
-# AC DriftLab 0.1.0
+# AC DriftLab 0.1.1
 
-Experimental AI-control and telemetry app for Assetto Corsa with CSP 0.3.2-preview2.
+CSP Lua app for controlled AI input experiments in Assetto Corsa.
 
-## Features
+## Correct installation layout
 
-- Controls only steering, throttle and brake through ac.overrideCarControls().
-- Does not send gear-up, gear-down or requested-gear commands: shifting remains with the car AI.
-- Does not read, follow, generate or require fast_lane.ai / AI spline.
-- Uses bounded, ramp-limited experimental phases: steering + throttle, steering + coast, short brake pulses, and recovery.
-- Stops if the selected car disappears or ceases to be AI-controlled.
-- Applies a recovery command if speed exceeds 70 km/h or absolute yaw rate exceeds 2.5 rad/s.
-- Records telemetry at 10 Hz and event/phase/error records.
+The app entry script name must match the folder name:
 
-## Install
+`assettocorsa/apps/lua/AC_DriftLab/AC_DriftLab.lua`
 
-Copy the AC_DriftLab folder into assettocorsa/apps/lua/AC_DriftLab/.
+The folder also contains `manifest.ini` and `icon.png`. Do not rename the Lua entry file.
 
-Enable Lua apps in Content Manager/CSP and open AC DriftLab from the in-game app sidebar.
+## Behavior
 
-The app requires CSP Lua I/O access to save logs. If I/O is unavailable, it refuses to start and displays the reason.
+- The app is registered as a normal CSP Lua app through its manifest and has a taskbar icon.
+- `LAZY = NONE` keeps `script.update(dt)` running even while the app window is closed.
+- Car index 0 is selected by default. When the player activates AC's AI autopilot and CSP reports `isAIControlled = true`, the experiment starts automatically.
+- Other AI cars can be selected in the app by their 0-based car index.
+- The app controls steering, throttle and brake only. It never sends gear commands.
+- No AI fastline/spline is read or required.
+- Inputs are bounded and ramp-limited. At 70 km/h or yaw rate above 2.5 rad/s, a one-second recovery phase is applied.
+- Stopping releases steering back to the original AI input using `steer = math.huge` and restores combined pedal input.
 
-## First test
+## Logs
 
-Use an empty practice session and select an AI car (player car is index 0; the first AI is commonly index 1). Keep the surroundings clear and observe the car throughout the experiment. Press STOP at any time.
+Requires CSP Lua I/O access. Files are written to the app ScriptConfig folder under `AC_DriftLab`:
+- `<experiment>_telemetry.csv`
+- `<experiment>_events.csv`
 
-Logs are saved under the app's CSP ScriptConfig directory, in AC_DriftLab, as:
-- <experiment>_telemetry.csv
-- <experiment>_events.csv
+## Validation status
 
-## Limits
-
-This is a data-gathering prototype, not a finished autonomous drift controller. It does not constrain the car to a track boundary and does not use an AI line. It has not yet been runtime-tested in the user's CSP installation. The next iteration depends on the first telemetry CSV and observed in-game response.
-
-## SDK basis
-
-Implementation follows lua-sdk/ac_apps/lib.lua declarations for ac.overrideCarControls, ac.CarControlsInput, ac.getCar, ac.FolderID.ScriptConfig, io.available, io.createDir, io.save, and ac.onRelease.
+The app structure and API names have been checked against the CSP Lua SDK and app manifest documentation. Actual runtime behavior still needs testing in CSP 0.3.2-preview2. In particular, verify that the built-in AI autopilot toggles `ac.getCar(0).isAIControlled` in the target session.
