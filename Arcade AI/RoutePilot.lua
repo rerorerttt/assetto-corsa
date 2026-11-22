@@ -1,4 +1,4 @@
--- RoutePilot: следование по записанным точкам круга + ac.overrideCarControls + логи каждую секунду
+-- RoutePilot: route following + anti-donut traction and spin recovery
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then
@@ -8,6 +8,20 @@ end
 local BRAKE_ACCEL = 7.0
 local FOLLOW_LATERAL = 3.0
 local WALL_MARGIN = 6.0
+
+-- Anti-donut tuning
+local SLIP_ANGLE_START = 16.0
+local SLIP_ANGLE_FULL = 34.0
+local SLIP_SPEED_MIN = 3.0
+local LATERAL_SLIP_START = 2.2
+local LATERAL_SLIP_FULL = 6.0
+local YAW_RECOVERY_START = 0.75
+local YAW_RECOVERY_FULL = 1.8
+local REAR_SLIP_START = 1.05
+local REAR_SLIP_FULL = 1.65
+local RECOVERY_RELEASE_TIME = 0.75
+local GAS_RISE_RATE = 0.42
+local GAS_FALL_RATE = 4.5
 
 local state = {
   enabled = true,
@@ -44,6 +58,12 @@ local function clamp(v, lo, hi)
   if v < lo then return lo end
   if v > hi then return hi end
   return v
+end
+
+local function smoothstep(a, b, x)
+  if b <= a then return 0 end
+  local t = clamp((x - a) / (b - a), 0, 1)
+  return t * t * (3 - 2 * t)
 end
 
 local function flatDist(a, b)
@@ -182,12 +202,22 @@ local function newPersonality(carIndex)
     speed = kmh / 3.6,
     steer = 0,
     gas = 0,
+    gasOut = 0,
     brake = 0,
     hb = 0,
     stuck = 0,
     lastTargetX = 0,
     lastTargetZ = 0,
     lastLineDist = 0,
+
+    recovering = false,
+    recoveryStable = 0,
+    recoveryTime = 0,
+    slipAngle = 0,
+    lateralSpeed = 0,
+    yawRate = 0,
+    rearSlip = 0,
+    tractionLimit = 1,
   }
 
   local car = ac.getCar(carIndex)
@@ -252,6 +282,69 @@ local function liveRays(car)
     if okF and type(rF) == "number" and rF > 0 then dFwd = rF end
   end
   return dLeft, dRight, dFwd
+end
+
+-- Reads normalized slip from the rear tyres.
+-- Missing wheel data is ignored safely.
+local function readRearSlip(car)
+  if not car or not car.wheels then return nil end
+
+  local total = 0
+  local count = 0
+
+  for i = 2, 3 do
+    local wheel = car.wheels[i]
+    if wheel then
+      local ok, value = pcall(function()
+        return wheel.ndSlip
+      end)
+      if ok and type(value) == "number" then
+        total = total + math.abs(value)
+        count = count + 1
+      end
+    end
+  end
+
+  if count == 0 then return nil end
+  return total / count
+end
+
+-- Measures how far the car's actual movement direction differs
+-- from its body direction. This also works when the car is sliding.
+local function readMotionState(car)
+  local speed = math.max(0, car.speedMs or 0)
+  local lateralSpeed = 0
+  local slipAngle = 0
+
+  if car.velocity and car.side and car.look then
+    local okSide, sideValue = pcall(math.dot, car.velocity, car.side)
+    local okLook, forwardValue = pcall(math.dot, car.velocity, car.look)
+
+    if okSide and type(sideValue) == "number" then
+      lateralSpeed = sideValue
+    end
+
+    if okLook and type(forwardValue) == "number" then
+      if speed > SLIP_SPEED_MIN then
+        slipAngle = math.deg(math.atan2(
+          math.abs(lateralSpeed),
+          math.max(0.1, math.abs(forwardValue))
+        ))
+      end
+    end
+  end
+
+  local yawRate = 0
+  if car.localAngularVelocity then
+    local ok, value = pcall(function()
+      return car.localAngularVelocity.y
+    end)
+    if ok and type(value) == "number" then
+      yawRate = value
+    end
+  end
+
+  return slipAngle, lateralSpeed, yawRate, readRearSlip(car)
 end
 
 local function followRouteSteer(car, p, speed, nodes)
@@ -389,6 +482,107 @@ local function releaseCar(carIndex)
   state.p[carIndex] = nil
 end
 
+-- Anti-donut controller:
+-- detects excessive lateral motion, rear wheelspin and uncontrolled yaw.
+-- Recovery stays active until the car has settled for a short period.
+local function updateAntiDonut(car, p, dt, routeSteer, lineDist)
+  local slipAngle, lateralSpeed, yawRate, rearSlip = readMotionState(car)
+
+  p.slipAngle = slipAngle
+  p.lateralSpeed = lateralSpeed
+  p.yawRate = yawRate
+  p.rearSlip = rearSlip or 0
+
+  local absLateral = math.abs(lateralSpeed)
+  local absYaw = math.abs(yawRate)
+  local absSlipAngle = math.abs(slipAngle)
+
+  local angleRisk = smoothstep(SLIP_ANGLE_START, SLIP_ANGLE_FULL, absSlipAngle)
+  local lateralRisk = smoothstep(LATERAL_SLIP_START, LATERAL_SLIP_FULL, absLateral)
+  local yawRisk = smoothstep(YAW_RECOVERY_START, YAW_RECOVERY_FULL, absYaw)
+
+  local wheelRisk = 0
+  if rearSlip then
+    wheelRisk = smoothstep(REAR_SLIP_START, REAR_SLIP_FULL, rearSlip)
+  end
+
+  local risk = math.max(angleRisk, lateralRisk, yawRisk, wheelRisk)
+
+  -- At very low speed the slip angle is unreliable.
+  -- Yaw rate remains useful for detecting a car rotating on the spot.
+  local spinAtLowSpeed = car.speedMs < 3.0 and absYaw > YAW_RECOVERY_START
+  local severeSlide = absSlipAngle > 28.0 or absLateral > 4.5
+  local severeWheelspin = rearSlip and rearSlip > 1.55
+
+  if spinAtLowSpeed or severeSlide or severeWheelspin then
+    p.recovering = true
+    p.recoveryStable = 0
+  end
+
+  if p.recovering then
+    local settled =
+      absYaw < 0.42 and
+      absSlipAngle < 11.0 and
+      absLateral < 1.5 and
+      (not rearSlip or rearSlip < 1.05)
+
+    if settled then
+      p.recoveryStable = p.recoveryStable + dt
+    else
+      p.recoveryStable = 0
+    end
+
+    if p.recoveryStable >= RECOVERY_RELEASE_TIME then
+      p.recovering = false
+      p.recoveryStable = 0
+    end
+  end
+
+  local tractionLimit = 1.0 - risk * 0.88
+
+  -- A large route deviation combined with strong steering means
+  -- the car is no longer following the route cleanly.
+  local routeRisk = smoothstep(2.5, 9.0, lineDist)
+  local steeringRisk = smoothstep(0.35, 0.72, math.abs(routeSteer))
+  local routeLimit = 1.0 - routeRisk * steeringRisk * 0.85
+
+  tractionLimit = math.min(tractionLimit, routeLimit)
+
+  if p.recovering then
+    tractionLimit = math.min(tractionLimit, 0.04)
+  end
+
+  -- Countersteer against the lateral direction of travel.
+  -- When nearly stopped, use yaw rate to oppose rotation.
+  local recoverySteer = routeSteer
+
+  if p.recovering then
+    if absLateral > 0.8 then
+      local lateralDirection = lateralSpeed >= 0 and 1 or -1
+      recoverySteer = clamp(
+        routeSteer + lateralDirection * 0.42,
+        -0.8, 0.8
+      )
+    elseif absYaw > 0.25 then
+      recoverySteer = clamp(
+        routeSteer - yawRate * 0.42,
+        -0.8, 0.8
+      )
+    end
+  elseif risk > 0.15 and absLateral > 1.0 then
+    local lateralDirection = lateralSpeed >= 0 and 1 or -1
+    recoverySteer = clamp(
+      routeSteer + lateralDirection * 0.28 * risk,
+      -0.8, 0.8
+    )
+  end
+
+  p.tractionLimit = tractionLimit
+  p.recoveryTime = p.recovering and (p.recoveryTime + dt) or 0
+
+  return tractionLimit, recoverySteer, risk
+end
+
 local function updateLineCar(carIndex, car, dt)
   local p = state.p[carIndex]
   if not p then
@@ -403,7 +597,9 @@ local function updateLineCar(carIndex, car, dt)
   local offCenter = clamp((dRight - dLeft) / math.max(1, room), -1, 1)
 
   local speed = math.max(0, car.speedMs or 0)
-  local steer, curve, lineDist, targetX, targetZ = followRouteSteer(car, p, speed, state.nodes)
+  local steer, curve, lineDist, targetX, targetZ =
+    followRouteSteer(car, p, speed, state.nodes)
+
   p.lastTargetX = targetX
   p.lastTargetZ = targetZ
   p.lastLineDist = lineDist
@@ -427,14 +623,31 @@ local function updateLineCar(carIndex, car, dt)
     if gap < state.followGap then targetSpeed = 0 end
   end
 
-  local err = targetSpeed - speed
-  local gas = clamp(err * 0.35, 0, 1)
-  local brake = clamp(-err * 0.45, 0, 1)
-  local hb = 0
+  local speedError = targetSpeed - speed
+  local rawGas = clamp(speedError * 0.35, 0, 1)
+  local brake = clamp(-speedError * 0.45, 0, 1)
+
+  -- Evaluate grip and rotation before applying throttle.
+  local tractionLimit, correctedSteer, risk =
+    updateAntiDonut(car, p, dt, steer, lineDist)
+
+  local desiredGas = math.min(rawGas, tractionLimit)
+
+  -- During recovery, do not add throttle to a car that is still rotating.
+  if p.recovering then
+    desiredGas = 0
+    brake = 0
+  end
+
+  -- Smooth throttle: reduce quickly when grip is lost, restore gradually.
+  local gasRate = desiredGas < p.gasOut and GAS_FALL_RATE or GAS_RISE_RATE
+  local maxGasChange = gasRate * math.max(dt, 0)
+  p.gasOut = p.gasOut + clamp(desiredGas - p.gasOut, -maxGasChange, maxGasChange)
+  p.gasOut = clamp(p.gasOut, 0, 1)
 
   if speed < 1.5 then
     p.stuck = p.stuck + dt
-    if p.stuck > 3.0 then
+    if p.stuck > 3.0 and not p.recovering then
       p.stuck = 0
       newPersonality(carIndex)
       p = state.p[carIndex]
@@ -444,10 +657,13 @@ local function updateLineCar(carIndex, car, dt)
     p.stuck = 0
   end
 
-  p.steer = p.steer + (steer - p.steer) * clamp(dt * 8, 0, 1)
-  p.gas = gas
+  -- Steering is smoothed, but countersteering remains responsive.
+  local steerRate = p.recovering and 12.0 or 8.0
+  p.steer = p.steer + (correctedSteer - p.steer) * clamp(dt * steerRate, 0, 1)
+
+  p.gas = p.gasOut
   p.brake = brake
-  p.hb = hb
+  p.hb = 0
 
   local controls = ac.overrideCarControls(carIndex)
   if controls then
@@ -457,6 +673,7 @@ local function updateLineCar(carIndex, car, dt)
     controls.brake = p.brake
     controls.handbrake = p.hb
   end
+
   if physics and physics.setAIThrottleLimit then
     pcall(physics.setAIThrottleLimit, carIndex, 1)
   end
@@ -490,11 +707,15 @@ local function recordSecondTelemetry(sim)
       local nearby = formatNearbyNodes(car, p.segIdx)
 
       writeLog(
-        "car=%d pos=(%.2f,%.2f,%.2f) spd=%.1fkm/h(%.1fm/s) | ctrl: steer=%.3f gas=%.2f brk=%.2f hb=%.2f | path: seg=%d err=%.2fm tgt=(%.1f,%.1f) look=(%.2f,%.2f) vel=(%.2f,%.2f) | nodes: %s",
+        "car=%d pos=(%.2f,%.2f,%.2f) spd=%.1fkm/h(%.1fm/s) | ctrl: steer=%.3f gas=%.2f brk=%.2f hb=%.2f | grip: recovering=%s risk=%.2f slip=%.1fdeg lat=%.2f yaw=%.2f rearSlip=%.2f limit=%.2f | path: seg=%d err=%.2fm tgt=(%.1f,%.1f) look=(%.2f,%.2f) vel=(%.2f,%.2f) | nodes: %s",
         i,
         pos.x, pos.y, pos.z,
         spdKmh, spdMs,
         p.steer, p.gas, p.brake, p.hb,
+        tostring(p.recovering), risk or 0,
+        p.slipAngle or 0, p.lateralSpeed or 0,
+        p.yawRate or 0, p.rearSlip or 0,
+        p.tractionLimit or 1,
         p.segIdx, p.lastLineDist, p.lastTargetX, p.lastTargetZ,
         look and look.x or 0, look and look.z or 0,
         vel and vel.x or 0, vel and vel.z or 0,
@@ -511,6 +732,7 @@ end
 
 function script.update(dt)
   if not dt or dt <= 0 then return end
+
   local player = ac.getCar(0)
   if state.recording and player then
     addPoint(player.position)
