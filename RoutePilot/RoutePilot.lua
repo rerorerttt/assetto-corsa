@@ -1,36 +1,39 @@
--- RoutePilot: free-drive AI interception for Assetto Corsa CSP.
--- v0.3.2: EXACT copy of the proven FullThrottleAI mechanism:
---   * NO buttons, NO master switch — script.update runs every frame and
---     takes over ANY car with isAIControlled == true:
---       - the player car the moment Ctrl+8 is pressed (FullThrottleAI proof),
---       - every AI opponent in the session;
---   * while a car is caught, RoutePilot drives it with drift style:
---     wander steering, target speed, handbrake pulses, full gas in slides;
---   * AI throttle limit lifted via physics.setAIThrottleLimit (as in the
---     working app);
---   * when a car stops being AI-controlled, the override is zeroed at once.
--- No fast lane, no route, no files needed. Crash-safe logging kept.
+-- RoutePilot: takeover of any AI car with drift — Assetto Corsa CSP Lua app.
+-- v0.3.2: the activation model is copied 1:1 from the proven FullThrottleAI
+--   (which works flawlessly on this exact game install):
+--   * NO app-button gate. Every frame, for EVERY car in the session, if
+--     `car.isAIControlled` is true (the player car with Ctrl+8, and every
+--     AI opponent), RoutePilot immediately takes it over with
+--     `ac.overrideCarControls(i)` — the same call, the same conditions;
+--   * the same throttle-limit unlock FullThrottleAI uses:
+--     `physics.setAIThrottleLimit(i, 1)`;
+--   * driving style: lively wander steering, periodic handbrake pulses to
+--     kick the car sideways, and while the rear wheels are spinning
+--     (drift), gas is held at 100% so the slide never dies.
+-- Why the old versions "did nothing": they required an app button BEFORE
+-- looking at anything, so Ctrl+8 alone kept them idle. v0.3.2 removes that
+-- barrier completely — Ctrl+8 IS the switch, exactly like FullThrottleAI.
+-- Logging: crash-safe log in the app folder (routepilot_log.txt), heartbeat
+-- every second states whether Ctrl+8 is detected and what was commanded
+-- vs what the car actually reports.
 
 local Logger = require('logger')
 
 local APP_VERSION = "0.3.2"
 local HEARTBEAT_INTERVAL = 1.0
-local SELFTEST_SECONDS = 4.0
 local BRAKE_ACCEL = 7.0
-local FOLLOW_LATERAL = 2.6
+local FOLLOW_LATERAL = 3.0
 
 local state = {
   initialized = false,
   sessionScanned = false,
+  enabled = true,          -- can be turned off in the window; ON by default
   speedMin = 50,   -- km/h
-  speedMax = 110,  -- km/h
+  speedMax = 120,  -- km/h
   followGap = 8.0,
-  caught = 0,          -- cars currently intercepted
-  activePhys = 0,      -- overrides the physics actually consumes
-  slowingCount = 0,
-  playerCaught = false,
-  ctrl8Was = false,
-  p = {},               -- per-car personalities
+  controlledCount = 0,
+  playerAI = false,        -- is Ctrl+8 detected on the player car right now
+  p = {},                  -- per-car personalities
   selfTest = { active = false, carIndex = nil, timer = 0,
     steerSeen = 0, brakeSeen = 0, appliedFrames = 0, verdict = nil },
   log = nil,
@@ -38,7 +41,7 @@ local state = {
   heartbeatTimer = 0,
   updateErrors = 0,
   lastError = "",
-  status = "Ожидание: включи Ctrl+8 (или сессию с AI-соперниками)",
+  status = "Готово: включи Ctrl+8 — машина поедет и задрифтит",
 }
 
 -- ─────────────────── helpers ───────────────────
@@ -65,7 +68,7 @@ local function newPersonality(carIndex)
   local kmh = state.speedMin + math.random() * span
   local p = {
     t = math.random() * 100,
-    amp = 0.25 + math.random() * 0.5,
+    amp = 0.3 + math.random() * 0.5,
     period = 4 + math.random() * 6,
     phase = math.random() * math.pi * 2,
     speed = kmh / 3.6,
@@ -74,15 +77,27 @@ local function newPersonality(carIndex)
     pulseLeft = 0,
     steer = 0, gas = 0, brake = 0, hb = 0,
     stuck = 0,
-    slowing = false, active = false,
+    slowing = false,
   }
   state.p[carIndex] = p
-  log("car #%d caught: personality %.0f km/h, amp %.2f, period %.1f s",
+  log("car #%d personality: %.0f km/h, amp %.2f, period %.1f s",
     carIndex, kmh, p.amp, p.period)
 end
 
--- ─────────────────── collision avoidance ───────────────────
+-- rear-axle wheelspin magnitude (0 if the API is unavailable)
+local function rearSlip(car)
+  local slip = 0
+  pcall(function()
+    local w = car.wheels
+    if w then
+      if w[2] and type(w[2].slipRatio) == 'number' then slip = slip + math.abs(w[2].slipRatio) end
+      if w[3] and type(w[3].slipRatio) == 'number' then slip = slip + math.abs(w[3].slipRatio) end
+    end
+  end)
+  return slip
+end
 
+-- nearest car ahead in a forward cone (for collision avoidance)
 local function carAhead(carIndex, car)
   local look = car.look
   local lx, lz = look.x, look.z
@@ -112,22 +127,35 @@ local function carAhead(carIndex, car)
   return bestGap, bestSpeed
 end
 
--- ─────────────────── free-drive drift control ───────────────────
+-- ─────────────────── drift driving ───────────────────
 
-local function updateFreeCar(carIndex, car, dt)
+local function releaseCar(carIndex)
+  local ok, c = pcall(ac.overrideCarControls, carIndex)
+  if ok and c then
+    c.combineAxis = false
+    c.steer = 0
+    c.gas = 0
+    c.brake = 0
+    c.handbrake = 0
+  end
+  state.p[carIndex] = nil
+end
+
+local function updateDriftCar(carIndex, car, dt)
   local p = state.p[carIndex]
   if not p then
     newPersonality(carIndex)
     p = state.p[carIndex]
+    log("car #%d: AI control detected, RoutePilot takes over", carIndex)
   end
   p.t = p.t + dt
 
-  -- wander steering: two sinusoids for a lively, unpredictable line
+  -- lively wander steering: two sinusoids
   local wander = p.amp * math.sin(math.pi * 2 * p.t / p.period + p.phase)
     + 0.35 * p.amp * math.sin(math.pi * 2 * p.t / (p.period * 0.37) + p.phase * 2.3)
   local steer = clamp(wander, -1, 1)
 
-  -- speed planning with collision avoidance
+  -- speed planning with simple collision avoidance
   local speed = math.max(0, car.speedMs or 0)
   local targetSpeed = p.speed
   local gap, leaderSpeed = carAhead(carIndex, car)
@@ -144,7 +172,7 @@ local function updateFreeCar(carIndex, car, dt)
   local gas = clamp(err * 0.4, 0, 1)
   local brake = clamp(-err * 0.5, 0, 1)
 
-  -- handbrake pulses initiate drifts
+  -- periodic handbrake pulses kick the car sideways
   p.hbTime = p.hbTime - dt
   if p.pulseLeft <= 0 and p.hbTime <= 0 then
     p.pulseLeft = 0.3 + math.random() * 0.5
@@ -159,6 +187,14 @@ local function updateFreeCar(carIndex, car, dt)
     steer = clamp(steer * 1.6, -1, 1)
   end
 
+  -- if the rear wheels are already spinning (drift), hold full gas so the
+  -- slide never dies — exactly what a drifter does
+  local slip = rearSlip(car)
+  if slip > 0.25 then
+    gas = 1
+    brake = 0
+  end
+
   -- stuck detection: re-randomize the personality to escape
   if speed < 1.5 and p.pulseLeft <= 0 then
     p.stuck = p.stuck + dt
@@ -166,16 +202,16 @@ local function updateFreeCar(carIndex, car, dt)
       p.stuck = 0
       newPersonality(carIndex)
       p = state.p[carIndex]
+      log("car #%d: stuck, new personality", carIndex)
     end
   else
     p.stuck = 0
   end
 
   p.steer = p.steer + (steer - p.steer) * clamp(dt * 8, 0, 1)
-  p.gas, p.brake = gas, brake
+  p.gas, p.brake, p.hb = gas, brake, p.hb
 
-  -- THE core mechanism (exactly like the working FullThrottleAI):
-  -- apply every frame while the car is AI-controlled
+  -- the proven FullThrottleAI mechanism, verbatim structure
   local controls = ac.overrideCarControls(carIndex)
   if controls then
     controls.combineAxis = false
@@ -186,100 +222,24 @@ local function updateFreeCar(carIndex, car, dt)
   else
     log("car #%d: overrideCarControls returned nil", carIndex)
   end
-
-  -- lift the AI throttle limit, same guard as in the working app
+  -- remove any AI throttle cap, same as FullThrottleAI
   if physics and physics.setAIThrottleLimit then
-    physics.setAIThrottleLimit(carIndex, 1)
-  end
-end
-
-local function releaseCar(carIndex)
-  local controls = ac.overrideCarControls(carIndex)
-  if controls then
-    controls.combineAxis = false
-    controls.steer = 0
-    controls.gas = 0
-    controls.brake = 0
-    controls.handbrake = 0
-  end
-  if state.p[carIndex] then
-    log("car #%d released (no longer AI-controlled)", carIndex)
-  end
-  state.p[carIndex] = nil
-end
-
--- ─────────────────── main control loop (always on) ───────────────────
-
-local function updateControl(dt)
-  local sim = ac.getSim()
-  if not sim or not sim.isLive then return end
-  state.caught = 0
-  state.slowingCount = 0
-  state.playerCaught = false
-  local active = {}
-
-  -- EXACT FullThrottleAI condition, applied to EVERY car:
-  -- any car with isAIControlled == true is ours to drive
-  for i = 0, sim.carsCount - 1 do
-    local car = ac.getCar(i)
-    if car and car.isAIControlled then
-      if i == 0 then state.playerCaught = true end
-      updateFreeCar(i, car, dt)
-      active[i] = true
-      state.caught = state.caught + 1
-    end
-  end
-
-  -- release cars that stopped being AI-controlled (Ctrl+8 off, AI left)
-  for i in pairs(state.p) do
-    if not active[i] then releaseCar(i) end
-  end
-  for i in pairs(active) do
-    if state.p[i] and state.p[i].slowing then state.slowingCount = state.slowingCount + 1 end
-  end
-
-  state.activePhys = 0
-  for i in pairs(active) do
-    local controls = ac.overrideCarControls(i)
-    local a = controls and controls:active()
-    if state.p[i] then state.p[i].active = a and true or false end
-    if a then state.activePhys = state.activePhys + 1 end
-  end
-
-  -- log the Ctrl+8 transition for the player car
-  if state.playerCaught ~= state.ctrl8Was then
-    log("PLAYER: Ctrl+8 %s", state.playerCaught and "ON — car #0 intercepted" or "OFF — car #0 released")
-    state.ctrl8Was = state.playerCaught
-    logFlush()
-  end
-
-  if state.caught > 0 then
-    state.status = "Перехвачено машин: " .. tostring(state.caught)
-      .. (state.playerCaught and " (в т.ч. твоя — Ctrl+8)" or " (AI-соперники)")
-  else
-    state.status = "Ожидание: включи Ctrl+8 (или сессию с AI-соперниками)"
+    pcall(physics.setAIThrottleLimit, carIndex, 1)
   end
 end
 
 -- ─────────────────── self-test ───────────────────
 
 local function startSelfTest()
-  local sim = ac.getSim()
-  if not sim then
-    state.selfTest.verdict = "Сессия не активна"
-    return
-  end
-  local carIndex = 0
   local car = ac.getCar(0)
   if not car then
     state.selfTest.verdict = "Нет машины игрока"
     return
   end
-  state.selfTest = { active = true, carIndex = carIndex, timer = SELFTEST_SECONDS,
+  state.selfTest = { active = true, carIndex = 0, timer = 4.0,
     steerSeen = 0, brakeSeen = 0, appliedFrames = 0, verdict = nil }
   state.status = "Тест перехвата: машина игрока"
-  log("SELFTEST start: car#0 (player), cmd brake=1.00 steer=0.80 for %.1f s; Ctrl+8=%s",
-    SELFTEST_SECONDS, tostring(car.isAIControlled))
+  log("SELFTEST start: car#0, cmd brake=1.00 steer=0.80 for 4.0 s (включи Ctrl+8!)")
   logFlush()
 end
 
@@ -293,28 +253,23 @@ local function updateSelfTest(dt)
     st.verdict = "Машина исчезла"
     return
   end
-  local controls = ac.overrideCarControls(st.carIndex)
-  if not controls then
+  local ok, c = pcall(ac.overrideCarControls, st.carIndex)
+  if not ok or not c then
     st.active = false
     st.verdict = "overrideCarControls вернул nil — перехват недоступен"
-    log("SELFTEST: overrideCarControls(%d) -> nil", st.carIndex)
+    log("SELFTEST: overrideCarControls(0) -> nil/ERROR")
     logFlush()
     return
   end
-  controls.combineAxis = false
-  controls.gas = 0
-  controls.brake = 1
-  controls.steer = 0.8
+  c.combineAxis = false
+  c.gas = 0
+  c.brake = 1
+  c.steer = 0.8
   st.appliedFrames = st.appliedFrames + 1
   local brakeSeen = car.brake or 0
   local steerSeen = car.steer or 0
   if brakeSeen > 0.5 then st.brakeSeen = st.brakeSeen + 1 end
   if math.abs(steerSeen) > 0.3 then st.steerSeen = st.steerSeen + 1 end
-  if st.appliedFrames % 10 == 1 then
-    log("SELFTEST car#%d: cmd(steer 0.80 brake 1.00) | car reports steer %.2f brake %.2f | %.1f km/h | active=%s | ctrl8=%s",
-      st.carIndex, steerSeen, brakeSeen, car.speedKmh, tostring(controls:active()),
-      tostring(car.isAIControlled))
-  end
   if st.timer <= 0 then
     st.active = false
     if st.brakeSeen >= 10 or st.steerSeen >= 10 then
@@ -325,8 +280,8 @@ local function updateSelfTest(dt)
         .. " кадров из " .. st.appliedFrames .. ")"
     end
     log("SELFTEST verdict: %s", st.verdict)
-    local c2 = ac.overrideCarControls(st.carIndex)
-    if c2 then
+    local ok2, c2 = pcall(ac.overrideCarControls, st.carIndex)
+    if ok2 and c2 then
       c2.brake = 0
       c2.steer = 0
     end
@@ -346,8 +301,8 @@ local function scanSession(sim)
     if car then
       local name = "?"
       pcall(function() name = ac.getCarName(i) end)
-      log("CAR#%d: active=%s aiControlled=%s speed=%.1f name=%s",
-        i, tostring(car.isActive), tostring(car.isAIControlled), car.speedKmh, name)
+      log("CAR#%d: active=%s aiControlled=%s name=%s",
+        i, tostring(car.isActive), tostring(car.isAIControlled), name)
     end
   end
   logFlush()
@@ -363,13 +318,7 @@ local function updateInner(dt)
     state.log = Logger.new('routepilot_log.txt', 2000)
     local path = state.log:init()
     log("=== RoutePilot %s log start ===", APP_VERSION)
-    if path then
-      log("log file: %s", path)
-    else
-      log("LOG ERROR: file could not be created: %s", tostring(state.log.writeError))
-      ac.error("[RoutePilot] log file could not be created: " .. tostring(state.log.writeError))
-    end
-    log("Always-on mode: включи Ctrl+8 — машина перехватится автоматически, кнопки не нужны")
+    if path then log("log file: %s", path) end
     logFlush()
   end
 
@@ -378,22 +327,50 @@ local function updateInner(dt)
   if not sim or not sim.isLive then return end
 
   updateSelfTest(dt)
-  updateControl(dt)
 
+  -- ============ THE FullThrottleAI PATTERN, FOR EVERY CAR ============
+  -- No buttons, no gates: if a car is AI-controlled, it is taken over.
+  local controlled = 0
+  if state.enabled then
+    for i = 0, sim.carsCount - 1 do
+      local car = ac.getCar(i)
+      if car then
+        local isAI = false
+        pcall(function() isAI = car.isAIControlled and true or false end)
+        if i == 0 then state.playerAI = isAI end
+        if isAI then
+          updateDriftCar(i, car, dt)
+          controlled = controlled + 1
+        elseif state.p[i] then
+          releaseCar(i)   -- control returned (Ctrl+8 off / car no longer AI)
+        end
+      end
+    end
+  else
+    for i in pairs(state.p) do releaseCar(i) end
+  end
+  state.controlledCount = controlled
+
+  -- heartbeat every second: what we command vs what the car reports
   state.heartbeatTimer = state.heartbeatTimer + dt
   if state.heartbeatTimer >= HEARTBEAT_INTERVAL then
     state.heartbeatTimer = 0
     state.log:heartbeat(string.format(
-      "caught=%d playerCtrl8=%s physActive=%d slowing=%d errors=%d",
-      state.caught, tostring(state.playerCaught), state.activePhys,
-      state.slowingCount, state.updateErrors))
+      "controlled=%d ctrl8(playerAI)=%s enabled=%s errors=%d",
+      state.controlledCount, tostring(state.playerAI),
+      tostring(state.enabled), state.updateErrors))
     for carIndex, p in pairs(state.p) do
       local car = ac.getCar(carIndex)
       if car then
-        log("CAR#%d: cmd steer %.2f gas %.2f brake %.2f hb %.1f | car reports steer %.2f gas %.2f brake %.2f | %.1f km/h | active=%s",
+        local okGas, gas = pcall(function() return car.gas end)
+        local okBrake, brake = pcall(function() return car.brake end)
+        local okSteer, steer = pcall(function() return car.steer end)
+        log("CAR#%d: cmd steer %.2f gas %.2f brake %.2f hb %.1f | car reports steer %.2f gas %.2f brake %.2f | %.1f km/h | slip %.2f",
           carIndex, p.steer, p.gas, p.brake, p.hb,
-          car.steer or -1, car.gas or -1, car.brake or -1,
-          car.speedKmh, tostring(p.active))
+          (okSteer and type(steer) == 'number') and steer or -1,
+          (okGas and type(gas) == 'number') and gas or -1,
+          (okBrake and type(brake) == 'number') and brake or -1,
+          car.speedKmh or 0, rearSlip(car))
       end
     end
     logFlush()
@@ -415,41 +392,37 @@ function script.update(dt)
 end
 
 script.onRelease = function()
-  for i in pairs(state.p) do
-    local controls = ac.overrideCarControls(i)
-    if controls then
-      controls.combineAxis = false
-      controls.steer = 0
-      controls.gas = 0
-      controls.brake = 0
-      controls.handbrake = 0
-    end
+  local sim = ac.getSim()
+  if sim then
+    for i = 0, sim.carsCount - 1 do releaseCar(i) end
   end
-  state.p = {}
   if state.log then
     state.log:shutdown('script released (session end or game exit)')
   end
 end
 
 function script.windowMain(dt)
-  ui.text("RoutePilot  " .. APP_VERSION .. "  (always-on)")
-  ui.text("Перехвачено машин: " .. tostring(state.caught)
-    .. "   Физика приняла: " .. tostring(state.activePhys))
-  if state.playerCaught then
-    ui.textColored("Ctrl+8 ВКЛ — твоя машина ведётся RoutePilot", rgbm(0.3, 1, 0.5, 1))
+  ui.text("RoutePilot  " .. APP_VERSION)
+  if state.playerAI then
+    ui.textColored("Ctrl+8: ВКЛ — твоя машина под RoutePilot", rgbm(0.3, 1, 0.5, 1))
   else
-    ui.textColored("Ctrl+8 выкл — включи, и машина перехватится сама", rgbm(1, 0.8, 0.2, 1))
+    ui.textColored("Ctrl+8: выкл — нажми Ctrl+8, чтобы отдать машину ИИ+RoutePilot", rgbm(1, 0.8, 0.2, 1))
   end
+  ui.text("Машин под управлением: " .. tostring(state.controlledCount))
   if state.updateErrors > 0 then
     ui.textColored("Ошибок update: " .. tostring(state.updateErrors) .. " (см. лог)", rgbm(1, 0.4, 0.3, 1))
   end
   ui.separator()
 
+  if ui.checkbox("RoutePilot включён (перехватывает все AI-машины)", state.enabled) then
+    state.enabled = not state.enabled
+    log("OPTION enabled=%s", tostring(state.enabled))
+  end
   local sMin, chMin = ui.slider("Мин. скорость, км/ч", state.speedMin, 10, 80, "%.0f")
   if chMin then state.speedMin = sMin end
-  local sMax, chMax = ui.slider("Макс. скорость, км/ч", state.speedMax, 20, 160, "%.0f")
+  local sMax, chMax = ui.slider("Макс. скорость, км/ч", state.speedMax, 30, 180, "%.0f")
   if chMax then state.speedMax = math.max(sMax, state.speedMin + 5) end
-  local gVal, gCh = ui.slider("Мин. дистанция до машины", state.followGap, 3, 15, "%.1f м")
+  local gVal, gCh = ui.slider("Мин. дистанция до машин", state.followGap, 3, 15, "%.1f м")
   if gCh then state.followGap = gVal end
   ui.separator()
 
@@ -465,7 +438,6 @@ function script.windowMain(dt)
   end
 
   ui.separator()
-  ui.textWrapped("Статус: " .. state.status)
-  ui.textWrapped("Кнопок включения нет: как FullThrottleAI, приложение всегда активно и берёт под контроль любую машину ИИ — свою (после Ctrl+8) и AI-соперников.")
+  ui.textWrapped("Как это работает (как у FullThrottleAI): никаких кнопок-включателей. Каждый кадр приложение проверяет, какие машины управляются ИИ (твоя — при Ctrl+8, соперники — всегда) и перехватывает их: рулит, газует до пробуксовки, бьёт ручником для заноса и держит газ, пока колеса скользят.")
   ui.text("Лог: " .. (state.log and state.log.path or "создаётся…"))
 end
