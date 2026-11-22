@@ -520,7 +520,26 @@ local function followRouteSteer(car, p, speed, nodes)
   local angle = math.atan2(cross, dot)
   local steer = clamp(angle * 1.4, -0.8, 0.8)
 
-  local reference = state.telemetry and state.telemetry[bestSeg] or nil
+  local reference = nil
+  if state.telemetry then
+    local a = state.telemetry[bestSeg]
+    local nextIndex = state.loopRoute and ((bestSeg % n) + 1) or math.min(bestSeg + 1, n)
+    local b = state.telemetry[nextIndex]
+    if a and b then
+      local t = bestT
+      reference = {}
+      for _, key in ipairs({"speed","steer","gas","brake","clutch","handbrake","gear","rpm","slipAngle","lateralSpeed","yawRate","rearSlip"}) do
+        local av, bv = a[key], b[key]
+        if type(av)=="number" and type(bv)=="number" then
+          reference[key] = av + (bv - av) * t
+        else
+          reference[key] = av or bv
+        end
+      end
+    else
+      reference = a or b
+    end
+  end
   return steer, curve, lineDist, targetX, targetZ, reference
 end
 
@@ -563,7 +582,9 @@ local function updateAntiDonut(car, p, dt, routeSteer, lineDist, reference)
 
   local wheelRisk = 0
   if rearSlip then
-    wheelRisk = smoothstep(REAR_SLIP_START, REAR_SLIP_FULL, rearSlip)
+    local targetRearSlip = reference and math.abs(reference.rearSlip or 0) or 0
+    local wheelExcess = math.max(0, rearSlip - targetRearSlip - 0.20)
+    wheelRisk = smoothstep(REAR_SLIP_START, REAR_SLIP_FULL, wheelExcess)
   end
 
   local risk = math.max(angleRisk, lateralRisk, yawRisk, wheelRisk)
