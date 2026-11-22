@@ -1,5 +1,5 @@
 -- DriftAI/driver.lua
--- Per-car drift controller.
+-- Per-car drift controller (v1.1.0).
 --
 -- Control interception (confirmed in CSP 0.3.2-preview2):
 --   ac.overrideCarControls(carIndex) -> ac.CarControlsInput (struct `carcontrolsoverride`,
@@ -9,8 +9,15 @@
 --   `.requestedGearIndex` allows direct gear selection. `:active()` verifies that the physics
 --   thread has consumed the inputs.
 --
--- Stock AI is additionally neutralized with physics.setAIAggression/setAICaution/setAILevel
--- (verified signatures from real-world apps: FullSendAI, Realistic Trackday).
+-- v1.1.0 changes:
+--   * Wheelspin-targeted throttle: the target is the actual rear-wheel slip ratio
+--     (car.wheels[2]/[3].slipRatio, 0-based ac.Wheel order FL,FR,RL,RR). Throttle
+--     integrates toward TARGET_WHEEL_SLIP; if the car is starved at wide-open
+--     throttle, a lower gear is requested automatically.
+--   * Boundary-aware speed planning: speed limit from the braking distance to the
+--     nearest wall ahead (v = sqrt(2*a*(d - margin))); with enough free road the
+--     driver commits to a long, fast drift.
+--   * Higher entry speed (55 km/h), higher hard cap (150 km/h), target slip 32 deg.
 
 local Track = require('track')
 
@@ -24,24 +31,30 @@ end
 
 -- ─────────────────── tunables ───────────────────
 
-local TARGET_SLIP = rad(28)      -- target body slip angle
-local SLIP_DEADBAND = rad(4)      -- no correction inside this band
-local SLIP_KP = 2.4               -- steer correction gain (per radian of error)
-local SLIP_KD = 0.35              -- steer damping (per rad/s of slip rate)
-local STEER_RATE = 10.0           -- steering slew limit (per second)
+local TARGET_SLIP = rad(32)       -- target body slip angle
+local SLIP_DEADBAND = rad(4)       -- no correction inside this band
+local SLIP_KP = 2.4                -- steer correction gain (per radian of error)
+local SLIP_KD = 0.35               -- steer damping (per rad/s of slip rate)
+local STEER_RATE = 12.0            -- steering slew limit (per second)
 local MAX_STEER = 1.0
 
-local GAS_BASE = 0.85             -- steady-state throttle while drifting
-local GAS_MIN_DRIFT = 0.55        -- never below this while a drift is established
-local GAS_SLIP_GAIN = 0.8         -- throttle cut per radian of over-rotation
-local BRAKE_LIMITER = 0.35        -- speed limiter brake blend (keeps the drift)
-local HANDBRAKE_KICK = 1.0        -- handbrake pulse to initiate a drift
+-- wheelspin target (rear slip ratio, ac.StateWheel.slipRatio)
+local TARGET_WHEEL_SLIP = 0.30     -- sustained rear wheelspin for a long drift
+local WHEEL_SLIP_DEADBAND = 0.03
+local WHEEL_SLIP_GAIN = 60.0       -- throttle correction per second per unit of error
+local STARVED_TIME = 0.5           -- s of WOT without wheelspin -> downshift
+local GAS_MIN_DRIFT = 0.45
+local HANDBRAKE_KICK = 1.0
 
-local INIT_SPEED_KMH = 40         -- build speed before the first drift entry
-local SPEED_LIMIT_KMH = 120       -- hard cap
-local CORNER_SPEED_FACTOR = 0.62  -- target drift speed vs grip cornering speed
+local INIT_SPEED_KMH = 55          -- entry speed
+local SPEED_LIMIT_KMH = 150        -- hard cap
+local BRAKE_DECEL = 6.0            -- planning deceleration, m/s^2
+local WALL_MARGIN = 8              -- meters kept away from any wall
+local OPEN_TRACK_DIST = 120        -- more free road than this -> full commitment
 
-local GEAR_HOLDS = { [1] = 55, [2] = 85, [3] = 118 } -- upshift thresholds, km/h
+local GEAR_HOLDS = { [1] = 60, [2] = 95, [3] = 130 } -- upshift thresholds, km/h
+
+local WHEEL_RL, WHEEL_RR = 2, 3    -- 0-based ac.Wheel: FL,FR,RL,RR
 
 -- ─────────────────── driver class ───────────────────
 
@@ -52,6 +65,7 @@ function Driver.new(carIndex, config)
   local self = setmetatable({}, Driver)
   self.index = carIndex
   self.config = config
+  self.bounds = config.bounds
   self.state = 'accelerate'     -- accelerate | drift | recover | lost
   self.stateTime = 0
   self.steer = 0
@@ -62,10 +76,13 @@ function Driver.new(carIndex, config)
   self.slipAngle = 0
   self.prevSlipAngle = 0
   self.slipRate = 0
+  self.rearSlip = nil
+  self.starvedTimer = 0
   self.progress = nil
   self.lateral = 0
+  self.wallAhead = nil
   self.driftDir = 0             -- -1 right drift, 1 left drift, 0 unset
-  self.driftDirLock = 0          -- time the drift direction stays forced
+  self.driftDirLock = 0
   self.stuckTimer = 0
   self.driftTime = 0
   return self
@@ -73,7 +90,6 @@ end
 
 local function bodySlipAngle(car)
   -- Angle between heading and velocity direction, signed.
-  -- car.look is the forward vector, car.velocity is world velocity in m/s.
   local v = car.velocity
   local speed = v:length()
   if speed < 1.5 then return 0 end
@@ -84,9 +100,28 @@ local function bodySlipAngle(car)
   return atan2(cross, dot)
 end
 
+-- Average rear-wheel slip ratio (actual wheelspin feedback), or nil.
+local function rearWheelspin(car)
+  local ok, wl = pcall(function() return car.wheels[WHEEL_RL] end)
+  local ok2, wr = pcall(function() return car.wheels[WHEEL_RR] end)
+  if not ok or not ok2 or not wl or not wr then return nil end
+  local ok3, sl = pcall(function() return wl.slipRatio end)
+  local ok4, sr = pcall(function() return wr.slipRatio end)
+  if not ok3 or not ok4 or type(sl) ~= 'number' or type(sr) ~= 'number' then
+    return nil
+  end
+  return (abs(sl) + abs(sr)) * 0.5
+end
+
+-- Speed the car may carry so the braking distance fits the free road ahead:
+--   v = sqrt(2 * a * (d_wall - margin))
+local function wallLimitedSpeed(wallAheadM)
+  if not wallAheadM then return SPEED_LIMIT_KMH end
+  local d = max(0, wallAheadM - WALL_MARGIN)
+  return min(SPEED_LIMIT_KMH, math.sqrt(2 * BRAKE_DECEL * d) * 3.6)
+end
+
 -- Compute steering command from drift stabilisation + navigation.
--- Navigation: pure-pursuit aim at a lookahead point on the track centerline,
--- blended with counter-steer correction of the body slip angle.
 function Driver:_steering(car, dt, targetX, targetZ)
   local pos = car.position
   local look = car.look
@@ -98,7 +133,6 @@ function Driver:_steering(car, dt, targetX, targetZ)
     local forwardDot = look.x * dx + look.z * dz
     local cross = look.z * dx - look.x * dz
     aim = atan2(cross, forwardDot)
-    -- pure-pursuit steering angle for a ~2.65 m wheelbase, clamped
     aim = clamp(atan2(2 * 2.65 * math.sin(aim), max(1, dist)) / 0.55, -1, 1)
   end
 
@@ -115,31 +149,14 @@ function Driver:_steering(car, dt, targetX, targetZ)
     steer = clamp(aim, -MAX_STEER, MAX_STEER)
   end
 
-  -- slew limit for smoothness
   local rate = STEER_RATE * dt
   return clamp(steer, self.steer - rate, self.steer + rate)
-end
-
--- Speed management: keep the car fast enough to hold a drift, slow enough
--- not to fly off at corner entries.
-function Driver:_speed(car, halfWidth)
-  local kmh = car.speedKmh
-  local curvature = Track.curvatureAhead(self.progress, self.config.trackLengthM, 25)
-  local limit = SPEED_LIMIT_KMH
-  if curvature and abs(curvature) > 1e-4 then
-    -- grip-limited corner speed (a_lat ~= 8 m/s^2), scaled down for drift style
-    local vGrip = math.sqrt(8 / abs(curvature)) * 3.6
-    limit = min(limit, vGrip * CORNER_SPEED_FACTOR + 25)
-  end
-  if halfWidth and halfWidth < 6 then limit = min(limit, 70) end
-  return limit
 end
 
 function Driver:_pickDriftDirection(curvature)
   if self.driftDir ~= 0 and self.driftDirLock > 0 then
     return self.driftDir
   end
-  -- enter the turn: left turn (positive curvature) -> left-side drift
   if curvature and abs(curvature) > 1e-4 then
     return curvature > 0 and 1 or -1
   end
@@ -157,6 +174,7 @@ function Driver:update(car, dt)
   self.prevSlipAngle = self.slipAngle
   self.slipAngle = slip
   self.slipRate = (slip - self.prevSlipAngle) / max(dt, 1e-3)
+  self.rearSlip = rearWheelspin(car)
   local kmh = car.speedKmh
 
   -- navigation
@@ -171,7 +189,6 @@ function Driver:update(car, dt)
     self.stuckTimer = 0
   end
 
-  -- off-track / lost detection
   if progress == nil then
     self.state = 'lost'
   end
@@ -190,7 +207,6 @@ function Driver:update(car, dt)
       self.state = 'accelerate' -- re-initiate
       self.stateTime = 0
     end
-    -- spin-out guard: too much slip
     if abs(slip) > rad(75) then
       self.state = 'recover'
       self.stateTime = 0
@@ -209,7 +225,6 @@ function Driver:update(car, dt)
     end
   end
 
-  -- drift direction follows the upcoming corner
   local curvature = Track.curvatureAhead(self.progress, self.config.trackLengthM, 20)
   if self.state == 'drift' then
     self.driftDir = self:_pickDriftDirection(curvature)
@@ -228,33 +243,66 @@ function Driver:update(car, dt)
     targetZ = car.position.z + look.z * lookahead
   end
 
+  -- ── boundary-aware speed planning ──
+  local wallAhead = self.bounds and self.bounds:wallAheadOver(progress, 160) or nil
+  self.wallAhead = wallAhead
+  local limit = wallLimitedSpeed(wallAhead)
+  if halfWidth and halfWidth < 6 then limit = min(limit, 70) end
+  local openTrack = wallAhead == nil or wallAhead >= OPEN_TRACK_DIST
+
   -- ── controls ──
   self.steer = self:_steering(car, dt, targetX, targetZ)
-  local speedLimit = self:_speed(car, halfWidth)
   local gas, brake, handbrake = 0, 0, 0
 
   if self.state == 'accelerate' then
-    local err = speedLimit - kmh
-    gas = clamp(0.35 + err * 0.05, 0.2, 1)
-    if kmh > speedLimit then brake = 0.2 end
+    -- accelerate hard: speed is needed to spin the rear tires
+    gas = 1.0
+    if kmh > limit then gas = 0.3; brake = 0.25 end
     -- initiate a drift: steer into the corner and kick the handbrake
-    if curvature and abs(curvature) > 0.004 and kmh > 45 and self.stateTime > 1.2 then
+    if curvature and abs(curvature) > 0.004 and kmh > 45 and self.stateTime > 1.0 then
       handbrake = HANDBRAKE_KICK
-      gas = max(GAS_MIN_DRIFT, gas * 0.7)
     end
 
   elseif self.state == 'drift' then
-    gas = GAS_BASE - clamp((abs(slip) - TARGET_SLIP) * GAS_SLIP_GAIN, 0, 0.4)
+    -- wheelspin-targeted throttle: keep the rear wheels spinning at TARGET_WHEEL_SLIP
+    gas = self.gas
+    if self.rearSlip then
+      local err = TARGET_WHEEL_SLIP - self.rearSlip
+      if abs(err) > WHEEL_SLIP_DEADBAND then
+        gas = gas + err * WHEEL_SLIP_GAIN * dt -- continuous correction
+      end
+      -- not enough spin even at wide-open throttle -> ask for a lower gear
+      if self.rearSlip < 0.08 and gas > 0.92 then
+        self.starvedTimer = self.starvedTimer + dt
+        if self.starvedTimer > STARVED_TIME then
+          self.requestedGearIndex = max(1, car.gear - 1)
+          self.starvedTimer = 0
+        end
+      else
+        self.starvedTimer = 0
+      end
+      -- overspin: bleed off
+      if self.rearSlip > TARGET_WHEEL_SLIP + 0.15 then
+        gas = gas * 0.7
+      end
+    else
+      -- no wheel telemetry: hold a strong throttle
+      gas = max(GAS_MIN_DRIFT, gas)
+    end
     gas = clamp(gas, GAS_MIN_DRIFT, 1)
-    if kmh > speedLimit then
-      gas = gas * 0.6
-      brake = BRAKE_LIMITER
+    -- wall proximity: brake to the plan, pull back to the centerline
+    if kmh > limit then
+      gas = gas * 0.5
+      brake = max(brake, clamp((kmh - limit) * 0.04, 0, 0.6))
+    end
+    -- open road and slip established: commit to a long fast drift
+    if openTrack and abs(slip) > rad(15) then
+      gas = max(gas, 0.9)
     end
     -- light handbrake tap if the drift dies out
     if abs(slip) < rad(10) and kmh > 50 then
       handbrake = 0.6
     end
-    -- wall proximity: pull the lateral offset back toward the centerline
     if halfWidth then
       local margin = halfWidth - 3.5
       if abs(self.lateral) > margin then
@@ -264,13 +312,11 @@ function Driver:update(car, dt)
     end
 
   elseif self.state == 'recover' then
-    -- counter-steer against the spin, brake moderately, then resume
     self.steer = clamp(-sign(slip) * abs(slip) * 1.2, -1, 1)
     brake = clamp(0.3 + abs(slip) * 0.3, 0.2, 0.8)
     gas = 0
 
   elseif self.state == 'lost' then
-    -- no track spline: drive straight ahead, gently
     self.steer = 0
     gas = clamp((40 - kmh) * 0.05, 0, 0.5)
   end
@@ -282,22 +328,20 @@ function Driver:update(car, dt)
   self.brake = clamp(brake, 0, 1)
   self.handbrake = clamp(handbrake, 0, 1)
 
-  -- ── gearbox: hold low gears for torque, straight from requestedGearIndex ──
-  self.requestedGearIndex = 0
+  -- ── gearbox: hold low gears for torque ──
   if self.state == 'drift' or self.state == 'accelerate' then
     local gear = car.gear
-    if gear >= 1 and gear <= 3 then
-      if kmh < GEAR_HOLDS[gear] * 0.75 then
-        self.requestedGearIndex = max(1, gear - 1) -- hold
-      elseif kmh > GEAR_HOLDS[gear] and gear < 3 then
+    if self.requestedGearIndex == 0 and gear >= 1 and gear <= 3 then
+      if kmh > GEAR_HOLDS[gear] and gear < 3 then
         self.requestedGearIndex = gear + 1
       end
     end
+  else
+    self.requestedGearIndex = 0
   end
 end
 
 ---Apply the computed inputs to the car through the controls override.
----@param dt number
 ---@return boolean applied true when the override struct was written
 function Driver:applyControls(dt)
   local ok, controls = pcall(ac.overrideCarControls, self.index)
@@ -312,7 +356,6 @@ function Driver:applyControls(dt)
 end
 
 ---True if the physics thread is consuming this override (checked periodically).
----@return boolean
 function Driver:isActive()
   local ok, controls = pcall(ac.overrideCarControls, self.index)
   if not ok or not controls then return false end
