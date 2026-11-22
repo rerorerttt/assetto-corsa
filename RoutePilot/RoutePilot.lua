@@ -1,35 +1,55 @@
--- RoutePilot: route recording and AI control for Assetto Corsa CSP.
--- No stock AI fast lane is used. AI cars follow a route recorded by the player.
--- Controls written: steering, throttle and brake only. Gearbox remains automatic.
+-- RoutePilot: следование по записанным точкам круга + ac.overrideCarControls + логи каждую секунду
 
-local APP_VERSION = "0.1.0"
-local STORAGE_PREFIX = "routepilot_route_"
-local SAMPLE_DISTANCE = 2.0
-local MAX_ROUTE_POINTS = 12000
-local LOOKAHEAD_MIN = 7.0
-local LOOKAHEAD_MAX = 24.0
-local LOOKAHEAD_TIME = 0.55
-local LATERAL_ACCEL = 5.0
+local okLogger, Logger = pcall(require, "logger")
+if not okLogger or type(Logger) ~= "table" then
+  Logger = nil
+end
+
 local BRAKE_ACCEL = 7.0
-local WHEELBASE = 2.65
-local MAX_ROAD_WHEEL_ANGLE = 0.55
+local FOLLOW_LATERAL = 3.0
+local WALL_MARGIN = 6.0
+
+-- Настройки стабилизации руления
+local LOOKAHEAD_BASE = 18.0
+local LOOKAHEAD_SPEED = 0.55
+local LOOKAHEAD_MIN = 18.0
+local LOOKAHEAD_MAX = 30.0
+
+local STEER_GAIN = 0.82
+local STEER_LIMIT = 0.68
+local STEER_RATE = 1.15
+local STEER_DEADBAND = 0.012
 
 local state = {
+  enabled = true,
   recording = false,
-  autopilot = false,
-  route = {},
-  closed = true,
-  speedMultiplier = 1.0,
-  status = "Маршрут не загружен",
-  lastRecordPosition = nil,
-  recordTimer = 0,
-  ai = {},
-  updateTimer = 0,
-  routeKey = nil,
-  trackID = "",
-  controlledCount = 0,
-  lastError = ""
+  loopRoute = true,
+  speedMin = 60,
+  speedMax = 140,
+  followGap = 8.0,
+  p = {},
+  nodes = {},
+  status = "Готов",
+  logAccum = 0.0,
 }
+
+local logger = nil
+if Logger and type(Logger.new) == "function" then
+  logger = Logger.new("routepilot_trace.txt", 4000)
+  if logger.init then
+    logger:init()
+  end
+end
+
+local function writeLog(fmt, ...)
+  if not logger or not logger.log then return end
+  logger:log(fmt, ...)
+end
+
+local function flushLog()
+  if not logger or not logger.flush then return end
+  logger:flush()
+end
 
 local function clamp(v, lo, hi)
   if v < lo then return lo end
@@ -37,479 +57,779 @@ local function clamp(v, lo, hi)
   return v
 end
 
-local function distance2(a, b)
-  local dx = a.x - b.x
-  local dz = a.z - b.z
-  return dx * dx + dz * dz
+local function flatDist(a, b)
+  local dx = b.x - a.x
+  local dz = b.z - a.z
+  return math.sqrt(dx * dx + dz * dz)
 end
 
-local function distance(a, b)
-  return math.sqrt(distance2(a, b))
-end
-
-local function safeTrackID(value)
-  value = string.lower(value or "unknown_track")
-  value = string.gsub(value, "[^%w_%-]", "_")
-  return value
-end
-
-local function getTrackKey()
-  local id = safeTrackID(ac.getTrackFullID("_"))
-  state.trackID = id
-  state.routeKey = STORAGE_PREFIX .. id
-  return state.routeKey
-end
-
-local function routeLength()
-  if #state.route < 2 then return 0 end
-  local total = 0
-  for i = 1, #state.route - 1 do
-    total = total + state.route[i].length
+local function getTrackTag()
+  local tid = (ac.getTrackID and ac.getTrackID()) or "track"
+  local lay = (ac.getTrackLayout and ac.getTrackLayout()) or ""
+  if lay ~= "" then
+    return tostring(tid) .. "_" .. tostring(lay)
   end
-  if state.closed then
-    total = total + state.route[#state.route].length
+  return tostring(tid)
+end
+
+local function getLineFilePath()
+  local appDir = (ac.getFolder and ac.getFolder(ac.FolderID.ACApps)) or ""
+  local safeTag = string.gsub(getTrackTag(), "[^%w_%-]", "_")
+  if appDir ~= "" then
+    return appDir .. "/lua/RoutePilot/line_" .. safeTag .. ".txt"
   end
-  return total
+  return "line_" .. safeTag .. ".txt"
 end
 
-local function nextIndex(i)
-  if i < #state.route then return i + 1 end
-  if state.closed then return 1 end
-  return #state.route
+local function serializeNodes(nodes)
+  local lines = {}
+  for i = 1, #nodes do
+    local n = nodes[i]
+    table.insert(lines, string.format("%.4f %.4f %.4f", n.x, n.y, n.z))
+  end
+  return table.concat(lines, "\n")
 end
 
-local function previousIndex(i)
-  if i > 1 then return i - 1 end
-  if state.closed then return #state.route end
-  return 1
-end
-
-local function rebuildRoute()
-  local n = #state.route
-  if n < 3 then
-    for i = 1, n do
-      state.route[i].length = 0
-      state.route[i].curveSpeed = 12
+local function parseNodes(raw)
+  if type(raw) ~= "string" or raw == "" then return nil end
+  local loaded = {}
+  for line in string.gmatch(raw, "[^\r\n]+") do
+    local xs, ys, zs = string.match(line, "^%s*([%-0-9.]+)%s+([%-0-9.]+)%s+([%-0-9.]+)%s*$")
+    local x, y, z = tonumber(xs), tonumber(ys), tonumber(zs)
+    if x and y and z then
+      table.insert(loaded, vec3(x, y, z))
     end
+  end
+  if #loaded >= 2 then
+    return loaded
+  end
+  return nil
+end
+
+local function saveLine()
+  if #state.nodes < 2 then
+    state.status = "Нужно минимум 2 точки"
     return
   end
 
-  for i = 1, n do
-    local p = state.route[i]
-    local ni = nextIndex(i)
-    local pi = previousIndex(i)
-    local nextPoint = state.route[ni]
-    local prevPoint = state.route[pi]
-    local segLength = distance(p, nextPoint)
-    p.length = segLength
+  local data = serializeNodes(state.nodes)
+  local wroteFile = false
+  local path = getLineFilePath()
 
-    local ax = p.x - prevPoint.x
-    local az = p.z - prevPoint.z
-    local bx = nextPoint.x - p.x
-    local bz = nextPoint.z - p.z
-    local la = math.sqrt(ax * ax + az * az)
-    local lb = math.sqrt(bx * bx + bz * bz)
-    local curvature = 0
-
-    if la > 0.05 and lb > 0.05 then
-      local cross = ax * bz - az * bx
-      local dot = ax * bx + az * bz
-      local angle = math.abs(math.atan2(cross, dot))
-      curvature = angle / math.max(0.1, (la + lb) * 0.5)
+  if io and io.open then
+    local okOpen, f = pcall(io.open, path, "w")
+    if okOpen and f then
+      local okW = pcall(function()
+        f:write(data)
+        f:close()
+      end)
+      if okW then wroteFile = true end
     end
+  end
 
-    local curveSpeed = 60
-    if curvature > 0.0005 then
-      curveSpeed = math.sqrt(LATERAL_ACCEL / curvature)
-    end
-    p.curveSpeed = clamp(curveSpeed, 5.0, 60.0)
-    p.recordedSpeed = clamp(tonumber(p.recordedSpeed) or 12, 3.0, 65.0)
+  local wroteStorage = false
+  if ac.storage then
+    local okS = pcall(ac.storage, "RP_LINE_DATA_" .. getTrackTag(), data)
+    if okS then wroteStorage = true end
+  end
+
+  if wroteFile or wroteStorage then
+    state.status = string.format("Сохранено: %d т. (%s)", #state.nodes, wroteFile and "файл" or "storage")
+    writeLog("SAVE_LINE count=%d file=%s storage=%s", #state.nodes, tostring(wroteFile), tostring(wroteStorage))
+    flushLog()
+  else
+    state.status = "Ошибка сохранения"
   end
 end
 
-local function serializeRoute()
-  local out = {}
-  out[#out + 1] = "ROUTEPILOT|1|" .. (state.closed and "1" or "0")
-  for i = 1, #state.route do
-    local p = state.route[i]
-    out[#out + 1] = string.format("%.3f,%.3f,%.3f", p.x, p.z, p.recordedSpeed)
+local function loadLine()
+  local loaded = nil
+  local path = getLineFilePath()
+
+  if io and io.open then
+    local okOpen, f = pcall(io.open, path, "r")
+    if okOpen and f then
+      local okR, raw = pcall(function()
+        local txt = f:read("*all")
+        f:close()
+        return txt
+      end)
+      if okR and raw and raw ~= "" then
+        loaded = parseNodes(raw)
+      end
+    end
   end
-  return table.concat(out, "\n")
+
+  if not loaded and ac.storage then
+    local okS, rawSt = pcall(ac.storage, "RP_LINE_DATA_" .. getTrackTag())
+    if okS and rawSt and rawSt ~= "" then
+      loaded = parseNodes(rawSt)
+    end
+  end
+
+  if loaded and #loaded >= 2 then
+    state.nodes = loaded
+    state.p = {}
+    state.status = string.format("Загружено: %d т.", #state.nodes)
+    writeLog("LOAD_LINE count=%d track=%s", #state.nodes, getTrackTag())
+    flushLog()
+  else
+    state.status = "Линия не найдена"
+  end
 end
 
-local function parseRoute(data)
-  if type(data) ~= "string" or data == "" then
-    return false, "Сохранённый маршрут не найден"
+local function addPoint(pos)
+  if #state.nodes == 0 or flatDist(state.nodes[#state.nodes], pos) >= 3.0 then
+    table.insert(state.nodes, vec3(pos.x, pos.y + 0.1, pos.z))
+  end
+end
+
+local function newPersonality(carIndex)
+  local span = math.max(5, state.speedMax - state.speedMin)
+  local kmh = state.speedMin + math.random() * span
+  local p = {
+    t = math.random() * 100,
+    segIdx = 1,
+    speed = kmh / 3.6,
+    steer = 0,
+    gas = 0,
+    brake = 0,
+    hb = 0,
+    stuck = 0,
+    lastTargetX = 0,
+    lastTargetZ = 0,
+    lastLineDist = 0,
+    lastSteerTarget = 0,
+  }
+
+  local car = ac.getCar(carIndex)
+  if car and #state.nodes >= 2 then
+    local bestI, bestD = 1, math.huge
+    for i = 1, #state.nodes do
+      local d = flatDist(car.position, state.nodes[i])
+      if d < bestD then
+        bestD = d
+        bestI = i
+      end
+    end
+    p.segIdx = bestI
   end
 
-  local parsed = {}
-  local first = true
-  local closed = true
+  state.p[carIndex] = p
+  writeLog("car #%d personality: %.0f km/h, startSeg=%d", carIndex, kmh, p.segIdx)
+end
 
-  for line in string.gmatch(data, "[^\r\n]+") do
-    if first then
-      first = false
-      local flag = string.match(line, "^ROUTEPILOT|1|([01])$")
-      if not flag then return false, "Неподдерживаемый формат маршрута" end
-      closed = flag == "1"
-    else
-      local sx, sz, sv = string.match(line, "^([^,]+),([^,]+),([^,]+)$")
-      local x, z, speed = tonumber(sx), tonumber(sz), tonumber(sv)
-      if x and z and speed then
-        parsed[#parsed + 1] = { x = x, y = 0, z = z, recordedSpeed = speed }
-        if #parsed > MAX_ROUTE_POINTS then
-          return false, "В маршруте слишком много точек"
+local function carAhead(carIndex, car)
+  local look = car.look
+  local lx, lz = look.x, look.z
+  local len = math.sqrt(lx * lx + lz * lz)
+  if len < 0.001 then return nil end
+  lx, lz = lx / len, lz / len
+
+  local sim = ac.getSim()
+  if not sim then return nil end
+
+  local bestGap, bestSpeed = nil, nil
+  for i = 0, sim.carsCount - 1 do
+    if i ~= carIndex then
+      local other = ac.getCar(i)
+      if other then
+        local dx = other.position.x - car.position.x
+        local dz = other.position.z - car.position.z
+        local forward = dx * lx + dz * lz
+        if forward > 0 and forward < 60 then
+          local lateral = math.abs(dx * (-lz) + dz * lx)
+          if lateral <= FOLLOW_LATERAL and (bestGap == nil or forward < bestGap) then
+            bestGap = forward
+            bestSpeed = math.max(0, other.speedMs or 0)
+          end
         end
       end
     end
   end
 
-  if #parsed < 3 then return false, "В маршруте меньше трёх точек" end
-  state.route = parsed
-  state.closed = closed
-  rebuildRoute()
-  state.ai = {}
-  return true, "Загружено точек: " .. tostring(#state.route)
+  return bestGap, bestSpeed
 end
 
-local function saveRoute()
-  if #state.route < 3 then
-    state.status = "Сначала запиши маршрут (минимум 3 точки)"
-    return
-  end
-  rebuildRoute()
-  local ok, err = pcall(function()
-    ac.storage[getTrackKey()] = serializeRoute()
-  end)
-  if ok then
-    state.status = "Маршрут сохранён: " .. tostring(#state.route) .. " точек"
-  else
-    state.status = "Ошибка сохранения: " .. tostring(err)
-    ac.error(state.status)
-  end
-end
-
-local function loadRoute()
-  local ok, data = pcall(function()
-    return ac.storage[getTrackKey()]
-  end)
-  if not ok then
-    state.status = "Ошибка чтения хранилища: " .. tostring(data)
-    return
-  end
-  local success, message = parseRoute(data)
-  state.status = message
-  if success then
-    state.autopilot = false
-  end
-end
-
-local function addRecordPoint(car)
+local function liveRays(car)
+  local dLeft, dRight, dFwd = 15.0, 15.0, 50.0
   local pos = car.position
-  local speed = math.max(3.0, car.speedMs or 0)
-  state.route[#state.route + 1] = {
-    x = pos.x,
-    y = pos.y,
-    z = pos.z,
-    recordedSpeed = speed
-  }
-  state.lastRecordPosition = { x = pos.x, z = pos.z }
-  if #state.route >= MAX_ROUTE_POINTS then
-    state.recording = false
-    state.status = "Достигнут лимит точек записи"
+  local look = car.look
+  local len = math.sqrt(look.x * look.x + look.z * look.z)
+
+  if len > 1e-4 and physics and physics.raycastTrack then
+    local fx, fz = look.x / len, look.z / len
+    local rx, rz = -fz, fx
+
+    local okL, rL = pcall(physics.raycastTrack, pos + vec3(0, 1.0, 0), vec3(-rx, 0, -rz), 25.0)
+    if okL and type(rL) == "number" and rL > 0 then dLeft = rL end
+
+    local okR, rR = pcall(physics.raycastTrack, pos + vec3(0, 1.0, 0), vec3(rx, 0, rz), 25.0)
+    if okR and type(rR) == "number" and rR > 0 then dRight = rR end
+
+    local okF, rF = pcall(physics.raycastTrack, pos + vec3(0, 1.0, 0), vec3(fx, 0, fz), 60.0)
+    if okF and type(rF) == "number" and rF > 0 then dFwd = rF end
   end
+
+  return dLeft, dRight, dFwd
 end
 
-local function startRecording()
-  state.autopilot = false
-  state.route = {}
-  state.ai = {}
-  state.lastRecordPosition = nil
-  state.recordTimer = 0
-  state.recording = true
-  state.status = "Запись идёт — проедь нужную траекторию"
-  local car = ac.getCar(0)
-  if car then addRecordPoint(car) end
-end
+local function followRouteSteer(car, p, speed, nodes)
+  local n = #nodes
+  if n < 2 then return 0, 0, 0, 0, 0 end
 
-local function stopRecording()
-  state.recording = false
-  state.lastRecordPosition = nil
-  rebuildRoute()
-  state.status = "Запись остановлена: " .. tostring(#state.route) .. " точек"
-end
+  local segCount = state.loopRoute and n or (n - 1)
+  local px, pz = car.position.x, car.position.z
 
-local function findNearestRoutePoint(pos)
-  local bestIndex = 1
-  local bestDistance = math.huge
-  for i = 1, #state.route do
-    local d = distance2(pos, state.route[i])
-    if d < bestDistance then
-      bestDistance = d
-      bestIndex = i
+  local function segEnd(sIdx)
+    return state.loopRoute and nodes[(sIdx % n) + 1] or nodes[sIdx + 1]
+  end
+
+  local bestSeg = clamp(p.segIdx, 1, segCount)
+  local bestT = 0
+  local bestDistSq = math.huge
+
+  local function checkSeg(sIdx)
+    local a = nodes[sIdx]
+    local b = segEnd(sIdx)
+    local vx = b.x - a.x
+    local vz = b.z - a.z
+    local lenSq = vx * vx + vz * vz
+
+    local t = 0
+    if lenSq > 1e-6 then
+      t = clamp(((px - a.x) * vx + (pz - a.z) * vz) / lenSq, 0, 1)
+    end
+
+    local cx = a.x + vx * t
+    local cz = a.z + vz * t
+    local dx = px - cx
+    local dz = pz - cz
+    local dSq = dx * dx + dz * dz
+
+    if dSq < bestDistSq then
+      bestDistSq = dSq
+      bestSeg = sIdx
+      bestT = t
     end
   end
-  return bestIndex, math.sqrt(bestDistance)
-end
 
-local function findNearestLocal(pos, currentIndex)
-  local n = #state.route
-  local bestIndex = currentIndex
-  local bestDistance = math.huge
-  for offset = -3, 14 do
-    local idx = currentIndex + offset
-    if state.closed then
-      idx = ((idx - 1) % n) + 1
-    elseif idx < 1 then
-      idx = 1
-    elseif idx > n then
-      idx = n
-    end
-    local d = distance2(pos, state.route[idx])
-    if d < bestDistance then
-      bestDistance = d
-      bestIndex = idx
+  -- Ограничиваем поиск небольшим откатом назад и расширенным поиском вперёд.
+  -- Это предотвращает перескакивание на уже пройденные участки при заносе.
+  local backwardWindow = math.min(2, segCount - 1)
+  local forwardWindow = math.min(
+    segCount - 1,
+    math.max(12, math.floor(segCount * 0.30))
+  )
+
+  for offset = -backwardWindow, forwardWindow do
+    local idx = ((bestSeg - 1 + offset) % segCount) + 1
+    checkSeg(idx)
+  end
+
+  if bestDistSq > 25.0 * 25.0 then
+    for i = 1, segCount do
+      checkSeg(i)
     end
   end
-  return bestIndex, math.sqrt(bestDistance)
-end
 
-local function pointAtLookahead(index, lookahead)
-  local n = #state.route
-  local travelled = 0
-  local current = index
-  for _ = 1, n do
-    local p = state.route[current]
-    local nextI = nextIndex(current)
-    local len = p.length or 0
-    if len > 0.001 then
-      if travelled + len >= lookahead then
-        local t = clamp((lookahead - travelled) / len, 0, 1)
-        local q = state.route[nextI]
-        return {
-          x = p.x + (q.x - p.x) * t,
-          z = p.z + (q.z - p.z) * t
-        }, current
+  p.segIdx = bestSeg
+  local lineDist = math.sqrt(bestDistSq)
+
+  local segA = nodes[bestSeg]
+  local segB = segEnd(bestSeg)
+
+  local startX = segA.x + (segB.x - segA.x) * bestT
+  local startZ = segA.z + (segB.z - segA.z) * bestT
+
+  -- Увеличенное упреждение уменьшает частые перекладки руля.
+  local lookAhead = clamp(
+    LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
+    LOOKAHEAD_MIN,
+    LOOKAHEAD_MAX
+  )
+
+  local curSeg = bestSeg
+  local rem = lookAhead
+  local targetX, targetZ = segB.x, segB.z
+  local steps = 0
+
+  while rem > 0 and steps < segCount do
+    steps = steps + 1
+
+    local a = nodes[curSeg]
+    local b = segEnd(curSeg)
+
+    local curX = (steps == 1) and startX or a.x
+    local curZ = (steps == 1) and startZ or a.z
+
+    local segLen = math.sqrt(
+      (b.x - curX) * (b.x - curX) +
+      (b.z - curZ) * (b.z - curZ)
+    )
+
+    if segLen >= rem and segLen > 1e-4 then
+      local ratio = rem / segLen
+      targetX = curX + (b.x - curX) * ratio
+      targetZ = curZ + (b.z - curZ) * ratio
+      rem = 0
+    else
+      rem = math.max(0, rem - segLen)
+      targetX, targetZ = b.x, b.z
+
+      if state.loopRoute then
+        curSeg = (curSeg % segCount) + 1
+      else
+        if curSeg < segCount then
+          curSeg = curSeg + 1
+        else
+          break
+        end
       end
-      travelled = travelled + len
-    end
-    if nextI == current then break end
-    current = nextI
-    if not state.closed and current == n then
-      return state.route[n], n
     end
   end
-  return state.route[current], current
+
+  -- Оценка кривизны маршрута для расчёта целевой скорости.
+  local prevSeg = ((bestSeg - 2) % segCount) + 1
+  local nextSeg = (bestSeg % segCount) + 1
+
+  local pA, pB = nodes[prevSeg], segEnd(prevSeg)
+  local nA, nB = nodes[nextSeg], segEnd(nextSeg)
+
+  local v1x, v1z = pB.x - pA.x, pB.z - pA.z
+  local v2x, v2z = nB.x - nA.x, nB.z - nA.z
+
+  local l1 = math.sqrt(v1x * v1x + v1z * v1z)
+  local l2 = math.sqrt(v2x * v2x + v2z * v2z)
+
+  local curve = 0
+  if l1 > 0.1 and l2 > 0.1 then
+    curve = math.abs(
+      (v1x / l1) * (v2z / l2) -
+      (v1z / l1) * (v2x / l2)
+    )
+  end
+
+  local look = car.look
+  local fx, fz = look.x, look.z
+  local fLen = math.sqrt(fx * fx + fz * fz)
+
+  if fLen < 1e-4 then
+    return 0, curve, lineDist, targetX, targetZ
+  end
+
+  fx, fz = fx / fLen, fz / fLen
+
+  local dx = targetX - px
+  local dz = targetZ - pz
+  local dLen = math.sqrt(dx * dx + dz * dz)
+
+  if dLen < 1e-4 then
+    return 0, curve, lineDist, targetX, targetZ
+  end
+
+  local dirX, dirZ = dx / dLen, dz / dLen
+
+  local dot = clamp(fx * dirX + fz * dirZ, -1, 1)
+  local cross = fx * dirZ - fz * dirX
+  local angle = math.atan2(cross, dot)
+
+  -- Меньшее усиление и более узкий диапазон не дают контроллеру
+  -- постоянно перекладывать руль из одного крайнего положения в другое.
+  local steer = clamp(angle * STEER_GAIN, -STEER_LIMIT, STEER_LIMIT)
+
+  if math.abs(steer) < STEER_DEADBAND then
+    steer = 0
+  end
+
+  return steer, curve, lineDist, targetX, targetZ
 end
 
-local function speedTargetAt(index, speedMultiplier)
-  local n = #state.route
-  local base = state.route[index].recordedSpeed * speedMultiplier
-  local allowed = base
-  local travelled = 0
-  local current = index
+local function limitSteerRate(previous, target, dt)
+  local maxChange = STEER_RATE * math.max(0, dt)
+  local delta = target - previous
 
-  for _ = 1, math.min(n, 90) do
-    local p = state.route[current]
-    local curve = p.curveSpeed * speedMultiplier
-    local brakingLimit = math.sqrt(curve * curve + 2 * BRAKE_ACCEL * travelled)
-    if brakingLimit < allowed then allowed = brakingLimit end
-    travelled = travelled + (p.length or 0)
-    if travelled > 75 then break end
-    local ni = nextIndex(current)
-    if ni == current then break end
-    current = ni
-    if not state.closed and current == n then
-      allowed = math.min(allowed, 0)
-      break
-    end
+  if delta > maxChange then
+    delta = maxChange
+  elseif delta < -maxChange then
+    delta = -maxChange
   end
 
-  if not state.closed then
-    local remaining = 0
-    for i = index, n - 1 do
-      remaining = remaining + (state.route[i].length or 0)
-    end
-    if remaining < 18 then
-      allowed = math.min(allowed, math.sqrt(math.max(0, 2 * BRAKE_ACCEL * remaining)))
-    end
-  end
-
-  return clamp(allowed, 0, 65)
+  return clamp(previous + delta, -STEER_LIMIT, STEER_LIMIT)
 end
 
-local function updateOneAI(carIndex, car, dt)
-  local runtime = state.ai[carIndex]
-  if not runtime then
-    local nearest = findNearestRoutePoint(car.position)
-    runtime = { index = nearest, globalSearch = 0, steer = 0 }
-    state.ai[carIndex] = runtime
+local function releaseCar(carIndex)
+  local ok, c = pcall(ac.overrideCarControls, carIndex)
+  if ok and c then
+    c.combineAxis = false
+    c.steer = 0
+    c.gas = 0
+    c.brake = 0
+    c.handbrake = 0
   end
 
-  runtime.globalSearch = runtime.globalSearch + dt
-  local nearestIndex, distanceFromRoute
-  if runtime.globalSearch >= 1.5 or distance2(car.position, state.route[runtime.index]) > 225 then
-    nearestIndex, distanceFromRoute = findNearestRoutePoint(car.position)
-    runtime.globalSearch = 0
-  else
-    nearestIndex, distanceFromRoute = findNearestLocal(car.position, runtime.index)
-  end
-  runtime.index = nearestIndex
+  state.p[carIndex] = nil
+end
 
-  if distanceFromRoute > 35 then
-    local controls = ac.overrideCarControls(carIndex)
-    if controls then
-      controls.combineAxis = false
-      controls.steer = 0
-      controls.gas = 0
-      controls.brake = 0.6
-    end
-    return
+local function updateLineCar(carIndex, car, dt)
+  local p = state.p[carIndex]
+
+  if not p then
+    newPersonality(carIndex)
+    p = state.p[carIndex]
   end
+
+  p.t = p.t + dt
+
+  local dLeft, dRight, dFwd = liveRays(car)
+
+  local room = dLeft + dRight
+  local nearWall = math.min(dLeft, dRight)
+  local offCenter = clamp(
+    (dRight - dLeft) / math.max(1, room),
+    -1,
+    1
+  )
 
   local speed = math.max(0, car.speedMs or 0)
-  local lookahead = clamp(LOOKAHEAD_MIN + speed * LOOKAHEAD_TIME, LOOKAHEAD_MIN, LOOKAHEAD_MAX)
-  local target = pointAtLookahead(runtime.index, lookahead)
-  local dx = target.x - car.position.x
-  local dz = target.z - car.position.z
-  local look = car.look
-  local forwardDot = look.x * dx + look.z * dz
-  local cross = look.z * dx - look.x * dz
-  local alpha = math.atan2(cross, forwardDot)
-  local steeringAngle = math.atan2(2 * WHEELBASE * math.sin(alpha), math.max(1, math.sqrt(dx * dx + dz * dz)))
-  local steer = clamp(steeringAngle / MAX_ROAD_WHEEL_ANGLE, -1, 1)
 
-  local targetSpeed = speedTargetAt(runtime.index, state.speedMultiplier)
-  if not state.closed and runtime.index == #state.route then
-    targetSpeed = 0
-  end
-  local speedError = targetSpeed - speed
-  local gas = clamp(speedError * 0.32, 0, 1)
-  local brake = clamp(-speedError * 0.48, 0, 1)
+  local steer, curve, lineDist, targetX, targetZ =
+    followRouteSteer(car, p, speed, state.nodes)
 
-  if distanceFromRoute > 12 then
-    gas = math.min(gas, 0.25)
-    brake = math.max(brake, 0.12)
+  p.lastTargetX = targetX
+  p.lastTargetZ = targetZ
+  p.lastLineDist = lineDist
+
+  -- Коррекция у стены остаётся мягкой и не должна перебивать основное руление.
+  if nearWall < 4.0 then
+    local wallAvoid = -offCenter * 0.25
+    local wBlend = clamp((4.0 - nearWall) / 4.0, 0, 0.25)
+
+    steer = clamp(
+      steer * (1 - wBlend) + wallAvoid * wBlend,
+      -STEER_LIMIT,
+      STEER_LIMIT
+    )
   end
 
-  runtime.steer = runtime.steer + (steer - runtime.steer) * clamp(dt * 7, 0, 1)
+  -- Ограничение скорости по кривизне маршрута.
+  local targetSpeed = p.speed * clamp(1.0 - curve * 2.0, 0.45, 1.0)
 
-  local controls = ac.overrideCarControls(carIndex)
-  if controls then
-    controls.combineAxis = false
-    controls.steer = runtime.steer
-    controls.gas = gas
-    controls.brake = brake
-  end
-end
+  local wallSpeedCap = math.sqrt(
+    math.max(0, 2 * BRAKE_ACCEL * math.max(0, dFwd - WALL_MARGIN))
+  )
 
-local function updateAutopilot(dt)
-  local sim = ac.getSim()
-  if not sim or not sim.isLive or #state.route < 3 then
-    state.controlledCount = 0
-    return
+  if wallSpeedCap > 0 then
+    targetSpeed = math.min(targetSpeed, wallSpeedCap)
   end
 
-  local active = {}
-  local count = 0
-  for carIndex = 1, sim.carsCount - 1 do
-    local car = ac.getCar(carIndex)
-    if car and car.isActive and car.isAIControlled then
-      active[carIndex] = true
-      updateOneAI(carIndex, car, dt)
-      count = count + 1
+  local gap, leaderSpeed = carAhead(carIndex, car)
+
+  if gap then
+    local safeSpeed = math.sqrt(
+      math.max(
+        0,
+        leaderSpeed * leaderSpeed +
+        2 * BRAKE_ACCEL * math.max(0, gap - state.followGap)
+      )
+    )
+
+    if safeSpeed < targetSpeed then
+      targetSpeed = safeSpeed
+    end
+
+    if gap < state.followGap then
+      targetSpeed = 0
     end
   end
 
-  for carIndex in pairs(state.ai) do
-    if not active[carIndex] then state.ai[carIndex] = nil end
+  local err = targetSpeed - speed
+  local gas = clamp(err * 0.35, 0, 1)
+  local brake = clamp(-err * 0.45, 0, 1)
+  local hb = 0
+
+  if speed < 1.5 then
+    p.stuck = p.stuck + dt
+
+    if p.stuck > 3.0 then
+      p.stuck = 0
+      newPersonality(carIndex)
+      p = state.p[carIndex]
+      writeLog("car #%d: stuck, new personality", carIndex)
+    end
+  else
+    p.stuck = 0
   end
-  state.controlledCount = count
+
+  -- Ограничиваем скорость изменения рулевого угла.
+  -- В отличие от прежнего экспоненциального сглаживания, это не позволяет
+  -- мгновенно перебрасывать руль в противоположную сторону.
+  p.steer = limitSteerRate(p.steer, steer, dt)
+
+  p.gas = gas
+  p.brake = brake
+  p.hb = hb
+  p.lastSteerTarget = steer
+
+  local controls = ac.overrideCarControls(carIndex)
+
+  if controls then
+    controls.combineAxis = false
+    controls.steer = p.steer
+    controls.gas = p.gas
+    controls.brake = p.brake
+    controls.handbrake = p.hb
+  end
+
+  if physics and physics.setAIThrottleLimit then
+    pcall(physics.setAIThrottleLimit, carIndex, 1)
+  end
+end
+
+local function formatNearbyNodes(car, segIdx)
+  local n = #state.nodes
+  if n == 0 then return "none" end
+
+  local center = clamp(segIdx or 1, 1, n)
+  local parts = {}
+
+  for offset = -2, 3 do
+    local idx = ((center - 1 + offset) % n) + 1
+    local pt = state.nodes[idx]
+    local d = flatDist(car.position, pt)
+
+    table.insert(
+      parts,
+      string.format(
+        "#%d(%.1f,%.1f,%.1f d=%.1fm)",
+        idx,
+        pt.x, pt.y, pt.z,
+        d
+      )
+    )
+  end
+
+  return table.concat(parts, " ")
+end
+
+local function recordSecondTelemetry(sim)
+  local anyWritten = false
+
+  for i = 0, sim.carsCount - 1 do
+    local car = ac.getCar(i)
+    local p = state.p[i]
+
+    if car and car.isActive and car.isAIControlled and p then
+      local pos = car.position
+      local look = car.look
+      local vel = car.velocity
+      local spdMs = car.speedMs or 0
+      local spdKmh = spdMs * 3.6
+      local nearby = formatNearbyNodes(car, p.segIdx)
+
+      writeLog(
+        "car=%d pos=(%.2f,%.2f,%.2f) spd=%.1fkm/h(%.1fm/s) | ctrl: steer=%.3f target=%.3f gas=%.2f brk=%.2f hb=%.2f | path: seg=%d err=%.2fm tgt=(%.1f,%.1f) look=(%.2f,%.2f) vel=(%.2f,%.2f) | nodes: %s",
+        i,
+        pos.x, pos.y, pos.z,
+        spdKmh, spdMs,
+        p.steer, p.lastSteerTarget or 0,
+        p.gas, p.brake, p.hb,
+        p.segIdx, p.lastLineDist,
+        p.lastTargetX, p.lastTargetZ,
+        look and look.x or 0,
+        look and look.z or 0,
+        vel and vel.x or 0,
+        vel and vel.z or 0,
+        nearby
+      )
+
+      anyWritten = true
+    end
+  end
+
+  if not anyWritten and logger and logger.heartbeat then
+    logger:heartbeat("nodes=" .. tostring(#state.nodes))
+  end
+
+  flushLog()
 end
 
 function script.update(dt)
+  if not dt or dt <= 0 then return end
+
+  local player = ac.getCar(0)
+
+  if state.recording and player then
+    addPoint(player.position)
+  end
+
   local sim = ac.getSim()
-  if not sim or not sim.isLive then return end
+  if not sim then return end
 
-  if state.recording then
-    local car = ac.getCar(0)
-    if car then
-      state.recordTimer = state.recordTimer + dt
-      local pos = car.position
-      if not state.lastRecordPosition or distance(pos, state.lastRecordPosition) >= SAMPLE_DISTANCE then
-        addRecordPoint(car)
+  if not state.enabled or #state.nodes < 2 then
+    for idx in pairs(state.p) do
+      releaseCar(idx)
+    end
+  else
+    for i = 0, sim.carsCount - 1 do
+      local car = ac.getCar(i)
+
+      if car and car.isActive and car.isAIControlled then
+        updateLineCar(i, car, dt)
+      elseif state.p[i] then
+        releaseCar(i)
       end
     end
   end
 
-  if state.autopilot then
-    updateAutopilot(dt)
-  else
-    state.controlledCount = 0
+  state.logAccum = state.logAccum + dt
+
+  if state.logAccum >= 1.0 then
+    state.logAccum = state.logAccum - 1.0
+    recordSecondTelemetry(sim)
   end
 end
 
-function script.windowMain(dt)
-  ui.text("RoutePilot  " .. APP_VERSION)
-  ui.text("Трасса: " .. (state.trackID ~= "" and state.trackID or safeTrackID(ac.getTrackFullID("_"))))
-  ui.text("Точек маршрута: " .. tostring(#state.route) .. "   AI под управлением: " .. tostring(state.controlledCount))
-  ui.separator()
+function windowMain(dt)
+  local player = ac.getCar(0)
 
-  if state.recording then
-    if ui.button("Остановить запись", vec2(ui.availableSpaceX(), 32)) then
-      stopRecording()
+  ui.text(string.format("Точек: %d | %s", #state.nodes, state.status))
+
+  if logger and logger.path then
+    ui.text("Лог: " .. tostring(logger.path))
+  end
+
+  if ui.button(
+    state.recording and "Стоп запись" or "Запись линии",
+    vec2(150, 24)
+  ) then
+    state.recording = not state.recording
+
+    if state.recording then
+      state.nodes = {}
+      state.p = {}
+      state.status = "Запись линии..."
+    else
+      state.status = "Записано точек: " .. #state.nodes
     end
-  else
-    if ui.button("Начать запись маршрута", vec2(ui.availableSpaceX(), 32)) then
-      startRecording()
-    end
   end
 
-  if ui.checkbox("Замкнутый маршрут (круг)", state.closed) then
-    state.closed = not state.closed
-    rebuildRoute()
+  ui.sameLine()
+
+  if ui.button(
+    state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ",
+    vec2(-1, 24)
+  ) then
+    state.loopRoute = not state.loopRoute
   end
 
-  if ui.button("Сохранить маршрут этой трассы", vec2(ui.availableSpaceX(), 28)) then
-    saveRoute()
-  end
-  if ui.button("Загрузить маршрут этой трассы", vec2(ui.availableSpaceX(), 28)) then
-    loadRoute()
-  end
+  local canvas = vec2(300, 125)
 
-  ui.separator()
-  local multiplier, changed = ui.slider("Скорость AI", state.speedMultiplier, 0.5, 1.8, "%.2fx")
-  if changed then state.speedMultiplier = multiplier end
+  ui.invisibleButton("line_radar", canvas)
 
-  if state.autopilot then
-    if ui.button("Остановить автопилот", vec2(ui.availableSpaceX(), 34)) then
-      state.autopilot = false
-      state.ai = {}
-      state.controlledCount = 0
-      state.status = "Автопилот выключен"
-    end
-  else
-    if ui.button("Запустить автопилот", vec2(ui.availableSpaceX(), 34)) then
-      if #state.route >= 3 then
-        rebuildRoute()
-        state.ai = {}
-        state.autopilot = true
-        state.status = "Автопилот активен"
-      else
-        state.status = "Сначала запиши или загрузи маршрут"
+  local p0 = ui.getItemRectMin()
+  local p1 = ui.getItemRectMax()
+
+  ui.drawRectFilled(
+    p0,
+    p1,
+    rgbm(0.1, 0.1, 0.12, 1),
+    4.0
+  )
+
+  ui.drawRect(
+    p0,
+    p1,
+    rgbm(0.3, 0.3, 0.35, 1),
+    4.0
+  )
+
+  if #state.nodes >= 2 then
+    local cx = player and player.position.x or state.nodes[1].x
+    local cz = player and player.position.z or state.nodes[1].z
+
+    local scale = 1.2
+    local mx = (p0.x + p1.x) * 0.5
+    local my = (p0.y + p1.y) * 0.5
+
+    local segs = state.loopRoute and #state.nodes or (#state.nodes - 1)
+
+    for i = 1, segs do
+      local a = state.nodes[i]
+      local b = state.nodes[(i % #state.nodes) + 1]
+
+      local x1 = mx + (a.x - cx) * scale
+      local y1 = my + (a.z - cz) * scale
+      local x2 = mx + (b.x - cx) * scale
+      local y2 = my + (b.z - cz) * scale
+
+      if x1 >= p0.x and x1 <= p1.x and
+         y1 >= p0.y and y1 <= p1.y and
+         x2 >= p0.x and x2 <= p1.x and
+         y2 >= p0.y and y2 <= p1.y then
+
+        ui.drawLine(
+          vec2(x1, y1),
+          vec2(x2, y2),
+          rgbm(1.0, 0.85, 0.0, 0.9),
+          2.0
+        )
       end
     end
+
+    ui.drawCircleFilled(
+      vec2(mx, my),
+      4.5,
+      rgbm(0.0, 0.8, 1.0, 1.0),
+      12
+    )
   end
 
-  ui.separator()
-  ui.textWrapped("Статус: " .. state.status)
-  if state.recording then
-    ui.text("Записано точек: " .. tostring(#state.route))
+  if ui.button("Сохранить", vec2(96, 24)) then
+    saveLine()
   end
-  ui.text("Коробка передач остаётся под управлением автомобиля.")
+
+  ui.sameLine()
+
+  if ui.button("Загрузить", vec2(96, 24)) then
+    loadLine()
+  end
+
+  ui.sameLine()
+
+  if ui.button("Очистить", vec2(-1, 24)) then
+    state.nodes = {}
+    state.p = {}
+    state.status = "Очищено"
+  end
+
+  state.speedMin = ui.slider(
+    "Мин. скорость",
+    state.speedMin,
+    40,
+    180,
+    "%.0f км/ч"
+  )
+
+  state.speedMax = ui.slider(
+    "Макс. скорость",
+    state.speedMax,
+    60,
+    260,
+    "%.0f км/ч"
+  )
 end
 
-function script.onSessionStart()
-  getTrackKey()
-  loadRoute()
+if ac.onRelease then
+  ac.onRelease(function()
+    for idx in pairs(state.p) do
+      releaseCar(idx)
+    end
+
+    if logger and logger.shutdown then
+      logger:shutdown("RoutePilot released")
+    end
+  end)
 end
+
+loadLine()
