@@ -1,8 +1,9 @@
 -- RoutePilot: route recording and AI control for Assetto Corsa CSP.
 -- No stock AI fast lane is used. AI cars follow a route recorded by the player.
 -- Controls written: steering, throttle and brake only. Gearbox remains automatic.
+-- v0.2.0: car-following collision avoidance (front-car detection + safe speed).
 
-local APP_VERSION = "0.1.0"
+local APP_VERSION = "0.2.0"
 local STORAGE_PREFIX = "routepilot_route_"
 local SAMPLE_DISTANCE = 2.0
 local MAX_ROUTE_POINTS = 12000
@@ -13,6 +14,7 @@ local LATERAL_ACCEL = 5.0
 local BRAKE_ACCEL = 7.0
 local WHEELBASE = 2.65
 local MAX_ROAD_WHEEL_ANGLE = 0.55
+local FOLLOW_LATERAL = 2.4
 
 local state = {
   recording = false,
@@ -20,6 +22,7 @@ local state = {
   route = {},
   closed = true,
   speedMultiplier = 1.0,
+  followGap = 6.0,
   status = "Маршрут не загружен",
   lastRecordPosition = nil,
   recordTimer = 0,
@@ -28,12 +31,13 @@ local state = {
   routeKey = nil,
   trackID = "",
   controlledCount = 0,
+  slowingCount = 0,
   lastError = ""
 }
 
 local function clamp(v, lo, hi)
   if v < lo then return lo end
-  if v > hi then return hi end
+  if v > hi then return v and hi end
   return v
 end
 
@@ -338,6 +342,43 @@ local function speedTargetAt(index, speedMultiplier)
   return clamp(allowed, 0, 65)
 end
 
+-- Car-following: find the nearest car ahead in this car's lane.
+-- Returns gap (m) and leader speed (m/s), or nil if nothing is ahead.
+local function carAhead(carIndex, car)
+  local look = car.look
+  local lx, lz = look.x, look.z
+  local lookLen = math.sqrt(lx * lx + lz * lz)
+  if lookLen < 0.001 then return nil end
+  lx, lz = lx / lookLen, lz / lookLen
+
+  local sim = ac.getSim()
+  if not sim then return nil end
+
+  local bestGap = nil
+  local bestSpeed = nil
+
+  for otherIndex = 0, sim.carsCount - 1 do
+    if otherIndex ~= carIndex then
+      local other = ac.getCar(otherIndex)
+      if other then
+        local dx = other.position.x - car.position.x
+        local dz = other.position.z - car.position.z
+        local forward = dx * lx + dz * lz
+        if forward > 0 then
+          local lateral = dx * (-lz) + dz * lx
+          if math.abs(lateral) <= FOLLOW_LATERAL and (bestGap == nil or forward < bestGap) then
+            bestGap = forward
+            bestSpeed = math.max(0, other.speedMs or 0)
+          end
+        end
+      end
+    end
+  end
+
+  if bestGap == nil then return nil end
+  return bestGap, bestSpeed
+end
+
 local function updateOneAI(carIndex, car, dt)
   local runtime = state.ai[carIndex]
   if not runtime then
@@ -383,6 +424,24 @@ local function updateOneAI(carIndex, car, dt)
   if not state.closed and runtime.index == #state.route then
     targetSpeed = 0
   end
+
+  -- Car-following: limit target speed if a car is ahead in this lane.
+  local isSlowing = false
+  local gap, leaderSpeed = carAhead(carIndex, car)
+  if gap then
+    local safeSpeed = math.sqrt(math.max(0, leaderSpeed * leaderSpeed
+      + 2 * BRAKE_ACCEL * math.max(0, gap - state.followGap)))
+    if safeSpeed < targetSpeed then
+      targetSpeed = safeSpeed
+      isSlowing = true
+    end
+    if gap < state.followGap then
+      targetSpeed = 0
+      isSlowing = true
+    end
+  end
+  runtime.slowing = isSlowing
+
   local speedError = targetSpeed - speed
   local gas = clamp(speedError * 0.32, 0, 1)
   local brake = clamp(-speedError * 0.48, 0, 1)
@@ -407,17 +466,22 @@ local function updateAutopilot(dt)
   local sim = ac.getSim()
   if not sim or not sim.isLive or #state.route < 3 then
     state.controlledCount = 0
+    state.slowingCount = 0
     return
   end
 
   local active = {}
   local count = 0
+  local slowing = 0
   for carIndex = 1, sim.carsCount - 1 do
     local car = ac.getCar(carIndex)
     if car and car.isActive and car.isAIControlled then
       active[carIndex] = true
       updateOneAI(carIndex, car, dt)
       count = count + 1
+      if state.ai[carIndex] and state.ai[carIndex].slowing then
+        slowing = slowing + 1
+      end
     end
   end
 
@@ -425,6 +489,7 @@ local function updateAutopilot(dt)
     if not active[carIndex] then state.ai[carIndex] = nil end
   end
   state.controlledCount = count
+  state.slowingCount = slowing
 end
 
 function script.update(dt)
@@ -446,6 +511,7 @@ function script.update(dt)
     updateAutopilot(dt)
   else
     state.controlledCount = 0
+    state.slowingCount = 0
   end
 end
 
@@ -453,6 +519,7 @@ function script.windowMain(dt)
   ui.text("RoutePilot  " .. APP_VERSION)
   ui.text("Трасса: " .. (state.trackID ~= "" and state.trackID or safeTrackID(ac.getTrackFullID("_"))))
   ui.text("Точек маршрута: " .. tostring(#state.route) .. "   AI под управлением: " .. tostring(state.controlledCount))
+  ui.text("Притормаживают: " .. tostring(state.slowingCount))
   ui.separator()
 
   if state.recording then
@@ -480,12 +547,15 @@ function script.windowMain(dt)
   ui.separator()
   local multiplier, changed = ui.slider("Скорость AI", state.speedMultiplier, 0.5, 1.8, "%.2fx")
   if changed then state.speedMultiplier = multiplier end
+  local gapValue, gapChanged = ui.slider("Мин. дистанция до машины", state.followGap, 3, 15, "%.1f м")
+  if gapChanged then state.followGap = gapValue end
 
   if state.autopilot then
     if ui.button("Остановить автопилот", vec2(ui.availableSpaceX(), 34)) then
       state.autopilot = false
       state.ai = {}
       state.controlledCount = 0
+      state.slowingCount = 0
       state.status = "Автопилот выключен"
     end
   else
