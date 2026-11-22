@@ -8,11 +8,11 @@
 --   * horizontal rays to the left, right and forward measure the distance
 --     to walls and other solid obstacles.
 -- The map is sampled every 8 m along the track spline and is built over a
--- few frames (no hitch). Drivers use it to plan speed: the braking distance
--- to the nearest wall always fits the free road ahead, so with enough free
--- road the driver commits to a long, fast drift.
--- If the track has no spline, the map stays empty and drivers fall back to
--- conservative speed limits.
+-- few frames (no hitch). Drivers use `freeCorridor()` for speed planning:
+-- the braking distance always fits the length of the free track ahead, so
+-- the car can commit to a long, fast drift on open sections and slows down
+-- before tight spots. If the track has no spline, the map stays empty and
+-- drivers fall back to conservative speed limits.
 
 local Track = require('track')
 
@@ -88,6 +88,29 @@ function Bounds:sampleAt(progress)
   if not self.ready or not progress then return nil end
   local i = math.max(0, math.min(self.total - 1, math.floor(progress * self.total)))
   return self.samples[i + 1]
+end
+
+---Length in meters of the free track corridor starting at `progress`:
+-- the distance to the first sample where the forward ray hits something
+-- close (tight corner, wall closing in), capped at `maxMeters`.
+-- Returns nil when the map is not usable.
+function Bounds:freeCorridor(progress, maxMeters)
+  if not self.ready or not progress or self.good == 0 then return nil end
+  local maxSamples = math.max(1, math.floor((maxMeters or 200) / SAMPLE_STEP_M))
+  local idx = math.floor(progress * self.total)
+  -- distance covered by full samples ahead of the current one
+  for k = 0, maxSamples - 1 do
+    local s = self.samples[((idx + k) % self.total) + 1]
+    if not s then return k * SAMPLE_STEP_M end
+    -- a tight spot: not much free road straight ahead from this sample
+    if s.ahead < 45 and k > 0 then
+      return k * SAMPLE_STEP_M
+    end
+    if k == maxSamples - 1 then
+      return maxSamples * SAMPLE_STEP_M
+    end
+  end
+  return maxSamples * SAMPLE_STEP_M
 end
 
 ---Minimum forward wall distance over the next `meters` of track, or nil.
