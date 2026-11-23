@@ -326,12 +326,17 @@ end
 
 function Driver.telemetryLine(i, car, p)
   local left, right = H.boundsAt(p.segIdx)
+  local a=state.nodes[p.segIdx]
+  local b=H.segEnd(p.segIdx)
+  local tx,tz=normalize2(b.x-a.x,b.z-a.z)
+  local look=car.look
+  local headingDot=look.x*tx+look.z*tz
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), targetText, p.steer, p.gas, p.brake,
-    p.wheelSlip, p.tractionFactor, p.lineDist, p.segIdx, p.laneOffset, left, right)
+    p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx, p.laneOffset, left, right)
 end
 
 return Driver
