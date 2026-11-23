@@ -1930,14 +1930,6 @@ local function updateTrafficCoordinator(sim, dt)
       p.trafficDirectionSign = info.directionSign
       p.trafficCoordinated = plan ~= nil
       p.passCorridorClear = plan ~= nil
-      if plan and plan.role == "pass" then
-        writeLog("PASS_AUTHORIZED car=%d target=%d side=left corridor=clear",
-          index, plan.target or -1)
-      elseif plan and plan.role == "yield" then
-        writeLog("YIELD_AUTHORIZED car=%d target=%d action=hold_right_no_brake",
-          index, plan.target or -1)
-      end
-
       local alpha = clamp(dt * CFG.TRAFFIC_OFFSET_RATE, 0, 1)
       p.routeOffset = lerp(p.routeOffset or 0, desired, alpha)
     end
