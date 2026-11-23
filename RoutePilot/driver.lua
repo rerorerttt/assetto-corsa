@@ -1,13 +1,19 @@
--- RoutePilot/driver.lua — deterministic two-lane traffic (CSP 0.3.2-preview2)
--- Cars are assigned once by active roster order: first = left/fast,
--- second = right/40 km/h, then alternating. No car-to-car sensing, following,
--- yielding, overtaking or collision avoidance.
--- Each car follows its own fixed lateral offset from the recorded route.
+-- RoutePilot/driver.lua — two-lane race traffic (CSP 0.3.2-preview2)
+-- Both lanes are unrestricted on straights. Cars brake for route curvature
+-- and traffic, and change to the adjacent lane only when its swept corridor is clear.
 
 local Driver = {}
 local CFG, state, H
 
-local RIGHT_SPEED = 40 / 3.6
+local LANE_CHANGE_TIME = 1.65
+local LANE_CHANGE_COOLDOWN = 2.0
+local LANE_TRIGGER_DISTANCE = 10.0
+local LANE_TRIGGER_TTC = 1.35
+local LANE_FRONT_CLEAR = 32.0
+local LANE_REAR_CLEAR = 15.0
+local LANE_SAFETY_GAP = 5.0
+local LANE_HALF_WIDTH = 1.45
+local LANE_CHANGE_RATE = 2.1
 -- Conservative, rate-limited steering prevents large snap corrections.
 local STEER_LIMIT = 0.68
 local STEER_GAIN = 0.78
@@ -114,14 +120,21 @@ local function applyTractionLimiter(car,p,dt)
   p.gas=clamp(p.gasOutput,0,1)
 end
 
+local function laneRoleForOffset(offset, twoLane)
+  if not twoLane then return "SINGLE" end
+  return offset < 0 and "LEFT" or "RIGHT"
+end
+
 local function newPersonality(carIndex)
   local laneOffset, twoLane = H.laneOffset(carIndex, 1)
-  local laneRole = not twoLane and "SINGLE_40" or
-    (laneOffset > 0 and "LEFT_FAST" or "RIGHT_40")
   local p = {
     segIdx = 1,
-    laneRole = laneRole,
+    laneRole = laneRoleForOffset(laneOffset, twoLane),
     laneOffset = laneOffset,
+    laneStartOffset = laneOffset,
+    laneTargetOffset = laneOffset,
+    laneChangeProgress = 1.0,
+    laneCooldown = 0,
     twoLane = twoLane,
     steer = 0,
     steerFiltered = 0,
@@ -136,10 +149,13 @@ local function newPersonality(carIndex)
     previousFx = nil,
     previousFz = nil,
     stuck = 0,
-    targetSpeed = RIGHT_SPEED,
+    targetSpeed = math.huge,
     lineDist = 0,
     latOff = 0,
-    retireT = 2.0
+    retireT = 2.0,
+    trafficGap = math.huge,
+    trafficBlocked = false,
+    laneChanges = 0
   }
   state.p[carIndex] = p
   H.log("CAR_INIT id=%d lane=%s", carIndex, p.laneRole)
@@ -160,31 +176,33 @@ local function readVehicleDynamics(car, p, dt)
   return math.max(0, safeNumber(car.speedMs, longitudinal)), fx, fz
 end
 
-local function planFastLaneSpeed(p)
+local function planRaceSpeed(p, speed)
   local nodes = state.nodes
   local segments = H.segmentCount()
   if segments < 1 then return nil end
+
+  -- Dynamic look-ahead includes the full stopping distance at the current speed.
+  local horizon = math.max(CFG.PLAN_HORIZON,
+    speed * speed / (2 * CFG.BRAKE_ACCEL) + 45.0)
+  horizon = math.min(horizon, 1400.0)
 
   local target = math.huge
   local distance = 0
   local current = p.segIdx
   local steps = 0
-
-  while distance <= CFG.PLAN_HORIZON and steps < 240 do
+  while distance <= horizon and steps < 2400 do
     steps = steps + 1
     local curvature = H.getVertexCurvature(current)
     if curvature > CFG.CURVE_MIN then
       local cornerSpeed = math.sqrt(CFG.MAX_LATERAL_ACCEL / curvature)
-      cornerSpeed = math.max(8.0, cornerSpeed)
       local brakingSpeed = math.sqrt(cornerSpeed * cornerSpeed +
-        2 * CFG.BRAKE_ACCEL * distance)
+        2 * CFG.BRAKE_ACCEL * math.max(0, distance - 3.0))
       if brakingSpeed < target then target = brakingSpeed end
     end
 
     local a = nodes[current]
     local b = H.segEnd(current)
     distance = distance + math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
-
     if state.loopRoute then
       current = (current % segments) + 1
     elseif current < segments then
@@ -193,10 +211,148 @@ local function planFastLaneSpeed(p)
       break
     end
   end
-
-  -- No corner in the planning horizon means unrestricted full throttle.
   if target == math.huge then return nil end
-  return math.max(8.0, target)
+  return target
+end
+
+local function laneOffsetAtPosition(car, ownTangentX, ownTangentZ)
+  local dx = car.position.x
+  local dz = car.position.z
+  local lateral = dx * -ownTangentZ + dz * ownTangentX
+  return lateral
+end
+
+local function scanTraffic(carIndex, car, p, speed, tx, tz)
+  local sim = ac.getSim()
+  if not sim then return nil end
+  local nearest, nearestGap = nil, math.huge
+  for i = 0, sim.carsCount - 1 do
+    if i ~= carIndex then
+      local other = ac.getCar(i)
+      if other and other.isActive then
+        local dx = other.position.x - car.position.x
+        local dz = other.position.z - car.position.z
+        local longitudinal = dx * tx + dz * tz
+        local lateral = dx * -tz + dz * tx
+        local otherP = state.p[i]
+        local otherOffset = otherP and
+          (otherP.laneTargetOffset or otherP.laneOffset) or lateral
+        local sameLane = math.abs(lateral - p.laneOffset) <= LANE_HALF_WIDTH
+        if longitudinal > 0.5 and sameLane and longitudinal < nearestGap then
+          nearestGap = longitudinal
+          nearest = {
+            index = i,
+            gap = longitudinal,
+            speed = math.max(0, safeNumber(other.speedMs, 0)),
+            closing = speed - math.max(0, safeNumber(other.speedMs, 0))
+          }
+        end
+      end
+    end
+  end
+  return nearest
+end
+
+local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
+  local sim = ac.getSim()
+  if not sim then return false end
+  for i = 0, sim.carsCount - 1 do
+    if i ~= carIndex then
+      local other = ac.getCar(i)
+      if other and other.isActive then
+        local dx = other.position.x - car.position.x
+        local dz = other.position.z - car.position.z
+        local longitudinal = dx * tx + dz * tz
+        local lateral = dx * -tz + dz * tx
+        local otherP = state.p[i]
+        local reservedOffset = otherP and
+          (otherP.laneTargetOffset or otherP.laneOffset) or lateral
+        local inTargetLane = math.abs(lateral - targetOffset) <= LANE_HALF_WIDTH
+        local reservingTarget = otherP and
+          math.abs(reservedOffset - targetOffset) <= LANE_HALF_WIDTH
+        local inTransitionSweep = math.abs(longitudinal) < 8.0 and
+          lateral >= math.min(p.laneOffset, targetOffset) - LANE_HALF_WIDTH and
+          lateral <= math.max(p.laneOffset, targetOffset) + LANE_HALF_WIDTH
+        if (inTargetLane or reservingTarget) and
+          longitudinal >= -LANE_REAR_CLEAR and
+          longitudinal <= LANE_FRONT_CLEAR then
+          return false, i, longitudinal
+        end
+        if inTransitionSweep then return false, i, longitudinal end
+      end
+    end
+  end
+  return true
+end
+
+local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
+  p.laneCooldown = math.max(0, p.laneCooldown - dt)
+  p.trafficBlocked = false
+  local front = scanTraffic(carIndex, car, p, speed, tx, tz)
+  p.trafficGap = front and front.gap or math.huge
+
+  if p.twoLane and p.laneChangeProgress >= 1.0 and p.laneCooldown <= 0 and front then
+    local closing = math.max(0, front.closing)
+    local ttc = closing > 0.1 and front.gap / closing or math.huge
+    local trigger = front.gap <= LANE_TRIGGER_DISTANCE or
+      ttc <= LANE_TRIGGER_TTC
+    if trigger then
+      local targetOffset = -p.laneTargetOffset
+      local clear, blockedBy, blockedGap =
+        adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
+      if clear then
+        p.laneStartOffset = p.laneOffset
+        p.laneTargetOffset = targetOffset
+        p.laneChangeProgress = 0
+        p.laneCooldown = LANE_CHANGE_COOLDOWN
+        p.laneChanges = p.laneChanges + 1
+        p.laneRole = laneRoleForOffset(targetOffset, true)
+        H.log("LANE_CHANGE_START id=%d from=%.2f to=%.2f gap=%.2f closing=%.2f ttc=%.2f",
+          carIndex, p.laneStartOffset, targetOffset, front.gap, closing, ttc)
+      else
+        p.trafficBlocked = true
+        p.blockedBy = blockedBy
+        p.blockedGap = blockedGap
+      end
+    end
+  end
+
+  if p.laneChangeProgress < 1.0 then
+    p.laneChangeProgress = math.min(1.0,
+      p.laneChangeProgress + dt / LANE_CHANGE_TIME)
+    local t = p.laneChangeProgress
+    local smooth = t * t * (3.0 - 2.0 * t)
+    p.laneOffset = p.laneStartOffset +
+      (p.laneTargetOffset - p.laneStartOffset) * smooth
+    if p.laneChangeProgress >= 1.0 then
+      p.laneOffset = p.laneTargetOffset
+      H.log("LANE_CHANGE_DONE id=%d lane=%s changes=%d",
+        carIndex, p.laneRole, p.laneChanges)
+    end
+  end
+
+  -- Recheck the target lane while crossing; a newly arriving car blocks
+  -- acceleration until the transition is complete.
+  if p.laneChangeProgress < 1.0 then
+    local clear = adjacentLaneIsClear(carIndex, car, p,
+      p.laneTargetOffset, tx, tz)
+    if not clear then p.trafficBlocked = true end
+  end
+
+  -- If the neighboring lane is unavailable, stay in lane and brake to a
+  -- speed that can be stopped behind the leading vehicle.
+  if front and p.trafficBlocked then
+    local available = math.max(0, front.gap - LANE_SAFETY_GAP)
+    local safeSpeed = math.sqrt(front.speed * front.speed +
+      2 * CFG.BRAKE_ACCEL * available)
+    return safeSpeed, front
+  end
+  if front and p.laneChangeProgress < 0.55 then
+    local available = math.max(0, front.gap - LANE_SAFETY_GAP)
+    return math.sqrt(front.speed * front.speed +
+      2 * CFG.BRAKE_ACCEL * available), front
+  end
+  return nil, front
 end
 
 local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
@@ -205,11 +361,23 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.lineDist = lineDistance
   p.latOff = H.lateralOf(car.position, seg)
 
-  local laneOffset, twoLane = H.laneOffset(carIndex, seg)
-  p.laneOffset = laneOffset
+  local baseOffset, twoLane = H.laneOffset(carIndex, seg)
   p.twoLane = twoLane
-  p.laneRole = not twoLane and "SINGLE_40" or
-    (laneOffset > 0 and "LEFT_FAST" or "RIGHT_40")
+  if not twoLane then
+    p.laneOffset = 0
+    p.laneTargetOffset = 0
+    p.laneStartOffset = 0
+    p.laneRole = "SINGLE"
+  else
+    -- Preserve the chosen lane while following the route; the lane controller
+    -- changes this offset only after a verified safe gap.
+    if p.laneTargetOffset == nil then
+      p.laneOffset = baseOffset
+      p.laneTargetOffset = baseOffset
+      p.laneStartOffset = baseOffset
+    end
+    p.laneRole = laneRoleForOffset(p.laneTargetOffset, true)
+  end
 
   local lookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE, LOOKAHEAD_MAX)
@@ -279,7 +447,6 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-
   if speed < LANE_RESCUE_SPEED then
     p.stuck = p.stuck + dt
     if p.stuck >= LANE_RESCUE_TIME then
@@ -291,25 +458,31 @@ function Driver.update(carIndex, car, dt)
     p.stuck = 0
   end
 
-  local steer = calculateSteering(carIndex, car, p, speed, fx, fz, dt)
+  local seg = select(1, H.findNearestSeg(car.position, p.segIdx))
+  p.segIdx = seg
+  local a = state.nodes[seg]
+  local b = H.segEnd(seg)
+  local tx, tz = normalize2(b.x - a.x, b.z - a.z)
 
-  local targetSpeed
-  if not p.twoLane or p.laneOffset < 0 then
-    targetSpeed = RIGHT_SPEED
+  local trafficSpeed, front = updateLaneChange(
+    carIndex, car, p, speed, tx, tz, dt)
+
+  local steer = calculateSteering(carIndex, car, p, speed, fx, fz, dt)
+  local cornerSpeed = planRaceSpeed(p, speed)
+  local targetSpeed = cornerSpeed
+  if trafficSpeed then
+    targetSpeed = targetSpeed and math.min(targetSpeed, trafficSpeed) or trafficSpeed
+  end
+
+  if targetSpeed then
     p.targetSpeed = targetSpeed
     calculateSpeedControls(p, speed, targetSpeed, dt)
   else
-    targetSpeed = planFastLaneSpeed(p)
-    if targetSpeed then
-      p.targetSpeed = targetSpeed
-      calculateSpeedControls(p, speed, targetSpeed, dt)
-    else
-      -- No upcoming corner requires braking: the fast lane has no speed cap.
-      p.targetSpeed = math.huge
-      p.speedIntegral = 0
-      p.gas = 1
-      p.brake = 0
-    end
+    -- No corner or traffic constraint: maximum available throttle, no speed cap.
+    p.targetSpeed = math.huge
+    p.speedIntegral = 0
+    p.gas = 1
+    p.brake = 0
   end
 
   applyTractionLimiter(car,p,dt)
@@ -332,11 +505,14 @@ function Driver.telemetryLine(i, car, p)
   local look=car.look
   local headingDot=look.x*tx+look.z*tz
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
+  local gapText=p.trafficGap==math.huge and "INF" or string.format("%.2f",p.trafficGap)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), targetText, p.steer, p.gas, p.brake,
-    p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx, p.laneOffset, left, right)
+    p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx,
+    p.laneOffset, p.laneTargetOffset or p.laneOffset, p.laneChangeProgress or 1,
+    p.laneChanges or 0, gapText, tostring(p.trafficBlocked), left, right)
 end
 
 return Driver
