@@ -1,4 +1,4 @@
-# RoutePilot 0.2.1
+# RoutePilot 0.2.2
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
 
@@ -8,46 +8,24 @@ Copy the `RoutePilot` folder into:
 
 `assettocorsa/apps/lua/RoutePilot/`
 
-The folder must contain:
-- `manifest.ini`
-- `RoutePilot.lua`
-
 Enable RoutePilot in Content Manager's Lua Apps list and open it in a session.
 
 ## First use
 
-1. Drive the desired route with the player car.
-2. Press **Начать запись маршрута** before driving.
-3. Drive one full lap and press **Остановить запись**.
-4. Keep **Замкнутый маршрут (круг)** enabled for a lap route.
-5. Press **Сохранить маршрут этой трассы**.
-6. Add AI cars to the session and press **Запустить автопилот**.
+Drive and save a route, keep the loop option enabled for a lap route, record the track boundaries, then add AI cars to the session. The existing route recording, loading, map, world-line display and controls remain part of the app.
 
-Routes are stored separately by full track ID using CSP `ac.storage` and are autoloaded when the app starts on a track with a saved route.
+## Traffic and driving model
 
-## Current scope
+- Active AI cars are initially distributed alternately between the physical LEFT and RIGHT lanes. Negative lateral offset is physical LEFT in the current spawn coordinate basis; the map and spawn log use the same convention.
+- A recorded corridor at least 6 m wide uses two lane centres, normally 1.75 m to either side of the route centreline. A corridor narrower than 6 m remains single-file.
+- Neither lane has a fixed speed target or artificial straight-line speed ceiling. On a straight with no traffic constraint, the controller requests full throttle; actual top speed is determined by the car, gearing, drag and available grip.
+- Both lanes use the same route-curvature planner. It estimates corner speed from curvature and available lateral acceleration, then begins braking according to the distance to the corner. The look-ahead horizon expands with speed and stopping distance.
+- Cars inspect nearby traffic. A car closing on a vehicle in its current lane requests a lane change when the gap is around 10 m or the time-to-collision becomes short. The target lane must be clear ahead, behind and through the lateral transition corridor; another AI car's requested target lane is treated as reserved.
+- A lane change is a smooth transition between the two fixed lane centres. After completing it, the car continues following the same recorded route in the new lane; it does not generate a new racing line or choose a complex overtaking trajectory.
+- If the adjacent lane is occupied, the car stays in its lane and calculates a safe following speed from the leader's speed, remaining gap and braking capability. It brakes rather than forcing a merge. The lane is checked again on subsequent updates.
+- Factory traction control is requested per car. A second wheel-slip throttle limiter reduces gas if driven wheels spin, and throttle is released quickly whenever braking is commanded.
+- Steering uses filtered look-ahead control with a longer speed-dependent look-ahead for high-speed stability. Gear selection remains with the car's normal drivetrain.
 
-- Records and replays the player's route per track/layout.
-- Keeps the existing boundary recorder and width presets (3, 7, 11 and 15 m).
-- Deterministic traffic assignment by active roster order: the first AI car uses the left lane, the second the right lane, then the assignment alternates. Existing assignments remain stable if cars are added or temporarily disappear.
-- With a 7 m or wider recorded corridor, the two virtual lane centres are fixed at +1.75 m (left/fast) and -1.75 m (right/40 km/h) from the route centreline. The offsets use the route's local tangent, so the lanes follow bends without visible lane markings.
-- The right lane targets 40 km/h. The left lane has no fixed 40 km/h limiter and uses the route-curvature planner to brake for corners.
-- A 3 m corridor is treated as a single lane: all AI cars follow the centreline at 40 km/h; no passing lane is created.
-- Cars do not inspect, follow, yield to, brake for, or overtake one another. Passing happens naturally because the left lane is faster.
-- Steering uses a filtered, rate-limited look-ahead controller to hold each car on its assigned lateral offset.
-- Before spawning, the route point order is checked against the player's forward vector. If the saved route runs backwards, points and signed bounds are reversed together; inference is skipped if the player is more than 15 m from the route.
-- Spawn and recovery pass the negated route tangent to `physics.setAICarPosition()`, because the current live-session log showed the direct tangent placing cars facing against travel.
-- AI cars are initially placed at their assigned lane centres and retain that assignment during recovery.
-- Per-car factory traction control is forced on through CSP `physics.setAssists()`. A second throttle limiter monitors driven-wheel slip ratio and reduces throttle rapidly when wheelspin appears; throttle application is ramped to avoid abrupt launches.
-- Right-lane PI control has a wider integral range to avoid settling below the 40 km/h target.
-- Only steering, throttle and brake are overridden. Gear selection remains with the car's normal AI/automatic drivetrain.
+## Logging and validation
 
-## Changelog
-
-- 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
-- 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
-
-## Known limitations
-
-- Car-following only prevents rear-ending the car directly ahead in the same lane; side-by-side contact during overtakes is not handled (no overtaking logic yet).
-- This is an initial controller implementation. It must be tested in-game on a clear track before use in traffic. The controller does not yet perform overtaking, pit handling, or automatic recovery from a spin/off-track situation.
+`routepilot_trace.txt` includes lane assignments, lane-change start/completion events, current/target lane offsets, traffic gap/block status, speed targets, brake/throttle, wheel slip and heading alignment. Static source checks do not replace an in-game test with the current car pack, track and CSP build. The latest implementation has not yet been runtime-validated in Assetto Corsa.
