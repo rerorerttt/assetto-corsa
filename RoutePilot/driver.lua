@@ -101,6 +101,18 @@ local function laneLayout()
 end
 
 local laneFits
+local function playerBlocksLane(follower, player, target, metrics)
+  if not player then return false end
+  local gap=signedGap(follower,player,metrics.total)
+  local longitudinalClose=gap>-15.0 and gap<PASS_OCCUPANCY_RANGE
+  if player.headingDot<0.25 then
+    local dx,dz=player.x-follower.x,player.z-follower.z
+    longitudinalClose=dx*dx+dz*dz<50.0*50.0
+  end
+  return longitudinalClose and
+    math.abs(player.lateral-target)<follower.half+player.half+PASS_SEPARATION
+end
+
 local function assignLanes(snapshots,metrics)
   local cars={}
   for _,snap in pairs(snapshots) do
@@ -108,24 +120,28 @@ local function assignLanes(snapshots,metrics)
   end
   if #cars==0 then return false end
 
-  -- All cars cruise in the rightmost lane. The adjacent lane to the left
-  -- is reserved for a faster follower with a confirmed passing opportunity.
-  -- The slower leader is never moved, slowed down or asked to yield.
+  -- Prefer the rightmost lane, but never assign a car into the player's
+  -- occupied corridor. If the player blocks the right lane, use the next
+  -- safe lane to the left; if no lane fits, remain on the recorded centreline.
   local laneCount,_,offsets=laneLayout()
-  local homeLane=laneCount
-  local homeOffset=offsets[homeLane]
+  local player=snapshots[0]
   for _,snap in ipairs(cars) do
-    local lane,home=homeLane,homeOffset
-    if not laneFits(snap.seg,home,snap.half,metrics) then
-      lane,home=0,0
+    local lane,home=0,0
+    for candidate=laneCount,1,-1 do
+      local target=offsets[candidate]
+      if laneFits(snap.seg,target,snap.half,metrics) and
+        not playerBlocksLane(snap,player,target,metrics) then
+        lane,home=candidate,target
+        break
+      end
     end
     snap.p.laneIndex=lane
     snap.p.homeOffset=home
     snap.p.targetOffset=home
     snap.p.currentOffset=0
     snap.p.laneAssigned=true
-    H.log('LANE_ASSIGN car=%d lane=%d offset=%.2f pace=%.3f',
-      snap.index,lane,home,snap.p.targetLevel)
+    H.log('LANE_ASSIGN car=%d lane=%d offset=%.2f pace=%.3f playerBlock=%s',
+      snap.index,lane,home,snap.p.targetLevel,tostring(lane==0))
   end
   S.lanesAssigned=true
   return true
@@ -144,8 +160,12 @@ laneFits=function(seg, target, half, metrics)
 end
 
 local function laneIsFree(follower, leader, target, snapshots, metrics)
+  local leaderIndex=leader and leader.index or -1
   for index, other in pairs(snapshots) do
-    if index ~= follower.index and index ~= leader.index then
+    -- An AI leader is already known to be in its home lane; the player is
+    -- different: if the player is the leader, still treat the player's actual
+    -- position as an obstacle in the proposed passing corridor.
+    if index ~= follower.index and (index ~= leaderIndex or not leader.p) then
       local gap = signedGap(follower, other, metrics.total)
       local longitudinalClose = math.abs(gap) < PASS_OCCUPANCY_RANGE
       if other.headingDot < 0.25 then
