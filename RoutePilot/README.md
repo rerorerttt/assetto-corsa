@@ -1,45 +1,45 @@
-# RoutePilot 0.2.1
+# RoutePilot 1.0 — Native CSP Racing AI
 
-CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
+RoutePilot records a player-driven racing line and its left/right road limits, then converts them into a native Assetto Corsa/CSP version-7 AI spline. The game AI, not a Lua steering loop, controls steering, throttle, braking and gearbox.
 
-## Install
+## Installation
 
-Copy the `RoutePilot` folder into:
+Copy the complete `RoutePilot` directory into:
 
-`assettocorsa/apps/lua/RoutePilot/`
+```
+assettocorsa/apps/lua/RoutePilot/
+```
 
-The folder must contain:
-- `manifest.ini`
-- `RoutePilot.lua`
+Keep all five runtime files together: `manifest.ini`, `RoutePilot.lua`, `driver.lua`, `spline_builder.lua` and `logger.lua`. Enable **Arcade AI** in Content Manager's Lua Apps list. The app targets CSP 0.3.2-preview2 and uses its native `physics.setAISpline` and `physics.setAISplineAbsoluteOffset` APIs.
 
-Enable RoutePilot in Content Manager's Lua Apps list and open it in a session.
+## First run
 
-## First use
+1. Open RoutePilot on the track/layout you want to use.
+2. Select the road width: 1, 2, 3 or 4 cars. The default is 2 lanes so passing is available immediately. One lane intentionally disables passing.
+3. Record a complete lap with **Запись линии**, then stop recording.
+4. If necessary, record the road limits separately with **Запись границ**. The red boundaries are real limits, not decorative map lines.
+5. Press **Сохранить**. RoutePilot writes the text route, bounds and a generated native `.ai` spline for this track/layout.
+6. Add AI cars to the session. RoutePilot assigns the generated spline, waits for CSP to accept it, then spaces the AI cars along the recorded route. No separate start-autopilot button is required.
 
-1. Drive the desired route with the player car.
-2. Press **Начать запись маршрута** before driving.
-3. Drive one full lap and press **Остановить запись**.
-4. Keep **Замкнутый маршрут (круг)** enabled for a lap route.
-5. Press **Сохранить маршрут этой трассы**.
-6. Add AI cars to the session and press **Запустить автопилот**.
+Routes and bounds are stored per track/layout. The map is drawn directly inside the main RoutePilot window and uses the same boundary geometry as the 3D track overlay.
 
-Routes are stored separately by full track ID using CSP `ac.storage` and are autoloaded when the app starts on a track with a saved route.
+## Driving model
 
-## Current scope
+- **Native AI spline:** RoutePilot writes the version-7 binary structure used by `AISplineEditor`. The native game AI follows that spline and retains its normal vehicle physics and gearbox logic.
+- **Speed profile:** the spline receives curvature-derived speed hints, a 300 km/h straight-line cap, a 10.5 m/s² lateral-acceleration target and a 12 m/s² braking envelope. Actual speed still depends on the car, tyres, setup and track.
+- **Pace variation:** each AI receives a small deterministic variation around its configured AI level (94–106%, clamped to 0.70–1.15) and 95% CSP AI aggression. This creates faster and slower traffic without overriding the throttle.
+- **Lanes:** cars are ranked by pace. Faster groups are assigned to the leftmost lane; slower groups use the lanes to the right. Lane centres are calculated from the selected 3/7/11/15 m road width and are accepted only when the saved boundaries leave enough room.
+- **Overtaking:** a faster follower can move to an adjacent free lane, pass, then return to its assigned lane. The leader is never given a pass-specific steering, throttle, brake, speed or lateral-offset command. CSP AI awareness remains enabled because the offset API is called with `overrideAiAwareness=false`.
+- **Boundaries:** the generated spline stores left/right widths from the user's boundary recording. Lane assignment and passing are refused if the requested corridor does not fit those limits.
+- **Spawn and recovery:** `physics.setAICarPosition(index, position, nil)` lets CSP align the car with its assigned AI spline. A car moving below 0.8 m/s for 10 seconds after startup is considered stuck; recovery searches forward for a free route position before teleporting.
+- **No obstacle scan:** RoutePilot does not scan, record or infer wall/column collision meshes. Native CSP/AC AI awareness remains responsible for its built-in traffic response.
 
-- Records player-car world X/Z coordinates and speed.
-- Stores and loads routes per track/layout, with autoload on app start.
-- Uses a Pure Pursuit-style steering controller and a curvature/braking speed planner.
-- Car-following collision avoidance (v0.2.0): each AI car checks for the nearest car ahead in its own lane (lateral offset within 2.4 m) and limits its target speed to a safe value based on the gap and the leader's speed. Below the minimum gap (adjustable, 3–15 m) the car stops completely.
-- Controls only steering, throttle and brake. No gear, clutch, reverse or stock AI spline commands are issued.
-- Applies to active AI-controlled cars with index 1 and above.
+## Logs
 
-## Changelog
+The app writes `routepilot_trace.txt` in its app folder. Important events include `AI_SPLINE_BUILD_OK`, `AI_SPLINE_ASSIGNED`, `SPAWN_CAR`, `LANE_ASSIGN`, `PASS_START`, `PASS_COMPLETE`, `PASS_BLOCKED`, `PASS_RELEASE` and `RECOVERY_ATTEMPT`. Each periodic car line contains world position, speed, AI level, route projection error, lane, lateral offset and pass state.
 
-- 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
-- 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
+## Validation status and limits
 
-## Known limitations
+This is a source-level implementation based on the CSP SDK and the repository's `AISplineEditor` and `Verve` examples. It has **not** been run inside Assetto Corsa in this environment. A zero-accident guarantee is not physically possible: car dimensions, track mesh, AI behaviour, weather and mod-car physics vary. Start with a small number of AI cars and inspect the trace before increasing traffic density.
 
-- Car-following only prevents rear-ending the car directly ahead in the same lane; side-by-side contact during overtakes is not handled (no overtaking logic yet).
-- This is an initial controller implementation. It must be tested in-game on a clear track before use in traffic. The controller does not yet perform overtaking, pit handling, or automatic recovery from a spin/off-track situation.
+The NFS Underground-style corner arrow wall and airborne recovery are not implemented in this version. Track-boundary data must be recorded accurately; RoutePilot does not infer hidden walls or poles.
