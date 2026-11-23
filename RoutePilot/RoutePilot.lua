@@ -487,7 +487,7 @@ end
 local function laneOffsetForCar(carIndex)
   if (state.aiLaneCount or 1)<2 then return 0 end
   local half=state.aiLaneHalfWidth or 1.75
-  return (carIndex%2==1) and half or -half
+  return (carIndex%2==1) and -half or half
 end
 
 local function sampleSpawnRoute(metrics,distance,laneOffset)
