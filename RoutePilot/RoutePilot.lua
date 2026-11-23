@@ -1,16 +1,8 @@
--- RoutePilot.lua — v0.10.0 (CSP 0.3.2-preview2)
--- LANE SYSTEM (user's design): the width preset buttons 1/2/3/4 cars now set
--- N fixed invisible lanes on the track. The driver gives every car a home
--- lane (fast left, slow right); 1 lane = single file, no overtakes; 2+ lanes
--- = decisive lane changes only into CLEAR lanes.
--- RECORDING PREVIEW: while recording, the render draws the existing line
--- AND forecasts up to 30 m AHEAD of the player (straight-line prediction
--- along the current direction, at the current width) — you see where the
--- line and bounds WILL go; data is still recorded only under the car.
--- The loop closing segment renders only within 30 m.
--- Finished track ("Показать линии"): the whole route at long distance.
--- UI: Очистить and Запись границ restored with full labels; lane markers
--- drawn on the map; UI errors logged to the trace.
+-- RoutePilot.lua — v0.11.0 (CSP 0.3.2-preview2)
+-- v0.10 map/UI retained (window-local, thick lines, lane markers, forecast).
+-- Width buttons now set state.widthPreset ONLY (the driver derives lane
+-- geometry from the preset + the SAVED per-segment bounds, so rails follow
+-- the real track width everywhere it narrows or widens).
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -35,7 +27,6 @@ local WIDTH_PRESETS = {3, 7, 11, 15}
 local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
   speedMax=170, followGap=8.0, widthPreset=1,
-  laneCount=1, trackWidth=3,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
@@ -245,9 +236,9 @@ local function getVertexCurvature(index)
   local l2=math.sqrt(v2x*v2x+v2z*v2z)
   if l1<0.5 or l2<0.5 then return 0 end
   local dot=clamp((v1x*v2x+v1z*v2z)/(l1*l2),-1,1)
-  local angle=math.acos(dot)
-  if angle<0.02 then return 0 end
-  return angle/math.max(0.1,(l1+l2)*0.5)
+  local ang=math.acos(dot)
+  if ang<0.02 then return 0 end
+  return ang/math.max(0.1,(l1+l2)*0.5)
 end
 local function findNearestSeg(pos,hintSeg)
   local nodes=state.nodes; local segs=segmentCount()
@@ -546,17 +537,9 @@ local function updateBoundsRecording(player)
 end
 local function applyWidthPreset(preset)
   state.widthPreset=preset
-  state.laneCount=preset
-  state.trackWidth=WIDTH_PRESETS[preset]
-  local n=#state.nodes
-  if n<2 then return end
-  local half=WIDTH_PRESETS[preset]/2
-  for i=1,n do
-    state.boundsL[i]=-half
-    state.boundsR[i]=half
-  end
   state.p={}
-  writeLog("LANES preset=%d lanes=%d width=%dm",preset,preset,WIDTH_PRESETS[preset])
+  writeLog("LANES preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
+  state.status=string.format("Полос: %d (ширина %d м)",preset,WIDTH_PRESETS[preset])
 end
 local function releaseCar(carIndex)
   local ok,controls=pcall(ac.overrideCarControls,carIndex)
@@ -618,11 +601,8 @@ function script.update(dt)
   end
 end
 
--- 3D WORLD LINES.
--- Recording: existing nodes (8 m back) + straight-line FORECAST up to 30 m
--- AHEAD of the player at the current width — you see where the line and
--- bounds will go; only actual driving is recorded. Loop segment: near only.
--- Finished track: the whole route at long distance.
+-- 3D WORLD LINES: recording = existing nodes + 30 m forecast ahead;
+-- finished track = the whole route at long distance.
 render.on('main.track.transparent', function()
   local n=#state.nodes
   if n<2 then return end
@@ -636,9 +616,8 @@ render.on('main.track.transparent', function()
     local RED=rgbm(0.6,0.05,0.05,1)
     local CYAN=rgbm(0.2,0.85,1.0,1)
     if isRec then
-      -- existing nodes: 8 m back .. last node
       local seg=select(1,findNearestSeg(player.position,1))
-      local fromI,toI=seg,seg
+      local fromI=seg
       local back=0
       local j=seg
       while back<CFG.PREVIEW_BACK do
@@ -663,22 +642,18 @@ render.on('main.track.transparent', function()
         i2=(i2%n)+1
         if i2==seg then break end
       end
-      -- FORECAST: 30 m straight ahead from the player along the last direction,
-      -- at the current width — where the line WILL go (not recorded yet)
-      if state.recLine and n>=2 then
+      if state.recLine then
         local last=state.nodes[n]
         local prev=state.nodes[n-1]
         local dx,dz=normalize2(last.x-prev.x,last.z-prev.z)
         local half=WIDTH_PRESETS[state.widthPreset]/2
         local y=last.y
-        local fx0,fz0=last.x,last.z
         local step=3.0
         local steps=math.floor(CFG.PREVIEW_AHEAD/step)
-        local px0=fx0
-        local pz0=fz0
+        local px0,pz0=last.x,last.z
         for k=1,steps do
-          local px1=fx0+dx*step*k
-          local pz1=fz0+dz*step*k
+          local px1=last.x+dx*step*k
+          local pz1=last.z+dz*step*k
           render.debugLine(vec3(px0,y+0.05,pz0),vec3(px1,y+0.05,pz1),CYAN)
           render.debugLine(vec3(px0-dz*half,y+0.05,pz0+dx*half),
             vec3(px1-dz*half,y+0.05,pz1+dx*half),RED)
@@ -689,13 +664,12 @@ render.on('main.track.transparent', function()
         end
       end
     else
-      -- finished track: the whole route
       for i=1,n do
         local node=state.nodes[i]
         local nx=state.nodes[(i%n)+1]
         local lx,lz=normalize2(nx.x-node.x,nx.z-node.z)
         local al,ar=boundsAt(i)
-        render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
+        render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.nz or nx.z),YELLOW)
         render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
           vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
         render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
@@ -708,7 +682,7 @@ render.on('main.track.transparent', function()
   end
 end)
 
--- MAP: window-local coords (comfy_map pattern), thick lines, lane markers.
+-- MAP: window-local coords, thick lines, lane markers.
 local function computeMapBounds()
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
   for i=1,#state.nodes do
@@ -748,11 +722,11 @@ local function drawMapInRect(q0,q1)
   end
   local n=#state.nodes
   local minOff=CFG.MAP_MIN_OFFSET
-  -- lane separators (if 2+ lanes): thin white dashed-ish lines
-  if state.laneCount>=2 and n>=2 then
-    local usable=(math.abs(state.boundsL[1] or 1.5)+math.abs(state.boundsR[1] or 1.5))
-    local stepL=usable/state.laneCount
-    for ln=1,state.laneCount-1 do
+  if state.widthPreset>=2 and n>=2 then
+    local bl,br=boundsAt(1)
+    local usable=math.abs(bl)+math.abs(br)
+    local stepL=usable/state.widthPreset
+    for ln=1,state.widthPreset-1 do
       local off=-usable/2+stepL*ln
       local prev
       for i=1,n do
@@ -769,7 +743,6 @@ local function drawMapInRect(q0,q1)
       end
     end
   end
-  -- bounds: dark red, thick, min offset from the line
   for pass=1,2 do
     local prev
     for i=1,n do
@@ -790,7 +763,6 @@ local function drawMapInRect(q0,q1)
       prev=vec2(sx,sy)
     end
   end
-  -- AI line: yellow, thick
   do
     local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
     for i=2,n do
@@ -808,7 +780,6 @@ local function drawMapInRect(q0,q1)
       end
     end
   end
-  -- cars
   local sim=ac.getSim()
   if sim then
     for i=0,sim.carsCount-1 do
@@ -820,7 +791,7 @@ local function drawMapInRect(q0,q1)
             ui.drawCircleFilled(s,5,rgbm(0.0,0.8,1.0,1.0),12)
           else
             local p=state.p[i]
-            if p and p.overtakeSide~=0 then
+            if p and p.passSide~=0 then
               ui.drawCircleFilled(s,4,rgbm(0.2,1.0,0.4,1.0),10)
             else
               ui.drawCircleFilled(s,4,rgbm(1,1,1,0.95),10)
@@ -916,5 +887,5 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.10.0 INITIALIZED track=%s points=%d lanes=%d",getTrackTag(),#state.nodes,state.laneCount)
+writeLog("ROUTEPILOT 0.11.0 INITIALIZED track=%s points=%d preset=%d",getTrackTag(),#state.nodes,state.widthPreset)
 flushLog()
