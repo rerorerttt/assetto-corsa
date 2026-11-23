@@ -665,14 +665,24 @@ local function updateBoundsRecording(player)
   local off=lateralOf(player.position,seg)
   local l,r=boundsAt(seg)
   local newL,newR=l,r
+  -- Move only the boundary on the side where the player is driving. Never
+  -- expand either edge beyond the previously recorded corridor.
   if off>=0 then
-    newR=math.max(off+0.5,1.5)
-    newL=math.min(l,newR-CFG.BOUNDS_MIN_PASS)
-    if newL>-1.5 then newL=-1.5 end
+    local minimumRight=math.min(1.5,r)
+    newR=math.min(r,math.max(off+0.5,minimumRight))
+    newL=l
   else
-    newL=math.min(off-0.5,-1.5)
-    newR=math.max(r,newL+CFG.BOUNDS_MIN_PASS)
-    if newR<1.5 then newR=1.5 end
+    local maximumLeft=math.max(l,-1.5)
+    newL=math.max(l,math.min(off-0.5,maximumLeft))
+    newR=r
+  end
+  if newL>off or newR<off then
+    state.status="Запись границ остановлена: машина вышла за текущий коридор"
+    state.recBounds=false
+    writeLog("BOUNDS_REC_STOP seg=%d off=%.2f old=[%.2f,%.2f] new=[%.2f,%.2f]",
+      seg,off,l,r,newL,newR)
+    flushLog()
+    return
   end
   local idx=seg
   if state.loopRoute then idx=((seg-1)%n)+1 end
