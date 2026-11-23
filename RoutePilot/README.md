@@ -1,6 +1,6 @@
-# RoutePilot 0.5
+# RoutePilot 0.3
 
-CSP Lua app for Assetto Corsa. Records a custom route from the player car and controls AI cars on that route, with arcade pace, coordinated overtaking, crossing traffic coordination and recovery.
+CSP Lua app for Assetto Corsa. Records a player-driven route and makes AI cars follow it using custom steering, throttle and brake control.
 
 ## Install
 
@@ -10,30 +10,19 @@ Copy the `RoutePilot` folder into:
 
 Enable RoutePilot in Content Manager's Lua Apps list. Keep `manifest.ini`, `RoutePilot.lua` and `logger.lua` together.
 
-## First use
+## Current capabilities
 
-Record a route by driving it, stop recording, keep loop mode enabled for a circuit, and save the route for the current track/layout. RoutePilot loads the matching route on startup. The app controls steering, throttle and brake; the car retains control of its gearbox/transmission.
+- Record, save and load a route for the current track/layout.
+- Place active AI cars at intervals along a loop route on startup.
+- Follow the recorded route with a pure-pursuit steering controller and a basic curvature-based speed planner.
+- Draw the route radar inline in the main app window.
+- Log periodic AI telemetry to `routepilot_trace.txt`.
+- Override steering, throttle and brake only; gearbox and transmission remain under vehicle control.
 
-## Current controller
+## Current limitations
 
-- Restored to the last version explicitly confirmed by the user as launching and working.
-- The original inline radar drawing and global `windowMain(dt)` callback are restored.
-- Overtake initiation is restored to the last user-confirmed runtime baseline; no experimental pace-trigger change is active.
-- The previously committed arcade pace/overtake tuning is rolled back for now; it must be reapplied later as isolated, testable changes.
-- Static obstacle detection and live track raycast avoidance remain disabled. AI-to-AI traffic coordination and recovery logic are from the restored baseline.
-- Stuck, airborne and off-route recovery; periodic telemetry in `routepilot_trace.txt`.
+This is a stable route-following baseline, not yet a complete racing AI. It does not currently implement overtaking, coordinated yielding, head-on/crossing negotiation, obstacle detection or stuck/off-route recovery. The current following logic slows behind a car in front rather than planning and executing a pass. High-speed racing behaviour is under development and has not been validated in-game.
 
-## Collision map file behaviour
+The startup spawn direction was corrected in commit `7461f57d58bc65b4fe535a38ad437d2ff59fb529` after the committed telemetry showed the AI forward vector opposite to the route tangent. Verify the first post-spawn telemetry before treating the correction as confirmed.
 
-Old `#RP_OBSTACLE_V1` and `#RP_OBS` rows in route files are ignored. The scan button and map-hit overlays are removed. Track obstacle sensing will remain disabled until a validated route-local detector is implemented. Vehicle-to-vehicle traffic coordination is still active.
-
-## Validation status
-
-The branch has been rolled back to the last user-confirmed working runtime source and manifest. The current files match the confirmed baseline source and manifest blobs. This restores the previous UI code path but has not yet been re-tested in the user's game; do not claim runtime success until the user confirms it.
-
-Read `DEVELOPMENT.md` before changing the coordinator or obstacle cache. It contains the current implementation, SDK references, telemetry findings and required test cases.
-
-
-## Startup compatibility
-
-The main-window callback is the user-confirmed global `windowMain(dt)` declaration. The single manifest window uses the previously confirmed configuration without an added `FLAGS = MAIN` entry. The route radar is drawn inline using the original `ui.invisibleButton("line_radar", ...)` canvas. Do not replace this with a child window or change callback registration without first validating the exact CSP build in-game.
+Read `DEVELOPMENT.md` before modifying the controller. It records the current source state, SDK findings, telemetry analysis, validation status and next implementation steps.
