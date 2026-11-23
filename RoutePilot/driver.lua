@@ -8,15 +8,19 @@ local Driver = {}
 local CFG, state, H
 
 local RIGHT_SPEED = 40 / 3.6
-local STEER_LIMIT = 0.78
-local STEER_GAIN = 0.92
-local STEER_FILTER_TIME = 0.14
-local STEER_RATE = 2.2
-local LOOKAHEAD_BASE = 11.0
-local LOOKAHEAD_SPEED = 0.62
-local LOOKAHEAD_MAX = 42.0
+-- Conservative, rate-limited steering prevents large snap corrections.
+local STEER_LIMIT = 0.68
+local STEER_GAIN = 0.78
+local STEER_FILTER_TIME = 0.22
+local STEER_RATE = 1.5
+local LOOKAHEAD_BASE = 13.0
+local LOOKAHEAD_SPEED = 0.38
+local LOOKAHEAD_MAX = 30.0
 local LANE_RESCUE_SPEED = 1.5
 local LANE_RESCUE_TIME = 5.0
+local GAS_RISE_RATE = 1.8
+local GAS_RELEASE_RATE = 5.0
+local GAS_SPIN_CUT_RATE = 10.0
 
 local function clamp(v, lo, hi)
   return math.max(lo, math.min(hi, v))
@@ -50,6 +54,66 @@ function Driver.setup(cfg, st, helpers)
   H = helpers
 end
 
+local function ensureTractionAssist(carIndex,p)
+  if p.tcApplied then return end
+  if physics and type(physics.setAssists)=="function" then
+    local ok,result=pcall(physics.setAssists,
+      {tractionControl="on",editable=false},carIndex)
+    p.tcApplied=true
+    if ok then
+      H.log("TC_ASSIST id=%d applied=%s",carIndex,tostring(result))
+    else
+      H.log("TC_ASSIST_ERROR id=%d err=%s",carIndex,tostring(result))
+    end
+  else
+    p.tcApplied=true
+    H.log("TC_ASSIST_UNAVAILABLE id=%d",carIndex)
+  end
+end
+
+local function measureDrivenWheelSlip(car)
+  local wheels=car.wheels
+  if not wheels then return 0 end
+  local tractionType=safeNumber(car.tractionType,-1)
+  local indices
+  if tractionType==0 then
+    indices={2,3}                 -- RWD
+  elseif tractionType==1 then
+    indices={0,1}                 -- FWD
+  else
+    indices={0,1,2,3}             -- AWD or unknown: fail-safe
+  end
+  local maximum=0
+  for i=1,#indices do
+    local wheel=wheels[indices[i]]
+    if wheel then
+      local slip=math.abs(safeNumber(wheel.slipRatio,0))
+      if slip>maximum then maximum=slip end
+    end
+  end
+  return maximum
+end
+
+local function applyTractionLimiter(car,p,dt)
+  p.wheelSlip=measureDrivenWheelSlip(car)
+  -- Factory TC is forced on above; this second layer catches cars without
+  -- usable factory TC and trims throttle before sustained wheelspin develops.
+  local factor=1.0
+  if p.wheelSlip>0.10 then
+    factor=clamp(1.0-(p.wheelSlip-0.10)*1.75,0.22,1.0)
+  end
+  p.tractionFactor=factor
+  local requested=math.min(p.gas,factor)
+  local rate
+  if requested<p.gasOutput then
+    rate=(p.wheelSlip>0.14) and GAS_SPIN_CUT_RATE or GAS_RELEASE_RATE
+  else
+    rate=GAS_RISE_RATE
+  end
+  p.gasOutput=p.gasOutput+clamp(requested-p.gasOutput,-rate*dt,rate*dt)
+  p.gas=clamp(p.gasOutput,0,1)
+end
+
 local function newPersonality(carIndex)
   local laneOffset, twoLane = H.laneOffset(carIndex, 1)
   local laneRole = not twoLane and "SINGLE_40" or
@@ -62,8 +126,12 @@ local function newPersonality(carIndex)
     steer = 0,
     steerFiltered = 0,
     gas = 0,
+    gasOutput = 0,
     brake = 0,
     speedIntegral = 0,
+    wheelSlip = 0,
+    tractionFactor = 1.0,
+    tcApplied = false,
     slipAngle = 0,
     previousFx = nil,
     previousFz = nil,
@@ -186,7 +254,9 @@ local function calculateSpeedControls(p, speed, targetSpeed, dt)
   local drive = error * 0.18 + p.speedIntegral * 0.012
   if (drive > -1 and drive < 1) or (drive >= 1 and error < 0) or
       (drive <= -1 and error > 0) then
-    p.speedIntegral = clamp(p.speedIntegral + error * dt, -18, 18)
+    -- A larger integral range is needed to overcome each car's real drag
+    -- at 40 km/h; the old +/-18 clamp caused a permanent 35 km/h plateau.
+    p.speedIntegral = clamp(p.speedIntegral + error * dt, -60, 60)
     drive = error * 0.18 + p.speedIntegral * 0.012
   end
 
@@ -198,6 +268,7 @@ end
 
 function Driver.update(carIndex, car, dt)
   local p = state.p[carIndex] or newPersonality(carIndex)
+  ensureTractionAssist(carIndex,p)
 
   p.retireT = p.retireT + dt
   if p.retireT >= 2.0 then
@@ -241,6 +312,8 @@ function Driver.update(carIndex, car, dt)
     end
   end
 
+  applyTractionLimiter(car,p,dt)
+
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
     controls.combineAxis = false
@@ -255,10 +328,10 @@ function Driver.telemetryLine(i, car, p)
   local left, right = H.boundsAt(p.segIdx)
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), targetText, p.steer, p.gas, p.brake,
-    p.lineDist, p.segIdx, p.laneOffset, left, right)
+    p.wheelSlip, p.tractionFactor, p.lineDist, p.segIdx, p.laneOffset, left, right)
 end
 
 return Driver
