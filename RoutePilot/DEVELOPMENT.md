@@ -66,7 +66,7 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 - Made route projection height-aware for multi-level tracks.
 - Replaced pace-sorted default lanes with a right-lane cruise / left-lane passing policy.
 - Increased pass lookahead and occupancy horizon for high-speed traffic, increased post-pass clearance and kept a single pass reservation and made initial lane assignment/player occupancy checks aware of the player's actual position.
-- Applied CSP's documented aggression value (0.95) and a reduced but nonzero AI caution (0.5); removed artificial throttle/top-speed caps and reset CSP's post-teleport stop/parked-input state.
+- Applied CSP's documented aggression value (0.95) and the default AI caution (1.0) for safe following distance; removed artificial throttle/top-speed caps and reset CSP's post-teleport stop/parked-input state.
 - Updated `README.md` and this file with the new model and validation caveat.
 
 ## Required in-game validation
