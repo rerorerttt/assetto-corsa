@@ -132,15 +132,15 @@ local function buildAISpline()
   if laneCount==1 then
     paths[1]=base.."_single.ai"
     ok,info=Builder.build(state.nodes,state.boundsL,state.boundsR,paths[1],
-      state.speedMax,state.loopRoute,0,halfLane,nil)
+      1000,state.loopRoute,0,halfLane,nil)
   else
     paths[1]=base.."_left_fast.ai"
     paths[2]=base.."_right_40.ai"
     ok,info=Builder.build(state.nodes,state.boundsL,state.boundsR,paths[1],
-      state.speedMax,state.loopRoute,-halfLane,halfLane,nil)
+      1000,state.loopRoute,-halfLane,halfLane,nil)
     if ok then
       local okRight,infoRight=Builder.build(state.nodes,state.boundsL,state.boundsR,paths[2],
-        state.speedMax,state.loopRoute,halfLane,halfLane,40)
+        1000,state.loopRoute,halfLane,halfLane,40)
       if not okRight then ok,info=false,infoRight end
     end
   end
@@ -503,8 +503,11 @@ local function sampleSpawnRoute(metrics,distance,laneOffset)
       if direction:length()<0.0001 then return nil,nil end
       direction:normalize()
       local offset=tonumber(laneOffset) or 0
-      position.x=position.x+direction.z*offset
-      position.z=position.z-direction.x*offset
+      local horizontal=math.sqrt(direction.x*direction.x+direction.z*direction.z)
+      if horizontal>0.0001 then
+        position.x=position.x+(direction.z/horizontal)*offset
+        position.z=position.z-(direction.x/horizontal)*offset
+      end
       return position,direction
     end
   end
@@ -1072,7 +1075,7 @@ function windowMain(dt)
   local okDraw,errDraw=pcall(function()
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
     for idx=1,4 do
-      local label=string.format("%s%d %s",idx==state.widthPreset and "● " or "",idx,idx==1 and "машина" or "машины")
+      local label=string.format("%s%d м / %s",idx==state.widthPreset and "● " or "",WIDTH_PRESETS[idx],idx==1 and "1 полоса" or "2 полосы")
       if idx>1 then ui.sameLine(0,4) end
       if ui.button(label,vec2(92,22)) then
         applyWidthPreset(idx)
