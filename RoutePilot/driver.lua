@@ -12,8 +12,8 @@ local PASS_MIN_GAP = 6.0
 local PASS_CLEAR_GAP = 7.0
 local PASS_MAX_TIME = 18.0
 local PASS_OFFSET_RATE = 3.0
-local PASS_SEPARATION = 0.38
-local PASS_EDGE_MARGIN = 0.22
+local PASS_SEPARATION = 0.28
+local PASS_EDGE_MARGIN = 0.12
 local PASS_LOOKAHEAD = 42.0
 local PASS_OCCUPANCY_RANGE = 23.0
 local STUCK_SPEED = 0.8
@@ -138,6 +138,7 @@ local function ensureCar(index, car, dt)
     local baseLevel = number(car.aiLevel, 1.0)
     if baseLevel <= 0 then baseLevel = 1.0 end
     local baseAggression = number(car.aiAggression, 0.95)
+    if baseAggression < 0 then baseAggression = 0.95 end
     local pace = 0.94 + deterministic(index) * 0.12
     p = {
       segIdx = 1, baseLevel = baseLevel, baseAggression = baseAggression,
