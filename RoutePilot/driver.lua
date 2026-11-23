@@ -95,7 +95,7 @@ end
 local function planFastLaneSpeed(p)
   local nodes = state.nodes
   local segments = H.segmentCount()
-  if segments < 1 then return FAST_MAX_SPEED end
+  if segments < 1 then return nil end
 
   local target = math.huge
   local distance = 0
@@ -253,10 +253,11 @@ end
 
 function Driver.telemetryLine(i, car, p)
   local left, right = H.boundsAt(p.segIdx)
+  local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
-    safeNumber(car.speedMs), p.targetSpeed, p.steer, p.gas, p.brake,
+    safeNumber(car.speedMs), targetText, p.steer, p.gas, p.brake,
     p.lineDist, p.segIdx, p.laneOffset, left, right)
 end
 
