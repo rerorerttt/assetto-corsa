@@ -9,8 +9,9 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0,
-  CURVE_MIN=0.002,
+  -- Aggressive race pace: late braking and high sustained lateral grip.
+  MAX_LATERAL_ACCEL=17.5, BRAKE_ACCEL=14.0, PLAN_HORIZON=280.0,
+  CURVE_MIN=0.0005,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
@@ -256,8 +257,10 @@ local function findNearestSeg(pos,hintSeg)
     local dSq=dx*dx+dz*dz
     if dSq<bestDist then bestDist=dSq; bestSeg=index; bestT=t end
   end
-  local back=math.min(5,segs-1)
-  local ahead=math.min(segs-1,math.max(20,math.floor(segs*0.25)))
+  -- Keep the projection local. A 25% route window can jump to a nearby
+  -- parallel section on hairpins and make the AI cut across the circuit.
+  local back=math.min(4,segs-1)
+  local ahead=math.min(segs-1,math.max(16,math.min(28,math.floor(segs*0.08))))
   for offset=-back,ahead do
     local idx
     if state.loopRoute then
