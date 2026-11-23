@@ -42,7 +42,7 @@ local WIDTH_PRESETS = {3, 7, 11, 15}
 
 local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
-  speedMax=300, followGap=8.0, widthPreset=2,
+  speedMax=300, followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
