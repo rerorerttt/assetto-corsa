@@ -329,3 +329,24 @@ The telemetry previously logged only the controller's requested p.steer, not the
 Restored the steering cross-product sign and added control-handoff/actual-steering telemetry. No arbitrary gain, speed, lookahead, route, collision, passing, or UI parameter was changed. The new source is committed separately. The SDK was inspected at source-definition level, but this environment has no LuaJIT/Lua compiler and no Assetto Corsa runtime. Therefore syntax compilation, API execution, physics acceptance, and in-game handling remain unverified.
 
 Next test: run the exact current branch source and check whether the steering sign now makes the car yaw toward the route. Inspect CTRL_ACTIVE and ACTUAL_STEER_DEG alongside requested STEER; if control is accepted but yaw remains excessive or oscillatory, replace the angle-times-gain controller with a geometry-based steering law before touching traffic coordination. Do not re-enable passing until the baseline line follower is stable.
+
+
+## Follower-only passing re-enabled — 2026-11-23
+
+The user clarified the traffic requirement: the slower car must not move laterally, brake, reduce its target speed, or otherwise react to an approaching overtake. Only the faster following car performs the manoeuvre. This section supersedes earlier notes saying passing was disabled.
+
+### Source change
+
+In `RoutePilot.lua`, the previously present passing helpers are now called from `updateLineCar()`. The normal corner-speed target is calculated first; `updatePassingPlan()` then decides whether this car may pass, applies a temporary left-side route offset to this car only, and raises this car's target speed up to its configured `speedMax` while passing. Steering is calculated after the offset is updated, so the lookahead target follows the passing line in the same frame. After the follower has cleared the leader, it transitions back to the recorded route and releases the reservation. The previous per-frame code that erased all pass state and reset the global reservation has been removed.
+
+The slower/leading car is not assigned a pass state and receives no pass-specific steering, throttle, brake, or target-speed modification. It continues to follow its own recorded route and its own normal corner-speed plan. A single global `passOwner` reservation allows only one passing car at a time. The follower checks the left-side corridor before starting and while passing; if the corridor becomes occupied, the pass is aborted and the follower returns toward the route. The boost is capped at `state.speedMax / 3.6`, rather than exceeding the configured maximum by an additional 9 m/s.
+
+### Spawn orientation
+
+The current spawn sampler already sends the negative X/Z route tangent to `physics.setAICarPosition()`. This is intentional: previous runtime telemetry showed the positive tangent produced `heading_dot\u2248-1`, while the negative tangent is the direction that aligns `car.look` with the recorded route. The CSP SDK declaration confirms the third argument is a direction vector and that car indices are zero-based. The SDK declaration itself does not specify a sign convention; the direction sign is grounded in the in-game telemetry recorded earlier.
+
+### Limits and validation
+
+No slow-car yielding behaviour, obstacle raycasts, collision detector, track-width estimator, or track-boundary prediction was added. The passing corridor is a conservative proximity check against other cars, not proof that the track has sufficient paved width at every point. The pass logic has not been run in Assetto Corsa in this environment. Validate it in-game and inspect `PASS_START`, `PASS_COMPLETE`, `PASS_ABORT`, `PASS_RELEASE`, `PASS` and `PASS_OFFSET` telemetry. In particular, confirm that the leader's speed, throttle, brake and lateral position remain governed solely by its normal route controller while the follower moves left and returns after clearing it.
+
+Source commit: `8ed9482bda11d53966fa308492840ba54897e7dd`. The Lua source was edited and inspected at text level; no LuaJIT compiler or Assetto Corsa runtime was available, so no syntax-compile or in-game success is claimed.
