@@ -17,7 +17,7 @@ Last updated: 2026-11-24
 - A recorded corridor narrower than 6 m is treated as one lane: offset 0 m and target speed 40 km/h for all AI cars.
 - A corridor at least 6 m wide uses fixed lane offsets of +1.75 m (left/fast) and -1.75 m (right/40 km/h), clamped to the recorded boundaries.
 - Right lane target: 40 km/h using PI speed control.
-- Left lane: no 40 km/h limiter; target speed is determined by the route-curvature planner, with a 300 km/h ceiling and braking for corners.
+- Left lane: no fixed speed ceiling. It uses full throttle when no corner requires braking; the route-curvature planner supplies a temporary target speed only when a corner is ahead.
 - Cars do not sense or react to other cars during normal driving. No following, yielding, overtaking decisions or inter-car braking. The faster left lane passes the slower right lane naturally.
 - Steering uses a filtered look-ahead target on the assigned lane offset.
 - Startup placement and stuck recovery both place cars at their lane offset.
