@@ -1,46 +1,13 @@
 -- RoutePilot.lua
--- RoutePilot 0.4 — Arcade Racing Traffic
--- CSP Lua App. Controls AI cars along a recorded line (closed loop supported).
---
--- Fix history of 0.4:
---  * SPAWN HEADING: physics.setAICarPosition(carIndex, pos, dir) points the
---    car OPPOSITE to dir on this CSP build (verified in the trace log:
---    requested dir=(0,0,1) resulted in LOOK=(0,-1) for every car). Now the
---    direction is inverted before the call, and after teleport each car
---    gets a heading auto-correction: if the car's LOOK is backwards
---    relative to the line direction, the controller turns it around
---    within a couple of seconds.
---  * LOW-SPEED SLIP DAMPING removed: at walking speeds the lateral
---    velocity noise created a fake "slip" that cut the throttle to 0.08
---    and cars crawled. Slip-based damping now engages only above 8 m/s
---    and above 4 degrees of real slip angle.
---  * RACING TEMPO: cars drive as fast as the line allows — the planner
---    looks 170 m ahead, computes corner apex speeds from curvature and
---    brakes exactly the distance needed. Per-car pace multiplier
---    (0.85..1.15) makes fast cars overtake slow ones naturally.
---  * OVERTAKING: a faster car does not brake behind a slower one — it
---    shifts to the overtake side (left/right of the line) and passes,
---    then returns to the line. Slower cars hold their line and pace
---    (they do not yield and do not brake; the passing car does the work).
---  * COLLISION SAFETY: forward-cone check against ALL cars including
---    the player; hard brake only if the space ahead is actually taken.
---  * MAP: the track map is embedded in the MAIN window as a static
---    canvas that fills the whole window width. No separate floating map
---    window anymore (the broken manifest is replaced).
---  * UI: only working elements remain — record/stop, save/load/clear,
---    loop toggle, enable toggle, speed sliders, follow distance.
+-- RoutePilot 0.4 — Arcade Racing Traffic (main script)
+-- Line recording, AI teleport-spawn on the line, racing-traffic driver (driver.lua).
 
 local okLogger, Logger = pcall(require, "logger")
-if not okLogger or type(Logger) ~= "table" then
-  Logger = nil
-end
-
-------------------------------------------------------------
--- CONFIGURATION
-------------------------------------------------------------
+if not okLogger or type(Logger) ~= "table" then Logger = nil end
+local okDriver, Driver = pcall(require, "driver")
+if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  -- steering
   LOOKAHEAD_BASE = 8.0,
   LOOKAHEAD_SPEED = 0.55,
   LOOKAHEAD_MIN = 8.0,
@@ -50,54 +17,38 @@ local CFG = {
   STEER_RATE = 3.5,
   STEER_FILTER = 0.10,
 
-  -- grip and speed planning
-  MAX_LATERAL_ACCEL = 9.0,     -- arcade grip for corner speeds
-  BRAKE_ACCEL = 8.5,           -- arcade braking power
-  PLAN_HORIZON = 170.0,        -- look this far ahead for corners
-  CORNER_HORIZON = 45.0,       -- where corner speed matters without braking
-  MIN_APEX_SPEED = 11.0,       -- m/s, never plan below this (~40 km/h)
+  MAX_LATERAL_ACCEL = 9.0,
+  BRAKE_ACCEL = 8.5,
+  PLAN_HORIZON = 170.0,
+  MIN_APEX_SPEED = 11.0,
   GAS_GAIN = 0.45,
   BRAKE_GAIN = 0.60,
   MAX_GAS = 1.0,
   MAX_BRAKE = 1.0,
 
-  -- slip / stability
   SLIP_START = 0.09,
   SLIP_FULL = 0.45,
-  SLIP_DAMP_MIN_SPEED = 8.0,   -- below this speed no slip damping at all
+  SLIP_DAMP_MIN_SPEED = 8.0,
   SLIP_DAMP_MIN_ANGLE = 4.0 * math.pi / 180,
 
-  -- following and overtaking
-  FOLLOW_LATERAL = 4.0,        -- cone half-width for cars ahead
-  FOLLOW_DISTANCE = 8.0,
-  OVERTAKE_TRIGGER_TIME = 1.2, -- follow this long before committing
-  OVERTAKE_LATERAL = 5.5,      -- shift this far from the line to pass
-  OVERTAKE_CLEAR_AHEAD = 4.0,  -- end overtake this far past the leader
-  OVERTAKE_SIDE_PREF = 1,      -- 1 = prefer right side of the line
+  FOLLOW_LATERAL = 4.0,
+  OVERTAKE_TRIGGER_TIME = 1.2,
+  OVERTAKE_LATERAL = 5.5,
+  OVERTAKE_CLEAR_AHEAD = 4.0,
 
-  -- line keeping
-  LINE_HARD_PULL = 25.0,       -- further than this: strong pull to the line
-  LINE_SOFT_PULL = 10.0,       -- further than this: moderate pull
+  LINE_HARD_PULL = 25.0,
 
-  -- spawning
   SPAWN_GAP = 25.0,
   SPAWN_MIN_GAP = 14.0,
   SPAWN_STABLE_TIME = 0.35,
   SPAWN_WAIT_TIMEOUT = 8.0,
-  SPAWN_CORRECT_TIME = 6.0,    -- heading auto-correction window
 
-  -- telemetry
   LOG_INTERVAL = 1.0,
   MAX_ROUTE_POINTS = 50000,
   RECORD_DISTANCE = 3.0,
 
-  -- map
-  MAP_MARGIN = 10.0,           -- padding around the drawn line, meters
+  MAP_MARGIN = 12.0,
 }
-
-------------------------------------------------------------
--- STATE
-------------------------------------------------------------
 
 local state = {
   enabled = true,
@@ -106,7 +57,6 @@ local state = {
 
   speedMin = 70,
   speedMax = 170,
-
   followGap = 8.0,
 
   spawnDone = false,
@@ -120,7 +70,6 @@ local state = {
 
   status = "Готов",
   logAccum = 0,
-
   loaded = false,
 }
 
@@ -132,15 +81,8 @@ if Logger and type(Logger.new) == "function" then
     l:init()
     return l
   end)
-
-  if ok then
-    logger = result
-  end
+  if ok then logger = result end
 end
-
-------------------------------------------------------------
--- LOGGING
-------------------------------------------------------------
 
 local function writeLog(fmt, ...)
   if not logger or not logger.log then return end
@@ -148,14 +90,8 @@ local function writeLog(fmt, ...)
 end
 
 local function flushLog()
-  if logger and logger.flush then
-    pcall(logger.flush, logger)
-  end
+  if logger and logger.flush then pcall(logger.flush, logger) end
 end
-
-------------------------------------------------------------
--- MATH
-------------------------------------------------------------
 
 local function clamp(v, lo, hi)
   return math.max(lo, math.min(hi, v))
@@ -173,44 +109,20 @@ end
 
 local function normalize2(x, z)
   local l = math.sqrt(x * x + z * z)
-  if l < 0.00001 then
-    return 0, 1
-  end
+  if l < 0.00001 then return 0, 1 end
   return x / l, z / l
 end
 
-local function signedAngle(ax, az, bx, bz)
-  local dot = clamp(ax * bx + az * bz, -1, 1)
-  local cross = ax * bz - az * bx
-  return math.atan2(cross, dot)
-end
-
 local function safeNumber(v, fallback)
-  if type(v) ~= "number" then
-    return fallback or 0
-  end
-  if v ~= v or v == math.huge or v == -math.huge then
-    return fallback or 0
-  end
+  if type(v) ~= "number" then return fallback or 0 end
+  if v ~= v or v == math.huge or v == -math.huge then return fallback or 0 end
   return v
 end
-
--- deterministic per-car random from the index (stable across frames)
-local function carRand(carIndex, salt)
-  local n = math.sin(carIndex * 127.1 + salt * 311.7) * 43758.5453
-  return n - math.floor(n)
-end
-
-------------------------------------------------------------
--- TRACK AND FILES
-------------------------------------------------------------
 
 local function getTrackTag()
   local tid = (ac.getTrackID and ac.getTrackID()) or "track"
   local layout = (ac.getTrackLayout and ac.getTrackLayout()) or ""
-  if layout ~= "" then
-    return tostring(tid) .. "_" .. tostring(layout)
-  end
+  if layout ~= "" then return tostring(tid) .. "_" .. tostring(layout) end
   return tostring(tid)
 end
 
@@ -220,15 +132,9 @@ local function getLineFilePath()
     appDir = ac.getFolder(ac.FolderID.ACApps) or ""
   end
   local tag = string.gsub(getTrackTag(), "[^%w_%-]", "_")
-  if appDir ~= "" then
-    return appDir .. "/lua/RoutePilot/line_" .. tag .. ".txt"
-  end
+  if appDir ~= "" then return appDir .. "/lua/RoutePilot/line_" .. tag .. ".txt" end
   return "line_" .. tag .. ".txt"
 end
-
-------------------------------------------------------------
--- ROUTE SERIALIZATION
-------------------------------------------------------------
 
 local function serializeNodes(nodes)
   local lines = {}
@@ -240,33 +146,19 @@ local function serializeNodes(nodes)
 end
 
 local function parseNodes(raw)
-  if type(raw) ~= "string" or raw == "" then
-    return nil
-  end
+  if type(raw) ~= "string" or raw == "" then return nil end
   local loaded = {}
   for line in string.gmatch(raw, "[^\r\n]+") do
     local xs, ys, zs = string.match(line, "^%s*([%-0-9%.]+)%s+([%-0-9%.]+)%s+([%-0-9%.]+)%s*$")
-    local x = tonumber(xs)
-    local y = tonumber(ys)
-    local z = tonumber(zs)
-    if x and y and z then
-      if x == x and y == y and z == z then
-        loaded[#loaded + 1] = vec3(x, y, z)
-      end
+    local x, y, z = tonumber(xs), tonumber(ys), tonumber(zs)
+    if x and y and z and x == x and y == y and z == z then
+      loaded[#loaded + 1] = vec3(x, y, z)
     end
-    if #loaded >= CFG.MAX_ROUTE_POINTS then
-      break
-    end
+    if #loaded >= CFG.MAX_ROUTE_POINTS then break end
   end
-  if #loaded >= 2 then
-    return loaded
-  end
+  if #loaded >= 2 then return loaded end
   return nil
 end
-
-------------------------------------------------------------
--- SAVE / LOAD LINE
-------------------------------------------------------------
 
 local function saveLine()
   if #state.nodes < 2 then
@@ -274,27 +166,21 @@ local function saveLine()
     return
   end
   local data = serializeNodes(state.nodes)
-  local wroteFile = false
-  local wroteStorage = false
   local path = getLineFilePath()
+  local wroteFile = false
   if io and io.open then
     local ok, f = pcall(io.open, path, "w")
     if ok and f then
-      local result = pcall(function()
-        f:write(data)
-        f:close()
-      end)
-      wroteFile = result
+      wroteFile = pcall(function() f:write(data) f:close() end)
     end
   end
+  local wroteStorage = false
   if ac.storage then
-    local ok = pcall(ac.storage, "RP_LINE_DATA_" .. getTrackTag(), data)
-    wroteStorage = ok
+    wroteStorage = pcall(ac.storage, "RP_LINE_DATA_" .. getTrackTag(), data)
   end
   if wroteFile or wroteStorage then
     state.status = string.format("Сохранено: %d точек", #state.nodes)
-    writeLog("SAVE_ROUTE points=%d file=%s storage=%s",
-      #state.nodes, tostring(wroteFile), tostring(wroteStorage))
+    writeLog("SAVE_ROUTE points=%d", #state.nodes)
     flushLog()
   else
     state.status = "Ошибка сохранения"
@@ -312,16 +198,12 @@ local function loadLine()
         f:close()
         return content
       end)
-      if success then
-        loaded = parseNodes(raw)
-      end
+      if success then loaded = parseNodes(raw) end
     end
   end
   if not loaded and ac.storage then
     local ok, raw = pcall(ac.storage, "RP_LINE_DATA_" .. getTrackTag())
-    if ok and raw then
-      loaded = parseNodes(raw)
-    end
+    if ok and raw then loaded = parseNodes(raw) end
   end
   if loaded then
     state.nodes = loaded
@@ -343,32 +225,18 @@ local function loadLine()
   return false
 end
 
-------------------------------------------------------------
--- LINE GEOMETRY (nodes are stored in route order)
-------------------------------------------------------------
-
-local function nodeCount()
-  return #state.nodes
-end
-
 local function segmentCount()
-  if state.loopRoute then
-    return #state.nodes
-  end
+  if state.loopRoute then return #state.nodes end
   return math.max(0, #state.nodes - 1)
 end
 
 local function segEnd(index)
   local count = #state.nodes
-  if state.loopRoute then
-    return state.nodes[(index % count) + 1]
-  end
+  if state.loopRoute then return state.nodes[(index % count) + 1] end
   return state.nodes[index + 1]
 end
 
--- walk `distance` meters along the line from segment index / t; returns a point
 local function walkLine(startSeg, startT, distance)
-  local count = #state.nodes
   local segs = segmentCount()
   if segs < 1 then return nil end
   local seg = startSeg
@@ -378,27 +246,155 @@ local function walkLine(startSeg, startT, distance)
     local a = state.nodes[seg]
     local b = segEnd(seg)
     local length = flatDist(a, b)
-    local room = length * (1 - t)
-    if room >= remaining then
-      local nt = (length * t + remaining) / math.max(0.0001, length)
-      return vec3(lerp(a.x, b.x, nt), lerp(a.y, b.y, nt), lerp(a.z, b.z, nt)), seg, nt
+    if length >= 0.0001 then
+      local room = length * (1 - t)
+      if room >= remaining then
+        local nt = (length * t + remaining) / length
+        return vec3(lerp(a.x, b.x, nt), lerp(a.y, b.y, nt), lerp(a.z, b.z, nt))
+      end
+      remaining = remaining - room
+      t = 0
     end
-    remaining = remaining - room
-    t = 0
     if state.loopRoute then
       seg = (seg % segs) + 1
     elseif seg < segs then
       seg = seg + 1
     else
-      return vec3(b.x, b.y, b.z), seg, 1
+      return nil
     end
   end
   return nil
 end
 
-------------------------------------------------------------
--- STARTUP AI TELEPORT
-------------------------------------------------------------
+local function getVertexCurvature(index)
+  local nodes = state.nodes
+  local count = #nodes
+  if count < 3 then return 0 end
+  local prevIndex = index - 1
+  local nextIndex = index + 1
+  if state.loopRoute then
+    if prevIndex < 1 then prevIndex = count end
+    if nextIndex > count then nextIndex = 1 end
+  else
+    if prevIndex < 1 or nextIndex > count then return 0 end
+  end
+  local a = nodes[prevIndex]
+  local b = nodes[index]
+  local c = nodes[nextIndex]
+  local v1x, v1z = b.x - a.x, b.z - a.z
+  local v2x, v2z = c.x - b.x, c.z - b.z
+  local l1 = math.sqrt(v1x * v1x + v1z * v1z)
+  local l2 = math.sqrt(v2x * v2x + v2z * v2z)
+  if l1 < 0.1 or l2 < 0.1 then return 0 end
+  local dot = clamp((v1x * v2x + v1z * v2z) / (l1 * l2), -1, 1)
+  return math.acos(dot) / math.max(0.1, (l1 + l2) * 0.5)
+end
+
+local function findNearestSegment(car, p)
+  local nodes = state.nodes
+  local segs = segmentCount()
+  if segs < 1 then return 1, 0, 0, segs end
+  local px = car.position.x
+  local pz = car.position.z
+  local bestSeg = clamp(p.segIdx, 1, segs)
+  local bestT = 0
+  local bestDist = math.huge
+  local function checkSegment(index)
+    local a = nodes[index]
+    local b = segEnd(index)
+    local vx = b.x - a.x
+    local vz = b.z - a.z
+    local lenSq = vx * vx + vz * vz
+    if lenSq < 0.00001 then return end
+    local t = clamp(((px - a.x) * vx + (pz - a.z) * vz) / lenSq, 0, 1)
+    local cx = a.x + vx * t
+    local cz = a.z + vz * t
+    local dx = px - cx
+    local dz = pz - cz
+    local dSq = dx * dx + dz * dz
+    if dSq < bestDist then
+      bestDist = dSq
+      bestSeg = index
+      bestT = t
+    end
+  end
+  local back = math.min(3, segs - 1)
+  local ahead = math.min(segs - 1, math.max(15, math.floor(segs * 0.20)))
+  for offset = -back, ahead do
+    local idx
+    if state.loopRoute then
+      idx = ((p.segIdx - 1 + offset) % segs) + 1
+    else
+      idx = p.segIdx + offset
+      if idx >= 1 and idx <= segs then checkSegment(idx) end
+      idx = nil
+    end
+    if idx then checkSegment(idx) end
+  end
+  if bestDist > 20 * 20 then
+    for i = 1, segs do checkSegment(i) end
+  end
+  p.segIdx = bestSeg
+  return bestSeg, bestT, math.sqrt(bestDist), segs
+end
+
+local function carAheadFull(carIndex, car, lateralWidth)
+  local fx, fz = normalize2(car.look.x, car.look.z)
+  local sim = ac.getSim()
+  if not sim then return nil, nil, nil end
+  local bestGap, bestSpeed, bestIndex = nil, nil, nil
+  for i = 0, sim.carsCount - 1 do
+    if i ~= carIndex then
+      local other = ac.getCar(i)
+      if other and other.isActive then
+        local dx = other.position.x - car.position.x
+        local dz = other.position.z - car.position.z
+        local forward = dx * fx + dz * fz
+        if forward > 0 and forward < 90 then
+          local lateral = math.abs(dx * fz - dz * fx)
+          if lateral <= (lateralWidth or CFG.FOLLOW_LATERAL) then
+            if not bestGap or forward < bestGap then
+              bestGap = forward
+              bestSpeed = math.max(0, safeNumber(other.speedMs))
+              bestIndex = i
+            end
+          end
+        end
+      end
+    end
+  end
+  return bestGap, bestSpeed, bestIndex
+end
+
+local function carAhead(carIndex, car, lateralWidth)
+  local gap, speed = carAheadFull(carIndex, car, lateralWidth)
+  return gap, speed
+end
+
+local function carAheadIndex(carIndex, car, lateralWidth)
+  local gap, speed, index = carAheadFull(carIndex, car, lateralWidth)
+  return index
+end
+
+local function recordSecondTelemetry(sim)
+  local anyWritten = false
+  for i = 1, sim.carsCount - 1 do
+    local car = ac.getCar(i)
+    local p = state.p[i]
+    if car and car.isActive and car.isAIControlled and p then
+      if Driver and Driver.telemetryLine then
+        writeLog(Driver.telemetryLine(i, car, p))
+      else
+        writeLog("CAR=%d SPEED=%.2f SEGMENT=%d", i, safeNumber(car.speedMs), p.segIdx or 0)
+      end
+      anyWritten = true
+    end
+  end
+  if not anyWritten and logger and logger.heartbeat then
+    pcall(logger.heartbeat, logger, "nodes=" .. tostring(#state.nodes))
+  end
+  flushLog()
+end
 
 local function buildSpawnRouteMetrics()
   local count = #state.nodes
@@ -415,9 +411,7 @@ local function buildSpawnRouteMetrics()
       totalLength = totalLength + length
     end
   end
-  if #segments < 2 or totalLength < CFG.SPAWN_MIN_GAP * 2 then
-    return nil
-  end
+  if #segments < 2 or totalLength < CFG.SPAWN_MIN_GAP * 2 then return nil end
   return { segments = segments, length = totalLength, loop = state.loopRoute }
 end
 
@@ -436,9 +430,9 @@ local function findRouteDistanceAtPosition(position, metrics)
       local pz = a.z + vz * t
       local dx = position.x - px
       local dz = position.z - pz
-      local distanceSq = dx * dx + dz * dz
-      if distanceSq < bestDistanceSq then
-        bestDistanceSq = distanceSq
+      local dSq = dx * dx + dz * dz
+      if dSq < bestDistanceSq then
+        bestDistanceSq = dSq
         bestRouteDistance = seg.start + seg.length * t
       end
     end
@@ -460,9 +454,7 @@ local function sampleSpawnRoute(metrics, distance)
       local a, b = seg.a, seg.b
       local position = vec3(lerp(a.x, b.x, t), lerp(a.y, b.y, t), lerp(a.z, b.z, t))
       local direction = vec3(b.x - a.x, b.y - a.y, b.z - a.z)
-      if direction:length() < 0.0001 then
-        return nil, nil
-      end
+      if direction:length() < 0.0001 then return nil, nil end
       direction:normalize()
       return position, direction
     end
@@ -514,13 +506,13 @@ local function teleportAICarsToRoute(aiCars)
     if player then
       local nearestDistance, playerLineError = findRouteDistanceAtPosition(player.position, metrics)
       startDistance = nearestDistance + gap
-      writeLog("SPAWN_ANCHOR player_line_error=%.2f route_distance=%.2f", playerLineError, nearestDistance)
+      writeLog("SPAWN_ANCHOR player_line_error=%.2f route_distance=%.2f",
+        playerLineError, nearestDistance)
     else
       startDistance = gap
     end
   end
-  local moved = 0
-  local failed = 0
+  local moved, failed = 0, 0
   writeLog("SPAWN_BEGIN cars=%d route=%.1f gap=%.1f start=%.1f loop=%s",
     count, metrics.length, gap, startDistance, tostring(metrics.loop))
   for order = 1, count do
@@ -528,15 +520,16 @@ local function teleportAICarsToRoute(aiCars)
     local routeDistance = startDistance + (order - 1) * gap
     local position, direction = sampleSpawnRoute(metrics, routeDistance)
     if position and direction then
-      -- THE FIX: on this CSP build the car ends up facing OPPOSITE to the
-      -- given dir (verified via trace log). Pass the inverted direction.
+      -- FIX: this CSP build points the car OPPOSITE to the passed dir,
+      -- so pass the inverted direction (trace: dir=(0,0,1) -> LOOK=(0,-1)).
       local ok, result = pcall(physics.setAICarPosition, carIndex,
         position, vec3(-direction.x, -direction.y, -direction.z))
       if ok and result ~= false then
         moved = moved + 1
         state.p[carIndex] = nil
-        writeLog("SPAWN_CAR id=%d order=%d distance=%.2f pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f,%.3f)",
-          carIndex, order, routeDistance, position.x, position.y, position.z,
+        writeLog("SPAWN_CAR id=%d order=%d distance=%.2f pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f,%.3f) inverted=1",
+          carIndex, order, routeDistance,
+          position.x, position.y, position.z,
           -direction.x, -direction.y, -direction.z)
       else
         failed = failed + 1
@@ -563,11 +556,7 @@ local function updateStartupTeleport(sim, dt)
   state.spawnWait = state.spawnWait + dt
   local aiCars = collectActiveAICars(sim)
   local count = #aiCars
-  local rosterParts = {}
-  for i = 1, count do
-    rosterParts[i] = tostring(aiCars[i])
-  end
-  local roster = table.concat(rosterParts, ",")
+  local roster = table.concat(aiCars, ",")
   if count == 0 then
     state.spawnStable = 0
     state.spawnLastRoster = ""
@@ -596,10 +585,6 @@ local function updateStartupTeleport(sim, dt)
   return false
 end
 
-------------------------------------------------------------
--- RECORD PLAYER LINE
-------------------------------------------------------------
-
 local function addPoint(pos)
   if #state.nodes >= CFG.MAX_ROUTE_POINTS then
     state.recording = false
@@ -611,381 +596,229 @@ local function addPoint(pos)
   end
 end
 
-------------------------------------------------------------
--- CAR PERSONALITY
-------------------------------------------------------------
-
-local function newPersonality(carIndex)
-  local span = math.max(0, state.speedMax - state.speedMin)
-  -- deterministic per-car pace so fast cars overtake slow ones
-  local pace = 0.85 + carRand(carIndex, 1) * 0.30   -- 0.85..1.15
-  local kmh = clamp(state.speedMin + span * 0.5, 40, 260) * pace
-  local p = {
-    segIdx = 1,
-    pace = pace,
-    cruiseSpeed = kmh / 3.6,
-    steer = 0,
-    steerFiltered = 0,
-    gas = 0,
-    brake = 0,
-    slipAngle = 0,
-    lateralVelocity = 0,
-    lateralAccel = 0,
-    yawRate = 0,
-    previousFx = nil,
-    previousFz = nil,
-    stuck = 0,
-    lineDist = 0,
-    targetX = 0,
-    targetZ = 0,
-    targetSpeed = 0,
-    slipSeverity = 0,
-    stability = 1,
-    lastCurve = 0,
-    -- heading auto-correction after teleport
-    correctTimer = CFG.SPAWN_CORRECT_TIME,
-    -- overtaking state
-    overtakeSide = 0,            -- -1 left, 1 right, 0 none
-    overtakeTarget = nil,       -- carIndex being passed
-    followTimer = 0,
-  }
-  local car = ac.getCar(carIndex)
-  if car and #state.nodes >= 2 then
-    local bestI = 1
-    local bestD = math.huge
-    for i = 1, #state.nodes do
-      local d = flatDist(car.position, state.nodes[i])
-      if d < bestD then
-        bestD = d
-        bestI = i
-      end
-    end
-    p.segIdx = bestI
+local function releaseCar(carIndex)
+  local ok, controls = pcall(ac.overrideCarControls, carIndex)
+  if ok and controls then
+    controls.combineAxis = false
+    controls.steer = 0
+    controls.gas = 0
+    controls.brake = 0
+    controls.handbrake = 0
   end
-  state.p[carIndex] = p
-  writeLog("CAR_INIT id=%d cruise=%.1fkmh pace=%.2f segment=%d", carIndex, kmh, pace, p.segIdx)
+  state.p[carIndex] = nil
 end
 
-------------------------------------------------------------
--- SEGMENT SEARCH
-------------------------------------------------------------
+local driverReady = false
 
-local function findNearestSegment(car, p)
-  local nodes = state.nodes
-  local count = #nodes
-  local segs = segmentCount()
-  local px = car.position.x
-  local pz = car.position.z
-  local bestSeg = clamp(p.segIdx, 1, segs)
-  local bestT = 0
-  local bestDist = math.huge
-  local function checkSegment(index)
-    local a = nodes[index]
-    local b = segEnd(index)
-    local vx = b.x - a.x
-    local vz = b.z - a.z
-    local lenSq = vx * vx + vz * vz
-    if lenSq < 0.00001 then return end
-    local t = clamp(((px - a.x) * vx + (pz - a.z) * vz) / lenSq, 0, 1)
-    local cx = a.x + vx * t
-    local cz = a.z + vz * t
-    local dx = px - cx
-    local dz = pz - cz
-    local dSq = dx * dx + dz * dz
-    if dSq < bestDist then
-      bestDist = dSq
-      bestSeg = index
-      bestT = t
-    end
-  end
-  local back = math.min(3, segs - 1)
-  local ahead = math.min(segs - 1, math.max(15, math.floor(segs * 0.20)))
-  for offset = -back, ahead do
-    local idx
-    if state.loopRoute then
-      idx = ((p.segIdx - 1 + offset) % segs) + 1
-    else
-      idx = p.segIdx + offset
-      if idx >= 1 and idx <= segs then
-        checkSegment(idx)
-      end
-      idx = nil
-    end
-    if idx then
-      checkSegment(idx)
-    end
-  end
-  if bestDist > 20 * 20 then
-    for i = 1, segs do
-      checkSegment(i)
-    end
-  end
-  p.segIdx = bestSeg
-  return bestSeg, bestT, math.sqrt(bestDist), segs
+local function ensureDriver()
+  if driverReady or not Driver then return Driver ~= nil end
+  if type(Driver.setup) ~= "function" then return false end
+  Driver.setup(CFG, state, {
+    segEnd = segEnd,
+    segmentCount = segmentCount,
+    walkLine = walkLine,
+    flatDist = flatDist,
+    getVertexCurvature = getVertexCurvature,
+    findNearestSegment = findNearestSegment,
+    carAhead = carAhead,
+    carAheadIndex = carAheadIndex,
+    log = writeLog,
+  })
+  driverReady = true
+  return true
 end
 
-------------------------------------------------------------
--- LOOKAHEAD TARGET
-------------------------------------------------------------
-
-local function getLookaheadTarget(car, p, speed)
-  local nodes = state.nodes
-  local count = #nodes
-  local seg, t = findNearestSegment(car, p)
-  local a = nodes[seg]
-  local b = segEnd(seg)
-  local startX = lerp(a.x, b.x, t)
-  local startZ = lerp(a.z, b.z, t)
-  local lookAhead = clamp(
-    CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
-    CFG.LOOKAHEAD_MIN,
-    CFG.LOOKAHEAD_MAX
-  )
-  local point = walkLine(seg, t, lookAhead)
-  if point then
-    return point.x, point.z, seg, t
-  end
-  return b.x, b.z, seg, t
-end
-
-------------------------------------------------------------
--- CURVATURE AND SPEED PLANNER
-------------------------------------------------------------
-
-local function getVertexCurvature(index)
-  local nodes = state.nodes
-  local count = #nodes
-  local prevIndex = index - 1
-  local nextIndex = index + 1
-  if state.loopRoute then
-    if prevIndex < 1 then prevIndex = count end
-    if nextIndex > count then nextIndex = 1 end
-  else
-    if prevIndex < 1 or nextIndex > count then
-      return 0
-    end
-  end
-  local a = nodes[prevIndex]
-  local b = nodes[index]
-  local c = nodes[nextIndex]
-  local v1x = b.x - a.x
-  local v1z = b.z - a.z
-  local v2x = c.x - b.x
-  local v2z = c.z - b.z
-  local l1 = math.sqrt(v1x * v1x + v1z * v1z)
-  local l2 = math.sqrt(v2x * v2x + v2z * v2z)
-  if l1 < 0.1 or l2 < 0.1 then
-    return 0
-  end
-  local dot = clamp((v1x * v2x + v1z * v2z) / (l1 * l2), -1, 1)
-  local angle = math.acos(dot)
-  return angle / math.max(0.1, (l1 + l2) * 0.5)
-end
-
--- racing planner: scan PLAN_HORIZON ahead, compute the allowed speed at each
--- corner and brake exactly as late as physics allows
-local function planTargetSpeed(p, speed)
-  local nodes = state.nodes
-  local count = #nodes
-  local segs = segmentCount()
-  local targetSpeed = p.cruiseSpeed
-  local distance = 0
-  local current = p.segIdx
-  local maxCurve = 0
-  for _ = 1, 90 do
-    if distance > CFG.PLAN_HORIZON then break end
-    local curvature = getVertexCurvature(current)
-    if curvature > 0.0008 then
-      maxCurve = math.max(maxCurve, curvature)
-      local cornerSpeed = math.max(CFG.MIN_APEX_SPEED, math.sqrt(CFG.MAX_LATERAL_ACCEL / curvature))
-      local safeSpeed = math.sqrt(cornerSpeed * cornerSpeed + 2 * CFG.BRAKE_ACCEL * distance)
-      if safeSpeed < targetSpeed then
-        targetSpeed = safeSpeed
-      end
-    end
-    local a = nodes[current]
-    local b = segEnd(current)
-    local segLen = flatDist(a, b)
-    distance = distance + segLen
-    if state.loopRoute then
-      current = (current % segs) + 1
-    elseif current < segs then
-      current = current + 1
-    else
-      break
-    end
-  end
-  p.lastCurve = maxCurve
-  return math.max(0, targetSpeed)
-end
-
-------------------------------------------------------------
--- VEHICLE DYNAMICS
-------------------------------------------------------------
-
-local function readVehicleDynamics(car, p, dt)
-  local velocity = car.velocity
-  local look = car.look
-  local fx, fz = normalize2(look.x, look.z)
-  local rx = fz
-  local rz = -fx
-  local vx = safeNumber(velocity.x)
-  local vz = safeNumber(velocity.z)
-  local longitudinalVelocity = vx * fx + vz * fz
-  local lateralVelocity = vx * rx + vz * rz
-  local slipAngle = math.atan2(lateralVelocity, math.max(0.5, longitudinalVelocity))
-  local yawRate = 0
-  if p.previousFx and dt > 0.0001 then
-    local headingChange = signedAngle(p.previousFx, p.previousFz, fx, fz)
-    yawRate = headingChange / dt
-  end
-  local speed = math.max(0, safeNumber(car.speedMs, longitudinalVelocity))
-  local lateralAccel = math.abs(yawRate * speed)
-  p.previousFx = fx
-  p.previousFz = fz
-  p.previousLatVelocity = lateralVelocity
-  p.lateralVelocity = lateralVelocity
-  p.slipAngle = slipAngle
-  p.yawRate = yawRate
-  p.lateralAccel = lateralAccel
-  return speed, fx, fz
-end
-
-------------------------------------------------------------
--- STABILITY
-------------------------------------------------------------
-
-local function calculateStability(p, speed)
-  local slip = math.abs(p.slipAngle)
-  local severity = 0
-  -- FIX: only apply slip damping at real speeds with real slip angles;
-  -- at low speed the lateral noise used to create fake slip and kill gas
-  if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
-    local slipSeverity = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
-    local accelerationSeverity = clamp(
-      (p.lateralAccel - CFG.MAX_LATERAL_ACCEL) / (CFG.MAX_LATERAL_ACCEL * 1.6 - CFG.MAX_LATERAL_ACCEL),
-      0, 1)
-    severity = math.max(slipSeverity, accelerationSeverity)
-  end
-  p.slipSeverity = severity
-  p.stability = 1 - severity
-  return severity
-end
-
-------------------------------------------------------------
--- PURE PURSUIT STEERING (with heading auto-correction)
-------------------------------------------------------------
-
-local function headingMatchesLine(fx, fz, seg)
-  local a = state.nodes[seg]
-  local b = segEnd(seg)
-  local dx, dz = normalize2(b.x - a.x, b.z - a.z)
-  return (fx * dx + fz * dz) > -0.1
-end
-
-local function calculateSteering(car, p, speed, fx, fz)
-  local targetX, targetZ, seg, t = getLookaheadTarget(car, p, speed)
-  p.targetX = targetX
-  p.targetZ = targetZ
-  p.segIdx = seg
-
-  -- heading auto-correction right after teleport: if the car faces
-  -- backwards along the line, turn it around instead of steering crazy
-  if p.correctTimer > 0 then
-    p.correctTimer = p.correctTimer - dtLastFrame
-    if not headingMatchesLine(fx, fz, seg) then
-      return (fz > 0) and 1 or -1, seg, t  -- steady full-lock turn
-    end
-  end
-
-  local dx = targetX - car.position.x
-  local dz = targetZ - car.position.z
-  local distance = math.sqrt(dx * dx + dz * dz)
-  if distance < 0.001 then
-    return 0, seg, t
-  end
-  local dirX = dx / distance
-  local dirZ = dz / distance
-  local angle = signedAngle(fx, fz, dirX, dirZ)
-  local routeSteer = angle * CFG.STEER_GAIN
-  local slipCompensation = p.slipAngle * 0.62
-  local steer = routeSteer + slipCompensation
-
-  -- overtaking: shift the steering target laterally off the line
-  if p.overtakeSide ~= 0 then
-    local lateral = p.overtakeSide * CFG.OVERTAKE_LATERAL
-    local lineDirX, lineDirZ = normalize2(targetX - car.position.x, targetZ - car.position.z)
-    local nx, nz = -lineDirZ, lineDirX
-    local shiftedX = targetX + nx * lateral
-    local shiftedZ = targetZ + nz * lateral
-    dx = shiftedX - car.position.x
-    dz = shiftedZ - car.position.z
-    distance = math.sqrt(dx * dx + dz * dz)
-    if distance > 0.001 then
-      angle = signedAngle(fx, fz, dx / distance, dz / distance)
-      steer = angle * CFG.STEER_GAIN + slipCompensation
-    end
-  end
-
-  -- keep the car from straying too far from the line
-  local segA = state.nodes[seg]
-  local segB = segEnd(seg)
-  local lineDx, lineDz = normalize2(segB.x - segA.x, segB.z - segA.z)
-  local toCarX = car.position.x - segA.x
-  local toCarZ = car.position.z - segA.z
-  local along = toCarX * lineDx + toCarZ * lineDz
-  local lateralOffset = -(toCarX * lineDirZ) + (toCarZ * lineDx) * 0 + (toCarX * -lineDirZ + toCarZ * lineDx)
-  local perpDist = math.abs(toCarX * -lineDirZ + toCarZ * lineDirX)
-  if perpDist > CFG.LINE_HARD_PULL and p.overtakeSide == 0 then
-    -- strong pull back to the line
-    local side = math.sign((toCarX * -lineDirZ + toCarZ * lineDx)) or 1
-    steer = steer - side * 0.4
-    steer = clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
-  end
-
-  return clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT), seg, t
-end
-
-------------------------------------------------------------
--- STEERING FILTER
-------------------------------------------------------------
-
-local function filterSteering(p, target, dt)
-  local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
-  local filtered = lerp(p.steerFiltered, target, alpha)
-  local maxChange = CFG.STEER_RATE * dt
-  local delta = clamp(filtered - p.steer, -maxChange, maxChange)
-  p.steer = clamp(p.steer + delta, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
-  p.steerFiltered = filtered
-  return p.steer
-end
-
-------------------------------------------------------------
--- CARS AHEAD
-------------------------------------------------------------
-
-local function carAhead(carIndex, car, lateralWidth)
-  local fx, fz = normalize2(car.look.x, car.look.z)
+function script.update(dt)
+  if not dt or dt <= 0 then return end
+  dt = math.min(dt, 0.05)
   local sim = ac.getSim()
-  if not sim then
-    return nil, nil
+  if not sim then return end
+  local player = ac.getCar(0)
+
+  if state.recording and player then
+    addPoint(player.position)
   end
-  local bestGap = nil
-  local bestSpeed = nil
-  for i = 0, sim.carsCount - 1 do
-    if i ~= carIndex then
-      local other = ac.getCar(i)
-      if other and other.isActive then
-        local dx = other.position.x - car.position.x
-        local dz = other.position.z - car.position.z
-        local forward = dx * fx + dz * fz
-        if forward > 0 and forward < 90 then
-          local lateral = math.abs(dx * fz - dz * fx)
-          if lateral <= (lateralWidth or CFG.FOLLOW_LATERAL) then
-            if not bestGap or forward < bestGap then
-              bestGap = forward
-              bestSpeed = math.max(0, safeNumber(other.speedMs))
+
+  local startupReady = true
+  if state.enabled and state.loaded and #state.nodes >= 2 then
+    startupReady = updateStartupTeleport(sim, dt)
+  end
+
+  if not state.enabled or #state.nodes < 2 or not Driver or not ensureDriver() then
+    for idx in pairs(state.p) do
+      releaseCar(idx)
+    end
+  elseif startupReady then
+    for i = 1, sim.carsCount - 1 do
+      local car = ac.getCar(i)
+      if car and car.isActive and car.isAIControlled then
+        local ok, err = pcall(Driver.update, i, car, dt)
+        if not ok then
+          writeLog("DRIVER_ERROR id=%d err=%s", i, tostring(err))
+          releaseCar(i)
+        end
+      elseif state.p[i] then
+        releaseCar(i)
+      end
+    end
+  else
+    local playerCar = ac.getCar(0)
+    if playerCar and playerCar.isActive and playerCar.isAIControlled then
+      local ok, err = pcall(Driver.update, 0, playerCar, dt)
+      if not ok then
+        writeLog("DRIVER_ERROR id=0 err=%s", tostring(err))
+      end
+    end
+  end
+
+  state.logAccum = state.logAccum + dt
+  if state.logAccum >= CFG.LOG_INTERVAL then
+    state.logAccum = state.logAccum - CFG.LOG_INTERVAL
+    recordSecondTelemetry(sim)
+  end
+end
+
+local mapBounds = nil
+
+local function computeMapBounds()
+  if mapBounds then return mapBounds end
+  local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
+  for i = 1, #state.nodes do
+    local n = state.nodes[i]
+    if n.x < minX then minX = n.x end
+    if n.x > maxX then maxX = n.x end
+    if n.z < minZ then minZ = n.z end
+    if n.z > maxZ then maxZ = n.z end
+  end
+  if minX == math.huge then return nil end
+  mapBounds = { minX = minX, maxX = maxX, minZ = minZ, maxZ = maxZ }
+  return mapBounds
+end
+
+local function invalidateMap()
+  mapBounds = nil
+end
+
+local function drawMap()
+  if #state.nodes < 2 then return end
+  local b = computeMapBounds()
+  if not b then return end
+
+  local width = ui.availableSpaceX()
+  if width < 80 then width = 80 end
+  local height = math.max(120, math.min(260, width * 0.55))
+
+  ui.invisibleButton("line_map", vec2(width, height))
+  local p0 = ui.getItemRectMin()
+  local p1 = ui.getItemRectMax()
+
+  ui.drawRectFilled(p0, p1, rgbm(0.08, 0.08, 0.10, 1), 4)
+  ui.drawRect(p0, p1, rgbm(0.3, 0.3, 0.35, 1), 4)
+
+  local spanX = math.max(1, b.maxX - b.minX) + CFG.MAP_MARGIN * 2
+  local spanZ = math.max(1, b.maxZ - b.minZ) + CFG.MAP_MARGIN * 2
+  local scale = math.min((p1.x - p0.x) / spanX, (p1.y - p0.y) / spanZ)
+  local cx = (b.minX + b.maxX) * 0.5
+  local cz = (b.minZ + b.maxZ) * 0.5
+  local mx = (p0.x + p1.x) * 0.5
+  local my = (p0.y + p1.y) * 0.5
+
+  local function toScreen(n)
+    return vec2(mx + (n.x - cx) * scale, my + (n.z - cz) * scale)
+  end
+
+  local prev = toScreen(state.nodes[1])
+  for i = 2, #state.nodes do
+    local cur = toScreen(state.nodes[i])
+    ui.drawLine(prev, cur, rgbm(1.0, 0.85, 0.0, 0.9), 2)
+    prev = cur
+  end
+  if state.loopRoute then
+    ui.drawLine(prev, toScreen(state.nodes[1]), rgbm(1.0, 0.85, 0.0, 0.9), 2)
+  end
+
+  local sim = ac.getSim()
+  if sim then
+    for i = 0, sim.carsCount - 1 do
+      local car = ac.getCar(i)
+      if car and car.isActive then
+        local s = toScreen(car.position)
+        if s.x > p0.x and s.x < p1.x and s.y > p0.y and s.y < p1.y then
+          if i == 0 then
+            ui.drawCircleFilled(s, 4.5, rgbm(0.0, 0.8, 1.0, 1.0), 12)
+          else
+            local p = state.p[i]
+            if p and p.overtakeSide ~= 0 then
+              ui.drawCircleFilled(s, 3.5, rgbm(0.2, 1.0, 0.4, 1.0), 10)
+            else
+              ui.drawCircleFilled(s, 3.5, rgbm(1, 1, 1, 0.9), 10)
             end
           end
         end
- 
+      end
+    end
+  end
+end
+
+function windowMain(dt)
+  drawMap()
+
+  ui.separator()
+  ui.text(string.format("Точек: %d | %s", #state.nodes, state.status))
+  ui.text(string.format("Автопилот: %s", state.enabled and "ВКЛ" or "ВЫКЛ"))
+
+  if ui.button(state.recording and "Стоп запись" or "Запись линии", vec2(-1, 26)) then
+    state.recording = not state.recording
+    if state.recording then
+      state.nodes = {}
+      state.p = {}
+      state.loaded = false
+      invalidateMap()
+      state.status = "Запись линии..."
+    else
+      state.status = "Записано точек: " .. #state.nodes
+    end
+  end
+
+  if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ", vec2(-1, 24)) then
+    state.loopRoute = not state.loopRoute
+    state.p = {}
+  end
+
+  if ui.button(state.enabled and "Отключить ИИ" or "Включить ИИ", vec2(-1, 26)) then
+    state.enabled = not state.enabled
+    if not state.enabled then
+      for idx in pairs(state.p) do releaseCar(idx) end
+    end
+  end
+
+  if ui.button("Сохранить", vec2(-1, 24)) then saveLine() end
+  if ui.button("Загрузить", vec2(-1, 24)) then
+    if loadLine() then invalidateMap() end
+  end
+  if ui.button("Очистить", vec2(-1, 24)) then
+    state.nodes = {}
+    state.p = {}
+    state.status = "Очищено"
+    state.loaded = false
+    invalidateMap()
+  end
+
+  state.speedMin = ui.slider("Мин. скорость", state.speedMin, 40, 180, "%.0f км/ч")
+  state.speedMax = ui.slider("Макс. скорость", state.speedMax, 60, 260, "%.0f км/ч")
+  state.speedMin = math.min(state.speedMin, state.speedMax)
+  state.followGap = ui.slider("Дистанция до машины", state.followGap, 3, 20, "%.0f м")
+end
+
+if ac.onRelease then
+  ac.onRelease(function()
+    for idx in pairs(state.p) do releaseCar(idx) end
+    if logger and logger.shutdown then
+      pcall(logger.shutdown, logger, "RoutePilot released")
+    end
+  end)
+end
+
+loadLine()
+writeLog("ROUTEPILOT INITIALIZED track=%s points=%d", getTrackTag(), #state.nodes)
+flushLog()
