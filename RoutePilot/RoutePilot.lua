@@ -522,6 +522,8 @@ local function trySpawnTeleport(sim,dt)
   if roster~=state.spawnLastRoster then
     state.spawnLastRoster=roster
     state.spawnStable=0
+    state.spawnWait=0
+    state.splineTimeoutLogged=false
     return
   end
   state.spawnStable=state.spawnStable+dt
