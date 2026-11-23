@@ -63,11 +63,14 @@ local function ensureCar(index, car, dt)
   if not p.settingsApplied then
     local okLevel, errLevel = pcall(physics.setAILevel, index, 2.0)
     local okAgg, errAgg = pcall(physics.setAIAggression, index, 1.0)
-    p.settingsApplied = okLevel and okAgg
-    H.log('AI_PROFILE car=%d level=2.00 aggression=1.00 levelOK=%s aggressionOK=%s',
-      index, tostring(okLevel), tostring(okAgg))
+    local topSpeed = p.laneIndex == 2 and 40 or 1000000000
+    local okTop, errTop = pcall(physics.setAITopSpeed, index, topSpeed)
+    p.settingsApplied = okLevel and okAgg and okTop
+    H.log('AI_PROFILE car=%d level=2.00 aggression=1.00 topSpeed=%.0f levelOK=%s aggressionOK=%s topSpeedOK=%s',
+      index, topSpeed, tostring(okLevel), tostring(okAgg), tostring(okTop))
     if not okLevel then H.log('AI_PROFILE_ERROR car=%d kind=level err=%s', index, tostring(errLevel)) end
     if not okAgg then H.log('AI_PROFILE_ERROR car=%d kind=aggression err=%s', index, tostring(errAgg)) end
+    if not okTop then H.log('AI_PROFILE_ERROR car=%d kind=top_speed err=%s', index, tostring(errTop)) end
   end
   return p
 end
@@ -163,6 +166,7 @@ function Driver.release(index)
   pcall(physics.setAISpline, index, nil, nil)
   if p.baseLevel then pcall(physics.setAILevel, index, p.baseLevel) end
   if p.baseAggression then pcall(physics.setAIAggression, index, p.baseAggression) end
+  if physics.setAITopSpeed then pcall(physics.setAITopSpeed, index, 1000000000) end
   S.p[index], S.trafficHints[index] = nil, nil
 end
 
