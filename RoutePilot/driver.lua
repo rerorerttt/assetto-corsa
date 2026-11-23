@@ -1,20 +1,19 @@
 -- RoutePilot/driver.lua
--- Per-car racing traffic controller for RoutePilot 0.4.1.
+-- Per-car racing traffic controller for RoutePilot 0.4.2.
 --
--- v0.4.1 changes:
---  * STRAIGHT-LINE SPEED: the old planner saw "curvature" in the noise of the
---    recorded line everywhere and capped cars at ~80 km/h even on straights.
---    Now curvature comes from the smoothed line with a wide window and an
---    ignore threshold (helpers in the main script), so straights are driven
---    at full racing pace (per-car 0.85..1.15 of the top speed).
---  * WALL CORRIDOR: the main script builds a corridor map (raycasts left/right
---    along the line, saved once to a text file). Steering targets are clamped
---    inside the corridor, overtakes only happen where there is room, and a
---    forward raycast brakes the car before hitting a wall or a pillar.
---  * NO MORE VANISHING CARS: CSP retires AI cars after mistakes — that is why
---    they disappeared. physics.preventAIFromRetiring is called every 2 s.
---  * STEADIER STEERING: longer lookahead, lower gain, yaw-rate damping,
---    slower steer rate — no more unprovoked zigzags.
+-- v0.4.2 — NFS-Underground-style traffic:
+--  * INSTANT avoidance: the moment ANY car (or the player) is ahead in the
+--    cone, the driver commits to a pass in the same frame — no 1.2 s timer.
+--    The side is picked from LIVE left/right raycasts (more room wins), so
+--    the car always knows it will fit.
+--  * NEVER PUSHES: if both sides are blocked, the car brakes behind the
+--    obstacle and can stop completely (the old version held speed+5 and
+--    shoved slow cars and the player around).
+--  * ARCADE CORRIDOR SPEED: the corridor cap is scaled arcade (half*1.8),
+--    the floor is 8 m/s — narrow sections no longer crawl at 40 km/h.
+--  * Pass ends only when fully ahead of the target.
+-- v0.4.1: curvature from the smoothed line (full speed on straights),
+--    wall-ahead braking, heading auto-correction, preventAIFromRetiring.
 
 local Driver = {}
 
@@ -63,7 +62,7 @@ end
 
 local function newPersonality(carIndex)
   local pace = 0.85 + carRand(carIndex, 1) * 0.30
-  local kmh = clamp(state.speedMax * pace * 0.92, 60, 260)
+  local kmh = clamp(state.speedMax * pace * 0.95, 80, 280)
   local p = {
     segIdx = 1,
     pace = pace,
@@ -89,8 +88,8 @@ local function newPersonality(carIndex)
     correctTimer = 6.0,
     overtakeSide = 0,
     overtakeTarget = nil,
-    followTimer = 0,
-    retireT = 2.0,      -- fire preventAIFromRetiring soon after adoption
+    blockTimer = 0,
+    retireT = 2.0,
   }
   state.p[carIndex] = p
   H.log("CAR_INIT id=%d cruise=%.1fkmh pace=%.2f", carIndex, kmh, pace)
@@ -137,7 +136,7 @@ local function calculateStability(p, speed)
 end
 
 ------------------------------------------------------------
--- speed planner (racing tempo)
+-- speed planner (racing tempo; arcade corridor cap)
 ------------------------------------------------------------
 
 local function planTargetSpeed(p)
@@ -159,10 +158,10 @@ local function planTargetSpeed(p)
         target = safeSpeed
       end
     end
-    -- narrow corridor ahead: slow down proportionally
+    -- arcade corridor cap: wide half -> no cap; tight half -> arcade slowdown
     local half = H.corridorAt(current)
-    if half < 9 then
-      local cap = math.max(CFG.MIN_APEX_SPEED, half * 1.3)
+    if half < 8 then
+      local cap = math.max(8.0, half * 1.8)
       local safeCap = math.sqrt(cap * cap + 2 * CFG.BRAKE_ACCEL * distance)
       if safeCap < target then
         target = safeCap
@@ -194,7 +193,6 @@ local function headingMatchesLine(fx, fz, seg)
   return (fx * dx + fz * dz) > -0.1
 end
 
--- clamp a target point laterally inside the corridor
 local function clampToCorridor(seg, tx, tz)
   local a = state.nodes[seg]
   local b = H.segEnd(seg)
@@ -202,7 +200,7 @@ local function clampToCorridor(seg, tx, tz)
   local relX, relZ = tx - a.x, tz - a.z
   local along = relX * lx + relZ * lz
   local lat = relX * -lz + relZ * lx
-  local half = math.max(2, H.corridorAt(seg) - 2)
+  local half = math.max(2, H.corridorAt(seg) - 1.5)
   if lat > half then lat = half end
   if lat < -half then lat = -half end
   return a.x + lx * along + (-lz) * lat,
@@ -214,7 +212,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.segIdx = seg
   p.lineDist = lineDist
 
-  -- heading auto-correction right after teleport
   if p.correctTimer > 0 then
     p.correctTimer = p.correctTimer - dt
     if not headingMatchesLine(fx, fz, seg) then
@@ -235,24 +232,15 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     targetX, targetZ = b.x, b.z
   end
 
-  -- lateral shift while overtaking (only where the corridor allows it)
-  local corridorHalf = H.corridorAt(seg)
+  -- lateral shift while passing an obstacle
   if p.overtakeSide ~= 0 then
-    if corridorHalf < 6 then
-      -- too narrow to pass here: give up, tuck back in
-      p.overtakeSide = 0
-      p.overtakeTarget = nil
-    else
-      local shift = math.min(CFG.OVERTAKE_LATERAL, corridorHalf - 2)
-      local nx, nz = normalize2(-(targetZ - car.position.z), targetX - car.position.x)
-      targetX = targetX + nx * p.overtakeSide * shift
-      targetZ = targetZ + nz * p.overtakeSide * shift
-    end
+    local shift = math.min(CFG.OVERTAKE_LATERAL, math.max(3.0, H.corridorAt(seg) - 1.5))
+    local nx, nz = normalize2(-(targetZ - car.position.z), targetX - car.position.x)
+    targetX = targetX + nx * p.overtakeSide * shift
+    targetZ = targetZ + nz * p.overtakeSide * shift
   end
 
-  -- never aim outside the corridor
   targetX, targetZ = clampToCorridor(seg, targetX, targetZ)
-
   p.targetX = targetX
   p.targetZ = targetZ
 
@@ -267,8 +255,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     + p.slipAngle * 0.62
     - p.yawRate * 0.05
 
-  -- hard pull back if the car left the corridor (and is not overtaking)
-  if p.overtakeSide == 0 and lineDist > math.max(10, corridorHalf) then
+  -- hard pull back if far off the line
+  if p.overtakeSide == 0 and lineDist > math.max(10, H.corridorAt(seg)) then
     local a = state.nodes[seg]
     local lx, lz = normalize2(targetX - a.x, targetZ - a.z)
     local side = (car.position.x - a.x) * -lz + (car.position.z - a.z) * lx
@@ -293,53 +281,64 @@ local function filterSteering(p, target, dt)
 end
 
 ------------------------------------------------------------
--- overtaking decision
+-- NFS-style obstacle avoidance (instant decision)
 ------------------------------------------------------------
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  local gap, leaderSpeed = H.carAhead(carIndex, car, CFG.FOLLOW_LATERAL)
+  local gap, leaderSpeed, leaderIndex = H.carAhead(carIndex, car, CFG.AVOID_LATERAL)
 
+  -- currently passing: finish only when fully ahead of the target
   if p.overtakeSide ~= 0 then
-    if p.overtakeTarget then
-      local other = ac.getCar(p.overtakeTarget)
-      if other and other.isActive then
-        local dx = other.position.x - car.position.x
-        local dz = other.position.z - car.position.z
-        local fx, fz = normalize2(car.look.x, car.look.z)
-        local forward = dx * fx + dz * fz
-        local lateral = math.abs(dx * fz - dz * fx)
-        if forward < -CFG.OVERTAKE_CLEAR_AHEAD or lateral > CFG.OVERTAKE_LATERAL * 2 then
-          p.overtakeSide = 0
-          p.overtakeTarget = nil
-          H.log("CAR=%d OVERTAKE_END", carIndex)
-        end
-        return targetSpeed
+    local other = p.overtakeTarget and ac.getCar(p.overtakeTarget) or nil
+    if other and other.isActive then
+      local dx = other.position.x - car.position.x
+      local dz = other.position.z - car.position.z
+      local fx, fz = normalize2(car.look.x, car.look.z)
+      local forward = dx * fx + dz * fz
+      if forward < -CFG.OVERTAKE_CLEAR_AHEAD then
+        p.overtakeSide = 0
+        p.overtakeTarget = nil
+        H.log("CAR=%d OVERTAKE_END", carIndex)
       end
+      -- keep the racing pace through the pass
+      return math.max(targetSpeed, math.min(p.cruiseSpeed, (leaderSpeed or 0) + 8))
     end
+    -- target vanished: done
     p.overtakeSide = 0
     p.overtakeTarget = nil
-    return targetSpeed
   end
 
   if not gap then
-    p.followTimer = 0
+    p.blockTimer = 0
     return targetSpeed
   end
 
-  -- a slower car ahead: keep the pace and go around (do not brake behind it)
-  if leaderSpeed + 3 < speed and gap < 60 then
-    p.followTimer = p.followTimer + dt
-    if p.followTimer > CFG.OVERTAKE_TRIGGER_TIME
-       and H.corridorAt(p.segIdx) >= 6 then
-      p.followTimer = 0
-      p.overtakeTarget = H.carAheadIndex and H.carAheadIndex(carIndex, car, CFG.FOLLOW_LATERAL * 2)
-      p.overtakeSide = (carRand(carIndex, 2) > 0.5) and 1 or -1
-      H.log("CAR=%d OVERTAKE_BEGIN side=%d gap=%.1f", carIndex, p.overtakeSide, gap)
-    end
-    return math.max(targetSpeed, leaderSpeed + 5)
+  -- obstacle ahead (car OR player, any speed): decide INSTANTLY
+  local needPass = (leaderSpeed or 0) + 2 < speed or (gap or 0) < 30
+  if not needPass then
+    return targetSpeed
   end
 
-  -- same-speed or faster car ahead: classic safe following
+  -- pick the side with more live room (rays from THIS car, right now)
+  local roomL, roomR = H.liveRoomLeftRight(car)
+  local side = 0
+  if roomL >= CFG.PASS_MIN_ROOM and roomL >= roomR then
+    side = -1
+  elseif roomR >= CFG.PASS_MIN_ROOM then
+    side = 1
+  end
+
+  if side ~= 0 then
+    -- commit: full racing pace through the pass
+    p.overtakeTarget = leaderIndex
+    p.overtakeSide = side
+    p.blockTimer = 0
+    H.log("CAR=%d OVERTAKE_BEGIN side=%d gap=%.1f roomL=%.1f roomR=%.1f leader=%d",
+      carIndex, side, gap or -1, roomL, roomR, leaderIndex or -1)
+    return math.max(targetSpeed, math.min(p.cruiseSpeed, (leaderSpeed or 0) + 8))
+  end
+
+  -- both sides blocked: brake behind and be ready to stop — never push
   local safeSpeed = math.sqrt(math.max(0,
     (leaderSpeed or 0) * (leaderSpeed or 0) +
     2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - state.followGap)))
@@ -395,7 +394,7 @@ function Driver.update(carIndex, car, dt)
   if H.wallAhead then
     local wallDist = H.wallAhead(car)
     if wallDist and wallDist < 70 then
-      local vStop = math.sqrt(math.max(0, 2 * CFG.BRAKE_ACCEL * (wallDist - 2)))
+      local vStop = math.sqrt(math.max(0, 2 * CFG.BRAKE_ACCEL * (wallDist - 3)))
       if vStop < targetSpeed then
         targetSpeed = vStop
       end
