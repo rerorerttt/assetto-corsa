@@ -146,3 +146,15 @@ The user reported that the app UI was empty and the application did not work aft
 ## Isolated coordinator change — early pass initiation — 2026-11-23
 
 Starting from the emergency-restored, user-confirmed baseline, only the same-direction pass initiation gate in `RoutePilot.lua` was changed. The previous condition required `closingSpeed > 2.5 m/s`, which can prevent a pass from being requested when cars have only a modest pace difference. The new condition permits a pass when `closingSpeed > 0.65 m/s` OR the follower's deterministic `paceMultiplier` exceeds the leader's by more than 0.025 (2.5%), provided the computed setup distance is available; a stopped leader remains a separate trigger. Setup distance is now `max(8 m, max(0, closingSpeed) * 0.8 + 5 m)`. Existing route alignment, same-direction checks, paired pass/yield reservations and subsequent traffic-lane clearance checks were not changed. No UI, manifest, callback, obstacle sensing, steering, throttle, brake or recovery code was changed. This is a source-level targeted change only; it has not been tested in the Assetto Corsa runtime. If the game still shows no passes, collect a fresh `routepilot_trace.txt` and inspect `PASS_ROLE`, `PASS_TARGET`, `PASS_CLEAR`, speed, target speed and route offset before changing the controller further.
+
+
+## Emergency runtime rollback — 2026-11-23
+
+The user reported that the app was dead and the main UI was blank after the latest pass-trigger change. The branch was inspected before editing. The live Lua source differed from the last user-confirmed runtime baseline only in the overtake-start condition introduced by commit `39bcc61a8607b5cfc34647cd2f6cd7f1b1034c21`; that experimental change has now been reverted by restoring the exact baseline file content from commit `289e4857a85fe4327c1f7e83e0070955cd7fde4a`.
+
+- Runtime source restore commit: `241c9edc926e09c46b7bc47c4c115c943e1ea59f`.
+- Restored `RoutePilot/RoutePilot.lua` blob: `1cbf1fbd1fcd476d000c297e417b70c3ab956995`.
+- `RoutePilot/manifest.ini` was not modified; its blob remains `37bda1525a620daf30622ed6745e706d69c9a577`.
+- The single global `windowMain(dt)` callback and original inline radar implementation are unchanged from the confirmed baseline.
+- This is a source rollback, not proof of runtime recovery. The app has not been launched in Assetto Corsa in this environment.
+- Do not make further UI, manifest, callback, or controller changes until the user confirms whether this exact restored build opens. If it remains blank, obtain the CSP Lua app error log / traceback and diagnose the actual load or callback error before editing again.
