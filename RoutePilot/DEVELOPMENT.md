@@ -1,3 +1,31 @@
+## Spawn orientation, steering response and speed planning correction — 2026-11-23
+
+Reviewed the latest uploaded `routepilot_trace.txt`, route file `line_nevadadrift.txt`, current Lua source and the checked-in CSP Lua SDK declarations.
+
+### Confirmed root cause: spawn direction was reversed
+
+The route file's segment 268 runs from approximately `(-57.3279, -461.9761)` to `(-57.4150, -458.9362)`, so its forward tangent is approximately `(-0.0286, +0.9996)`. The trace records the spawn argument as `dir=(-0.029, 0, 1.000)`, but the first actual car orientation is `LOOK=(0.04, -1.00)`. The car is therefore facing and initially moving opposite to the recorded route. At the same time the controller commands `STEER=+0.721` and `STEER_TARGET=+0.750` while the car is almost exactly on the route (`LINE_ERROR=0.03`). This is not a path-tracking tuning issue: the controller is trying to turn a car around by steering while full throttle is applied. That explains the initial full-lock steering, wrong-way acceleration, subsequent large line errors and the chain of wall departures. The previous negative-tangent change was incorrect and has been reversed.
+
+The SDK declaration for `physics.setAICarPosition(carIndex, pos, dir)` documents `dir` as an optional `vec3`; passing `nil` aligns the car to the track AI spline. It does not define a sign convention for a custom route. The runtime trace is therefore the decisive evidence here: the supplied negative tangent produced a negative-Z `car.look`. The source now supplies the positive, horizontal route tangent. The new `CAR_INIT` record includes `heading_dot`, the dot product between actual `car.look` and the route tangent, so the next run can verify alignment numerically. A value near +1 is correct; a value near -1 means the car still faces backwards.
+
+### Source changes
+
+- `physics.setAICarPosition()` now receives `(b - a)`, the forward route tangent, with Y forced to zero.
+- Default cruise range increased from 150–230 to 180–260 km/h (220 km/h midpoint). Corner speed remains constrained by route curvature and braking distance; this is not a request to force 220 km/h through a tight turn.
+- Steering response slew limit increased from 2.0 to 8.0 normalized input units per second and low-pass time reduced from 0.18 to 0.10 seconds. The previous limiter could take 0.75 seconds to move from full lock to center and 1.5 seconds from lock to lock, adding substantial control delay.
+- Corner lookahead no longer stops after a fixed 36 route segments. It now scans at least 220 m and extends the scan to the estimated braking distance plus 80 m. At high speed, a fixed 36-point window could end before the braking zone.
+- Passing remains disabled in the current source while the route follower is being revalidated.
+
+### Log/source mismatch and validation
+
+The uploaded trace contains `PASS_START` and `PASS_ABORT` events, although the current checked-in `RoutePilot.lua` explicitly clears pass state and does not call `updatePassingPlan()`. The trace was therefore produced by a build with the older passing implementation and must not be treated as a direct test of the currently checked-in no-pass source. The initial wrong-way spawn evidence is still valid because the trace includes the exact spawn vector and actual `LOOK` values.
+
+Current source correction commit: `2b43d2e6fa9181ad1c72d45934f602002b799a71` (includes the source changes and the follow-up fix to keep the diagnostic compatible with Lua local declaration order). The branch also contains the preceding source commit `7a89470fa32b28f34dc046a05fe7aac0c71054ed`.
+
+No Assetto Corsa runtime test or LuaJIT syntax execution was available during this edit. Do not claim that the cars are now proven stable or that wall impacts are impossible. The next in-game trace must be generated with this exact source and checked for `heading_dot` near +1, no initial steering saturation, bounded `LINE_ERROR`, actual acceleration toward the raised cruise target, and no cars leaving the route. Do not re-enable passing until this baseline is confirmed.
+
+---
+
 ## Latest regression diagnosis and isolation — 2026-11-23
 
 Latest user-uploaded trace is from the five-AI Nevada run (about 35 seconds, 140 one-second AI samples). It proves the spawn heading was wrong in the tested build: for example, car 1 was spawned with `dir=(-0.029, 0, 1.000)`, while its first reported forward vector was `LOOK=(0.04, -1.00)`, i.e. opposite to the route tangent. The same trace shows steering saturation at `±0.750`, route error reaching about 8 m, cars nearly stationary while commanded throttle is high, and a pass attempt immediately aborted because another car occupied the left corridor. Later samples show multiple cars stopped near the route edge. This is direct evidence from the uploaded trace, not an in-game diagnosis of every collision.
