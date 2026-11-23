@@ -21,21 +21,21 @@ local CFG = {
 
   STEER_GAIN = 0.48,
   STEER_LIMIT = 0.75,
-  STEER_RATE = 2.4,
-  STEER_FILTER = 0.18,
+  STEER_RATE = 3.6,
+  STEER_FILTER = 0.14,
 
   SLIP_START = 0.16,
   SLIP_FULL = 0.62,
 
-  MAX_LATERAL_ACCEL = 11.5,
-  LATERAL_ACCEL_LIMIT = 17.0,
+  MAX_LATERAL_ACCEL = 20.0,
+  LATERAL_ACCEL_LIMIT = 27.0,
 
-  BRAKE_ACCEL = 12.0,
+  BRAKE_ACCEL = 16.0,
   MAX_BRAKE = 0.75,
   MAX_GAS = 1.0,
 
-  SPEED_GAIN = 0.55,
-  MIN_CORNER_SPEED = 9.0,
+  SPEED_GAIN = 0.85,
+  MIN_CORNER_SPEED = 14.0,
   SCAN_RAY_LENGTH = 14.0,
   SCAN_RAYS_PER_FRAME = 64,
   SCAN_CACHE_VERSION = 2,
@@ -65,7 +65,7 @@ local CFG = {
   COLLISION_RADIUS = 6.5,
   COLLISION_EMERGENCY_RADIUS = 3.2,
 
-  OVERTAKE_DISTANCE = 42.0,
+  OVERTAKE_DISTANCE = 60.0,
   OVERTAKE_REAR_DISTANCE = 30.0,
   OVERTAKE_MIN_ADVANTAGE = 0.5,
   OVERTAKE_OFFSET = 1.45,
@@ -79,7 +79,7 @@ local CFG = {
   TRAFFIC_LOOKAHEAD = 125.0,
   TRAFFIC_ONCOMING_TIME = 8.0,
   TRAFFIC_ONCOMING_RANGE = 9.0,
-  TRAFFIC_OFFSET_RATE = 3.0,
+  TRAFFIC_OFFSET_RATE = 5.0,
 
   LOG_INTERVAL = 1.0,
   MAX_ROUTE_POINTS = 50000,
@@ -1825,6 +1825,9 @@ local function updateTrafficCoordinator(sim, dt)
               end
 
               local closingSpeed = follower.speed - leader.speed
+              local followerPace = follower.p and follower.p.paceMultiplier or 1.0
+              local leaderPace = leader.p and leader.p.paceMultiplier or 1.0
+              local paceAdvantage = followerPace - leaderPace
               local leaderStopped = leader.speed < 1.5 and
                 (leader.isPlayer and state.playerSlowTimer > 1.5 or
                  leader.p and (leader.p.slowTimer or 0) > 1.5)
@@ -1835,11 +1838,12 @@ local function updateTrafficCoordinator(sim, dt)
               local routeAligned = routeGap and routeGap > 4.0 and
                 routeGap < CFG.OVERTAKE_DISTANCE and
                 math.abs(routeGap - gap) < 12.0 and routeLateral < 5.5
-              -- Personality pace is not a physical reason to change lanes.
-              -- Start the lane change early enough to finish it before reaching
-              -- the leader. At high closing speed, a seven-metre trigger is too late.
-              local setupDistance = math.max(7.0, math.abs(closingSpeed) * 0.65 + 4.0)
-              local canPass = (closingSpeed > 2.5 and gap > setupDistance) or leaderStopped
+              -- Arcade race logic: a modest real closing speed OR a clear pace
+              -- advantage is enough to request a pass. This avoids waiting until
+              -- the faster car has already reached the leader's bumper.
+              local setupDistance = math.max(8.0, math.max(0, closingSpeed) * 0.8 + 5.0)
+              local canPass = ((closingSpeed > 0.65 or paceAdvantage > 0.025) and
+                gap > setupDistance) or leaderStopped
 
               if routeAligned and gap > 7.0 and gap < CFG.OVERTAKE_DISTANCE and
                  lateral < 5.5 and canPass then
@@ -2998,71 +3002,66 @@ function windowMain(dt)
     state.loaded = false
   end
 
-  -- The route map is drawn inline in this single main window, below the controls.
+  -- The radar is an explicit ImGui child region of this one manifest window.
+  -- It cannot become a second top-level/floating app window.
   local canvas = vec2(ui.availableSpaceX(), math.min(360, ui.availableSpaceY()))
+  ui.childWindow("##route_map", canvas, function()
+    local p0 = ui.getItemRectMin()
+    local p1 = ui.getItemRectMax()
 
-  ui.invisibleButton("line_radar", canvas)
-
-  local p0 = ui.getItemRectMin()
-  local p1 = ui.getItemRectMax()
-
-  ui.drawRectFilled(
-    p0,
-    p1,
-    rgbm(0.1, 0.1, 0.12, 1),
-    4
-  )
-
-  ui.drawRect(
-    p0,
-    p1,
-    rgbm(0.3, 0.3, 0.35, 1),
-    4
-  )
-
-  if #state.nodes >= 2 then
-    local cx = player and player.position.x or state.nodes[1].x
-    local cz = player and player.position.z or state.nodes[1].z
-
-    local scale = 1.2
-
-    local mx = (p0.x + p1.x) * 0.5
-    local my = (p0.y + p1.y) * 0.5
-
-    local segmentCount = state.loopRoute and
-      #state.nodes or (#state.nodes - 1)
-
-    for i = 1, segmentCount do
-      local a = state.nodes[i]
-      local b = state.nodes[(i % #state.nodes) + 1]
-
-      local x1 = mx + (a.x - cx) * scale
-      local y1 = my + (a.z - cz) * scale
-
-      local x2 = mx + (b.x - cx) * scale
-      local y2 = my + (b.z - cz) * scale
-
-      if x1 >= p0.x and x1 <= p1.x and
-         y1 >= p0.y and y1 <= p1.y and
-         x2 >= p0.x and x2 <= p1.x and
-         y2 >= p0.y and y2 <= p1.y then
-
-        ui.drawLine(
-          vec2(x1, y1),
-          vec2(x2, y2),
-          rgbm(1.0, 0.85, 0.0, 0.9),
-          2
-        )
-      end
-    end
-
-    ui.drawCircleFilled(
-      vec2(mx, my),
-      4.5,
-      rgbm(0.0, 0.8, 1.0, 1.0),
-      12
+    ui.drawRectFilled(
+      p0,
+      p1,
+      rgbm(0.1, 0.1, 0.12, 1),
+      4
     )
-  end
+
+    ui.drawRect(
+      p0,
+      p1,
+      rgbm(0.3, 0.3, 0.35, 1),
+      4
+    )
+
+    if #state.nodes >= 2 then
+      local cx = player and player.position.x or state.nodes[1].x
+      local cz = player and player.position.z or state.nodes[1].z
+      local scale = 1.2
+      local mx = (p0.x + p1.x) * 0.5
+      local my = (p0.y + p1.y) * 0.5
+      local segmentCount = state.loopRoute and
+        #state.nodes or (#state.nodes - 1)
+
+      for i = 1, segmentCount do
+        local a = state.nodes[i]
+        local b = state.nodes[(i % #state.nodes) + 1]
+        local x1 = mx + (a.x - cx) * scale
+        local y1 = my + (a.z - cz) * scale
+        local x2 = mx + (b.x - cx) * scale
+        local y2 = my + (b.z - cz) * scale
+
+        if x1 >= p0.x and x1 <= p1.x and
+           y1 >= p0.y and y1 <= p1.y and
+           x2 >= p0.x and x2 <= p1.x and
+           y2 >= p0.y and y2 <= p1.y then
+          ui.drawLine(
+            vec2(x1, y1),
+            vec2(x2, y2),
+            rgbm(1.0, 0.85, 0.0, 0.9),
+            2
+          )
+        end
+      end
+
+      ui.drawCircleFilled(
+        vec2(mx, my),
+        4.5,
+        rgbm(0.0, 0.8, 1.0, 1.0),
+        12
+      )
+    end
+  end)
+
 
 end
 
