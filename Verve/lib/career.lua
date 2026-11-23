@@ -1,0 +1,206 @@
+-- Verve / lib/career.lua
+-- Knows what was launched: reads cfg/race.ini (the launcher's output) and recognises AC's own CAREER events
+-- by matching track / layout / car / grid / laps against content/career/*/event*/event.ini, confirmed by the
+-- opponents' names. Exposes the configured difficulty (the launcher's meter and every car's AI_LEVEL) so the
+-- difficulty module can make those numbers real -- AC itself ignores them on at least some installs
+-- (calibrated 2026-09-13: 60..100 gave identical lap times).
+local C = {}
+C.active = false        -- a career event is running
+C.series, C.event = nil, nil
+C.eventLevel = nil      -- the event's own AI_LEVEL (AC's built-in ramp: ~80 at Novice 1 up to ~97 at the top)
+C.ramp = 0              -- 0..1 position of this event on that ramp (across every installed career event)
+C.meter = nil           -- [RACE] AI_LEVEL of the launched race (the launcher's difficulty slider); NIL = not
+                        -- readable. Never defaulted to a number: see C.meterSource and lib/difficulty.lua.
+C.meterSource = nil     -- 'race.ini' | 'per-car median' | nil. Shown in the UI so an undetected level is
+                        -- diagnosable in seconds instead of silently becoming maximum (board report 2026-10-12).
+C.carLevels = {}        -- [i] = AI_LEVEL of CAR_i from race.ini (nil if absent)
+C.track, C.layout, C.model, C.cars, C.laps = nil, nil, nil, 0, 0
+C.sessionType = nil
+C.info = ''
+
+local scanned = false
+local rampMin, rampMax = nil, nil
+local events = {}       -- { {series=, event=, track=, layout=, model=, cars=, laps=, level=, names={...}} }
+local detectedFor = nil -- session index the detection ran for
+
+-- tiny INI parser: sections -> key -> value (last wins), keys upper-cased
+local function parseIni(text)
+    local out, cur = {}, nil
+    if type(text) ~= 'string' then return out end
+    for line in text:gmatch('[^\r\n]+') do
+        local s = line:match('^%s*%[([^%]]+)%]')
+        if s then cur = s:upper(); out[cur] = out[cur] or {}
+        elseif cur then
+            local k, v = line:match('^%s*([^=;#]+)%s*=%s*(.-)%s*$')
+            if k then out[cur][k:upper():gsub('%s+$', '')] = v end
+        end
+    end
+    return out
+end
+
+local function listDir(dir)
+    local names = {}
+    pcall(function()
+        local r = io.scanDir(dir, '*', function(name) names[#names + 1] = name end)
+        if type(r) == 'table' and #names == 0 then for _, n in ipairs(r) do names[#names + 1] = n end end
+    end)
+    return names
+end
+
+local function scanCareer()
+    if scanned then return end
+    scanned = true
+    pcall(function()
+        local root = ac.getFolder(ac.FolderID.Root) .. '/content/career'
+        for _, series in ipairs(listDir(root)) do
+            if series:match('^series%d+$') then
+                local sdir = root .. '/' .. series
+                local oppNames, oppModels = {}, {}
+                local opp = parseIni(io.load(sdir .. '/opponents.ini', ''))
+                for sec, kv in pairs(opp) do
+                    -- (0.15.1) series 8-28 write DRIVER_NAME (and each car's MODEL), series 1-5 write NAME: reading only NAME left
+                    -- every later series without names, so a real race there was 'Not a career event' (car15, 1 Oct)
+                    local nm = kv.NAME; if not nm or #nm == 0 then nm = kv.DRIVER_NAME end   -- (an empty NAME= falls through)
+                    if sec:match('^AI%d+$') and nm and #nm > 0 then oppNames[nm:lower()] = true end
+                    if sec:match('^AI%d+$') and kv.MODEL and #kv.MODEL > 0 then oppModels[kv.MODEL:lower()] = true end
+                end
+                for _, ev in ipairs(listDir(sdir)) do
+                    if ev:match('^event%d+$') then
+                        local ini = parseIni(io.load(sdir .. '/' .. ev .. '/event.ini', ''))
+                        local race = ini.RACE
+                        if race and race.TRACK then
+                            local names, models = {}, {}
+                            for k in pairs(oppNames) do names[k] = true end
+                            for sec, kv in pairs(ini) do
+                                if sec:match('^CAR_%d+$') and kv.DRIVER_NAME and #kv.DRIVER_NAME > 0 then names[kv.DRIVER_NAME:lower()] = true end
+                                if sec:match('^CAR_%d+$') and kv.MODEL and kv.MODEL ~= '-' then models[kv.MODEL:lower()] = true end
+                            end
+                            models[(race.MODEL or ''):lower()] = true
+                            for m in pairs(oppModels) do models[m] = true end
+                            local level = tonumber(race.AI_LEVEL) or 0
+                            events[#events + 1] = {
+                                series = series, event = ev,
+                                track = (race.TRACK or ''):lower(), layout = (race.CONFIG_TRACK or ''):lower(),
+                                model = (race.MODEL or ''):lower(), cars = tonumber(race.CARS) or 0,
+                                laps = C.raceLapsOf(ini),
+                                level = level, names = names, models = models,
+                                sun = tonumber(ini.LIGHTING and ini.LIGHTING.SUN_ANGLE),
+                                sig = C.sigOf(ini),
+                            }
+                            if level > 0 then
+                                rampMin = rampMin and math.min(rampMin, level) or level
+                                rampMax = rampMax and math.max(rampMax, level) or level
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- (0.15.1, review) the RACE session's laps (TYPE 3): in an Extreme / Advanced event SESSION_0 is the practice (no LAPS)
+function C.raceLapsOf(ini)
+    for n = 0, 9 do
+        local s = ini['SESSION_' .. n]
+        if s and tostring(s.TYPE) == '3' then return tonumber(s.LAPS) or 0 end
+    end
+    return tonumber(ini.SESSION_0 and ini.SESSION_0.LAPS) or 0
+end
+
+-- (0.15.1) what tells an 'Extreme' / 'Advanced' series from its base series (same track, car, grid and opponents): the
+-- track-rubber preset, the session list and the race-laps key (series19 v series18: preset 3 v 4, 3 sessions v 1;
+-- series12 v series9: RACE_LAPS 20 v 5). Read from event.ini and from race.ini alike.
+function C.sigOf(ini)
+    local d, r, n = ini.DYNAMIC_TRACK or {}, ini.RACE or {}, 0
+    for sec in pairs(ini) do if sec:match('^SESSION_%d+$') then n = n + 1 end end
+    return { preset = tonumber(d.PRESET), start = tonumber(d.SESSION_START), sessions = n, raceLaps = tonumber(r.RACE_LAPS) }
+end
+
+-- Read the launched race. Called once per session (cheap); safe to call every frame.
+function C.detect()
+    local sim = ac.getSim(); if not sim then return end
+    local idx = sim.currentSessionIndex or 0
+    if detectedFor == idx then return end
+    detectedFor = idx
+    C.active, C.series, C.event, C.eventLevel, C.ramp = false, nil, nil, nil, 0
+    C.meter, C.carLevels, C.meterSource = nil, {}, nil
+    pcall(function()
+        local ini = parseIni(io.load(ac.getFolder(ac.FolderID.Cfg) .. '/race.ini', ''))
+        local race = ini.RACE or {}
+        C.track = (race.TRACK or ''):lower(); C.layout = (race.CONFIG_TRACK or ''):lower()
+        C.model = (race.MODEL or ''):lower(); C.cars = tonumber(race.CARS) or sim.carsCount
+        C.laps = C.raceLapsOf(ini)
+        C.sessionType = ini.SESSION_0 and ini.SESSION_0.TYPE or nil
+        C.meter = tonumber(race.AI_LEVEL)
+        if C.meter then C.meterSource = 'race.ini' end
+        local raceNames, raceModels = {}, {}
+        for sec, kv in pairs(ini) do
+            local n = sec:match('^CAR_(%d+)$')
+            if n then
+                n = tonumber(n)
+                if kv.AI_LEVEL then C.carLevels[n] = tonumber(kv.AI_LEVEL) end
+                if kv.DRIVER_NAME and #kv.DRIVER_NAME > 0 and n > 0 then raceNames[#raceNames + 1] = kv.DRIVER_NAME:lower() end
+                if n > 0 and kv.MODEL and kv.MODEL ~= '-' then raceModels[#raceModels + 1] = kv.MODEL:lower() end
+            end
+        end
+        -- (0.16) The launcher may write the difficulty ONLY per car - an external launcher like GT Life builds
+        -- the grid itself, and a user reported Verve pinning the field at maximum because [RACE] AI_LEVEL was
+        -- not where we look. The per-car levels are already parsed above, so use their MEDIAN rather than
+        -- assuming anything. Median, not mean, so one oddly-levelled car cannot drag the whole field.
+        if not C.meter then
+            local vals = {}
+            for k, v in pairs(C.carLevels) do
+                if k > 0 and type(v) == 'number' and v > 0 then vals[#vals + 1] = v end
+            end
+            if #vals > 0 then
+                table.sort(vals)
+                C.meter = vals[math.ceil(#vals / 2)]
+                C.meterSource = 'per-car median'
+            end
+        end
+        local sun = tonumber(ini.LIGHTING and ini.LIGHTING.SUN_ANGLE)
+        local sig = C.sigOf(ini)
+        scanCareer()
+        -- (0.15.1) score EVERY matching event, best wins: two events of one series on the same track with the same car and grid
+        -- (KTM series3 event2 and event5, both Imola, 8 cars) were told apart by nothing, so event5 ran as event2 (ramp 0.14,
+        -- not 0.71: the last KTM race got the first one's difficulty, car15 30 Sep). Sun angle, grid models and laps decide.
+        local best, bestScore = nil, -1
+        for _, e in ipairs(events) do
+            if e.track == C.track and e.layout == C.layout and e.model == C.model and e.cars == C.cars then
+                -- the same track/car/grid could be a quick race: require the launcher's opponent names
+                local hit = 0
+                for _, nm in ipairs(raceNames) do if e.names[nm] then hit = hit + 1 end end
+                if hit >= 1 or #raceNames == 0 then
+                    local score = hit
+                    if sun and e.sun and math.abs(sun - e.sun) < 0.5 then score = score + 100 end
+                    local mOk = #raceModels > 0
+                    for _, m in ipairs(raceModels) do if not e.models[m] then mOk = false; break end end
+                    if mOk then score = score + 50 end
+                    if e.laps > 0 and e.laps == C.laps then score = score + 10 end
+                    local es = e.sig or {}
+                    if sig.preset and sig.preset == es.preset and sig.start == es.start then score = score + 40 end
+                    if sig.raceLaps and sig.raceLaps == es.raceLaps then score = score + 20 end
+                    if sig.sessions > 0 and sig.sessions == es.sessions then score = score + 20 end
+                    if score > bestScore then best, bestScore = e, score end
+                end
+            end
+        end
+        if best then
+            C.active, C.series, C.event, C.eventLevel = true, best.series, best.event, best.level
+            if rampMin and rampMax and rampMax > rampMin then
+                C.ramp = math.max(0, math.min(1, (best.level - rampMin) / (rampMax - rampMin)))
+            end
+        end
+    end)
+    if C.active then
+        C.info = string.format('Career %s/%s (event level %d, ramp %.2f, meter %s)', C.series, C.event, C.eventLevel or 0, C.ramp or 0, tostring(C.meter))   -- (audit A2) meter is nil with no AI_LEVEL anywhere: %d threw
+    else
+        C.info = string.format('Not a career event (meter %s)', tostring(C.meter))
+    end
+    pcall(function() ac.log('Verve career: ' .. C.info) end)
+end
+
+function C.reset() detectedFor = nil end
+
+return C

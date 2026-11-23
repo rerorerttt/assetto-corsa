@@ -1,0 +1,676 @@
+0.16.7
+- Fixed: on some setups 0.16.6 did not show Verve at all, neither in the race nor on the setup screen. The window is
+  back where it was in 0.16.5 (the app bar in the race). The setup-screen option is withdrawn until it works for
+  everyone. The Reset my car guard from 0.16.6 stays.
+
+0.16.6
+- Verve's window is now in the setup screen too, so you can set up before the race; Reset my car waits until you are
+  driving.
+- Release check: this release changes no racing code (only the window setting and the Reset my car guard), so
+  instead of the usual 36-race comparison it was checked in game and with one full race for errors, on the owner's
+  decision.
+
+0.16.5
+- AI touring cars now get the same tyre-grip hint GT3 cars already get: up to x1.2 at AI level 100, ramping in from
+  level 90. It stays at x1.2 above level 100 (Above-expert adds nothing for touring yet; those levels were not
+  tested). GT3 behaviour is unchanged.
+- Who gets it: cars with an exact `touring` tag whose class resolves to touring, plus any car you set to the touring
+  class yourself in the class override.
+- What we measured (Kunos 90s touring cars: BMW M3 E30 DTM, Alfa 155 V6, Mercedes 190 Evo II; 16 cars, 12 laps,
+  8 races per arm at Monza and Brands Hatch GP, AI level 100): best laps 3.5 s faster at Monza and 2.8 s faster at
+  Brands; median laps 4.2 s and 1.5 s faster. Contacts (car or track) on the opening two laps went down (Monza 156 to
+  132, Brands 149 to 124), and so did repairs (Monza 25 to 19, Brands 24 to 20).
+- Trade-off: fewer passes in the midfield. At Brands the field made 36% fewer passes (576 to 366). When a midfield car
+  closed to within 40 m behind a rookie, that spell ended in a pass 76% of the time without the hint and 50% with it.
+  Rookies gain the most from the hint.
+- Caveats: tested on the Kunos 90s touring cars only, at AI level 100. The 90 to 100 ramp is checked at level 95 but
+  not raced at length. Other touring-tagged mods (TCR, BTCC, DTM, STW and similar packs) also get the hint if they
+  carry a `touring` tag; they have not been tested. Kunos cars filed as touring without that tag (for example the Alfa
+  GTA, Escort Mk1, Abarth 595s and the Audi TT Cup) do not get it.
+- README: the Repair damage on track setting is now described.
+- Release-check notes:
+  - GT3 races came out level with 0.16.4 (the GT3 code is unchanged). At Spa the fastest-lap figure sat a few tenths
+    outside 0.16.4's range, within normal variation; it is recorded as a named exception.
+  - A check that the shipped touring code races exactly like the tested version did not pass its pre-set rule: one run
+    had faster typical laps, and a same-day comparison came out mixed (a bit faster at Monza, a bit slower at Brands
+    Hatch). Both apply the same grip hint, and the same rule also fails when the tested version is compared with itself
+    on another day, so we read it as race-to-race variation.
+
+0.16.4
+- Fixed a bug from 0.16.2 that switched off much of Verve's racing whenever a car had another car right behind it. In
+  that situation the AI stopped choosing when to attack and defend, stopped picking its racing line, stopped moving
+  aside for faster cars lapping it, and stopped easing off when damaged. That is what made races on 0.16.2 and 0.16.3
+  calmer than they should have been.
+- Verve races fully again. In our tests at default settings (6 races a side), the AI averaged about 67 contacts a race
+  at Monza (18 GT3 cars, 12 laps), against 70 on 0.16.1; 107 at Spa (18 GT3 cars, 12 laps), against 119; and 31 at
+  Singapore (20 Formula cars, 5 laps), against 38. On 0.16.3 it was about 51 at Monza, 63 at Spa and 11 at Singapore,
+  because of the bug. Lap times are unchanged from 0.16.3.
+- The defending change from 0.16.2 now really works: the AI defends against cars that aren't attacking about half as
+  often (about 47% of its defending before, 20 to 24% now).
+- A correction to the 0.16.2 notes: most of the contact reduction we reported there came from the bug above, not from
+  the changes those notes described.
+
+0.16.3
+- When you switch Verve off mid-session or untick Control AI grip, and on the cooldown lap after the flag, the AI now goes
+  back to the game's normal grip. Before, it was left with less grip than stock AC gives it, which made many cars run off
+  and get stuck. In our tests (18 GT3 cars at Laguna Seca, Verve switched off after 3 laps, 3 races a side), about 9 cars
+  a race retired after the switch on 0.16.2, against under 2 with this fix.
+- Base AI grip can no longer be set below the game's normal 1.20. Below that, the AI drove too fast for the grip it had
+  and crashed. If you saved a lower value or a preset with one, it now runs at 1.20.
+
+0.16.2
+- The AI no longer defends against cars that aren't attacking. Before, a car could keep covering its line against a car
+  just sitting behind it at the same speed, which caused needless blocking and contact. Now it defends only when the car
+  behind is closing or is genuinely faster. On for everyone.
+- What that and the other changes here add up to, at default settings and difficulty 100, compared with 0.16.1 over 6
+  races a side (18 GT3 cars for 12 laps at Monza and Spa, 20 Formula cars for 5 laps at Singapore): contact down about 41%
+  at Monza, 52% at Spa and 71% at Singapore, and no cars retired, against 6 on 0.16.1. Typical lap times are level or
+  better. The costs: the fastest GT3 laps are about 0.4 s slower at Monza and 0.9 s slower at Spa, and a separate test of
+  the defending fix at Spa saw about 10% fewer completed overtakes.
+- New "Smarter dives" setting, off by default, in the main window. On: the AI only dives up the inside from close behind,
+  about two and a half car lengths, so fewer hopeless lunges and tighter lines at the apex. In our tests it brings a little
+  more contact overall, which is why it is your choice.
+- Named presets: save your settings under a name, then load or delete them from the Verve AI window. A built-in Default
+  is always there. Presets don't include per-car driver or class overrides.
+- Career: the GT3 clear-road grip now follows the level of the current career event, so an early event low on the career
+  ramp no longer gets the full effect. In a career, Above-expert AI applies to the whole field.
+- Settings: with autosave on, an open window kept re-saving slider values because of tiny rounding differences, even
+  when you hadn't touched them. A slider now saves only when you move it.
+- Tooltips now say GT3 cars, not GT cars, for the clear-road grip, which only applies to cars tagged GT3.
+
+0.16.1
+- GT3 cars (cars tagged GT3 in their data) are quicker at high difficulty. Above difficulty 90, a GT3 car with clear road
+  ahead trusts its tyres more, and it eases back to normal as it closes on another car. In our tests at difficulty 100
+  (18 GT3 cars, 12 laps), the AI's best laps were about 1.6 s quicker at Monza and about 4.7 s quicker at Spa, with
+  contact and incidents within the 0.16.0 range. Other kinds of car are unchanged.
+- New "Above-expert AI" slider, for when difficulty 100 is not hard enough. Above 100, GT3 cars at full difficulty get
+  faster still, up to 120. 100 = off.
+- Cooldown lap: after the chequered flag Verve hands each car back to the game once and then leaves it alone, so the
+  cooldown lap runs as it does in stock AC.
+- New "Rescue crashed cars" switch. On (the default): a stuck or wrecked car is repaired and put back on the track, as
+  before. Off: crashed cars are left to the game, and a car that can't continue retires, as in stock AC.
+- Quick settings: the settings button on the Verve AI window opens a compact panel with Enable Verve, Human errors, Race
+  start, Above-expert AI, Rescue crashed cars and Tactics. The tooltips match the main window.
+- Career: an event that gives no AI level no longer causes an error in the career info line.
+
+0.16.0
+- Smoother starts: on the opening lap the AI no longer snaps on and off the throttle in the pack behind the leader. It
+  still holds back where it should, it just eases off and back on instead of stepping.
+- The difficulty slider now sets the AI level directly (95 means 95). If you preferred the old lap-time steps, turn
+  "Difficulty slider in lap-time steps" back on in the options.
+- Difficulty in other launchers: when a launcher does not tell Verve the AI level (reported with GT Life), Verve no longer
+  assumes maximum. Before, the difficulty stayed at maximum whatever you set.
+- Yellow flags: a car stopped a little way off the racing line now raises a yellow. Before, a car stopped just off the line
+  raised nothing and the next car arrived flat out.
+- Mid-pack drivers make mistakes at their own level's rate. Before, they made noticeably fewer than intended.
+- Ovals: only purpose-built ovals get oval racing. Several road layouts (Monza's older layouts, the Red Bull Ring national
+  layout, COTA East) were being treated as ovals.
+- Older Custom Shaders Patch: below build 3465 Verve now stands down for the session and shows one clear message, instead
+  of running with features missing.
+- Privacy: the anonymous race report (off unless you turn it on) now includes where Verve's first error happened, as a file
+  name and line number only. Never the error text, never a folder path. The privacy text in the app and the README say so,
+  and they now list everything the report contains.
+- README: only switch off "Control AI grip" if another mod is controlling AI grip. In our tests, switching it off with no
+  other grip mod made a Formula field crash more.
+- Tooltips: the "Human errors" and tactics tooltips now describe what those options actually do.
+- Small fixes from a code review: a rookie diving up the inside settles back into line as in 0.15.3, a car being recovered
+  after a crash is never held back by the start smoothing, and a race report the server rejects is no longer resent at
+  every game start.
+
+0.15.3
+- Smoother frame times: Verve makes far less throwaway data for Lua to clean up every frame, and saves what it has learned
+  about a track's trouble spots every 5 minutes instead of every 20 seconds (and once more when you quit). The AI races
+  exactly as before.
+- Tip: if the game hitches or shows CPU occupancy warnings, cap your frame rate (Content Manager > Settings > Video > FPS
+  limit). With no cap the game can run hundreds of frames a second and starve AC's physics, with or without Verve.
+
+0.15.2
+- A car crawling round on light suspension damage is repaired where it is: before, a car with a slightly bent corner could
+  drive at walking pace for up to 20 minutes (seen with 2026 F1 cars at Bahrain) until the game retired it.
+- Timed races: if the game does not report the race as timed, Verve reads the race's own settings file, so the AI still gets
+  fuel for the whole race instead of pitting every lap. Race reports now say whether the timed-race fuel step ran.
+- Race feed: the results at the flag are listed in finishing order.
+
+0.15.1
+- Career mode: Verve now recognises every career race. Before, most series from the Lotus Lightweight Trofeo on - the Ferrari
+  Trofeos, Formula Abarth and every GT3 and GT2 series with their Extreme versions - ran as normal races without the career
+  difficulty curve, and two races of one series on the same track could be mixed up.
+- Switching Verve off during a race hands every car back to standard AC at once (before, cars could keep a speed limit, grip or
+  pace that Verve had set). Unticking 'Control AI grip' hands the grip back the same way.
+- Changing driver profiles during a race (Clear, Randomize, a pick) eases each car into its new pace, grip and aggression over a
+  few seconds instead of in one step, which could put a car off mid-corner. Changes on the grid still apply at once.
+- Verve switched on after the start no longer holds cars back as if they were on the grid, and with Verve off across the start
+  it no longer refuels the whole field in the middle of the race.
+- The 'slider in lap-time steps' and 'career curve' options take effect at once instead of in the next session.
+- Fuel: the fuel rate set in the launcher is now read on older CSP builds too (such as 3465), so with double or triple fuel
+  the AI starts with enough fuel there as well (before, every car could stop three or four times in a short race).
+- Race feed: a retired car is reported once. Race reports include the launcher's AI aggression setting.
+
+0.15.0
+- Drivers make visible, human mistakes, more often the less experienced they are: in testing a Rookie about once every
+  3 laps, a Midfielder every 4 to 5, a Veteran every 10 to 15. A lock-up, a missed apex or a lift on the exit costs time
+  and sometimes the place.
+- Faster cars get past more often: better slipstreaming on the straights and less over-caution behind a car in a corner, and
+  drivers of every level try a move when the chance is there.
+- A grid without driver profiles at difficulty 100 gets the same extra grip as the best drivers (about 1 s a lap at Monza),
+  fading out by difficulty 90.
+- The start: cars hold their grid column into turn 1 only where the grid really is two columns (single-file, three-wide
+  and diagonal grids no longer squeeze cars together).
+- Fuel: with the fuel rate above normal the AI now starts with enough fuel (before, at triple rate every car stopped 3-4 times).
+- A car Verve retires stays retired (it could drive back out of the pits and crash).
+- Every car's personality is re-drawn each race, so grid slot 7 is not the same driver every time.
+- Race feed: lap events carry the exact lap time. Race reports include the tyre wear setting.
+
+0.14.9
+- A car on the same lap no longer pulls over for a faster one unless it is damaged or crawling (in 0.14.8, mixed
+  Rookie / Midfielder / Veteran grids had slower cars waving faster ones by, even for the lead).
+- New driver profile, right below Veteran in the list: Wrecking Crew, a chaos driver - top pace, elbows out, almost no margin.
+- A driver profile is only used when you pick one (no more automatic profiles from matching driver names).
+- Nearstappen is now rated the fastest and most aggressive F1 profile.
+- Real drivers are rated as the pros they are: every roster now runs from just under a Veteran to the very top,
+  so a grid of real names races close; the Veteran is almost as quick as the stars.
+- The best drivers (stars, then Veterans) get a little extra grip, so difficulty 100 is closer to the fastest humans.
+- Race feed (for Verve Booth / Race Engineer): no more short freeze every 5 seconds in long races.
+- The driver name on your own car is re-applied correctly in later sessions of a weekend.
+
+0.14.8
+- Driver profiles set a car's pace outright: Rookie = difficulty 80, Midfielder = 90, Veteran about 98, the fastest real
+  drivers 99-100. Before, profiles were relative to the fastest driver on the grid, so an all-Rookie grid raced at full pace.
+  The difficulty slider now sets the cars without a driver. Career events keep their own difficulty.
+- Drivers panel: buttons to make every AI car a Rookie, a Midfielder or a Veteran in one click.
+- Cars without a driver profile keep the AI aggression you set in the launcher. Before, it drifted to the extremes within
+  about two minutes, so most of such a field ended up either reckless or passive.
+- Repositioned cars: a car put back just before a sector line that can't get going now gets one more try where it
+  originally stopped (it loses the lap, not the race), and that failed try no longer counts toward switching repositioning off
+  for the race. Tight street circuits with full Rookie grids still lose too many damaged cars; a repair fix is next.
+- Race reports: each car's level is the one it actually runs at (a driver sets its own), and errors in the fuel, race
+  feed, contact, penalty, watchdog and report code are counted too, not only the per-car loop.
+
+0.14.7
+- Repositioned cars keep their lap. A car that stops anywhere after the first sector line (up to 10 km on) is now put
+  back just before that line, so AC counts the lap. Before, a car that stopped in the last sector lost the lap and was
+  classified a lap down. In testing every such lap counted (11 of 11, against 0 of 11 before), with no contact after
+  the move. The car gives up the road back to that line, up to about two thirds of a lap at Spa: less than the lap it
+  used to lose.
+- Test switch added, off: a quicker reaction at the lights for top drivers.
+
+0.14.6
+- Timed races: AC fuels the AI for only 1.2 laps in a race run on the clock, and at their pit stop it sets the tank to
+  empty, so cars queued in the pit lane and most of the field dropped out. Verve now fuels the AI for the clock and
+  refills any car that leaves its pit box empty. Monza, 24 F1 cars, 20 minutes: 18 of 24 running at the flag instead
+  of 2. A Barcelona weekend with a timed race: 16 of 16 instead of 6.
+- Repositioned cars keep their own fuel. Moving a car used to reload its tank to the race-start load: up to 40 L
+  extra late in a race, or a nearly empty tank in a timed race.
+- Repositioned cars keep their lap more often: a car put back up to 1000 m after the first sector line (was 500 m)
+  is set down just before it, on a straight at its own spot. Monza: 5 of 5 laps counted, against 1 of 8.
+- Race feed: race_start is written only once the grid has actually launched.
+- Test switches added, all off: slowing for a stopped car ahead, a wider fast-tuck window, a fixed aggression base for
+  cars without a driver profile, and steering read in degrees for dirty air and the tow.
+
+0.14.5
+- Race weekends: the race after practice or qualifying now starts with the opening-lap rules on (the turn-1 lanes,
+  the grid hold, the convoy throttle, the row caution). The first second of every new session still shows the
+  previous session's cars, and Verve believed it: every car that had driven laps in practice or qualifying looked
+  like it was already on a later lap, so all of that was off for those cars. Plain single races were never affected.
+- Race weekends: no more phantom crash repairs for every car on the grid and in the pit boxes at the start of
+  qualifying and the race.
+- Trouble spots: every learned trouble-spot map is reset once. Weekends had taught them a crash in the pit boxes
+  and on the grid for every car, which crowded the real corners out of the map. They relearn in a few races.
+- Repositioned cars keep their lap more often: on tracks with three sectors, a car put back in the middle sector
+  never had that lap counted (AC only credits a lap that passes the first sector line). A car put back within
+  500 m after the first sector line is now put back just before it instead. Further on, and in the last sector,
+  it rejoins where it stopped (the old move back to the last sector line never got the lap counted either).
+  Tested at Baku: 6 of 6 laps counted, against 0 of 14 before.
+- Race feed: nothing is written in the first 3 seconds of a session, race_start now marks the real launch (single
+  races get one too), and the header gives each car's class. Also fixed: in a weekend, the race's feed file could
+  stay unwritten, and driver-name updates stopped, for as long as the previous session had run.
+- The Drivers panel and the Randomize tooltip no longer say driver picks reset every race: since 0.14.4 they last
+  the whole weekend on the same grid.
+- Test switch added, off: FAST_TUCK (two abreast at speed into a bend, the car behind lifts and tucks in).
+
+0.14.4
+- Repositioned cars rejoin on warm tyres: their tyre temperatures were restored on the rear wheels only, so every
+  repositioned car set off on front tyres at 12 C.
+- Broken suspension: a car crawling round at 30 km/h on a bent corner is now repaired on track after 15 s (no
+  teleport) and races on; the time it lost limping is its penalty. At most two repairs per car, and only when
+  'Repair damage on track' is on. At Baku these cars used to crawl for the rest of the race, holding up the field.
+- Safer repositioning: a car is only put back on the track when nothing behind would reach it within 4 seconds
+  (it used to look 90 m back - one second at Baku's top speed - and forced repositions did not look at all), so
+  the field no longer arrives at full speed on a car setting off from 27 km/h.
+- Repositioning no longer switches itself off after a pile-up. Repositions still being judged, and damaged cars
+  that crawl at 30 km/h after a correct reposition, counted as failures; in the races where that switched
+  repositioning off, 10-12 of 20 cars were lost.
+- Race weekends: a driver grid you set up in practice now survives qualifying and the race.
+- Test switches added, all off: ROOM (a tight-room map), LANE_MIN_HALF, GRID_HOLD_MAXLAT and BLOCK_MIN_HALF (a
+  width-aware start for very narrow grids such as Amalfi), CRAWL_PASS, CRAWL_DMG, CRAWL_CLOSE, SUSP_FIX_PIT, RS_SEE_STOPPED.
+
+0.14.3
+- Opening lap: the turn-1 lane hold ended at turn 1 as designed only on paper. A grid-wrap fix from 0.14.1 also fired
+  for cars still on their first lap in the second half of the lap, so the lanes (half a car off the racing line), the
+  grid hold and the convoy throttle switched back on at full speed. At Baku that lane ran into the 250 km/h kink onto
+  the back straight and made half of all heavy crashes; at Spa and Monza it put a third of the field off-line through
+  the fast second-half corners. Fixed: a car that has crossed the line is on its lap. Measured on two machines and two
+  CSP builds: heavy hits at Baku halved, the kink empty on the opening lap. Retirements at Baku are not lower yet - a
+  car crawling on broken suspension still holds the field up; that is the next fix.
+- Every parked car now records why it was parked (and its damage before the pit teleport wiped it) in the diagnostics.
+- Tools: real-time ratio fixed (two bugs), a race that never starts is abandoned after 150 s, crawler-queue and
+  ablation scorers, a --fuel harness arm for quali-load pace probes. Harness switches added, all off: CRAWL_PASS (v2),
+  CAUT_BASE.
+
+Verve - changelog
+
+0.14.2
+- Passing: a faster car now gets on with it. Verve's cold-tyre model judged tyres "warm" only at 80 C, so on cool days
+  (below about 18 C ambient) every AI car carried a permanent cold-tyre penalty all race: 4 % less grip and a quarter
+  more caution than intended, which is what made a quicker driver hesitate behind a slower one. Warm-up now ends after
+  two laps of a stint (and starts again on new tyres after a stop), as it always should have. Measured: a veteran stuck
+  behind a midfielder gets past in about half the time at Monza, and converts more of his attempts at Spa; lap times
+  unchanged, so the difficulty scale is unchanged.
+- Opening laps at race fuel: the brake guard's reach and the row caution now grow with the fuel on board, so a full
+  tank brakes earlier for turn 1. Every opening-lap rule had been tuned on light sprints; long races start 50 kg heavier.
+  Twelve-lap-fuel opening laps at Spa: 14/3/14 incidents -> 7/8/9; Barcelona F1: 11/9/10 -> 8/6/2; heavy hits down
+  at every track.
+- A car Verve had given up on could sit stationary on the track for the rest of the race (a "frozen car"); fixed.
+- Verve never retires or parks the player's car.
+- New setting, Race start (Calm / Racing / Stock). Calm is the default and is what you have now: the opening-lap
+  easing that keeps turn 1 tidy. Racing gives a sharper getaway and closer first laps at the cost of a few more
+  touches; Stock leaves the start entirely to Assetto Corsa. Tracks whose first corner is very close to the line
+  (Spa's La Source) keep the calm easing whatever you pick, because there is no room for anything else.
+- New setting, Repair damage on track (on by default = unchanged). Turn it off and a car put back on track keeps its
+  damage and has to pit for it, the way stock AC would.
+- The difficulty slider now moves in lap-time steps, so 95 means roughly the same pace deficit at every track and in
+  every class instead of meaning something different in a kart and an F1 car.
+- Cars no longer get stranded mid pit stop. A stop was judged "live" only by fuel going in, so a tyre-only stop
+  looked idle and a healthy car could be retired in the middle of a tyre change - wet races, which are nothing but
+  tyre-only stops, were the worst case. A compound change or fresh rubber now counts as work in progress.
+- A car that cannot take a particular corner is now put back PAST it rather than into it again, and the "same spot"
+  window covers a corner rather than a point, so a car stops re-crashing in a loop at places like Imola's chicane.
+- Opening lap: the grid-depth easing is on by default.
+- Harness (maintainers): timed races (--minutes), heavy sprints (--stop-laps), the constants of the racecraft module in
+  one table (the app was five switches from LuaJIT's upvalue limit).
+
+0.14.1
+- Ovals: the "groove" (committing to a high or low lane in a pack) is off. It was what turned a 20-car Daytona race
+  into a 48-incident wreck; without it the same race ran 6 and 3 incidents with no retirements and more lead changes
+  than stock AC. Oval detection is also fixed (it could run before the track's AI line had loaded).
+- Difficulty: the launcher's slider is the truth in every mode. Content Manager's per-car grid levels only keep their
+  spread around it; a hand-set grid (levels more than 10 apart) is honoured as written. The window says when the slider
+  overrode the grid.
+- Opening lap: turn-1 lanes and caution-by-gap are on by default (each car holds its grid side into turn 1; the
+  opening caution scales with the gap to the car ahead).
+- Conflicts: the window warns when something else is changing the AI level or aggression (rubber-banding, adaptation,
+  other AI apps) - Verve reads its own values back every frame and reports a steady mismatch.
+- Anonymous race stats (opt-in): each race is sent once (a quit before the confirmation used to resend it), a race
+  restarted within seconds is no longer reported as finished, the player's start position is captured properly, field
+  spread is only computed for races, and the row carries Verve's own frame cost and error count. A column the server does
+  not know yet is dropped and the row resent, so an older database never rejects a newer app.
+- Race feed: a "names" event after driver profiles apply (the header is written before that). A car refuelling in its
+  box is no longer treated as stranded.
+- Roster: the one remaining real name renamed (387 of 387 fictional).
+- Off by default, for testing: a RainFX-aware wet rule (with rain physics present, Verve's own wet grip cut is not
+  stacked on top), live fault attribution and penalties, a suspension limper that sends a car with a broken corner to the
+  pits.
+- Contacts without damage: incidents are read from CSP's collision state as well as from damage, so an install with
+  damage turned off (one outside player's 23-car, 34-lap race reported zero incidents) now reports its contacts in the
+  race feed, the anonymous stats and the fault judge. The stats row also carries the launcher's damage and fuel settings.
+- Update banner: the download button only ever opens the project's own GitHub page.
+- The difficulty notice ("grid levels 97-104, slider 80: field at the slider") now actually appears in the window's
+  Status section outside career mode.
+- Anonymous race stats: a row is resent once per column the server does not know yet (it used to give up after one),
+  and the frame-cost and error figures are per race, not per game launch.
+- Harness (maintainers): --assists {"DAMAGE":0} runs one race with the launcher's damage off; R.CV_TGAP (off) makes the
+  opening-lap convoy keep a time gap instead of a fixed distance (24-car grids under test).
+- README: CSP build requirement stated; "Before you race": the slider is real (80 beginner / 90 intermediate / 100
+  strong club racer), keep damage on at 50 % or more, run one AI mod at a time.
+- Race weekends: after a practice or qualifying session some AI cars never launched in the race (an OverTake review:
+  "in race-weekend mode they just no longer start"). Verve's own retirement rule had parked cars that sat in their box
+  after a run, and the hold carried into the race. Retirements and repositions now happen only in a race session, and
+  every hold is released when a new session starts. Reproduced (4 dead cars after a 10-minute qualifying) and verified
+  fixed on the same weekend.
+
+0.14.0
+- Opening laps: every car holds its grid side into turn 1 until just past the apex (turn-1 lanes), and the opening
+  caution scales with the gap to the car ahead, so the front rows brake normally and the pack behind eases in
+  proportion. F1 opening-lap contact roughly a third lower over two days of sprints; GT3 the same or better.
+- Road space: a faster car measures the free room beside the car ahead and aims for the gap instead of orbiting
+  its gearbox. Alone on track: a car with a catchable rival ahead keeps its pace instead of easing off.
+- Penalties (new, off by default until proven): every contact is judged live - rear-end, squeeze, unsafe rejoin,
+  hit a stopped car, pile-up, or racing incident - and a culprit's second offence costs 5 seconds served in the
+  race (AI: a short throttle cut; player: AC's own slow-down penalty). Verdicts go to the CSP log and the race feed.
+- Difficulty: the launcher's slider is the truth in every mode. Content Manager's per-car grid levels only keep
+  their spread around it (a hand-set grid, spread wider than 10 points, is honoured as written).
+- Damage: a car with a broken corner limps to the pits for repairs instead of crawling on the racing line for the
+  rest of the race, and retires if it never gets there (off by default this release).
+- Driver roster: 386 public driver names with pronunciations; no real names anywhere.
+- Look: new black-and-yellow icon and window header.
+- Tools: human lap-time baselines (RSR hotlap boards) with an AI-vs-human check, a held-up metric, opening-lap zone
+  tallies, per-model shift probes, a one-click penalty test, replays kept on D: when present.
+- Includes everything listed under 0.13.0 below, which was never released on its own.
+
+0.13.0
+- Difficulty means something. Verve now applies the AI level the launcher configured for each car itself
+  (AC ignored it on the installs we measured: 60 and 100 gave identical lap times), using a curve measured on a
+  real field: 90 is nearly full pace, 80 is about 7% off, and the erratic zone below 0.75 is never used.
+- Career: the difficulty meter picks a pace band and AC's own event ramp moves you through it (soft first
+  series, a real fight at the end). Option "Career: scale difficulty across the series", on by default.
+  Career events lock driver profiles; the curve owns the field. This replaces the separate Career Ramp tool.
+- Driver profiles: three archetypes only (Rookie, Midfielder, Veteran), listed first. Profile pace is now a
+  lap-time spread (a Rookie about 5% off a star) instead of a raw level.
+- Opt-in "Send anonymous race stats to improve Verve" (off by default): one small summary per race, no names,
+  no paths, no hardware ids; sent at the next launch if the game was quit or crashed.
+- Racing: lapping cars no longer tiptoe behind a yielding backmarker; two repositioned cars can't cap each
+  other to a crawl; a car left in its pit box by AC's damage teleport is retired instead of "running" forever.
+- Settings window: the driver list no longer squashes rows once a profile is picked.
+- Diagnostics log tyre wear, compound and fuel.
+
+0.12.0
+- Core behaviour is now always on: human variability, class physics, racecraft, self-recovery with
+  crash repair, and trouble-spot learning have no user toggle any more (turn Verve off for stock AC).
+  Crash repair and trouble spots were opt-in experiments; a day of A/B racing showed crash repair is the
+  single biggest thing Verve does, so both are on for everyone (older settings are migrated once).
+- Settings window restructured: what Verve does, then the few real options (human errors, Formula DRS
+  discipline), with an Advanced section for controlling AI grip and the race feed.
+- Driver profiles rename the AI: pick a profile and AC's leaderboard shows that driver; clear it and the
+  original name returns. AC driver names that match the roster get their profile automatically.
+- Race feed (advanced, off by default): a structured JSONL race feed for companion tools.
+- Test harness: full weekends (practice/quali auto-advance), randomized driver grids, chase camera, and a
+  graceful AC shutdown after the flag so the replay autosaves.
+
+0.11.0
+- Recovery rebuilt around what the logs actually showed. A stuck car is now put back on the racing line
+  with the AI-aware teleport (the AI driver moves WITH the car -- before, the car moved and the driver
+  didn't, and it sat in neutral on the rev limiter), set down facing the right way (the game's direction
+  convention turned out to be the reverse of what was assumed -- every reset was backwards -- it's now
+  verified after every move), on the tyre temperatures it had (a teleport resets tyres to ambient; on a
+  cold day cars were being set down on 12 C rubber and spinning at the next corner), and handed straight
+  to the AI. Verve no longer drives stuck cars itself: taking the controls left every car it touched with
+  no drive and a locked wheel once handed back. Result on the hardest test grid (18 mixed F1 mods,
+  Zandvoort, 11 C): rejoins went from 0 of 270 to 21 of 21.
+- No more frozen cars. A car Verve gives up on is cleared to its pit box at once instead of sitting in
+  the gravel for minutes waiting on the game's own retirement timer, and a car wedged at the pit exit
+  after the game's damage-pit teleport is reset onto the track like any other stuck car.
+- Repositioning judges itself. Every reset is scored (did the car actually get going?), and if a session's
+  grid/track/day makes resets fail, Verve stops doing them and lets cars retire cleanly rather than
+  parking wrecks on the racing line for the next car to hit.
+- Repairs now register. The damage value the rules read is a never-decreasing record of the worst hit,
+  so a repaired car was treated as wrecked for the rest of the race (kept off-line, growing penalties).
+  Rules now use damage SINCE the last repair.
+- Damaged cars nurse it home on the line and move over only when a faster car is actually on their tail
+  (a self-imposed blue flag) -- instead of living 0.58 off the racing line with their caution capped,
+  which sent 73% of them off again within 40 s.
+- Yellow flags. A stopped car on the road ahead now gives everyone arriving a speed cap that tightens
+  as they approach (double-waved yellows), and the go-around looks ahead by time, not a fixed distance,
+  so a car at 200 km/h starts moving over much earlier than one at 80.
+- Caution is capped. The back-off terms (hot corner, crash damping, cold tyres, anti-rear-end...) used
+  to stack until the front of a train crawled through a corner at 76 km/h while the tail arrived at
+  170 -- the caution itself made the pile-up. Careful, never crawling.
+- Hot spots are relative: the few corners that are hot compared with the rest of the track, not every
+  bin over a fixed line (a track with history had 40 "hot spots" and the whole lap at max caution).
+  Field-wide crash damping now comes from incidents in THIS session and relaxes when the race settles.
+- Works the same on every track: every gap Verve uses (attack range, rear-end guard, blockage lookahead,
+  tow, dirty air, safe-drop checks) is now defined in metres and derived per track. A spline fraction is
+  36 m at Zandvoort, 160 m at the Nordschleife and 8 m on a kart track; it was tuned for one of those.
+- Mixed grids race properly: a faster class -- or simply a much faster car by measured lap time --
+  closing on a slower one is let through rather than fought corner by corner (the slowest mod in a
+  mixed F1 field was lasting 1.9 laps on average).
+- Repeat-offender retirement counts incidents, not retries (a car patched three times inside one pile-up
+  had ONE crash), and a car that keeps wrecking in the same corner for a minute is retired like a broken
+  car should be.
+
+0.10.7
+- Cars flung deep off track now come back. Recovery worked out where a car was by projecting its world
+  position onto the track -- which returns nonsense for a car thrown 30-50 m into a runoff, so those
+  wrecks were judged "impossibly far", skipped, and left frozen off-track for the whole race. It now
+  uses the car's own tracked spline position instead, so even a car deep in the gravel gets found,
+  repaired and put back on the racing line. (This also cured most of the "recovered facing the wrong
+  way" -- the bad position was feeding a bad facing direction too.)
+- No car is left in limbo. A beached car that can't drive out is now firmly put back on the line (after
+  a few seconds' grace for traffic), and one that keeps crashing hits the repeat-offender limit and
+  retires -- so every stricken car resolves: it races again, or it retires. Nothing sits dead off-track.
+- Damaged cars pull aside. A hurt car now moves decisively off the racing line and stops trying to race
+  (no more weaving down the middle as it limps), so the healthy field can stream past cleanly. And a
+  damaged car gets patched up in place sooner -- ideally before AC packs it off to the pits.
+- "Reset my car" button now reliably moves you OUT of the pits (and anywhere else you're stuck) and
+  drops you back on the racing line.
+- "Reset my car" button: stuck, beached, or wedged in the pits? One click repairs your car and drops it
+  back on the racing line facing forward, so you can get going again instead of sitting out the race.
+  (Top of the app, under Enable Verve. Press it WHILE stuck -- a car that's already retired can't return.)
+- Recovered cars now face the RIGHT way. On some tracks the track spline runs opposite to the racing
+  direction, which was dropping recovered cars in facing backward (they'd U-turn and beach in the grass).
+  Verve now remembers which way each car was actually racing and uses that, so a recovered car sets off
+  forward. Fixes both the button and every automatic recovery.
+- Trouble-spot learning no longer drops out after a reload. If the app reloaded mid-session, the learned
+  hot-spots for the track weren't reloaded and the adaptive crash-damping silently switched off; it now
+  reloads them automatically, so the damping stays active the whole session (and crashy tracks stay calm).
+
+0.10.5
+- Recovered cars no longer set off backwards. Putting a car back on the racing line sets its orientation
+  but not its speed, so a car sliding out of a crash kept its backward momentum -- it would land facing
+  forward but drift the wrong way, fight itself, and beach in the grass. It's now given a small forward
+  push so it sets off the right way and just drives on.
+- Repeat-offender retirements: a car that's been crash-repaired many times and keeps wrecking itself is
+  a broken car -- it now retires instead of crash-looping all race and finishing laps down. This brings
+  retirements up from near-zero to a realistic handful, and self-scales -- a clean track barely triggers
+  it, a crash-heavy one retires its worst few. (It also cuts the total repair churn a lot, since the
+  hopeless cars stop generating endless repairs.)
+- Cleaner behaviour when you're being lapped: a lapped car now eases aside DECISIVELY and keeps rolling
+  instead of stacking every caution into a near-stop -- which was making faster cars pile up and rear-end
+  it. It moves clearly off-line, holds that line (no swerving for other obstacles while it yields), and
+  only lifts a touch as the car actually draws alongside.
+- No more giant berth for a car that's already off the road: cars only sweep around an obstacle that's
+  actually on the racing surface. A car parked well off to the side gets passed on the line, no swerve.
+
+0.10.4
+- Pile-ups no longer wipe out the grid. When a knot of cars gets wedged together and can't be freed,
+  each one now gets one rescue -- a fresh body and a force-placed return to the racing line at a
+  STAGGERED point, so the heap lands strung out over a stretch of track instead of restacking -- then
+  keeps being protected while it drives away. Cars in a heap get separated and rejoin, rather than all
+  timing out together and retiring at once.
+- "Limp repairs" no longer runs away. The give-a-hobbled-car-a-fresh-body helper now re-bodies a given
+  car at most ONCE per damage episode (it was re-firing every few seconds on kerb-worn cars, showing
+  hundreds of "repairs" a race). Body damage only, since that's all it can actually fix.
+- Retirement count is now the real thing: it counts cars that ACTUALLY retired, not our own "give up"
+  decisions -- so the number you see matches the grid (and the ~10.5% real-world target).
+- Trouble-spot learning is protected from being wiped. A reload used to be able to overwrite a track's
+  learned hot-spots with an empty set; now learned data is never overwritten with nothing, so the
+  adaptive crash-damping keeps building across sessions instead of resetting.
+
+0.10.3
+- Pick a driver for EVERY racer, not just per car model. The driver list is now one row per grid slot
+  (numbered, with each racer's name), so a grid of identical cars can be a full grid of different
+  drivers. Car class (the physics setting) stays per-model in its own section.
+- Adaptive crash damping: Verve now uses a track's own learned trouble-spot history to tell how
+  crash-prone it is, and calms the WHOLE field to suit -- more caution, less aggression, a bigger
+  opening-lap ease, and the pack pace-stretch pulled back. A nasty track (Zandvoort) settles down on
+  its own while a clean one stays racy. This attacks the crash RATE, not just after-the-fact repairs.
+  Biggest effect on opening-lap pile-ups. (Needs Trouble-spot learning on.)
+- Clearer status readout: the old "repaired & rejoined" tally is split into Crash repairs, Limp
+  repairs, and Retired (genuinely wrecked) -- so you can see the real picture (retirements vs the
+  ~10.5% real-world target) instead of one big, alarming number.
+- Damaged cars limp for far less time: the "give a knocked-about car a fresh wing/body" trigger now
+  catches smaller aero knocks and acts sooner, so a hobbled car rejoins racing pace instead of
+  crawling round for laps holding everyone up.
+- Cars go around a genuinely slow car instead of piling into it: the "take the open road" move now
+  also fires for a car limping at 30-55 km/h (not only a nearly-stopped one) -- including YOUR car if
+  you're wounded -- so fast traffic sweeps past cleanly instead of queuing up and rear-ending it. Tuned
+  so it does NOT fire on a car merely braking for a corner (that was causing swerves in the braking zones).
+- Fewer last-few-laps crashes: as tyres fade late in a stint, cars now back off a little more and
+  drive within the worn grip, instead of running at the limit and sliding off at the end.
+
+0.10.2
+- Crash recovery no longer strands cars off-track. A beached car is only counted "repaired & rejoined"
+  once it's actually been put back on the racing line -- and the reposition now only waits for a
+  genuinely-close or fast-approaching car (not any car within ~40 m), so it succeeds instead of
+  stalling forever. As an absolute backstop, a car that still can't be freed is force-placed back on
+  the line rather than abandoned in the gravel for the whole race. (Fixes "Recovering right now" and
+  the repaired count sticking, with cars sat off-track.)
+- Limping cars cleared: a damaged car crawling on-track and holding up the field now gets a fresh
+  body after a short grace, so it rejoins racing pace instead of dragging a train behind it for laps.
+- Take the open road: if a stopped or crawling car is sitting on the track just ahead, cars now sweep
+  around it on the OPEN side (a car stopped on the right sends the field left) instead of queuing up
+  behind it. Cars already crawling in a queue behind the obstacle peel off and filter past too, and
+  they key off the genuinely-stalled car rather than whoever's merely nearest -- so a crash clears
+  instead of stacking the field nose-to-tail.
+- Quicker to pounce on open space: a fast car behind a slower one now starts moving for the pass as
+  soon as it has a real speed run, rather than waiting until it's almost touching -- and a genuine run
+  resists the pack damping, so it can still pull into clear track in a crowd (most visible off the start).
+- Less pack bunching: a car with clear road ahead now drives away on the racing line instead of running
+  a slow defensive line every corner just because someone's on its tail -- so the front of a bunch
+  stops anchoring the field. Leading a pack also earns a small pace stretch to string it out.
+- Recovery powers out of gravel: a car driving itself back from an off now uses near-full throttle on
+  soft ground instead of bogging down and stopping halfway (with the same firm reposition as a backstop
+  if it still can't make it), so it reaches the tarmac and rejoins.
+- Driver pace now genuinely strings the field out. The fastest driver ACTUALLY on the grid runs at the
+  difficulty slider, and everyone else is spaced below by how far their pace rating trails his -- and
+  that spread was widened, because the old amount barely separated cars (a mid-pack driver sat only a
+  few hundredths of an AI level off the ace, so a varied grid still bunched). A randomized grid now
+  spreads out properly instead of circulating nose-to-tail. (Aggression slider is still ignored for
+  profiled cars; each drives to their own known aggression.)
+- Starts eased slightly: the opening-lap caution was a touch too strong, so the field was over-cautious
+  off the line. Trimmed and released a bit sooner (the grid funnel still spaces the merge to turn 1).
+
+0.10.1
+- Verve now controls RETIREMENTS, not AC. A car that crashes is held (AC's own retirement blocked),
+  given a fresh wing/body in place after a penalty, and put back on the racing line if it's beached
+  off-track -- so it rejoins and races on. Only genuinely wrecked cars (a big impact or broken
+  suspension) or truly unrecoverable ones retire, so retirement rates land near real-world instead
+  of losing half the grid. No teleporting into the pack, no pit-lane stranding. ("Crash repair",
+  needs Self-recovery; off by default.)
+- Trouble-spot learning: Verve learns where cars repeatedly crash on a track and adds a little
+  caution there, so the field stops piling into the same corner. Per track and per car class, and
+  REMEMBERED across sessions -- race #2 on a track already knows its hot spots. Self-corrects as a
+  corner calms. ("Trouble-spot learning"; off by default.)
+- Oval / NASCAR: a new stock-car class (huge draft, packs up in dirty air, uses the whole width),
+  automatic oval-vs-road-course detection, and groove racing -- on a speedway, stock cars commit to
+  a high or low lane and run side-by-side. Plus 80+ real NASCAR and oval drivers added to the driver
+  profiles (Petty, Earnhardt, Larson, Hamlin...) and Indy oval aces.
+- Cleaner racing: a grid funnel so the field merges onto the line gradually off the start instead of
+  all diving for it at once; a launch boost so cars don't bog off the line; opportunistic inside AND
+  outside passes that use more of the track when a car has a real speed run -- and scale with the
+  driver's aggression (an attacker takes every opening, a measured driver picks his); and an anti-rear-end ease so
+  a fast-closing car doesn't pile into the back of a slower one in the braking zone, without killing
+  the overtake.
+
+0.10.0
+- Driver profiles (optional, big one): assign any grid slot a real driver -- 300+ across F1,
+  Le Mans/prototypes, GT, touring, rally, vintage, karts, IndyCar and drift -- or a generic
+  archetype. Each has its own pace, aggression, risk and consistency drawn from public racing
+  record, so the field feels like individuals. Class-filtered, type-to-search dropdown next to
+  each car; one-click "Randomize driver grid"; session-only, so five identical cars can be five
+  different drivers. Cross-discipline: drivers show up in every category they genuinely raced
+  (e.g. a modern F1 star in a kart). Pace sets each car's AI level. Leave a slot blank for the normal
+  slider-driven behaviour.
+- Crash & retirement control: Verve now decides retirements, not AC. A car that spins or crashes
+  is held (AC's own retirement blocked), given a quick wing/body repair in place after a penalty,
+  and driven back out by self-recovery. Only genuinely wrecked cars (a big impact or broken
+  suspension) or truly unrecoverable ones retire -- so an off costs time, not your race, and
+  retirement rates land near real-world instead of losing half the grid. No teleporting, no
+  pit-lane stranding. Toggle "Crash repair" (needs Self-recovery on); off by default.
+- Race awareness: calmer, more spaced opening lap (far fewer first-corner pile-ups); cars ease
+  off when there's nothing to race for; clean blue-flag behaviour (move aside and lift only as
+  the faster car arrives -- otherwise keep racing); and "leave room" so an overlapping car isn't
+  pinched into the wall.
+- Ctrl+C takeover: when the AI drives your car, it now gets the full Verve treatment -- pace,
+  racecraft and self-recovery -- and stays hands-off the instant you take back control.
+
+0.9.0
+- Human mistake variety: instead of one generic wobble, cars now make distinct, mostly
+  recoverable errors -- a missed apex, a wide exit, a caught twitch, or a brief brake lockup
+  under pressure. Most come with a small lift so a bobble self-corrects instead of sliding off.
+- Move commitment: once a car commits to a pass or a defence it holds that intent for a beat
+  instead of re-deciding every frame, so racecraft reads as decisive rather than hesitant.
+
+0.8.0
+- Three new car classes, all auto-detected and overridable per car:
+  - Kart: no downforce, instant tyre warm-up, bumper-to-bumper slipstream racing.
+  - Rally: AWD, strong in the wet, slidey but catchable (races like a grippy road car on tarmac).
+  - Formula Jr (low-downforce open-wheelers, e.g. Formula Ford/Vee): detected by wing count, so
+    they race in close slipstream packs instead of hanging back like a downforce F1.
+
+0.7.3
+- Class-profile QA pass: moderated the Touring class (it was near-max on line-swings,
+  inside dives, and close-following all at once, which got chaotic) to aggressive-but-clean;
+  lowered Vintage's mistake rate (classic cars should be forgiving, not error-prone). All
+  other classes verified realistic and consistent.
+
+0.7.2
+- Less corner bunching: cars no longer 'pounce' to close a gap while braking into a corner
+  (only on straights/fast sections), so packs don't compress in the braking zones.
+
+0.7.1
+- Big cut to attrition in long races (esp. Formula): dirty air now makes a following car BACK
+  OFF (keep distance) instead of losing grip and sliding off through corners -- that grip loss
+  was crashing fragile cars over a long stint. And high-downforce cars no longer "pounce" into
+  gaps (they keep aero distance), reducing contact.
+
+0.7.0
+- Simpler control: removed the per-car Chill/Clean/Intense levels. The Difficulty (pace) and
+  Aggression sliders cover how fast / how hard the field races, and the Variability slider now
+  also spreads per-driver aggression, so the grid isn't uniform -- no manual per-car setup.
+- Pounce: cars stay eager to fill a gap for a moment after following someone, taking advantage
+  when space opens instead of hanging back. Scales with racecraft intensity.
+- The per-car list is now just class detection/override (the physics knob).
+
+0.6.9
+- Fewer Formula/aero retirements: high-downforce cars keep more racing distance (they can't
+  follow closely in dirty air anyway), reducing contact in big fragile fields.
+- Late-race corners: halved the end-of-stint grip fade so it no longer stacks with AC's own
+  tyre wear and drag the AI under-gripped into run-wides.
+
+0.6.8
+- Packs no longer crawl/concertina to a halt before corners: the pack-density damping now only
+  calms the line-changing (so starts stay tidy) and no longer makes cars hang back in traffic,
+  so they stay opportunistic and keep the field flowing.
+
+0.6.7
+- Track-edge safety: Verve no longer pushes a car further toward an edge it's already near,
+  so it won't shove a car onto a kerb at a corner exit (fixes a near-rollover).
+- Calmer race starts and packs (stronger pack-density damping); smaller pass/defend offsets.
+
+0.6.6
+- Base AI grip slider opened to 1.50 (above 1.20 = extra stick + speed).
+
+0.6.5
+- Base AI grip default returned to 1.20 (AC stock; fixes AI running wide at hard corners).
+
+0.6.4
+- Pack-density damping: cars hold formation in a crowd instead of all passing/defending at
+  once (much calmer race starts and traffic).
+
+0.6.3
+- Aggression: racecraft now uses the car's own aggression (the Quick Race slider) as a
+  baseline instead of overwriting it, and only adds a bit when fighting.
+- Calmer racecraft (bigger deadzone, longer side-hold, smaller offsets).
+- Cold-tyre corners handled better (esp. classic/muscle cars).
+- Formula DRS discipline: closes DRS outside a zone / out of range; in-zone DRS left to the game.
+- Per-car list split into "in this session" vs "saved overrides for other cars".
+
+0.6.2
+- Gentler racecraft for high-downforce cars (they keep more distance in dirty air).
+- Traffic-aware recovery: a spun car waits for a gap instead of rejoining into oncoming cars.
+- Faster recovery return (accelerates once pointed forward, hands back to the AI sooner).
+
+0.6.1
+- Fix: restored the app manifest (the app is now visible in the sidebar again).
+- De-skittish defending (hold the inside line into corners; don't mirror/weave).
+
+0.6.0
+- Physics-signal car classifier (reads downforce / aids / tyres / drivetrain when tags + name
+  don't identify a car).
+
+0.5.0
+- Corner-aware and defender-aware passing (dive the inside when open, pass where the defender
+  isn't) and per-class racecraft tactics.
+
+0.4.0
+- Auto-save vs session-only editing, per-car and global Reset, pre-race review list.
+
+0.3.0
+- Tag-aware classifier + per-car class overrides + per-car racecraft levels (chill/clean/intense).
+
+0.2.0
+- Our own racecraft: overtaking and defending.
+
+0.1.0
+- First build: human pace variability, class-aware tyre/weather physics, gentle class-aware
+  mistakes, and automatic self-recovery for spun/beached cars.

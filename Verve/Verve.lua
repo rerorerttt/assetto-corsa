@@ -1,0 +1,1132 @@
+-- Verve  -- original AC AI enhancer (human pace variability + tyre/weather awareness +
+-- self-recovery + our own racecraft). Not affiliated with other AI mods. CSP public APIs only.
+
+local Human     = require('lib.human')
+local Recovery  = require('lib.recovery')
+local Classes   = require('lib.classes')
+local Racecraft = require('lib.racecraft')
+local Overrides = require('lib.overrides')
+local Update    = require('lib.update')
+local Drivers   = require('lib.drivers')
+local Troublespots = require('lib.troublespots')
+local Feed      = require('lib.feed')
+local Presets   = require('lib.presets')
+local Career    = require('lib.career')       -- recognises AC career events; reads the launcher's difficulty numbers
+local Difficulty = require('lib.difficulty')  -- makes those numbers real (AC ignores them on some installs)
+local Telemetry = require('lib.telemetry')
+local Watch     = require('lib.watch')        -- read-back watchdog: is anything else writing the AI level / aggression?
+local Contacts  = require('lib.contacts')     -- contacts from CSP's collision state (works with damage off)
+local Fault     = require('lib.fault')        -- who caused each contact, and the time penalty it costs (owner's ask 2026-09-17)
+local Strategy  = require('lib.strategy')     -- planned manoeuvres (racecraft drives it; Verve owns the toggle + status)
+local Fuel      = require('lib.fuel')         -- timed races: AC's 1.2-lap AI fuel load and its empty-tank pit loop (G.timedFuel)
+local Ers       = require('lib.ers')          -- AI battery deployment, MGU-K (R.ERS_MODE; default 'off' = AC decides)
+local TyreHint  = require('lib.tyrehint')     -- cold-tyre AI tyre hint (R.COLD_TYRE; default 0 = AC's own)
+Racecraft.penCap = Fault.penCap            -- penalty throttle caps, read by racecraft's throttle setter (shared table)
+Fault.attach(Recovery.recentDrops, Feed.event)
+Racecraft.humanMv = Human.mv               -- (lib/human.lua H.MISTAKE_V2) a visible mistake's levers, applied by racecraft (shared table)
+Human.feedEvent = Feed.event               -- ...its feed events ('mistake', 'mistake_model', 'mistake_drop')
+Human.busy = function(i)                   -- ...never drawn or fired for a car recovery is driving or ramping back up
+    local ok, b = pcall(function() return Recovery.rampCap(i) < 1e9 or (Recovery.stateOf(i) or {}).rec == true end)
+    return ok and b == true
+end
+do  -- ...and an off it started heats the learned trouble-spot map at Human.MV_TS_W (the saved maps on players' machines)
+    local tsIncident = Troublespots.incident
+    Troublespots.incident = function(spline, cls, i, wt)   -- (i: the car; lib/troublespots.lua mutes a chaos driver's own)
+        if Human.MISTAKE_V2 and type(spline) == 'number' then
+            local now = os.clock()
+            for _, st in pairs(Human.mv) do
+                if st.sp and (st.t0 or now - (st.endT or -1e9) < Human.MV_TS_WIN)
+                   and math.abs((st.sp - spline + 0.5) % 1 - 0.5) < 0.02 then wt = (wt or 1) * Human.MV_TS_W; break end
+            end
+        end
+        return tsIncident(spline, cls, i, wt)
+    end
+end
+-- (2026-10-27, owner item 33) CSP MINIMUM CHECK. Verve's AI-grip and racecraft paths rely on CSP public APIs that
+-- exist from build 3465; below it they are simply absent and those features fall back to AC's own. Say so once,
+-- clearly, and change NOTHING else - no feature is gated on this, it is only a message.
+-- STAND-DOWN (owner item 33, reworked 27 Oct): below the minimum Verve does NOT run with parts failing. It writes
+-- NOTHING to the cars (script.update routes through the already-safe disabled path at G.enabled's branch) and shows
+-- one clear message in its window. If the build cannot be read (nil), do NOT stand down - just log it.
+local CSP_MIN = 3465
+local cspBuildCode = nil; pcall(function() cspBuildCode = ac.getPatchVersionCode() end)
+local cspStoodDown = false      -- recomputed per frame in script.update (a harness-only override may raise the minimum)
+do
+    if type(cspBuildCode) == 'number' and cspBuildCode < CSP_MIN then
+        pcall(ac.log, string.format(
+            'Verve needs Custom Shaders Patch build %d or newer (this is build %d). Verve is off for this session; update CSP to use it.',
+            CSP_MIN, cspBuildCode))
+    elseif type(cspBuildCode) ~= 'number' then
+        pcall(ac.log, 'Verve: could not read the CSP build number; proceeding without standing down.')
+    end
+end
+local Diag = nil; pcall(function() Diag = require('diag') end)   -- LOCAL dev diagnostics; absent in the shipped build
+-- LOCAL test harness (tools/harness.py writes harness.lua right before launching a run, and it self-expires):
+-- can put the player's car on autopilot, override settings for the run, and label the diagnostics file.
+-- Never shipped; ignored unless the file is fresh, so a stale one can't hijack a real race.
+local Harness = nil
+pcall(function()
+    local h = require('harness')
+    if type(h) == 'table' and type(h.expires) == 'number' and h.expires > os.time() then Harness = h end
+    -- trouble-spot overrides apply at LOAD: the session reset (which loads the learned map) can run before the first update
+    if Harness and type(Harness.troublespots) == 'table' then for k, v in pairs(Harness.troublespots) do Troublespots[k] = v end end
+end)
+local harnessApplied, autopilotArmed, harnessT = false, false, 0
+local frameMs, frameN, luaErrors = 0, 0, 0     -- Verve's own cost per frame and errors swallowed by pcall (telemetry)
+-- (2026-10-27, owner item 34) module:line of the FIRST swallowed error this session, for the anonymous report.
+-- THE LIMIT, written into the change: this is EXTRACTED (a file name and a line number only), never stripped from
+-- the error, so no part of the error MESSAGE and no filesystem path can ever reach the report through it.
+local firstErrAt = nil
+local errSeen = { n = 0 }                       -- (0.15, code review) each distinct swallowed error is logged once per session
+-- when LOGGING an error, show its location as module:line only, never a path. A CSP Lua error is
+-- "<full path>\lib\racecraft.lua:1415: msg" and the path leaks the machine's layout; a path can contain spaces
+-- ("Program Files (x86)"), so a character class cannot span it - anchor on the .lua:line token and drop all before it.
+local function shortErr(e)
+    e = tostring(e)
+    local ok, r = pcall(function() return (e:gsub("[^\r\n]-([%w_%.%-]+%.lua:%d+)", "%1", 1)) end)
+    return (ok and r) or e      -- never let the sanitiser itself throw inside the error sink
+end
+local function noteErr(where, e)
+    luaErrors = luaErrors + 1
+    if not firstErrAt then                       -- first error only; EXTRACT module:line, never the message text
+        local m, l = tostring(e):match("([%w_%-]+%.lua):(%d+)")
+        if m then firstErrAt = m .. ':' .. l end
+    end
+    if errSeen.n >= 25 then return end
+    local k = where .. ': ' .. shortErr(e)
+    if not errSeen[k] then errSeen[k] = true; errSeen.n = errSeen.n + 1; pcall(ac.log, 'Verve error (' .. k .. ')') end
+end
+local function pc(where, f, ...)                -- pcall that counts AND logs (noteErr)
+    local ok, e = pcall(f, ...)
+    if not ok then noteErr(where, e) end
+    return ok
+end
+-- (R.errN) racecraft's per-frame evalBody pcall used to discard its error, so a car could silently skip its
+-- control writes for a frame with nothing recorded. The module now reports through this hook, which means ONE
+-- counting-and-logging mechanism (noteErr: distinct message logged once, hard cap 25) rather than a second one
+-- inside racecraft. `pc` cannot be used there - it is a local here and a module cannot see it.
+Racecraft.onError = noteErr
+Recovery.onError = noteErr
+Human.onError = noteErr
+local shiftSet = {}                              -- per car: shift thresholds applied (see Racecraft.SHIFT_UP)
+local launchDone = {}                            -- per car: past 90 km/h once this session (Racecraft.LAUNCH_WRAP)
+local harnessStartT, harnessStarted = 0, false   -- "press Drive" on AC's pre-session screen (ac.tryToStart)
+local harnessEndT = 0                            -- seconds a timed session (practice/quali) has been over
+local harnessDoneT, harnessQuit = 0, false       -- race-over timer / already asked AC to quit
+local harnessStopT = 0                           -- stop-at-lap reached: grace so the final lap gets recorded
+local harnessCamT = 0                            -- last time the chase camera was re-asserted
+
+-- defaults for the global settings (also used for "reset to defaults")
+-- Core behaviour (humanVar, classPhys, racecraft, recovery, crashRepair, troubleSpots) is what Verve IS: it's
+-- always on when Verve is enabled and has no user toggle (the keys remain so a test harness can A/B them).
+-- The user-facing options are the ones a player might genuinely want different.
+local DEFAULTS = {
+    enabled = true, controlGrip = true, humanVar = true, humanErrors = true,
+    classPhys = true, racecraft = true, recovery = true, drsDiscipline = true,
+    crashRepair = true, troubleSpots = true, raceFeed = false, showAdvanced = false,
+    careerCurve = true, shareData = false, strategy = true, raceStart = 'calm', sliderCurve = false, repairOnTrack = true,
+    intensity = 0.5, rcIntensity = 0.7, baseGrip = 1.20,
+    -- sliderCurve DEFAULT false since 0042 (owner 2026-10-22): THE SLIDER IS THE AI LEVEL. On, the slider is
+    -- read as lap-time steps, which mapped slider 80 to level 83 and slider 99 to 94 on a GT car. The schema
+    -- bump below turns it off once for installs that already stored `true`, or the decision never reaches them.
+    timedFuel = true,    -- DEFAULT 0.14.6 (lib/fuel.lua): fuel a TIMED race's AI for the clock, stop AC's empty-tank pit loop
+    shortFuel = false,   -- DEFAULT OFF (owner item 28, lib/fuel.lua F.SHORT_FUEL): a SHORT lapped race that fits one tank gets a start load covering it, so the AI makes no pointless fuel stop
+    paceAbs = true,      -- DEFAULT 0.14.8 (lib/drivers.lua D.PACE_ABS): a driver profile sets the car's pace outright
+    ratingV2 = true,     -- DEFAULT 0.14.9; harness switch (lib/drivers.lua D.RATING_V2): real drivers rated as pros around a Veteran (owner 2026-09-29)
+    classV2 = false,     -- harness switch (lib/classes.lua M.DETECT_V2): the v2 car-class detector (2026-09-30 inventory: 97 % vs 53 %)
+    aboveExpert = 100,   -- (0.16.x, lib/tyrehint.lua R.HINT_ABOVE) the "past 100" control: 100 = off; up to 120 raises the GT clean-air hint
+    rescueCrashed = true, -- (0.16.1, community ask; lib/recovery.lua R.NO_REPOSITION) off: Verve never moves, repairs or protects a crashed car
+    smarterDives = false, -- (0.16.2, lgate_follow 2026-11-03; lib/strategy.lua S.LUNGE_MAX_M) on: AI only dives from <=12 m (fewer hopeless lunges, tighter apex, a little more contact). off (default) = 0.16.1
+}
+local CORE = { 'humanVar', 'classPhys', 'racecraft', 'recovery', 'crashRepair', 'troubleSpots' }
+
+-- S = persisted store; G = working copy the game actually reads (so "session-only" edits can
+-- be live without being saved until the user commits).
+local S = ac.storage({
+    enabled = true, controlGrip = true, humanVar = true, humanErrors = true,
+    classPhys = true, racecraft = true, recovery = true, drsDiscipline = true,
+    crashRepair = true, troubleSpots = true, raceFeed = false, showAdvanced = false,
+    careerCurve = true, shareData = false, strategy = true, raceStart = 'calm', sliderCurve = false, repairOnTrack = true,
+    intensity = 0.5, rcIntensity = 0.7, baseGrip = 1.20,
+    timedFuel = true,
+    shortFuel = false,
+    paceAbs = true,
+    ratingV2 = true,
+    classV2 = false,
+    aboveExpert = 100,
+    rescueCrashed = true,
+    smarterDives = false,
+    autosave = true, schema = 1,
+})
+-- settings migration: 0.12 made crash repair + trouble spots core (they were opt-in experiments; a day-long
+-- A/B showed crash repair is the single biggest thing Verve does). A stored "false" from an older install
+-- would silently keep them off, so bump them once.
+if (S.schema or 1) < 2 then S.crashRepair = true; S.troubleSpots = true; S.schema = 2 end
+-- 0042 (owner 2026-10-22): the main difficulty slider sets the AI level, so `sliderCurve` - which reads the
+-- slider as lap-time steps instead - defaults OFF. A stored `true` from any earlier install would silently keep
+-- the old mapping (slider 80 -> level 83 on a GT car), and the OWNER'S OWN config is one of those, so the
+-- decision would never reach the person who asked for it. Measured 2026-10-22: the validation race at
+-- --ai-level 80 applied 83 with the module default already flipped, because Verve.lua reassigns
+-- SLIDER_CURVE from the store every frame. Same shape as the 0.12 bump above. The option stays in the UI.
+if (S.schema or 1) < 3 then S.sliderCurve = false; S.schema = 3 end
+local drsCd = {}
+local G = {}
+for k in pairs(DEFAULTS) do G[k] = S[k] end
+for _, k in ipairs(CORE) do G[k] = true end   -- core is always on (a harness override can still flip it for a run)
+-- (0.16.3) Base AI grip never goes below stock AI grip (Racecraft.STOCK_AI_GRIP, 1.20). Below it the AI overdrives and
+-- crashes (our tests, Nov 2026: at grip 1.0 the AI ran off and got stuck far more often than with Verve off).
+-- Clamped in G only, every frame, so a saved value, a preset, a harness --settings or a scripted change all land at
+-- the floor; the store is not rewritten.
+-- A test that wants lower grip says so explicitly: Harness.gripMin (harness-only; absent in the shipped build).
+local function gripFloor()
+    local m = (Harness and tonumber(Harness.gripMin)) or Racecraft.STOCK_AI_GRIP or 1.20
+    local v = tonumber(G.baseGrip)
+    if v == nil or v < m then G.baseGrip = m end
+end
+gripFloor()
+
+-- (fix 2026-11-04) never persist to the owner's store under the harness: a windowed harness run renders the
+-- settings sliders, which fire setG, so without this a --settings / preset test would overwrite the owner's S.
+local function setG(k, v) G[k] = v; if S.autosave and not Harness then S[k] = v end end
+-- (fix 2026-11-04) epsilon guard for ui.slider -> setG: a slider reads its value back with float drift (0.9 ->
+-- 0.89999998), so a bare `v ~= G[k]` is true every frame the window is open and re-saves a drifted float. Only
+-- commit a slider move larger than the drift.
+local function setGnum(k, v) if math.abs((tonumber(v) or 0) - (tonumber(G[k]) or 0)) > 1e-4 then setG(k, v) end end
+local function commitGlobals() for k in pairs(DEFAULTS) do S[k] = G[k] end end
+local function revertGlobals() for k in pairs(DEFAULTS) do G[k] = S[k] end end
+local function resetGlobals() for k, v in pairs(DEFAULTS) do G[k] = v; if S.autosave then S[k] = v end end end
+local function globalsDirty() for k in pairs(DEFAULTS) do if G[k] ~= S[k] then return true end end return false end
+-- (presets) one UI-state table (name buffer + selected name), a once-per-session flag for the PRESET_LOAD
+-- harness hook, and the live snapshot the diag ev:settings read-back reports (Presets.KEYS = 15 preset keys)
+local presetUI = { name = '', sel = nil }
+local presetLoaded = false
+local presetSaved = false
+local presetDeleted = false
+local function gsnapshot() local t = {}; for _, k in ipairs(Presets.KEYS) do t[k] = G[k] end; return t end
+
+-- detect other AI-control mods that also drive physics.setExtraAIGrip
+local otherAI = nil
+do
+    pcall(function()
+        local base = ac.getFolder(ac.FolderID.ACApps) .. '/lua/'
+        for _, name in ipairs({ 'AIWhisperer', 'AIFlood', 'BrokenCarsKicker', 'SmartAI' }) do
+            if io.dirExists(base .. name) then otherAI = name; break end
+        end
+    end)
+end
+
+local function clamp(x, a, b) if x < a then return a elseif x > b then return b end return x end
+local managed = 0
+
+-- Session reset: everything per-session starts over. Called from ac.onSessionStart AND from the restart
+-- detector below -- AC's "Restart session" does NOT fire onSessionStart, and without a reset the modules
+-- carried stale state into the new start (recovery saw a field that "had moved" now sitting still on the
+-- grid and crash-repaired every car in the first 8 s of the re-run -- seen 2026-09-13, Imola career).
+local telemetryCtx   -- defined below (needs the modules)
+local weekendSig = nil   -- track + car count + model per slot of the last session: the same signature = the same weekend
+local function gridSignature()
+    local ok, sig = pcall(function()
+        local s = ac.getSim(); local parts = { tostring(ac.getTrackFullID and ac.getTrackFullID('/') or ac.getTrackID()), tostring(s.carsCount) }
+        for i = 0, s.carsCount - 1 do local c = ac.getCar(i); parts[#parts + 1] = c and tostring(c.id or '') or '' end
+        return table.concat(parts, '|')
+    end)
+    return ok and sig or nil
+end
+weekendSig = gridSignature()   -- seed: CSP never fires onSessionStart for the session running when Lua loads, so without this
+                               -- the practice grid was wiped at practice -> qualifying (0.14.4 release review)
+local function sessionReset(restart)
+    pcall(function() local okS, simR = pcall(ac.getSim); if okS and simR then Telemetry.abort(restart and 'restart' or 'session change', simR, telemetryCtx()) end end)
+    pcall(Career.reset)
+    pcall(Difficulty.reset)
+    frameMs, frameN, luaErrors, firstErrAt = 0, 0, 0, nil; errSeen = { n = 0 }
+    harnessStarted, harnessStartT, autopilotArmed, harnessT, harnessEndT = false, 0, false, 0, 0
+    presetLoaded = false                      -- (presets) re-apply a harness PRESET_LOAD once per session
+    presetSaved = false                       -- (presets) re-save a harness PRESET_SAVE once per session
+    presetDeleted = false                     -- (presets) re-delete a harness PRESET_DELETE once per session
+    pcall(Classes.reset)
+    pcall(TyreHint.reset)                     -- (audit A3) per-car hint state is keyed by index: clear it per session
+    pcall(Human.reset)            -- per-track distances
+    pcall(Racecraft.reset)
+    shiftSet = {}; launchDone = {}
+    pcall(Contacts.reset)
+    pcall(Fault.reset)
+    pcall(Watch.reset)
+    -- driver profiles are session-only: wipe every race. NOT on a restart: the picks should survive it, and
+    -- the AI-level overrides persist in physics across a restart, so the remembered base levels stay valid
+    -- (0042) the AI levels Verve wrote do NOT survive a restart - AC puts the race.ini value back - so forget
+    -- what was applied or applyPace will see no change from its own memory and never write the level again.
+    -- The driver picks DO survive, which is what the block below is about.
+    if restart then pcall(Drivers.forgetApplied) end
+    if not restart then
+        -- a driver grid set up in practice survives qualifying and the race: keep the picks when the grid is the
+        -- same weekend (same track, car count and model per slot); a different grid wipes them as before
+        local sig = gridSignature()
+        pcall(Drivers.reset, sig ~= nil and sig == weekendSig)
+        if sig ~= nil and weekendSig ~= nil and sig ~= weekendSig then Racecraft.aggrPrev = {} end   -- a different grid: no aggression base carried by slot (review 2026-09-28)
+        weekendSig = sig
+    end
+    pcall(Recovery.reset)         -- clear per-car recovery + pit-rescue state
+    pcall(Troublespots.reset)     -- save the old track's learned hot spots, load the new track's
+    pcall(Feed.reset)
+    pcall(Fuel.reset)
+    if Diag then pcall(Diag.reset) end
+end
+
+-- Restart detector: the field had been moving, and now EVERY car is stationary on lap 0 in the grid zone
+-- (just before the line). That only happens on a restart -- a real-race pile-up never stops all cars at
+-- once inside the last 8% of the lap with nobody past the line.
+local fieldMoved, racedT = false, 0
+local function detectRestart(sim, dt)
+    local anyMoving, allGrid = false, true
+    for i = 0, sim.carsCount - 1 do
+        local c = ac.getCar(i)
+        if c then
+            if (c.speedKmh or 0) > 30 then anyMoving = true end
+            local sp = c.splinePosition or 0
+            if (c.lapCount or 0) > 0 or (c.speedKmh or 0) > 1 or not (sp > 0.92 or sp < 0.03) then allGrid = false end
+        end
+    end
+    -- arm only after the field has genuinely raced (a quali->race transition briefly shows moving cars,
+    -- then a stationary grid: that is not a restart -- seen 2026-09-14 as duplicate diag files)
+    if anyMoving then racedT = racedT + (dt or 0); if racedT > 10 then fieldMoved = true end
+    elseif allGrid and fieldMoved then
+        fieldMoved = false; racedT = 0
+        pcall(function() ac.log('Verve: session restart detected, resetting') end)
+        sessionReset(true)
+    end
+end
+
+function script.update(dt)
+    local tFrame0 = os.preciseClock and os.preciseClock() or os.clock()
+    if Harness then
+        if not harnessApplied then
+            harnessApplied = true
+            -- a JSON number landing on a BOOLEAN switch is coerced (0 -> false, else true): Lua treats 0 as true, so
+            -- a queue row written in the numeric "0 = off" convention of the sibling switches was turning booleans
+            -- ON (review 2026-10-10, R.BG_ALL_GATE). Numbers onto numbers, strings onto strings pass through as before.
+            local function hv(dst, k, v)
+                if type(dst[k]) == 'boolean' and type(v) == 'number' then dst[k] = (v ~= 0) else dst[k] = v end
+            end
+            if type(Harness.settings) == 'table' then
+                for k, v in pairs(Harness.settings) do if DEFAULTS[k] ~= nil then hv(G, k, v) end end   -- session only, never saved
+            end
+            if type(Harness.recovery) == 'table' then for k, v in pairs(Harness.recovery) do hv(Recovery, k, v) end end
+            if type(Harness.racecraft) == 'table' then for k, v in pairs(Harness.racecraft) do hv(Racecraft, k, v) end end
+            if type(Harness.fault) == 'table' then for k, v in pairs(Harness.fault) do hv(Fault, k, v) end end
+            if type(Harness.human) == 'table' then for k, v in pairs(Harness.human) do hv(Human, k, v) end end
+            if type(Harness.strategy) == 'table' then for k, v in pairs(Harness.strategy) do hv(Strategy, k, v) end end
+            if Diag and Harness.label then Diag.label = tostring(Harness.label) end
+        end
+        -- (presets test hook, harness-only) load a named preset once per session, SESSION-ONLY (G only, never
+        -- setG, so a harness run never writes the person's stored settings/presets). Racecraft.PRESET_LOAD is
+        -- nil in normal play, so this is inert outside the harness.
+        if Racecraft.PRESET_LOAD and not presetLoaded then
+            presetLoaded = true
+            local p = Presets.load(tostring(Racecraft.PRESET_LOAD), DEFAULTS)
+            if p then for k, v in pairs(p) do G[k] = v end end
+        end
+        -- (presets test hooks, harness-only) save the live globals as a named preset, or delete one, once per
+        -- session, so a later AC session can prove the ac.storage round-trip and the test cleans up after itself.
+        -- Racecraft.PRESET_SAVE / PRESET_DELETE are nil in normal play, so both are inert outside the harness.
+        if Racecraft.PRESET_SAVE and not presetSaved then
+            presetSaved = true
+            Presets.save(tostring(Racecraft.PRESET_SAVE), G)
+        end
+        if Racecraft.PRESET_DELETE and not presetDeleted then
+            presetDeleted = true
+            Presets.delete(tostring(Racecraft.PRESET_DELETE))
+        end
+        -- AC loads to a pre-session screen and waits for the Drive button; nothing (not even the AI grid)
+        -- moves until it's pressed. Press it a few seconds after load, and keep trying until it takes.
+        local okS, simH = pcall(ac.getSim)
+        if okS and simH and not harnessStarted then
+            harnessStartT = harnessStartT + dt
+            if harnessStartT > 4.0 and simH.isInMainMenu then
+                harnessStartT = 0
+                pcall(function() harnessStarted = ac.tryToStart(true) == true end)
+                if harnessStarted then pcall(function() ac.log('Verve harness: pressed Drive') end) end
+            elseif harnessStartT > 4.0 and not simH.isInMainMenu then
+                harnessStarted = true      -- already driving (someone pressed it, or no such screen this session)
+            end
+        end
+        -- WEEKEND: a timed practice / qualifying session is over -> advance to the next session (AC waits
+        -- for a click on the results screen otherwise). The race session ends itself.
+        if okS and simH and (simH.raceSessionType == ac.SessionType.Practice or simH.raceSessionType == ac.SessionType.Qualify)
+           and simH.isSessionStarted and (simH.sessionTimeLeft or 1) <= 0 then
+            harnessEndT = harnessEndT + dt
+            if harnessEndT > 8.0 then
+                harnessEndT = -20.0     -- (don't hammer it: retry every ~28 s)
+                pcall(function() ac.log('Verve harness: session over, advancing'); ac.tryToSkipSession() end)
+            end
+        end
+        -- RACE OVER (every car parked in the pits and still, well into a race session): quit AC gracefully
+        -- so it autosaves the replay -- a killed process saves nothing, and the produced broadcasts
+        -- need the replay.
+        if Harness.shutdownAtEnd and okS and simH and simH.raceSessionType == ac.SessionType.Race and simH.isSessionStarted then
+            local allParked, anyLap = true, false
+            for i = 0, simH.carsCount - 1 do
+                local c = ac.getCar(i)
+                if c then
+                    if not (c.isInPitlane and (c.speedKmh or 0) < 1) then allParked = false end
+                    if (c.lapCount or 0) >= 1 then anyLap = true end
+                end
+            end
+            -- HEAVY SPRINT (Harness.stopAtLap): a long race's fuel load, a sprint's duration -- quit once the leader has done N laps
+            local leaderLaps = 0
+            if type(Harness.stopAtLap) == 'number' and Harness.stopAtLap > 0 then for i = 0, simH.carsCount - 1 do local c = ac.getCar(i); if c and (c.lapCount or 0) > leaderLaps then leaderLaps = c.lapCount end end end
+            if type(Harness.stopAtLap) == 'number' and Harness.stopAtLap > 0 and leaderLaps >= Harness.stopAtLap and not harnessQuit then
+                -- don't quit in the same frame as the crossing: the feed's lap event for this lap and the next
+                -- diag snapshot have not been written yet, so every tool that counts laps from them would
+                -- under-read the race by one (second test PC, 2026-09-24). The diag writes every 8 s, so clear that.
+                if harnessStopT == 0 then harnessStopT = os.clock() end
+                -- (STOP_WAIT, harness A/B) quit only once every car still racing has taken the flag, plus 3 s, at most
+                -- STOP_WAIT s after the leader's. A flat 10 s quit lands while the field is crossing the line: when a car
+                -- crosses at the moment AC shuts down, AC loses it (-1 in race_out's raceResult) and writes NO laps at all
+                -- (every -1 file has 0 laps, 18 of 1583; 20 % of stop-at-lap quits v 5 % when AC ends the race itself).
+                local waitMax, pending = tonumber(Racecraft.STOP_WAIT) or 0, false
+                if waitMax > 0 then
+                    for k = 0, simH.carsCount - 1 do
+                        local ck = ac.getCar(k)
+                        if ck and not ck.isRaceFinished and (ck.lapCount or 0) < Harness.stopAtLap and not ck.isRetired and not ck.isInPitlane
+                           and (ck.speedKmh or 0) > 5 then pending = true; break end   -- (a --stop-laps sprint: done = reached the stop lap)
+                    end
+                    if pending then Harness.doneT = nil elseif not Harness.doneT then Harness.doneT = os.clock() end
+                end
+                local held = os.clock() - harnessStopT
+                if held >= 10 and (waitMax <= 0 or held >= waitMax or (Harness.doneT and os.clock() - Harness.doneT >= 3)) then
+                    harnessQuit = true
+                    pcall(function() ac.log('Verve harness: stop-at-lap reached, shutting AC down (replay autosave)'); ac.shutdownAssettoCorsa() end)
+                end
+            end
+            if allParked and anyLap then
+                harnessDoneT = harnessDoneT + dt
+                if harnessDoneT > 20.0 and not harnessQuit then
+                    harnessQuit = true
+                    pcall(function() ac.log('Verve harness: race over, shutting AC down (replay autosave)'); ac.shutdownAssettoCorsa() end)
+                end
+            else
+                harnessDoneT = 0
+            end
+        end
+        -- (0.15.1) scripted changes mid-session, through the same calls as the app's controls (settings are not saved): does anything
+        -- go wonky when a player changes settings or driver profiles on the grid or halfway through a race? (owner 2026-09-30)
+        -- Harness.changes = { { grid=true | t=<s after the green> | lap=<leader laps>, settings={..}, clear=, fill=<key>, randomize=,
+        -- profiles={all=, slots={['3']=key}}, class={[model]=key}, label= }, ... }
+        if type(Harness.changes) == 'table' and okS and simH and simH.raceSessionType == ac.SessionType.Race then
+            pcall(function()
+                if simH.isSessionStarted then Harness._rt = (Harness._rt or 0) + dt end
+                local pending = false
+                for _, ch in ipairs(Harness.changes) do if not ch._done then pending = true; break end end
+                if not pending then return end   -- (review) no leader-lap scan once every change has fired
+                local lead = 0
+                for k = 0, simH.carsCount - 1 do local c = ac.getCar(k); if c and (c.lapCount or 0) > lead then lead = c.lapCount end end
+                for n, ch in ipairs(Harness.changes) do
+                    local due = (ch.grid and harnessStarted and (autopilotArmed or not Harness.autopilot) and not simH.isSessionStarted)   -- (after the harness's own grid setup: its profiles land when the autopilot arms)
+                        or (ch.grid and simH.isSessionStarted)   -- (review) the arming came after the green: apply now rather than never
+                        or (type(ch.t) == 'number' and simH.isSessionStarted and (Harness._rt or 0) >= ch.t)
+                        or (type(ch.lap) == 'number' and simH.isSessionStarted and lead >= ch.lap)
+                    if due and not ch._done then
+                        ch._done = true
+                        if type(ch.settings) == 'table' then for k, v in pairs(ch.settings) do if DEFAULTS[k] ~= nil then G[k] = v end end end
+                        if ch.clear then Drivers.clearAll() end
+                        if type(ch.fill) == 'string' then Drivers.fillGrid(ch.fill) end
+                        if ch.randomize then Drivers.randomizeGrid() end
+                        if type(ch.profiles) == 'table' then
+                            local sl = {}
+                            for k, v in pairs(ch.profiles.slots or {}) do if tonumber(k) then sl[tonumber(k)] = v end end
+                            Drivers.applyFixed({ all = ch.profiles.all, slots = sl })
+                        end
+                        if type(ch.class) == 'table' then Overrides.autosave = false; for m, key in pairs(ch.class) do Overrides.setClass(m, key) end end
+                        local lab = tostring(ch.label or ''):gsub('[^%w_%-]', '_')
+                        ac.log(string.format('Verve harness: change %d (%s) at leader lap %d, %.1f s after the green', n, lab, lead, Harness._rt or 0))
+                        Feed.event('harness_change', string.format('"n":%d,"label":"%s","lap":%d,"t_race":%.1f', n, lab, lead, Harness._rt or 0))
+                    end
+                end
+            end)
+        end
+        if Harness.autopilot and not autopilotArmed then
+            -- harness `fuel` (litres): every car gets this load once, so a pace probe runs a quali fuel, not the AI's race fuel
+            if type(Harness.fuel) == 'number' and Harness.fuel > 0 and physics.setCarFuel then
+                pcall(function() local sF = ac.getSim(); for k = 0, sF.carsCount - 1 do physics.setCarFuel(k, Harness.fuel) end end)
+            end
+            -- armed 2 s after the Drive press (the countdown), not after the session starts: armed at the green
+            -- light the player car sat driverless for 2 s and the car behind ran into it (2026-09-16)
+            if okS and simH and (harnessStarted or simH.isSessionStarted) then
+                harnessT = harnessT + dt
+                if harnessT > 2.0 then
+                    autopilotArmed = true
+                    pcall(function() physics.setCarAutopilot(true, true) end)
+                    -- the launcher fuels the player for a short run (30 L); give the autopilot the AI field's load, or it pits twice.
+                    -- Not in a TIMED race: AC fuels that field for 1.2 laps, so the median handed car 0 ~5 L. It keeps the launcher's
+                    -- load there (and with G.timedFuel on, lib/fuel.lua loads it like an AI car once the autopilot has it).
+                    pcall(function()
+                        if Fuel.timedSession(simH) then return end
+                        local fs = {}
+                        for i = 1, simH.carsCount - 1 do local c = ac.getCar(i); if c and c.fuel and c.fuel > 0 then fs[#fs + 1] = c.fuel end end
+                        table.sort(fs)
+                        if #fs > 0 and physics.setCarFuel then physics.setCarFuel(0, fs[math.ceil(#fs / 2)]) end
+                    end)
+                    -- chase camera for unattended runs: markedly lighter on the GPU than the cockpit view
+                    pcall(function() ac.setCurrentCamera(ac.CameraMode.Drivable); ac.setCurrentDrivableCamera(ac.DrivableCamera.Chase) end)
+                    -- randomised driver profiles, the way a real grid will be run (same as the UI button)
+                    if Harness.randomizeDrivers and not Drivers.anyAssigned() then   -- once per weekend, not per session
+                        pcall(function()
+                            local seed = tonumber(Harness.driverSeed) or 0       -- (--driver-seed) the same draw for both arms of a pair
+                            Drivers.SEED = seed > 0 and math.floor(seed) or nil
+                            Drivers.randomizeGrid()
+                            local parts = {}
+                            for i = 1, simH.carsCount - 1 do
+                                local k = Drivers.profileOf(i)
+                                parts[#parts + 1] = string.format('%d=%s', i, k and Drivers.nameOf(k) or '-')
+                            end
+                            ac.log('Verve harness: driver profiles ' .. table.concat(parts, ', '))
+                        end)
+                    end
+                    -- fixed grid profiles ({all=key, slots={[i]=key}}), e.g. a Rookie field with one star at the back
+                    if type(Harness.profiles) == 'table' then
+                        pcall(function()
+                            Drivers.applyFixed(Harness.profiles)
+                            ac.log('Verve harness: fixed profiles all=' .. tostring(Harness.profiles.all))
+                        end)
+                    end
+                end
+            end
+        end
+        -- (2026-09-27) the arm-time top-up above lands in the countdown and AC puts the player's SETUP fuel back at the green
+        -- (30 L in a GT3; 25 Sep races too): every player-slot race longer than ~6 laps pitted car 0 for fuel - the star
+        -- from last pitted on lap 6-7 in all 7 climbs of 26/27 Sep. Repeat it once per race session, 3 s into the race; a
+        -- no-op when car 0 already has the load, in a timed race (lib/fuel.lua owns that) or with a harness `fuel` override.
+        if Harness.autopilot and autopilotArmed and okS and simH and simH.isSessionStarted and simH.raceSessionType == ac.SessionType.Race
+            and Harness._fuelSess ~= simH.currentSessionIndex then
+            Harness._fuelT = (Harness._fuelT or 0) + dt
+            if Harness._fuelT > 3.0 then
+                Harness._fuelSess, Harness._fuelT = simH.currentSessionIndex, 0
+                pcall(function()
+                    if Fuel.timedSession(simH) or (type(Harness.fuel) == 'number' and Harness.fuel > 0) or not physics.setCarFuel then return end
+                    local fs = {}
+                    for i = 1, simH.carsCount - 1 do local c = ac.getCar(i); if c and c.fuel and c.fuel > 0 then fs[#fs + 1] = c.fuel end end
+                    table.sort(fs)
+                    local want, c0 = fs[math.ceil(#fs / 2)], ac.getCar(0)
+                    if want and c0 and (c0.fuel or 0) < want - 3 then
+                        physics.setCarFuel(0, want)
+                        ac.log(string.format('Verve harness: car 0 fuel %.0f -> %.0f L at the green (AI median)', c0.fuel or 0, want))
+                    end
+                end)
+            end
+        end
+    end
+    -- (owner item 33) CSP stand-down, recomputed each frame so a harness-only override (Harness.cspMin) can raise the
+    -- minimum for the test. nil build never stands down. Routed through the disabled branch below: no car writes, the
+    -- cars are handed back once, and diag/feed/telemetry keep observing - exactly "do nothing, don't run parts failing".
+    gripFloor()   -- (0.16.3) after the harness hooks above (settings, presets, scripted changes), before any grip write
+    local cspEffMin = (Harness and type(Harness.cspMin) == 'number' and Harness.cspMin) or CSP_MIN
+    cspStoodDown = type(cspBuildCode) == 'number' and cspBuildCode < cspEffMin
+    if not G.enabled or cspStoodDown then
+        -- (local dev diagnostics still log a DISABLED race, so a baseline run can be compared; the race feed is an
+        -- observer and keeps running too, so a stock-AI race gets the same timing card as a Verve race)
+        -- (0.16) contactRecent in the DISABLED branch too, so diag's contact ring - and results.csv
+        -- `incidents` and `contact_events` derived from it - count taps identically in both arms.
+        -- Contacts.update now runs here (84c1f02), so the accessor has data to return.
+        -- rcErr is passed on the DISABLED branch too, and is genuinely 0 here because racecraft is not running.
+        -- A field present in one branch and absent in the other is how 84c1f02/e96168d made two arms partly
+        -- instrument rather than effect (contactRecent); the column must exist in both or they stop comparing.
+        if Diag then pcall(function() Diag.update(dt, { managed = 0, contactRecent = Contacts.recent, rcErr = Racecraft.errN or 0, recErr = Recovery.errN or 0, humErr = Human.errN or 0 }) end) end
+        Feed.ENABLED = G.raceFeed
+        -- (0.16, decision 0031) SET THIS IN THE DISABLED BRANCH TOO. It used to be assigned only below this
+        -- return, so with Verve off and sharing just unticked the flag kept its stale `true` and Telemetry.abort
+        -- still posted a row at quit - the one case where the player had actively said no.
+        Telemetry.ENABLED = G.shareData == true
+        if G.raceFeed then pcall(Feed.update, dt, {}) end
+        -- (0.16) MEASUREMENT PARITY, not a behaviour change. feed.lua promotes a collision tap to an incident only
+        -- `if Contacts.available`, and Contacts.update was called ONLY below this return - so a Verve-OFF race
+        -- counted damage jumps while a Verve-ON race counted jumps PLUS taps, and NO feed incident number could
+        -- cross an ON/OFF boundary. contacts.lua only observes (it makes no physics writes), so running it here
+        -- changes nothing about the race. Called AFTER Feed.update to match the enabled path's order exactly
+        -- (that path does feed at :543 then contacts at :544), so the one-frame lag is identical in both arms.
+        if G.raceFeed then pcall(Contacts.update, dt) end
+        pcall(Racecraft.offSwitch, false, false, Difficulty.stockLevel)   -- (0.15.1) switched off mid-session: hand the cars back, once
+        pcall(Fuel.offTick)                                                 -- (0.15.1) off across the green: no green load later
+        pcall(TyreHint.offTick)                                             -- (0.16.x) a raised or cut tyre hint handed back, once
+        return
+    end
+    local ok, sim = pcall(ac.getSim)
+    if not ok or not sim then return end
+
+    detectRestart(sim, dt)                    -- "Restart session" doesn't fire onSessionStart; catch it ourselves
+    Career.detect()                           -- once per session: is this a career event? what did the launcher configure?
+    Difficulty.CAREER_CURVE = G.careerCurve
+    Difficulty.SLIDER_CURVE = G.sliderCurve ~= false
+    Drivers.LOCKED = Career.active            -- career: the difficulty curve sets the field; profiles are off
+    Drivers.PACE_ABS = G.paceAbs == true      -- (lib/drivers.lua) profile pace against a fixed reference
+    Drivers.RATING_V2 = G.ratingV2 == true    -- (lib/drivers.lua) real drivers rated as pros around a Veteran
+    if Classes.DETECT_V2 ~= (G.classV2 == true) then Classes.DETECT_V2 = G.classV2 == true; pcall(Classes.reset) end   -- (lib/classes.lua) re-detect on a flip
+    Drivers.autoMatch()                       -- once per session: AC driver names that match the roster get their profile
+    Human.ENABLED       = true
+    Human.HUMAN_VAR     = G.humanVar
+    Human.INTENSITY     = G.intensity
+    Human.HUMAN_ERRORS  = G.humanErrors
+    Human.CLASS_PHYSICS = G.classPhys
+    Racecraft.ENABLED     = G.racecraft
+    Racecraft.START_X     = ({ calm = 1.0, racing = 0.5, stock = 0.0 })[G.raceStart] or 1.0
+    Strategy.ENABLED      = G.strategy ~= false
+    Strategy.LUNGE_MAX_M  = G.smarterDives and 12 or nil   -- (smarterDives, lgate_follow 2026-11-03) on: dive gate at 12 m centre-to-centre; off (default) = nil = 0.16.1 (no cap)
+    Strategy.LUNGE_OVL    = G.smarterDives and -9 or 0.5   -- gate overlap floor when on; 0.5 default when off (unused while LUNGE_MAX_M is nil)
+    Racecraft.INTENSITY   = G.rcIntensity
+    Racecraft.VARIABILITY = G.intensity     -- spreads per-driver aggression across the field
+    Racecraft.HINT_ABOVE  = tonumber(G.aboveExpert) or 100   -- (lib/tyrehint.lua) the Above-expert slider; 100 = off
+    Overrides.autosave    = S.autosave
+    Racecraft.beginFrame()
+    pcall(Racecraft.offSwitch, true, G.controlGrip, Difficulty.stockLevel)   -- (0.15.1) 'Control AI grip' unticked: grip handed back, once
+    Drivers.WILD_ON = Racecraft.WILD ~= false   -- one master switch (Racecraft.WILD) for the chaos driver in every module
+
+    local behaviourOn = G.humanVar or G.classPhys or G.racecraft
+    local n = 0
+    local diagPer = {}    -- per-car values we applied this frame (only read by the local diagnostics logger)
+    -- start at 0 so the player's own car is managed WHEN (and only when) it's under AI control
+    -- (Ctrl+C takeover): the isAIControlled gate below means we never touch it while you drive.
+    for i = 0, sim.carsCount - 1 do
+        local okCar, eCar = pcall(function()
+            local car = ac.getCar(i)
+            if not car or not car.isAIControlled then return end
+            if Recovery.PARK_HOLD and Recovery.isParked(i) then Recovery.holdParked(i, car); return end   -- (0.15) retired by Verve: hold it, never race it again
+            -- (0.16.1, community ask) past the flag: hand back what Verve changed ONCE, then never touch it again, so CSP's AI
+            -- cooldown lap (its throttle limiter) and AC's own drive to the pits are all that is left
+            if car.isRaceFinished then
+                if not Racecraft.finished[i] then Racecraft.finishHandBack(i, G.controlGrip, behaviourOn, Difficulty.stockLevel) end
+                return
+            end
+            if car.isInPitlane then Racecraft.pitRelease(i); return end   -- never touch a car doing a pit stop (player or AI); (H.MISTAKE_V2) drop a mistake's cap
+            Drivers.applyPace(i, Difficulty.levelFor(i)) -- configured/career difficulty, then the driver profile's pace on top
+            -- shift-point study (harness A/B): R.SHIFT_UP > 0 sets the AI's shift thresholds once per car (stops CSP's own dynamic logic)
+            if Racecraft.SHIFT_UP > 0 and not shiftSet[i] and (car.rpmLimiter or 0) > 0 then
+                shiftSet[i] = true
+                -- a value <= 1.5 is a fraction of THIS car's limiter (0.90 as a raw number short-shifted four models to half revs, 2026-09-17)
+                local up, down = Racecraft.SHIFT_UP, Racecraft.SHIFT_DOWN
+                if up <= 1.5 then up = up * car.rpmLimiter end
+                if down <= 1.5 then down = down * car.rpmLimiter end
+                pcall(physics.setAIShiftingThresholds, i, up, down)
+            end
+            local gOff, cOff = Human.getModifiers(i)
+            local gripApplied = nil
+            if G.controlGrip then
+                local grip = G.baseGrip + gOff
+                if Racecraft.TOP_GRIP > 0 then
+                    local prof, pct = Drivers.statsOf(i), nil
+                    if not prof and Racecraft.TOP_UNPROF > 0 then local l = Difficulty.levelFor(i); if l then pct = Difficulty.pctOf(i, l) end end
+                    grip = grip + Racecraft.topEase(i, Racecraft.TOP_GRIP * Racecraft.gripW(prof, pct), car, dt)   -- (0.15.1) eased on a moving car
+                end   -- (R.TOP_GRIP) top-tier pace
+                -- launch assist: a brief traction boost off a standing start (AC's AI bogs down off the
+                -- line), fading out as the car gets up to speed. Only at the very start of lap 1.
+                local sp = car.splinePosition or 1
+                if Racecraft.LAUNCH_WRAP then   -- (0.15, code review) a grid behind the line (spline 0.97-0.99 on lap 0) gets it too: once per car
+                    if launchDone[i] or (car.speedKmh or 0) >= 90 or (sp >= 0.012 and sp <= 0.9) then launchDone[i] = true; sp = 1 elseif sp > 0.9 then sp = 0 end
+                end
+                if (car.lapCount or 0) == 0 and sp < 0.012 then
+                    local s = car.speedKmh or 0
+                    if s < 90 then grip = grip + 0.07 * clamp(1 - s / 90, 0, 1) end
+                end
+                gripApplied = clamp(grip, 0.5, 1.6)
+                physics.setExtraAIGrip(i, gripApplied)
+            end
+            local rcCaut = Racecraft.evaluate(i, dt)
+            local wd = (Racecraft.WILD ~= false and Racecraft.WILD_NOLEARN and Drivers.isWild(i)) or nil
+            Troublespots.mute[i] = wd; Recovery.wildCar[i] = wd   -- (R.WILD_NOLEARN) a chaos driver's own crashes don't teach the field
+            local cautApplied = clamp(1.0 + cOff + rcCaut, 0.0, 16.0)
+            if behaviourOn then
+                physics.setAICaution(i, cautApplied)
+            end
+            if Diag then diagPer[i] = { hG = gOff, hC = cOff, grip = gripApplied, rc = rcCaut, caut = cautApplied, wu = Human.wu and Human.wu[i] or 0 } end
+            -- Formula DRS discipline: close DRS when the game says it isn't available (outside a
+            -- zone / not within range). Toggle-based with a cooldown so it doesn't flip-flop.
+            if G.drsDiscipline and Classes.keyOf(i) == 'formula' and car.drsPresent
+               and car.drsActive and not car.drsAvailable then
+                local nowc = os.clock()
+                if (drsCd[i] or 0) < nowc then
+                    local c = ac.overrideCarControls(i)
+                    if c then c.drs = true; c.kers = -1; c.mguhMode = -1 end   -- KERS / MGU-H: leave the car's own (struct defaults undocumented)
+                    drsCd[i] = nowc + 1.0
+                end
+            end
+            if G.controlGrip or behaviourOn then n = n + 1 end
+        end)
+        if not okCar then noteErr('car loop', eCar) end   -- one key for every car: the same fault in 18 cars logs once
+    end
+    managed = n
+
+    Recovery.ENABLED = G.recovery
+    Recovery.NO_REPOSITION = G.rescueCrashed == false   -- (0.16.1) off = stock AC's fate for a crashed car (no move, repair or hold)
+    Recovery.CRASH_REPAIR = G.crashRepair and not Recovery.NO_REPOSITION   -- crashRepair is core; the user's rescue switch still turns it off
+    Recovery.REPAIR_BODY  = G.repairOnTrack ~= false
+    if G.recovery then Recovery.update(dt) end
+    Fuel.SHORT_FUEL = G.shortFuel == true   -- (owner item 28) short-race fuel guard, read inside Fuel.update's gate
+    Fuel.TIMED = G.timedFuel == true        -- the timed / rate>1 branches run only with timedFuel itself on, not via shortFuel
+    if G.timedFuel or G.shortFuel then pc('fuel', Fuel.update, sim, dt) else pcall(Fuel.offTick) end   -- timed races + short-race guard: green fuel load / pit-box guard (lib/fuel.lua)
+    Troublespots.ENABLED = G.troubleSpots
+    Troublespots.update(dt)
+    pc('ers', Ers.update, sim, dt)   -- AI battery deployment (lib/ers.lua); returns at once while R.ERS_MODE is 'off'
+    pc('tyrehint', TyreHint.update, sim, dt)   -- cold-tyre AI tyre hint (lib/tyrehint.lua); returns at once while R.COLD_TYRE is 0
+
+    if Diag then pcall(function()
+        Diag.update(dt, {
+            managed = managed, attacking = Racecraft.attacking, defending = Racecraft.defending,
+            rcErr = Racecraft.errN or 0, recErr = Recovery.errN or 0, humErr = Human.errN or 0,   -- (R.errN) per-row instrument flags: any row with any of these > 0 is suspect
+
+            recovering = Recovery.count, crashRepairs = Recovery.repairedCount,
+            limpRepairs = Recovery.limpCount, retired = Recovery.retiredCount, crawlN = Racecraft.crawlN or 0,
+            roomN = Racecraft.roomN or 0, roomAct = Racecraft.roomAct or 0, bgN = Racecraft.bgN or 0, bgPassN = Racecraft.bgPassN or 0, evalN = Racecraft.evalN or 0, fastTuckN = Racecraft.fastTuckN or 0, yellowSlowN = Racecraft.yellowSlowN or 0,
+            hotSpots = Troublespots.hotCount(), crashRisk = Troublespots.crashiness(), isOval = Racecraft.isOval,
+            -- item 14 (owner's yes 2026-10-24, logging only): isOval alone cannot say WHY a genuine oval reads as
+            -- a road course, which it has done INTERMITTENTLY on Daytona - 1 of the 7 races since 00c5c43 (and NOT
+            -- the "42 consecutive" I first claimed: that count swept in 41 Bahrain ROAD-course races). These five
+            -- separate the candidates in one row: ovalSampled false = never got geometry; sampled true with
+            -- ovalTotal ~0 = DEGENERATE points at load (the leading hypothesis); a real total with a ratio below
+            -- ovalOneway = the threshold genuinely rejecting it.
+            ovalSampled = Racecraft.ovalSampled, ovalTotal = Racecraft.ovalTotal, ovalRatio = Racecraft.ovalRatio,
+            ovalOneway = Racecraft.OVAL_ONEWAY, ovalChecked = Racecraft.ovalChecked,
+            peak = Troublespots.peakHeat(), storeLen = Troublespots.storeLen, saveOk = Troublespots.lastSaveOk,
+            per = diagPer, rc = Racecraft.last, recState = Recovery.stateOf, cv2 = Racecraft.cv2, episodes = Strategy.episodes,
+            gsnap = gsnapshot,   -- (presets) diag calls this ONCE at its one-shot for the ev:settings read-back (no per-frame table)
+            recentDrops = Recovery.recentDrops, dropN = Recovery.dropN, dropOK = Recovery.dropOK, dropFailN = Recovery.dropFailN, dropFailClear = Recovery.dropFailClear, boxRescueN = Recovery.boxRescueN, boxSeenN = Recovery.boxSeenN, boxTryN = Recovery.boxTryN, boxOkN = Recovery.boxOkN, dropsOff = Recovery.dropsOff, fuelLoadN = Fuel.loadN, fuelBoxN = Fuel.boxFixN, fuelReN = Fuel.boxReN,
+            mvN = Strategy.attempts, mvOK = Strategy.ok, mvT = Strategy.byTypeString(), gateN = Recovery.gateMoves,
+            fmOnlyN = Racecraft.fmOnlyN,     -- premise counter for R.FASTER_MARGIN_X: 0 by construction at X=1.0
+            fwdSign = (Recovery.fwdSign and Recovery.fwdSign() or 0), dropFlips = Recovery.dropFlips,
+            suspPits = Recovery.suspPitCount, faults = Fault.count, penalties = Fault.penCount, contacts = Contacts.count,
+            contactRecent = Contacts.recent,
+            conflictLevel = Watch.conflicts.level, conflictAggr = Watch.conflicts.aggr,
+            wet = (function() local w = 0; pcall(function() w = sim.rainWetness or 0 end); return w end)(), rain = (function() local r = 0; pcall(function() r = sim.rainIntensity or 0 end); return r end)(),
+        })
+    end) end
+    Feed.ENABLED = G.raceFeed
+    -- every module error counts toward luaErrors (the reports' error column), not only the per-car loop's (review 2026-09-28)
+    if G.raceFeed then pc('feed', Feed.update, dt, { rc = Racecraft.last, recState = Recovery.stateOf, recentDrops = Recovery.recentDrops }) end
+    pc('contacts', Contacts.update, dt)
+    pc('fault', Fault.update, dt)
+    pc('watch', Watch.update, dt)
+    Telemetry.ENABLED = G.shareData == true
+    pcall(Racecraft.cspLatGrip)   -- (0.16) reads CSP's AI grip key ONCE; cached, so this is a string compare
+    Telemetry.VERSION = Update.LOCAL_VERSION or '0.0.0'
+    Telemetry.UNATTENDED = Harness ~= nil and Harness.autopilot == true
+    -- AC puts the camera back to cockpit when a weekend moves from practice to the race, and the chase camera
+    -- was set once, 2 s into the FIRST session only - so every weekend race ran the heavier cockpit render
+    -- unattended (spotted by eye on the second test PC, 2026-09-24). Re-asserting beats detecting the change: a timer
+    -- cannot miss an event it never has to notice.
+    if Harness and Harness.autopilot and os.clock() - harnessCamT > 1.0 then
+        harnessCamT = os.clock()
+        pcall(function() ac.setCurrentCamera(ac.CameraMode.Drivable); ac.setCurrentDrivableCamera(ac.DrivableCamera.Chase) end)
+    end
+    if Telemetry.ENABLED then pc('telemetry', Telemetry.update, dt, telemetryCtx) end   -- the builder, not a table: built inside the pcall, once a second
+    local tFrame1 = os.preciseClock and os.preciseClock() or os.clock()
+    frameMs = frameMs + (tFrame1 - tFrame0) * 1000; frameN = frameN + 1
+end
+
+-- everything the anonymous race report needs from the other modules (no names, no paths)
+telemetryCtx = function()
+    local settings = {}
+    for _, k in ipairs({ 'humanErrors', 'drsDiscipline', 'controlGrip', 'careerCurve', 'intensity', 'rcIntensity', 'baseGrip', 'raceStart', 'sliderCurve', 'repairOnTrack', 'paceAbs' }) do
+        local v = G[k]; settings[#settings + 1] = string.format('"%s":%s', k, type(v) == 'number' and string.format('%.2f', v) or (type(v) == 'string' and ('"' .. v .. '"') or tostring(v == true)))
+    end
+    local pu, au, wu = 0, 0, 0
+    pcall(function() pu, au, wu = Drivers.counts() end)
+    if (wu or 0) > 0 then settings[#settings + 1] = string.format('"wildDrivers":%d', wu) end   -- chaos drivers: in the settings JSON (no schema change), only when one races
+    pcall(function()   -- (0.15.1) the launcher's AI aggression (car.aiAggression, read once per car before Verve writes it; 0 % -> 0.05,
+        local v = {}   -- 50 % -> 0.175, 100 % -> 0.65): how many players leave it at 0? decides R.AGGR_FLOOR. In the settings JSON: no schema change
+        for i, a in pairs(Racecraft.baseAggr or {}) do if i ~= 0 and type(a) == 'number' and a >= 0 then v[#v + 1] = a end end   -- (not slot 0: the autopilot reads 1.0)
+        if #v > 0 then table.sort(v); settings[#settings + 1] = string.format('"launcherAggr":%.3f', v[math.floor((#v + 1) / 2)]) end
+    end)
+    pcall(function() local f = Fuel.summary(); if f then settings[#settings + 1] = f end end)   -- (0.15.2) timed/lapped fuel work, if any
+    pcall(function()   -- (A2, 0.16) WHY each car was parked, as a {reason:count} tally in the settings blob - no schema change.
+        local t, out = {}, {}   -- the report has only ever carried retired_by_verve, a COUNT, so a player's "Verve retired 6 of my 7
+        for i, w in pairs(Recovery.parkWhy or {}) do   -- cars" could not be told from six genuine wrecks. Every community case that
+            if i ~= 0 and type(w) == 'string' then t[w] = (t[w] or 0) + 1 end   -- matters shows 0 incidents, so the REASON is the finding.
+        end
+        for w, c in pairs(t) do out[#out + 1] = string.format('"%s":%d', w, c) end
+        if #out > 0 then table.sort(out); settings[#settings + 1] = '"parkWhy":{' .. table.concat(out, ',') .. '}' end
+    end)
+    local playerModel = ''; pcall(function() playerModel = ac.getCarID(0) or '' end)
+    local cspBuild = nil; pcall(function() cspBuild = ac.getPatchVersionCode() end)
+    return {
+        classOf = Classes.keyOf, recState = Recovery.stateOf,
+        levelOf = function(i) local a = Drivers.appliedLevel(i); if a ~= nil then return a end; return Difficulty.levelFor(i) end,   -- what the car runs at (a driver profile sets its own)
+        meter = Career.meter, isCareer = Career.active, careerEvent = Career.active and (Career.series .. '/' .. Career.event) or nil,
+        laps = Career.laps, playerModel = playerModel, cspBuild = cspBuild,
+        retiredByVerve = Recovery.retiredCount, crashRepairs = Recovery.repairedCount, limpRepairs = Recovery.limpCount, suspPits = Recovery.suspPitCount,
+        verveMs = frameN > 0 and frameMs / frameN or nil, luaErrors = luaErrors, firstErrAt = firstErrAt, track = (function() local t = ''; pcall(function() t = ac.getTrackID() or '' end); return t end)(),
+        drops = Recovery.dropN, dropsOk = Recovery.dropOK, troubleSpots = Troublespots.hotCount(), crawlN = Racecraft.crawlN or 0,
+        faults = Fault.count, penalties = Fault.penCount,
+        profilesUsed = pu, archetypesUsed = au,
+        appliedJson = string.format('{"meter":%d,"career":%s,"curve":%s,"ramp":%.2f}', Career.meter or 100, tostring(Career.active), tostring(G.careerCurve == true), Career.ramp or 0),
+        settingsJson = '{' .. table.concat(settings, ',') .. '}',
+    }
+end
+ac.onRelease(function() pcall(function() local okS, simR = pcall(ac.getSim); if okS and simR then Telemetry.abort('quit', simR, telemetryCtx()) end end); pcall(Feed.finish)   -- (Feed.finish: race_end + the last lines; it was never called)
+    pcall(Troublespots.save, true) end)   -- (lean016) the learned map's last minutes (in-race saves are now every T.SAVE_EVERY s)
+
+ac.onSessionStart(function()
+    -- harness: every session of a weekend needs its own Drive press + autopilot arming
+    fieldMoved, racedT = false, 0
+    sessionReset()
+end)
+
+-- ------------------------------- UI -------------------------------
+local CLASS_OPTS = { 'auto', 'formula', 'formula_jr', 'prototype', 'hypercar', 'gt', 'road', 'touring', 'vintage', 'drift', 'kart', 'rally', 'nascar' }
+
+local function toggle(label, key, help)
+    if ui.checkbox(label, G[key]) then setG(key, not G[key]) end
+    if help and ui.itemHovered() then ui.setTooltip(help) end
+end
+
+-- (0.16.1) tooltips the main window and the compact quick-settings window (windowQuick) share, so the two never drift apart
+local TIP = {
+    humanErrors = 'One visible mistake per driver every few laps: a late brake and lock-up, a missed apex, or a snap and lift. The rate follows pace, so a rookie errs every 2-3 laps, a midfielder every 4-5, a veteran every 9-15, and the quickest driver in a class less often still. Offs are rare and spins rarer. Formula, Prototype and Hypercar get half those off and spin odds, and on NASCAR and drift cars a mistake never becomes an off or a spin. Race sessions only, never the opening lap, never your own car.',
+    raceStart = 'How the AI launches and takes the first lap. Calm: staggered release and extra spacing into the first corners (the fewest first-lap pile-ups). Racing: half of that - backmarkers go for it, expect the occasional turn-1 tangle, as in real life. Stock: none of it, AC\'s own start.',
+    aboveExpert = 'For when difficulty 100 is not hard enough. Above 100, GT3 cars at full difficulty get faster still, up to 120. 100 = off (the normal game). Other kinds of car are unchanged.',
+    rescueCrashed = 'On: a stuck or wrecked car is repaired and put back on the track (the default). Off: crashed cars are left to the game: a car that can\'t continue retires, as in stock AC.',
+    strategy = 'Planned manoeuvres on top of the reactive racecraft, per class (a GT driver out-brakes, a formula driver sets it up on the straight, a stock car slingshots). On at any difficulty whenever this is ticked; each car\'s own pace decides how much of the playbook it uses (a Rookie never switchbacks, a Veteran does).',
+    smarterDives = 'Smarter dives: the AI only dives up the inside from close behind, about two and a half car lengths, so fewer hopeless lunges and tighter lines at the apex. In our tests a little more contact overall. Off = today\'s behaviour.',
+}
+
+local function comboFor(tag, previewText, currentKey, opts, onPick)
+    ui.setNextItemWidth(120)
+    ui.combo(tag, previewText, nil, function()
+        for _, opt in ipairs(opts) do
+            if ui.selectable(opt, opt == currentKey) then onPick(opt) end
+        end
+    end)
+end
+
+-- searchable, class-filtered driver dropdown for one grid slot (index). Type to narrow the list.
+local driverFilter = {}
+local function driverComboFor(idx)
+    local cls = Classes.keyOf(idx)
+    local curKey = Drivers.profileOf(idx)
+    local preview = curKey and Drivers.nameOf(curKey) or '- driver -'
+    ui.setNextItemWidth(150)
+    ui.combo('##drv' .. idx, preview, nil, function()
+        local typed = ui.inputText('search##ds' .. idx, driverFilter[idx] or '')
+        if type(typed) == 'string' then driverFilter[idx] = typed end
+        local fl = (driverFilter[idx] or ''):lower()
+        if ui.selectable('- none -', curKey == nil) then Drivers.setProfile(idx, nil) end
+        for _, d in ipairs(Drivers.rosterFor(cls)) do
+            if fl == '' or d.name:lower():find(fl, 1, true) then
+                if ui.selectable(d.name, d.key == curKey) then Drivers.setProfile(idx, d.key) end
+                if d.wild and ui.itemHovered() then ui.setTooltip('Chaos driver: top pace, elbows out, almost no margin. He dives from too far back, squeezes and rarely backs out. Expect contact. Never picked by Randomize.') end
+            end
+        end
+    end)
+end
+
+-- DRIVER is per grid SLOT (every individual racer), so identical cars can each get a different
+-- driver. One row per car on the grid, labelled by number + its in-game driver name.
+local function driverGridList()
+    local sim = ac.getSim()
+    if not sim then ui.textWrapped('No session yet. Open Verve on the grid before the lights.'); return end
+    if sim.carsCount <= 0 then ui.textWrapped('No cars in this session.'); return end
+    for i = 0, sim.carsCount - 1 do          -- slot 0 is the player's car (for Ctrl+C takeover)
+        local drv = 'Car ' .. (i + 1)
+        pcall(function() local d = ac.getDriverName(i); if type(d) == 'string' and #d > 0 then drv = d end end)
+        ui.text(string.format('%2d.', i + 1))
+        ui.sameLine()
+        driverComboFor(i)
+        -- AC's own driver label. Once a profile is picked the AI is renamed to it, so this reads the same;
+        -- when no profile is set it's just AC's label (Content Manager's name) and does nothing.
+        -- (sameLine only when a label follows -- a dangling sameLine pulled the NEXT row up onto this one)
+        if i == 0 then ui.sameLine(); ui.textColored(drv .. '  (you)', rgbm(0.6, 0.6, 0.6, 1))
+        elseif not Drivers.profileOf(i) then ui.sameLine(); ui.textColored(drv, rgbm(0.5, 0.5, 0.5, 1)) end
+        if Drivers.isWild(i) then ui.sameLine(); ui.textColored('chaos', rgbm(0.95, 0.45, 0.3, 1)) end   -- the Wrecking Crew (a label follows this sameLine)
+    end
+end
+
+-- CLASS is a per-MODEL physics setting (all cars of a model share it) -- one compact row per model.
+local function classOverrideList()
+    local seen, models = {}, {}
+    pcall(function()
+        local sim = ac.getSim()
+        if not sim then return end
+        for i = 0, sim.carsCount - 1 do
+            local id = nil
+            pcall(function() id = ac.getCarID(i) end)
+            if id and not seen[id] then
+                seen[id] = true
+                local nm = id
+                pcall(function() nm = ac.getCarName(i) or id end)
+                models[#models + 1] = { id = id, idx = i, name = nm }
+            end
+        end
+    end)
+    table.sort(models, function(a, b) return a.name < b.name end)
+
+    if #models == 0 then
+        ui.textWrapped('No cars in this session.')
+    else
+        for _, m in ipairs(models) do
+            local auto = Classes.autoKeyOf(m.idx)
+            local curClass = Overrides.classOverride(m.id) or 'auto'
+            local classPreview = (curClass == 'auto') and (auto and ('auto (' .. auto .. ')') or 'auto') or curClass
+            ui.text(m.name)
+            ui.sameLine()
+            comboFor('##cls' .. m.id, classPreview, curClass, CLASS_OPTS, function(opt) Overrides.setClass(m.id, opt) end)
+            ui.sameLine()
+            if ui.button('Reset##r' .. m.id) then Overrides.resetCar(m.id) end
+        end
+    end
+
+    -- saved overrides for models NOT in this race (shown separately so the list isn't confusing)
+    local others = {}
+    for _, id in ipairs(Overrides.ids()) do if not seen[id] then others[#others + 1] = id end end
+    if #others > 0 then
+        ui.newLine()
+        ui.textColored('Saved overrides for other cars (not in this race):', rgbm(0.55, 0.55, 0.55, 1))
+        table.sort(others)
+        for _, id in ipairs(others) do
+            local curClass = Overrides.classOverride(id) or 'auto'
+            local classPreview = (curClass == 'auto') and 'auto' or curClass
+            ui.text(id)
+            ui.sameLine()
+            comboFor('##clsO' .. id, classPreview, curClass, CLASS_OPTS, function(opt) Overrides.setClass(id, opt) end)
+            ui.sameLine()
+            if ui.button('Reset##rO' .. id) then Overrides.resetCar(id) end
+        end
+    end
+end
+
+-- (0.16.1, community ask: "would be nice if it showed up on the setup menu") the few settings people change before a race, in
+-- one compact panel: the main window's settings panel (manifest FUNCTION_SETTINGS + FLAGS SETTINGS, the gear icon) and the
+-- setup-screen window if CSP shows one there. Same keys, same tooltips (TIP) as the main window.
+function script.windowQuick()
+    if cspStoodDown then ui.textWrapped('Verve is off: it needs a newer Custom Shaders Patch.'); return end
+    if ui.checkbox('Enable Verve', G.enabled) then setG('enabled', not G.enabled) end
+    toggle('Human errors', 'humanErrors', TIP.humanErrors)
+    do
+        local names = { calm = 'Calm', racing = 'Racing', stock = 'Stock' }
+        ui.text('Race start'); ui.sameLine(150)
+        comboFor('##raceStartQ', names[G.raceStart] or 'Calm', G.raceStart, { 'calm', 'racing', 'stock' }, function(o) setG('raceStart', o) end)
+        if ui.itemHovered() then ui.setTooltip(TIP.raceStart) end
+    end
+    do
+        local ax = ui.slider('Above-expert AI##axQ', tonumber(G.aboveExpert) or 100, 100, 120, '%.0f')
+        setGnum('aboveExpert', ax)
+        if ui.itemHovered() then ui.setTooltip(TIP.aboveExpert) end
+    end
+    toggle('Rescue crashed cars', 'rescueCrashed', TIP.rescueCrashed)
+    toggle('Tactics: set-up passes, late-brake lunges, switchbacks', 'strategy', TIP.strategy)
+    ui.textColored('Everything else is in the Verve AI app window.', rgbm(0.6, 0.6, 0.6, 1))
+end
+
+function script.windowMain()
+    ui.pushFont(ui.Font.Title)
+    ui.textColored('Verve', rgbm(0.98, 0.85, 0.02, 1))   -- brand yellow (#FBDA06 on near-black)
+    ui.popFont()
+    ui.sameLine()
+    ui.textColored('AI that feels human', rgbm(0.6, 0.6, 0.6, 1))
+
+    -- (owner item 33) stood down below the CSP minimum: show one clear message and nothing else - Verve is off.
+    if cspStoodDown then
+        ui.separator()
+        ui.textColored(string.format('Verve needs Custom Shaders Patch build %d or newer (this is build %s).',
+            CSP_MIN, tostring(cspBuildCode)), rgbm(0.98, 0.5, 0.2, 1))
+        ui.textWrapped('Verve is off for this session - it is not touching the AI. Update CSP to use it.')
+        return
+    end
+
+    Update.check()
+    if Update.latest then
+        ui.textColored('Update available: v' .. Update.latest .. (Update.summary and ('  -  ' .. Update.summary) or ''), rgbm(0.98, 0.85, 0.02, 1))
+        if Update.downloadUrl then
+            if ui.button('Get the update##upd') then pcall(function() if Update.safeUrl(Update.downloadUrl) then os.openURL(Update.downloadUrl) end end) end
+            ui.sameLine(); ui.textColored(Update.downloadUrl, rgbm(0.5, 0.5, 0.5, 1))
+        end
+    end
+
+    ui.separator()
+    if ui.checkbox('Enable Verve', G.enabled) then setG('enabled', not G.enabled) end
+
+    -- manual escape hatch: unstick YOUR car (repair + drop back on the racing line facing forward)
+    -- (0.16.6) the window now shows on the setup screen too: there the session has not started and the car is in its box, so the
+    -- button is replaced by a note (forceRecover also refuses a manual press while sim.isInMainMenu).
+    local inSetupScreen = false
+    pcall(function() inSetupScreen = (ac.getSim().isInMainMenu == true) end)
+    if inSetupScreen then
+        ui.textColored('Reset my car: available once you are driving.', rgbm(0.5, 0.5, 0.5, 1))
+    else
+        if ui.button('Reset my car (unstick)') then
+            -- Always the player's own car (index 0 in single-player), NOT the focused camera car -- otherwise
+            -- watching another driver would reset THAT opponent.
+            pcall(function() Recovery.forceRecover(0) end)
+        end
+        if ui.itemHovered() then ui.setTooltip('Stuck, beached, or wedged in the pits? Repairs your car and drops it back on the racing line facing forward. Press it WHILE stuck -- a car that has already retired can\'t be brought back.') end
+    end
+
+    -- save / session-only bar
+    local as = S.autosave
+    if ui.checkbox('Auto-save changes', as) then
+        S.autosave = not as
+        Overrides.setAutosave(S.autosave)
+        if S.autosave then commitGlobals() end
+    end
+    if ui.itemHovered() then ui.setTooltip('On: every change saves instantly. Off: changes are LIVE for this race but only persist when you press Save.') end
+    if not S.autosave then
+        if globalsDirty() or Overrides.dirty() then
+            if ui.button('Save changes') then commitGlobals(); Overrides.save() end
+            ui.sameLine()
+            if ui.button('Revert') then revertGlobals(); Overrides.revert() end
+            ui.sameLine()
+            ui.textColored('unsaved (live this race)', rgbm(1, 0.7, 0.2, 1))
+        else
+            ui.textColored('all saved', rgbm(0.5, 0.75, 0.45, 1))
+        end
+    end
+    ui.newLine()
+
+    -- Presets: named snapshots of the global settings below (NOT per-car overrides)
+    ui.text('Presets'); ui.sameLine(150)
+    presetUI.name = ui.inputText('##presetName', presetUI.name)
+    ui.sameLine()
+    if ui.button('Save as##preset') and presetUI.name ~= '' then
+        Presets.save(presetUI.name, G); presetUI.sel = presetUI.name; presetUI.name = ''
+    end
+    presetUI.sel = presetUI.sel or Presets.DEFAULT
+    comboFor('##presetPick', presetUI.sel, presetUI.sel, Presets.names(), function(o) presetUI.sel = o end)
+    ui.sameLine()
+    if ui.button('Load##preset') then
+        local p = Presets.load(presetUI.sel, DEFAULTS)
+        if p then for k, v in pairs(p) do setG(k, v) end end
+    end
+    ui.sameLine()
+    if ui.button('Delete##preset') and presetUI.sel ~= Presets.DEFAULT then
+        Presets.delete(presetUI.sel); presetUI.sel = Presets.DEFAULT
+    end
+    if ui.itemHovered() then ui.setTooltip('Named snapshots of the settings below. Presets do NOT include per-car driver or class overrides.') end
+    ui.newLine()
+
+    if Watch.detail ~= '' then
+        ui.textColored(Watch.detail, rgbm(1, 0.7, 0.2, 1))
+        ui.textWrapped('Another app or a CSP setting (rubber-banding, adaptation, AI Whisperer) is writing the same AI values as Verve. Turn that off, or Verve difficulty and racecraft will fight it.')
+        ui.separator()
+    end
+    if otherAI then
+        ui.textColored('Heads up: "' .. otherAI .. '" is installed.', rgbm(1, 0.7, 0.2, 1))
+        ui.textWrapped('It also controls AI grip, so running both fights over the same setting. ' ..
+            'Turn off "Control AI grip" below to defer to it (Verve still self-recovers), ' ..
+            'or disable the other app to let Verve drive.')
+        ui.separator()
+    end
+
+    ui.text('What Verve does (always on)')
+    ui.textWrapped('Human pace variability  -  class-aware tyre, wet and dirty-air physics  -  racecraft (overtaking, defending, blue flags, yellow flags)  -  self-recovery (a stuck car drives itself out; with Rescue crashed cars on, it is also repaired and set back on the racing line, and genuinely wrecked cars retire)  -  trouble-spot learning per track  -  at high difficulty, GT3 cars push harder on a clear road.')
+    if ui.itemHovered() then ui.setTooltip('These are Verve. They can\'t be half-enabled: turn Verve off to get stock AC.\nGT3 cars: from difficulty 90 up, a GT3 car with clear road ahead trusts its tyres more and is quicker. It eases off as it closes on another car, so it does not run into it. Other kinds of car are unchanged.') end
+
+    ui.newLine()
+    ui.text('Options')
+    toggle('Human errors', 'humanErrors', TIP.humanErrors)
+    toggle('Difficulty slider in lap-time steps (90 = +5%, 80 = +10%)', 'sliderCurve', 'AC\'s own level scale is not linear: on race cars 90 is 2% slower than 100 but 80 is 17% slower, and below that the AI gets erratic. On, the slider means measured lap-time steps for the car class you are racing: 100 = expert pace, 90 = +5%, 80 = +10%, 70 = +15%. Off, the raw AC level. Since 0042 the field always follows the slider: a grid whose opponents sit at other levels keeps its spacing and is shifted so the fastest car is at the slider.')
+    toggle('Career: scale difficulty across the series', 'careerCurve', 'In AC career events the difficulty meter picks a pace band and each event moves you through it: soft first series, a real fight at the end, never leaving the band. Off = every career event at the meter\'s flat level. (Outside career the meter always applies as set.)')
+    do
+        local names = { calm = 'Calm', racing = 'Racing', stock = 'Stock' }
+        ui.text('Race start'); ui.sameLine(150)
+        comboFor('##raceStart', names[G.raceStart] or 'Calm', G.raceStart, { 'calm', 'racing', 'stock' }, function(o) setG('raceStart', o) end)
+        if ui.itemHovered() then ui.setTooltip(TIP.raceStart) end
+    end
+    do
+        local ax = ui.slider('Above-expert AI##ax', tonumber(G.aboveExpert) or 100, 100, 120, '%.0f')
+        setGnum('aboveExpert', ax)
+        if ui.itemHovered() then ui.setTooltip(TIP.aboveExpert) end
+    end
+    toggle('Rescue crashed cars', 'rescueCrashed', TIP.rescueCrashed)
+    toggle('Repair damage on track', 'repairOnTrack', 'When a crashed car is rescued (above). On: its body is repaired (the default). Off: it keeps its damage and pits for repairs like stock AC.')
+    toggle('Tactics: set-up passes, late-brake lunges, switchbacks', 'strategy', TIP.strategy)
+    toggle('Smarter dives', 'smarterDives', TIP.smarterDives)
+    -- (0.16, decision 0032) The text now says what the code actually does: races only (which the session gate
+    -- enforces), including one left early (T.abort sends it at the next launch), and the install number, which
+    -- the owner chose to keep and describe rather than remove.
+    -- (item 11 T4/T3, 2026-10-22, decision 0032) The old text named six categories and the report sends far
+    -- more: conditions, your settings, performance, build numbers and per-car detail were all unlisted. It also
+    -- said "After each race", which overstated WHEN - with Verve off, Telemetry.update never runs, so `st` is
+    -- nil and even Telemetry.abort returns early: nothing is sent at all from a Verve-off race. Both are fixed
+    -- in the TEXT rather than the behaviour, which is the safe direction for a consent string. The full field
+    -- list lives in the README; this stays a summary by category, but an honest one.
+    toggle('Send anonymous race stats to improve Verve', 'shareData', 'Only races run WITH Verve on - never practice or qualifying, and nothing at all is sent from a race you run with Verve switched off. One small anonymous summary per race, including one you leave early: the race (track, layout, session type, car models and classes, laps, difficulty, career event), how the field did (finishers, retirements and how many of them Verve retired, contact and solo incidents, repairs, lead changes, field spread, repositions, parked or frozen cars), your own car (grid and finish position, laps, best and median lap, incidents, damage, pit stops), the same per-car detail for every other car, the conditions (weather type and controller, wet or dry, air and road temperature, time of day), your Verve settings and applied difficulty, performance (average fps, Verve\'s own frame time, a count of Lua errors and the Verve file and line where the first one happened, never the error text), the Verve and CSP build numbers, and a random install number so repeat reports from one copy can be grouped. No names, no gamer tag, no file paths, no hardware ids. Off by default - the full field list is in the README.')
+    toggle('Formula DRS discipline', 'drsDiscipline', 'On Formula cars, close DRS when the game says it is not available (outside a DRS zone or not within range). In-zone DRS is left to the game.')
+    if ui.checkbox('Advanced', G.showAdvanced) then setG('showAdvanced', not G.showAdvanced) end
+    if G.showAdvanced then
+        toggle('Control AI grip', 'controlGrip', 'Verve sets each AI car grip = base + variability. Turn OFF to defer grip to another AI mod (recovery still works).')
+        toggle('Race feed (for Verve Booth / Race Engineer)', 'raceFeed', 'Writes a structured, timestamped race feed (positions, gaps, overtakes, incidents, pits, and Verve\'s own decisions) to Documents/Assetto Corsa/verve_feed/ for companion tools. Off unless you use them.')
+    end
+
+    ui.newLine()
+    ui.text('Tuning')
+    local iv = ui.slider('Variability intensity##iv', G.intensity, 0.0, 1.5, '%.2f')
+    setGnum('intensity', iv)
+    if ui.itemHovered() then ui.setTooltip('Per-driver spread: pace/consistency differences AND how much drivers vary in aggression, so the field isn\'t uniform'
+        .. (Human.MV_INTENSITY and ', AND how often and how large their visible mistakes are' or '')
+        .. '. 0 = robotic/identical, 0.5 = subtle (default), 1.5 = dramatic.') end
+    local rc = ui.slider('Racecraft intensity##rc', G.rcIntensity, 0.0, 1.5, '%.2f')
+    setGnum('rcIntensity', rc)
+    if ui.itemHovered() then ui.setTooltip('How hard the field attacks/defends. 0 = passive, 0.7 = default, 1.5 = elbows out.') end
+    local bg = ui.slider('Base AI grip##bg', G.baseGrip, Racecraft.STOCK_AI_GRIP or 1.20, 1.50, '%.2f')
+    setGnum('baseGrip', bg)
+    if ui.itemHovered() then ui.setTooltip('Grip the AI has for its own racing line. 1.20 is the stock AC AI grip, the default and the minimum: with less grip than that the AI drives too fast for its tyres and crashes. Above 1.20 = extra stick and speed (keeps them planted and competitive at lower difficulty). Pace also scales with the race difficulty % (cars without a driver; a driver sets its own pace).') end
+
+    ui.newLine()
+    ui.separator()
+    ui.textColored('Drivers (per grid slot)', rgbm(0.6, 0.6, 0.6, 1))
+    ui.textWrapped('Give any individual racer its own driver -- a real racer or a generic archetype -- and each grid slot is separate, so even a grid of identical cars can be all different drivers. Each gets that driver\'s pace, aggression and risk: a driver sets the car\'s pace outright (Rookie = difficulty 80, Midfielder = 90, Veteran about 98, the fastest real drivers 99-100), and the difficulty slider sets cars without a driver. Kept through a race weekend on the same grid; a new grid starts fresh. Tip: pause on the grid with ESC to set up, or just hit Randomize.')
+    if Career.active then
+        ui.textColored('Career event: driver profiles are off. The career difficulty curve sets the field (see Options).', rgbm(0.8, 0.7, 0.4, 1))
+        ui.textColored(Difficulty.describe(), rgbm(0.6, 0.6, 0.6, 1))
+    else
+        if ui.button('Randomize driver grid') then Drivers.randomizeGrid() end
+        if ui.itemHovered() then ui.setTooltip('Assign every AI car a unique driver from its class (overflow uses the Rookie / Midfielder / Veteran archetypes). Kept through a race weekend on the same grid (practice, qualifying, race); a different grid starts fresh.') end
+        ui.sameLine()
+        if ui.button('Clear drivers') then Drivers.clearAll() end
+        if ui.button('All Rookies') then Drivers.fillGrid('arch_rookie') end
+        if ui.itemHovered() then ui.setTooltip('Give every AI car the Rookie profile. Use Randomize or Clear to undo.') end
+        ui.sameLine()
+        if ui.button('All Midfielders') then Drivers.fillGrid('arch_midfield') end
+        if ui.itemHovered() then ui.setTooltip('Give every AI car the Midfielder profile.') end
+        ui.sameLine()
+        if ui.button('All Veterans') then Drivers.fillGrid('arch_veteran') end
+        if ui.itemHovered() then ui.setTooltip('Give every AI car the Veteran profile.') end
+        driverGridList()
+    end
+    ui.newLine()
+    ui.textColored('Car class (per model -- physics)', rgbm(0.6, 0.6, 0.6, 1))
+    ui.textWrapped('Auto-detected from each car and drives its physics (warm-up, wet, mistakes). Override if it guesses wrong -- applies to every car of that model.')
+    classOverrideList()
+    ui.newLine()
+    if ui.button('Reset settings to defaults') then resetGlobals() end
+    ui.sameLine()
+    if ui.button('Clear all car overrides') then Overrides.resetAll() end
+
+    ui.newLine()
+    ui.separator()
+    ui.textColored('Status', rgbm(0.6, 0.6, 0.6, 1))
+    if not G.enabled then
+        ui.text('Verve is OFF.')
+    else
+        ui.text(string.format('AI cars managed: %d', managed))
+        if not Career.active and Difficulty.sliderOverride then ui.textColored('Difficulty: ' .. Difficulty.sliderOverride, rgbm(0.8, 0.7, 0.4, 1)) end
+        if G.racecraft then
+            ui.text(string.format('Attacking: %d   Defending: %d', Racecraft.attacking or 0, Racecraft.defending or 0))
+            ui.text('Track read as: ' .. (Racecraft.isOval and 'Oval / speedway' or 'Road course'))
+            if G.strategy ~= false then ui.text(string.format('Planned manoeuvres: %d (%d got past)', Strategy.attempts or 0, Strategy.ok or 0)) end
+        end
+        if G.troubleSpots then
+            ui.text(string.format('Trouble spots learned on this track: %d', Troublespots.hotCount()))
+            local crash = Troublespots.crashiness()
+            if crash > 0.05 then ui.text(string.format('Track crash-risk: %d%% (field calmed to suit)', math.floor(crash * 100 + 0.5))) end
+        end
+        ui.text(string.format('Recovering right now: %d', Recovery.count or 0))
+        if G.crashRepair then
+            ui.text(string.format('Crash repairs & rejoined: %d', Recovery.repairedCount or 0))
+            ui.text(string.format('Limp repairs (damaged cars re-bodied): %d', Recovery.limpCount or 0))
+            ui.text(string.format('Retired (genuinely wrecked): %d', Recovery.retiredCount or 0))
+        end
+        pcall(function()
+            local fc = ac.getSim().focusedCar
+            if fc and fc >= 0 then
+                local dk = Drivers.profileOf(fc)
+                ui.text('Focused car: ' .. tostring(Classes.keyOf(fc)) .. (dk and ('  -  ' .. Drivers.nameOf(dk)) or ''))
+            end
+        end)
+    end
+end

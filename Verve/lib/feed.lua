@@ -1,0 +1,462 @@
+-- (shared with the Verve Broadcast Booth and Race Engineer projects; the schema lives in verve-broadcast/feed/SCHEMA.md)
+-- Verve Race Feed (feed/SCHEMA.md, v1) -- a CSP Lua module for Verve.
+--
+-- Emits a JSON-lines race feed to Documents/Assetto Corsa/verve_feed/<date>_<track>.jsonl: a header,
+-- a state snapshot every STATE_EVERY seconds, and discrete events (laps, overtakes, incidents, pits,
+-- retirements, yellows, repositions, and Verve's own decisions) as they happen. Built to be required
+-- by Verve.lua and fed the same per-frame stats table the diagnostics logger gets:
+--
+--     local Feed = require('lib.feed')      -- (this file, dropped into Verve/lib/)
+--     Feed.update(dt, stats)                -- every frame, after Verve's own update
+--     Feed.reset()                          -- on session start
+--
+-- Everything is pcall-guarded and costs one string build per second; it never touches physics.
+
+local F = {}
+F.ENABLED = true
+
+local STATE_EVERY   = 1.0      -- seconds between state snapshots
+local BATTLE_GAP_S  = 1.0      -- a fight is "a battle" once the gap is under this...
+local BATTLE_HOLD   = 3        -- ...for this many snapshots
+local STUCK_S       = 8.0      -- stationary off the line this long = stuck (and a yellow if on the road)
+local INCIDENT_MIN  = 8        -- km/h of new body damage that counts as an incident
+local Contacts = require('lib.contacts')
+local Classes = require('lib.classes')    -- the header's per-car class (the classifier the app and the reports use)
+local feedEvSeen = {}       -- per car: last collision event id already reported
+F.wildSent = {}             -- per car: the one-off 'wild' decision already sent (the Wrecking Crew, a chaos driver profile)
+
+local file, buf, started = nil, {}, false
+local lastState, lastFlush = -1e9, -1e9
+local namesSent, namesT = '', 0   -- declared before F.reset so its reset reaches them (it used to set two globals)
+local t0 = 0
+local prev = {}                -- per-car last snapshot { lap, pos, dmg, pit, ret, spline, lat, spd, st, yl, bl, rec }
+local prevOrder = nil
+local lapStart, bestLap, overallBest = {}, {}, nil
+local stuckSince, stuckReported = {}, {}
+local battles = {}             -- "a-b" -> { t0, n, active }
+local trackLen = 4500
+
+local function now() return os.clock() - t0 end
+
+local function esc(s) return tostring(s):gsub('\\', '\\\\'):gsub('"', '\\"') end
+
+local function emit(line)
+    buf[#buf + 1] = line
+end
+
+-- F.KEEP_OPEN (2026-09-29): one handle per session file, flushed every 5 s. Opening and closing the file on every flush cost
+-- ~40 ms per MB already written (an antivirus re-scans the whole file on close): a 200 ms hitch every 5 s after ~20 min of a
+-- 20-car race. false = the old open/append/close per flush.
+F.KEEP_OPEN = true
+local fh = nil
+local function closeFh() if fh then pcall(function() fh:close() end); fh = nil end end
+local function flush()
+    if not file or #buf == 0 then return end
+    local wrote = false
+    pcall(function()
+        if F.KEEP_OPEN then
+            fh = fh or io.open(file, 'a')
+            if fh then fh:write(table.concat(buf, '\n'), '\n'); fh:flush(); wrote = true end   -- (not keyed on write's return value:
+                                                                                    -- CSP's io may return nothing on success)
+        else
+            local f = io.open(file, 'a')
+            if f then f:write(table.concat(buf, '\n'), '\n'); f:close(); wrote = true end
+        end
+    end)
+    if wrote then buf = {} else closeFh() end   -- (a failed write keeps the lines for the next try, on a fresh handle)
+end
+
+-- (0.16) "sim_ms" on every line: AC's session clock in ms (sim time, as AC's lap timer counts it; negative before the start,
+-- resets each session). "t" stays wall seconds since the feed started: the two drift apart when the game cannot keep real
+-- time, so sim_ms is what lines an event up with the replay and what a real-time ratio is measured with (dSim / dWall).
+-- Read through pcall: a CSP build without the field leaves it out of the line rather than stopping the feed.
+local function sessionMs(sim) return sim.currentSessionTime end
+local function simNow()
+    local ok, sim = pcall(ac.getSim)
+    if ok and sim then local ok2, v = pcall(sessionMs, sim); if ok2 and type(v) == 'number' and v > -1e9 and v < 1e10 then return math.floor(v) end end
+    return nil
+end
+F.simMs = nil                 -- the session clock at the last state tick (the time every event of that tick carries)
+local function simField(sms) return sms and string.format(',"sim_ms":%d', sms) or '' end
+
+local function event(t, typ, fields, sms)    -- sms: a backdated event's own sim time (battle); default the tick's
+    emit(string.format('{"v":1,"t":%.1f,"type":"%s"%s%s}', t, typ, fields and (',' .. fields) or '', simField(sms or F.simMs)))
+end
+
+local function lat01(pos)
+    local x = 0
+    pcall(function() local tc = ac.worldCoordinateToTrack(pos); if tc then x = tc.x end end)
+    return x
+end
+
+local function newFile(sim)
+    local dir = nil
+    pcall(function() dir = ac.getFolder(ac.FolderID.Documents) .. '/Assetto Corsa/verve_feed' end)
+    if not dir then return end
+    pcall(function() io.createDir(dir) end)
+    local track = 'track'; pcall(function() track = ac.getTrackFullID('/') or track end)
+    closeFh()
+    file = string.format('%s/%s_%s.jsonl', dir, os.date('%Y%m%d_%H%M%S'), tostring(track):gsub('[^%w]', '_'))
+    buf = {}
+    pcall(function() if sim.trackLengthM and sim.trackLengthM > 200 then trackLen = sim.trackLengthM end end)
+    local cars = {}
+    for i = 0, sim.carsCount - 1 do
+        local c = ac.getCar(i)
+        if c then
+            local model, name = '', ''
+            pcall(function() model = ac.getCarID(i) or '' end)
+            pcall(function() name = ac.getDriverName(i) or '' end)
+            local cls = ''; pcall(function() cls = Classes.keyOf(i) or '' end)
+            cars[#cars + 1] = string.format('{"i":%d,"model":"%s","class":"%s","driver":"%s","player":%s}', i, esc(model), esc(cls), esc(name), tostring(i == 0))
+        end
+    end
+    local amb, road, laps = 0, 0, 0
+    pcall(function() amb = sim.ambientTemperature or 0; road = sim.roadTemperature or 0; laps = sim.raceSessionLaps or sim.sessionLaps or 0 end)
+    emit(string.format('{"v":1,"t":0,"type":"header","track":"%s","layout":"","laps":%d,"ambient":%d,"road":%d,"cars":[%s]%s}',
+        esc(track), laps, math.floor(amb), math.floor(road), table.concat(cars, ','), simField(simNow())))
+end
+
+F.retSent = {}
+-- (Verve Engineer live test, 5 Oct) the same decision for the same car is not news again for a while: 'attack' re-fired 11 times in
+-- 200 s as one car dropped in and out of range, and the engineer said "lining you up" four times in two minutes. Seconds per
+-- decision; manoeuvres and the rest use DEC_HOLD_MV. The 1 Hz state still carries the live verve.state every tick.
+F.DEC_HOLD = { attack = 60, defend = 60, yield = 30 }
+F.DEC_HOLD_MV = 20
+F.decT = {}
+function F.decision(t, i, d, detail)
+    local k = i .. ':' .. d
+    local last = F.decT[k]
+    if last and t - last < (F.DEC_HOLD[d] or F.DEC_HOLD_MV) then return end
+    F.decT[k] = t
+    event(t, 'verve', string.format('"car":%d,"decision":"%s","detail":"%s"', i, d, detail))
+end
+function F.reset()
+    F.retSent = {}
+    F.decT = {}
+    feedEvSeen = {}
+    F.wildSent = {}
+    namesSent, namesT = '', 0
+    flush(); closeFh()
+    file = nil; started = false
+    prev = {}; prevOrder = nil; lapStart = {}; bestLap = {}; overallBest = nil
+    stuckSince = {}; stuckReported = {}; battles = {}
+    lastState = -1e9
+    lastFlush = -1e9   -- the new file's clock starts at 0: a stale value held a weekend race's writes for as long as the last session ran
+    F.startSent = false
+    F.startArmed = false   -- race_start needs a standing grid seen by this feed first (see F.update)
+    F.simMs = nil
+end
+
+-- stats: the same table Verve passes to the diagnostics logger (rc = Racecraft.last, recState = Recovery.stateOf)
+-- the header is written at session start, before driver profiles rename the cars: re-emit the names when they settle
+local function namesEvent(sim, t)
+    local parts = {}
+    for i = 0, sim.carsCount - 1 do local n = ''; pcall(function() n = ac.getDriverName(i) or '' end); parts[#parts + 1] = string.format('"%d":"%s"', i, esc(n)) end
+    local body = table.concat(parts, ',')
+    if body ~= namesSent then namesSent = body; event(t, 'names', '"names":{' .. body .. '}') end
+end
+
+function F.update(dt, stats)
+    if not F.ENABLED then return end
+    local ok, sim = pcall(ac.getSim); if not ok or not sim then return end
+    if not started then
+        t0 = os.clock(); started = true
+        pcall(newFile, sim)
+    end
+    local t = now()
+    if t - lastState < STATE_EVERY then
+        if t - lastFlush > 5 then lastFlush = t; flush() end
+        return
+    end
+    if t < 3.0 then return end   -- a new session's first frames still show the old session's cars (weekend race, 2026-09-26)
+    lastState = t
+    do local okT, v = pcall(sessionMs, sim); F.simMs = (okT and type(v) == 'number' and v > -1e9 and v < 1e10) and math.floor(v) or nil end   -- (before the session clock runs AC hands back a non-finite value: written as -9.2e18, 5 Oct)
+    stats = stats or {}
+    if t - namesT >= 5 then namesT = t; pcall(namesEvent, sim, t) end   -- every 5 s, written only when a name changed
+    local rc = stats.rc or {}
+
+    -- gather
+    local cars, running = {}, {}
+    for i = 0, sim.carsCount - 1 do
+        local c = ac.getCar(i)
+        if c then
+            local st = {}
+            if stats.recState then pcall(function() st = stats.recState(i) or {} end) end
+            local r = rc[i] or {}
+            local dmg = 0
+            pcall(function() local d = c.damage; if d then for k = 0, 4 do local v = d[k]; if type(v) == 'number' and v > dmg then dmg = v end end end end)
+            -- (0.16, F2) MEASUREMENT ONLY: the worst wheel slip on the car, longitudinal and lateral, for the
+            -- exit-off-track question. Both stay nil when CSP does not expose the field, and nil is SERIALISED AS
+            -- ABSENT rather than 0 - no module here has ever read slipRatio/slipAngle, so a 0 would be
+            -- indistinguishable from a car with perfect traction and the seed test could not tell them apart.
+            local slipR, slipA
+            pcall(function()
+                if not c.wheels then return end
+                for k = 0, 3 do
+                    local w = c.wheels[k]
+                    local sr = w and w.slipRatio
+                    local sa = w and w.slipAngle
+                    if type(sr) == 'number' then local a = math.abs(sr); if slipR == nil or a > slipR then slipR = a end end
+                    if type(sa) == 'number' then local a = math.abs(sa); if slipA == nil or a > slipA then slipA = a end end
+                end
+            end)
+            local e = {
+                i = i, lap = c.lapCount or 0, pos = c.racePosition or 0, spline = c.splinePosition or 0, spd = c.speedKmh or 0,
+                pit = c.isInPitlane == true, ret = c.isRetired == true, dmg = dmg, lat = lat01(c.position),
+                st = r.state or 0, yl = r.yield == true, bl = (r.block or 0) ~= 0, rec = st.rec == true, park = st.parked == true, mv = r.mv or 0,
+                wd = r.wild,   -- a chaos driver: 'calm' / 'tilt' (racecraft R.WILD); nil for every other car
+                tyre = (c.wheels and c.wheels[0] and c.wheels[0].tyreCoreTemperature) or 0,
+                slipR = slipR, slipA = slipA,   -- nil = CSP gave us nothing; 0 = measured and the car is planted
+            }
+            cars[#cars + 1] = e
+            if not e.ret and not e.park then running[#running + 1] = e end
+        end
+    end
+    table.sort(running, function(a, b) return a.pos < b.pos end)
+
+    -- race start: the first race-session car moving, leader on lap 0-1 (the old test, 'no previous order', only ever fired
+    -- from a weekend's stale first frames, and never in a plain race). Armed only after a settled snapshot of this Race
+    -- session showed a standing grid (every running car under 5 km/h): a feed that starts after the launch (the app
+    -- hot-reloaded, or 'Race feed' switched on during laps 0-1) never saw the grid and stamped race_start at racing
+    -- speed. Pure bug fix, no switch: the feed starts on AC's pre-session screen, where nothing moves until Drive, so a
+    -- feed that sees its session's grid arms on its first settled snapshot and writes what 0.14.5 wrote (2026-09-26)
+    if not F.startSent and #running > 0 and running[1].lap <= 1 then   -- <= 1: a grid before the line can cross it first
+        local isRace = false; pcall(function() isRace = sim.raceSessionType == ac.SessionType.Race end)
+        if isRace and not F.startArmed then
+            local still = true
+            for _, c in ipairs(running) do if c.spd >= 5 then still = false; break end end
+            F.startArmed = still
+        end
+        if isRace and F.startArmed then for _, c in ipairs(running) do if c.spd > 30 then event(t, 'race_start'); F.startSent = true; break end end end
+    end
+
+    -- state snapshot with time gaps
+    local parts = {}
+    local gapAhead = {}
+    for k, c in ipairs(running) do
+        local g = 'null'
+        if k > 1 then
+            local a = running[k - 1]
+            local d = (a.spline - c.spline) + math.max(0, a.lap - c.lap)
+            if d < 0 then d = d + 1 end
+            if c.spd > 5 then local gs = d * trackLen / (c.spd / 3.6); gapAhead[c.i] = gs; g = string.format('%.2f', gs) end
+        end
+        local stName = (c.st == 1) and 'attack' or ((c.st == 2) and 'defend' or 'cruise')
+        local slipF = (c.slipR and string.format(',"slipR":%.3f', c.slipR) or '')
+            .. (c.slipA and string.format(',"slipA":%.3f', c.slipA) or '')   -- absent, not 0, when CSP has neither
+        parts[#parts + 1] = string.format('{"i":%d,"pos":%d,"lap":%d,"spline":%.4f,"spd":%d,"gap_ahead_s":%s,"pit":%s,"ret":%s,"dmg":%d,"tyre":%d%s,"verve":{"state":"%s","yield":%s,"block":%s,"recovering":%s%s}}',
+            c.i, c.pos, c.lap, c.spline, math.floor(c.spd), g, tostring(c.pit), tostring(c.ret), math.floor(c.dmg), math.floor(c.tyre), slipF,
+            stName, tostring(c.yl), tostring(c.bl), tostring(c.rec), c.wd and (',"wild":"' .. c.wd .. '"') or '')   -- "wild" only on a chaos driver
+    end
+    local leaderLap = (#running > 0) and running[1].lap or 0
+    emit(string.format('{"v":1,"t":%.1f,"type":"state","leader_lap":%d,"running":%d,"cars":[%s]%s}', t, leaderLap, #running, table.concat(parts, ','), simField(F.simMs)))
+
+    -- per-car events
+    for _, c in ipairs(cars) do
+        local i, p = c.i, prev[c.i]
+        if p then
+            if c.lap > p.lap then
+                local lt = t - (lapStart[i] or t)
+                lapStart[i] = t
+                if p.lap == 0 then
+                    -- (0.16) The FIRST lap gets an event too. It used to be skipped because it is not a clean lap time
+                    -- (lapStart is when this feed first saw the car, so it includes the grid wait), but the consequence was
+                    -- that anyone counting laps from lap events undercounted by one per car - it cost the broadcast side a
+                    -- wrong car-lap total on the Brands Hatch comparison (3 Oct). Same field shape so no loader breaks:
+                    -- 'first':true marks it, 'best' is false, and it never touches bestLap / overallBest / fastest_lap.
+                    -- Consumers wanting lap TIMES must skip first:true; consumers counting laps can now count events.
+                    -- (0.16) It carries AC's own time for that lap, lap_ms, as every later lap does (omitted when AC has none).
+                    -- On a grid that sits before the timing line AC's first 'lap' can be the short run from the grid to it.
+                    local ms1, cuts1 = 0, -1
+                    pcall(function() local ac_c = ac.getCar(i); ms1 = (ac_c and ac_c.previousLapTimeMs) or 0; cuts1 = (ac_c and ac_c.lastLapCutsCount) or -1 end)
+                    event(t, 'lap', string.format('"car":%d,"lap":1,"time_s":%.1f,"best":false,"first":true%s%s', i, lt,
+                        (type(ms1) == 'number' and ms1 > 0) and string.format(',"lap_ms":%d', ms1) or '',
+                        (type(cuts1) == 'number' and cuts1 >= 0) and string.format(',"cuts":%d', cuts1) or ''))
+                end
+                if p.lap >= 1 and lt > 20 then
+                    local best = lt < (bestLap[i] or 1e9)
+                    if best then bestLap[i] = lt end
+                    local ms, cuts = 0, -1   -- (0.15) AC's own lap time: time_s is the 1 Hz tick difference (x.1 s resolution)
+                    -- (0.16) and AC's cut count for that lap: AC writes race_out with NO laps in 10-40 % of harness races, and
+                    -- then this event is the only lap record left - without the count a cut lap reads as a clean one.
+                    pcall(function() local ac_c = ac.getCar(i); ms = (ac_c and ac_c.previousLapTimeMs) or 0; cuts = (ac_c and ac_c.lastLapCutsCount) or -1 end)
+                    event(t, 'lap', string.format('"car":%d,"lap":%d,"time_s":%.1f,"best":%s%s%s', i, p.lap + 1, lt, tostring(best),
+                        (type(ms) == 'number' and ms > 0) and string.format(',"lap_ms":%d', ms) or '',
+                        (type(cuts) == 'number' and cuts >= 0) and string.format(',"cuts":%d', cuts) or ''))
+                    if not overallBest or lt < overallBest then
+                        overallBest = lt
+                        if p.lap >= 2 then event(t, 'fastest_lap', string.format('"car":%d,"lap":%d,"time_s":%.1f', i, p.lap + 1, lt)) end
+                    end
+                end
+            end
+            local dd = c.dmg - p.dmg
+            -- (0.16) WHICH INSTRUMENT COUNTED THIS INCIDENT: 'dmg' is a damage jump, 'hit' is a collision tap
+            -- promoted just below. The two were indistinguishable after the fact, and a Verve-OFF arm counted only
+            -- 'dmg' because Contacts.update sat below the disabled return in Verve.lua - so every cross-arm
+            -- incident count, severity median and closing-speed median was comparing two different instruments.
+            local dsrc = 'dmg'
+            if dd < INCIDENT_MIN and Contacts.available then     -- no damage jump: a collision event in the last second counts instead
+                local ev = Contacts.recent(i, 1.0)
+                if ev and ev.id ~= feedEvSeen[i] and ev.drop >= 3 then dd = math.max(INCIDENT_MIN, ev.drop); feedEvSeen[i] = ev.id; dsrc = 'hit' end
+            end
+            if dd >= INCIDENT_MIN and not c.pit then
+                local contact = {}
+                -- WHO HAD THE CORNER: the closest other car by on-track gap in the second BEFORE the hit (the previous
+                -- state), its nose ahead of mine or not, its lateral offset from me (+ = to my right) and my closing
+                -- speed on it. A first "steward's call" for the broadcast; the 4 Hz traces stay in the diag files.
+                local other, otherGap, otherSd = -1, 1e9, 0
+                for _, o in ipairs(cars) do
+                    local po = prev[o.i]
+                    if o.i ~= i and po then
+                        local sd = ((po.spline - p.spline + 0.5) % 1) - 0.5      -- signed: + = they were ahead of me
+                        local d = math.abs(sd) * trackLen
+                        if (o.dmg - po.dmg >= INCIDENT_MIN and d < 50) or d < 15 then contact[#contact + 1] = tostring(o.i) end
+                        if d < otherGap and d < 30 and not po.ret then other, otherGap, otherSd = o.i, d, sd end
+                    end
+                end
+                local who = ''
+                if other >= 0 then
+                    local po = prev[other]
+                    who = string.format(',"other":%d,"noseAhead":%s,"dLat":%.2f,"closing":%d',
+                        other, tostring(otherSd > 0), po.lat - p.lat, math.floor(p.spd - po.spd))
+                end
+                event(t, 'incident', string.format('"car":%d,"spline":%.4f,"severity":%d,"src":"%s","contact":[%s],"solo":%s,"speed":%d%s',
+                    i, p.spline, math.floor(dd), dsrc, table.concat(contact, ','), tostring(#contact == 0), math.floor(p.spd), who))
+            end
+            if math.abs(c.lat) > 1.3 and math.abs(p.lat) <= 1.3 and not c.pit then
+                event(t, 'off_track', string.format('"car":%d,"spline":%.4f', i, c.spline))
+            end
+            if c.spd < 3 and not c.pit and not c.ret and t > 30 then
+                stuckSince[i] = stuckSince[i] or t
+                if t - stuckSince[i] >= STUCK_S and stuckReported[i] ~= stuckSince[i] then
+                    stuckReported[i] = stuckSince[i]
+                    event(t, 'stuck', string.format('"car":%d,"spline":%.4f', i, c.spline))
+                    if math.abs(c.lat) < 1.3 then event(t, 'yellow', string.format('"spline":%.4f,"cars":[%d]', c.spline, i)) end
+                end
+            else
+                stuckSince[i] = nil
+            end
+            if c.pit and not p.pit then event(t, 'pit_in', string.format('"car":%d,"lap":%d', i, c.lap)) end
+            if p.pit and not c.pit then event(t, 'pit_out', string.format('"car":%d,"lap":%d', i, c.lap)) end
+            if F.retSent[i] and not c.ret and not c.park and c.spd > 30 then F.retSent[i] = nil end   -- (un-parked and racing again: a later park is news)
+            if ((c.ret and not p.ret) or (c.park and not p.park)) and not F.retSent[i] then
+                F.retSent[i] = true   -- (0.15.1) once per car per session: Verve switched off and on again re-read a parked car as newly retired
+                event(t, 'retire', string.format('"car":%d,"lap":%d,"reason":"%s"', i, c.lap, c.park and 'hopeless' or (c.dmg >= 150 and 'damage' or 'ac')))
+            end
+            -- Verve decisions (edge-triggered; attack/defend only when there's actually a car within reach)
+            if c.st == 2 and p.st ~= 2 then F.decision(t, i, 'defend', 'covering the inside line') end
+            if c.st == 1 and p.st ~= 1 and (gapAhead[i] or 9) < 1.5 then F.decision(t, i, 'attack', 'closing in, looking for a way past') end
+            if c.yl and not p.yl then F.decision(t, i, 'yield', 'moving aside for a faster car') end
+            if c.mv ~= 0 and c.mv ~= p.mv then
+                local MV = { [1] = { 'switchback', 'wide in, cutting back underneath on the exit' }, [2] = { 'lunge', 'braking late, diving for the inside' },
+                             [3] = { 'setup', 'sitting in the tow, setting up the pass' }, [4] = { 'slingshot', 'in the draft, pulling out at the last moment' } }
+                local m = MV[c.mv]
+                if m and c.mv == 2 and c.wd then m = { 'divebomb', 'sending it from way back, braking late' } end   -- a chaos driver's lunge
+                if m then F.decision(t, i, m[1], m[2]) end
+            end
+            if c.bl and not p.bl then F.decision(t, i, 'go_around', 'swerving around a stopped car') end
+            if c.wd and not F.wildSent[i] then F.wildSent[i] = true; event(t, 'verve', string.format('"car":%d,"decision":"wild","detail":"races with almost no margin"', i)) end
+            if c.wd and p.wd and c.wd ~= p.wd then event(t, 'verve', string.format('"car":%d,"decision":"%s","detail":"%s"', i, c.wd, c.wd == 'tilt' and 'loses his temper - no margin now' or 'settles down')) end
+            if c.rec and not p.rec then event(t, 'verve', string.format('"car":%d,"decision":"crash_repair","detail":"Verve is getting the car going again"', i)) end
+        else
+            lapStart[i] = t
+        end
+        prev[i] = c
+    end
+
+    -- overtakes
+    local order = {}
+    for k, c in ipairs(running) do order[k] = c.i end
+    if prevOrder then
+        local prevPos = {}
+        for k, i in ipairs(prevOrder) do prevPos[i] = k end
+        local curPos = {}
+        for k, i in ipairs(order) do curPos[i] = k end
+        for k, i in ipairs(order) do
+            local pk = prevPos[i]
+            if pk and k < pk then
+                for j = k, pk - 1 do
+                    local over = prevOrder[j]
+                    if over and curPos[over] and curPos[over] > k and (prev[over] and prev[over].spd or 0) > 30 then
+                        if (gapAhead[i] or 9) < 2.5 or (gapAhead[over] or 9) < 2.5 then
+                            event(t, 'overtake', string.format('"car":%d,"over":%d,"pos":%d,"spline":%.4f', i, over, k, running[k].spline))
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- (0.16) ONE lead_change per change of leader: the new P1 over the previous P1. It used to fire once for every car the new
+    -- leader jumped in a single tick (10 'lead changes' in one second at Fuji's start, 5 Oct; 177 spurious events in 15 of 85
+    -- feeds), and never when the old leader stopped. Same fields; a lead change by a pit cycle or a retirement now counts too.
+    if prevOrder and order[1] and prevOrder[1] and order[1] ~= prevOrder[1] then
+        event(t, 'lead_change', string.format('"car":%d,"over":%d', order[1], prevOrder[1]))
+    end
+    prevOrder = order
+
+    -- battles
+    local seen = {}
+    for k = 2, #running do
+        local a, b = running[k - 1], running[k]
+        local g = gapAhead[b.i]
+        local key = a.i .. '-' .. b.i
+        seen[key] = true
+        if g and g < BATTLE_GAP_S and b.spd > 60 then
+            local bt = battles[key]
+            if not bt then bt = { t0 = t, s0 = F.simMs, n = 0, active = false }; battles[key] = bt end
+            bt.n = bt.n + 1
+            if bt.n == BATTLE_HOLD then bt.active = true; event(bt.t0, 'battle', string.format('"cars":[%d,%d],"pos":%d,"gap_s":%.2f', a.i, b.i, k - 1, g), bt.s0) end
+        elseif battles[key] and (not g or g > 1.5) then
+            if battles[key].active then event(t, 'battle_end', string.format('"cars":[%d,%d],"resolved":"%s"', a.i, b.i, 'gap')) end
+            battles[key] = nil
+        end
+    end
+    for key, bt in pairs(battles) do
+        if not seen[key] then
+            if bt.active then
+                local a, b = key:match('(%d+)-(%d+)')
+                event(t, 'battle_end', string.format('"cars":[%s,%s],"resolved":"pass"', a, b))
+            end
+            battles[key] = nil
+        end
+    end
+
+    -- repositions: recovery exposes its recent drops (judged) -- emit once each
+    if stats.recentDrops then
+        pcall(function()
+            for _, d in ipairs(stats.recentDrops() or {}) do
+                if not d.fed then d.fed = true; event(t, 'reposition', string.format('"car":%d,"spline":%.4f,"ok":null', d.i, d.spl or 0)) end
+            end
+        end)
+    end
+
+    if t - lastFlush > 5 then lastFlush = t; flush() end
+end
+
+-- called when the session ends (or at any time to force a write)
+function F.finish()
+    local ok, sim = pcall(ac.getSim)
+    if ok and sim and started then
+        -- in finishing order (a reader taking results[1] as the winner was handed car 0); a car with no place goes last
+        local rows, parts = {}, {}
+        for i = 0, sim.carsCount - 1 do
+            local c = ac.getCar(i)
+            if c then rows[#rows + 1] = { pos = c.racePosition or 0, i = i, laps = c.lapCount or 0, ret = c.isRetired == true } end
+        end
+        table.sort(rows, function(a, b)
+            local pa, pb = a.pos > 0 and a.pos or 1e9, b.pos > 0 and b.pos or 1e9
+            if pa ~= pb then return pa < pb end
+            return a.i < b.i
+        end)
+        for _, r in ipairs(rows) do
+            parts[#parts + 1] = string.format('{"pos":%d,"car":%d,"laps":%d,"ret":%s}', r.pos, r.i, r.laps, tostring(r.ret))
+        end
+        event(now(), 'race_end', '"results":[' .. table.concat(parts, ',') .. ']', simNow())
+    end
+    flush(); closeFh()
+end
+
+-- other modules' events (lib/fault.lua penalties): typed like the built-in ones, same clock
+function F.event(typ, fields) if F.ENABLED then event(now(), typ, fields, simNow()) end end
+
+return F

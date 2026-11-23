@@ -1,0 +1,2654 @@
+-- Verve / racecraft.lua  (v0.5)
+-- Our own racecraft from CSP AI primitives. Per AI car we read the gap to the nearest car
+-- ahead/behind (+ their lateral position on track) and the shape of the track just ahead, then:
+--   ATTACK  -- car in range & keeping up: tuck in (less caution), raise aggression, and pick a
+--             passing line -- dive up the INSIDE of the corner ahead if it's open, else pass on
+--             the side the defender isn't (slipstream out on straights).
+--   DEFEND  -- faster car behind: ONE move to cover the vulnerable side (inside of the corner
+--             ahead, or the side the attacker is on) and hold.
+--   CRUISE  -- clear track: back to the racing line.
+--
+-- Track frame (ac.worldCoordinateToTrack): X = -1 left .. +1 right, Z = progress. Same sign as
+-- setAISplineOffset, so lateral reads and offsets share one frame -- no handedness guessing.
+-- Offset is slew-limited (anti-dart) and collision-awareness stays ON, so cars position not ram.
+--
+-- Per-CLASS tactics tune HOW each class races (an F1 slipstreams from far and passes precisely;
+-- a touring car dive-bombs the inside). The global racecraft INTENSITY slider scales it all; the
+-- Variability slider spreads per-driver aggression so the field isn't uniform. A short "pounce"
+-- keeps a car eager to fill a gap right after it opens.
+
+local Classes   = require('lib.classes')
+local Drivers   = require('lib.drivers')
+local Troublespots = require('lib.troublespots')
+local Recovery  = require('lib.recovery')     -- for damage-since-repair (recovery never requires racecraft: no cycle)
+local Strategy  = require('lib.strategy')     -- planned manoeuvres on top of attack mode (set-up, lunge, switchback, slingshot)
+Strategy.lapsOf = Recovery.lapsOf              -- (S.VERDICT_V2) the verdict's lap count is Verve's own: AC's drops a lap after a teleport
+
+local R = {}
+local K = {}               -- tuning constants (one table = one upvalue: LuaJIT allows a function 120, R.evaluate had 115)
+R.ENABLED     = true
+R.INTENSITY   = 0.7        -- racecraft "how hard they race" slider
+R.VARIABILITY = 0.5        -- variability slider: spreads per-driver aggression across the field
+R.attacking = 0
+R.defending = 0
+-- (2026-10-24) THE PREMISE COUNTER FOR R.FASTER_MARGIN_X, ZERO BY CONSTRUCTION AT THE DEFAULT.
+-- IT COUNTS CAR-FRAMES, NOT ATTACK ENTRIES - measured on s71b and the first version of this comment said
+-- "entries", which was wrong. It increments once per car per evaluated frame while the condition holds, so at
+-- X=3.0 over six Monza laps it read 354942, about 30.7 per car-second and ~51% of car-frames. THAT IS A DWELL
+-- MEASURE: how much of the race the loosened margin admits an attack the default refuses. It is NOT a count of
+-- attacks and must never be reported as one. An event count would need a per-car edge trigger (was this car
+-- already inside the band on the previous frame) and is not needed for a premise gate.
+-- The condition: `spd < aheadSpd - K.FASTER_MARGIN` AND `spd >= aheadSpd - K.FASTER_MARGIN * R.FASTER_MARGIN_X`.
+-- At X = 1.0 those cannot both hold, so this reads EXACTLY 0 - and any other value there means THE COUNTER is
+-- wrong, not the switch. At X > 1 it must exceed 0 or the switch is dead.
+-- AND IT SUBSUMES THE DELIVERY CHECK: a non-zero value is only reachable when X > 1, so fmOnlyN > 0 PROVES the
+-- switch arrived, more strongly than reading the value back from a settings blob would.
+-- WHY IT EXISTS: the first premise gate for this switch compared `attacking` between two rows, which is vacuous
+-- twice over - two rows at identical settings already differ run to run (s64's 100b v 100c), AND `R.attacking`
+-- is RESET EVERY FRAME in R.beginFrame(), so it is a per-frame GAUGE and comparing it compares one frame.
+-- CUMULATIVE ON PURPOSE: zeroed in R.reset() at session start, never in beginFrame().
+R.fmOnlyN = 0
+R.isOval = false           -- set per session: true if the track turns mostly one way (an oval/speedway)
+R.ovalSampled = false      -- item 14 logging (owner's yes 2026-10-24, logging only): did detectOval get geometry
+R.ovalTotal = -1           -- the total absolute turn it summed. ~0 with ovalSampled true = DEGENERATE points at
+R.ovalRatio = -1           -- load, which is the leading hypothesis for 41 genuine-oval races reading road course
+
+-- oval groove: on a speedway, stock cars commit to a high or low LANE and run it side-by-side
+-- through the banking, instead of all returning to one racing line.
+K.GROOVE_RANGE = 0.020  -- a car ahead within this spline gap -> we're in a pack, run a groove
+K.GROOVE_OFFSET = 0.62   -- how far toward the high/low line to commit (edge-safety still bounds it)
+K.GROOVE_HOLD = 3.0    -- s to commit to a chosen lane (sustained, not a dart)
+
+K.AGGR_SPREAD = 0.15   -- per-driver aggression spread (scaled by the Variability slider)
+K.POUNCE_HOLD = 1.2    -- s a car stays eager to fill a gap after following someone
+K.POUNCE_CAUT = -0.5   -- extra closing while pouncing (fill the opened space, don't hang back)
+-- Move commitment: once a car commits to attacking or defending it holds that INTENT for a
+-- short beat instead of re-deciding every frame. A genuine read (re)commits; when the read
+-- briefly drops (gap wobbles just past the line, speed dips in dirty air) the car coasts the
+-- committed decision until a wider release threshold clears it. Kills frame-to-frame dithering
+-- and makes passes / defences decisive instead of hesitant.
+K.COMMIT_HOLD = 0.7   -- s to hold a committed attack/defend decision
+K.COMMIT_RELEASE = 1.5   -- gap must grow past threshold*this to drop the commitment early
+
+-- Race awareness: competent drivers manage risk by CONTEXT, not just the car in front.
+--   Opening-lap caution -- cold tyres + a packed grid: calmer, more spacing, less line-swapping
+--     off the line, fading across the first lap. Kills first-corner pile-ups.
+--   Stakes / bring-it-home -- with clear track both ways there's nothing to win by pushing, so a
+--     lone car circulates a touch calmer instead of binning it for no reason.
+--   Blue-flag yield -- a car on a higher lap coming through gets let past (move off-line, lift),
+--     instead of being fought like a rival.
+--   Leave room -- when genuinely alongside (overlapping) and NOT the car with the corner, don't
+--     pinch into them; ease off and lift. Pure contact-reducer.
+-- All are applied AFTER the racecraft-intensity scale, so the safety holds even at low intensity.
+K.OPENLAP_CAUT = 0.45  -- extra caution at the very start of a race (0.38 -> 0.45, 2026-09-15: half the grid took contact on lap 1)
+K.OPENLAP_AGGR = 0.45  -- aggression trimmed by up to this fraction at the start
+K.OPENLAP_OFFSET = 0.55  -- line-changes trimmed by up to this fraction at the start
+K.OPENLAP_FLOOR = 0.30  -- the effect never drops below this during lap 0 (it used to be gone by half distance)
+K.OPENLAP_TAIL = 0.40  -- ...and fades out over this fraction of lap 1 (a fifth of the contacts were on lap 1)
+K.OPENLAP_ATTACK = 0.60  -- attack-mode caution relief is scaled back by this much while the opening lap is in force
+-- grid funnel: off the line, hold each car near its own starting lane and let it merge onto the
+-- racing line GRADUALLY over the run to turn 1, instead of all 22 diving for the line at once.
+K.GRID_FADE_END = 0.05  -- lane-hold fades to the racing line over this fraction of lap 1
+K.GRID_CAPTURE = 0.02  -- capture a car's grid lane while it's still within this fraction (near the grid)
+K.GRID_HOLD = 1.0   -- how strongly to hold the captured lane (1 = fully)
+K.ISOLATED_GAP = 0.030 -- clear track BOTH ways -> nothing to race
+K.ISOLATED_AGGR = 0.20  -- aggression trim when isolated
+K.ISOLATED_CAUT = 0.10  -- small lift when isolated (no pointless risk)
+-- pack leader / clear-ahead: a car with open road ahead can't be passed if it just DRIVES AWAY, so it
+-- shouldn't sit in a slow defensive line every corner (that's what stalls the front of a bunch and
+-- concertinas everyone behind). It keeps the racing line and gets a small pace stretch to string the
+-- field out, instead of the whole crowd circulating nose-to-tail at one pace.
+K.PACK_LEAD_GAP = 0.012 -- this much clear track ahead = "drive away" rather than defend a line
+K.PACK_STRETCH = 0.14  -- small pace stretch (less caution) for a car leading a pack, to open it up
+-- adaptive crash damping: the crashier a track has proven (from its learned trouble-spot history), the
+-- calmer the WHOLE field runs -- more caution, less aggression, a bigger opening-lap ease, and the pace
+-- stretch pulled back. Self-calibrating: a nasty track (Zandvoort) settles down, a clean one stays racy.
+R.CRASH_CAUT = 0.20          -- extra field-wide caution at a fully crash-prone track (was 0.35 -- see CAUT_MAX); harness A/B field
+R.CRASH_AGGR = 0.35          -- aggression trimmed by up to this fraction at a fully crash-prone track; harness A/B field
+-- The back-off terms (hot corner, crash damping, cold tyres, anti-rear-end, pounce, leave-room...) are each
+-- sensible alone but they STACK: a train reached caution 1.9 into a corner and its front cars crawled
+-- through at 76 km/h while the tail arrived at 170. Different speeds in one corner is what actually
+-- causes pile-ups, so the total racecraft caution is capped -- "careful", never "crawling".
+K.CAUT_MAX = 0.80
+-- anti rear-end: closing fast while sat DIRECTLY behind the car ahead (not moving alongside to pass)
+-- -> ease the final approach so we don't pile into its gearbox in the braking zone. AC's own AI does
+-- this badly; this is the biggest cause of the pack "wrecking crew". Even aggressive drivers keep a
+-- margin, scaled by Risk. (When a car pulls off-line to pass, it's no longer "behind" -> no back-off.)
+K.REAREND_GAP = 0.005 -- only this close behind counts as a rear-end risk
+K.REAREND_LAT = 0.28  -- and only when roughly on the same line (directly behind), not alongside
+K.REAREND_CLOSE = 8.0   -- km/h of closing speed before we start easing
+K.REAREND_RANGE = 26.0  -- full ease by this much closing (close + range)
+K.REAREND_CAUT = 1.2   -- how firmly to back off (kept high because a rear-end is a race-ruiner)
+-- blockage: a car crawling far below pace just ahead and on my line (a crash / spun / limping car) is
+-- an OBSTACLE, not a rival. Don't queue up behind it (anti-rear-end would just brake to a crawl) --
+-- sweep around it on the OPEN side of the track. This is "if the line's blocked, take the open road".
+K.BLOCK_SPEED = 24.0  -- a car ahead crawling below this (absolute) is a blockage (stalled/crashed)
+-- OR a genuinely-slow car (a limper) that I'm arriving on much faster. Both gates matter: the absolute
+-- cap keeps this from firing on a car simply BRAKING for a corner (that's ~100+ km/h, not a limper) --
+-- without it, a fast car behind treated every braking car as an obstacle and swerved around it into the
+-- corner, which was a contact machine at fast tracks.
+K.BLOCK_LIMP = 55.0  -- only a car below THIS absolute speed can be a "limper" blockage
+K.BLOCK_DELTA = 50.0  -- and I must be at least this much faster than it (clearly arriving on it)
+K.BLOCK_GAP = 0.006 -- look this far ahead for the obstacle (start peeling off a bit earlier)
+K.BLOCK_MARGIN = 6.0   -- I only need to be a little faster than it (so cars queued behind it still peel off)
+K.BLOCK_TIME = 2.0   -- ...and at least this many SECONDS of travel at my speed: 27 m is 0.8 s at 120 km/h,
+                             -- which is how a car T-boned a crawler at the last corner before it could move over
+K.BLOCK_OFFSET = 0.48  -- swing this far to the open side -- just enough to sneak past, not a huge berth
+K.BLOCK_HOLD = 1.5   -- commit to the avoidance side briefly (don't dart back into it)
+K.BLOCK_EDGE = 0.60  -- only sweep around an obstacle THIS central; a car parked well off to the
+                             -- side (in the grass/gravel) needs no berth -- just drive past it on the line
+K.YIELD_GAP = 0.010 -- a lapping car this close behind -> start moving aside
+-- OPENING-LAP CONVOY (harness A/B: R.CONVOY_ON): lap 0, first CONVOY_END of the lap, a car within CONVOY_GAP of the car
+-- ahead on a similar line is capped at that car's speed + CONVOY_MARGIN. Stops the nose-to-tail hits into turn one
+-- and the pile-ups they start (41% + 46% of opening-lap incidents in the 2026-09-15 feeds); racing resumes after.
+R.CONVOY_ON = false          -- v1 speed cap: OFF (halved lap-1 contact at Barcelona, 16-of-18 pile-up at Spa); kept for experiments
+-- (one table: LuaJIT allows a function 120 upvalues and R.evaluate's closure was over the limit -- Verve then fails to load)
+local CV = { END = 0.45, GAP = 0.006, LAT = 0.35, MARGIN = 6.0,          -- v1: lap fraction covered, gap (m via scaleToTrack), same-line lat, km/h margin
+             NEAR_M = 8.0, GAP_M = 25.0, THR_MIN = 0.35, CLOSING = 2.0, SNAP = 0.25, HYST = 1.0, THR_SLEW = 2.0,  -- v2 throttle convoy: gap at the floor, gap where it starts, floor, closing km/h
+             ROW_M = 8.0, ROW_T = 0.12, THR = 0.35,                      -- v2 staggered release: one row of distance, extra hold per row, throttle while held
+             ROWCAUT = 0.35, ROWCAUT_M = 90.0,                           -- brake-earlier-from-the-back: full extra caution this far behind the front car
+             SPIN_FRAC = 0.55, SPIN_DOT = 0.55,                          -- opening-lap yellow: car ahead under this fraction of my speed, or nose off its travel by this much
+             BG_M = 40.0, BG_HINT = 0.50, BG_BRAKE = 0.15, BG_CLOSE = 50.0,   -- brake-zone guard v2: gap where it starts, max hint CUT (lower = earlier), car-ahead brake pedal that counts, closing km/h for the full cut
+             SIDE_M = 6.0, SIDE_LAT = 0.2, SIDE_LAT_MAX = 0.7, SIDE_THR = 0.55, SIDE_SPACE = 0.18,
+             REACT_MIN = 0.15, REACT_THR = 0.05, PROX_NEAR = 15.0, PROX_FAR = 60.0, PRIO_OUT = 0.5,     -- reaction floor (s), caution-by-gap band (m), corner-priority outside line  -- side yield: their nose ahead of mine by less than this (m), lateral band that counts as alongside, throttle while tucking in
+             RS_EDGE = 0.80, RS_MARGIN_M = 0.8, RS_CARW_M = 1.9, RS_BACK_M = 12.0, RS_FWD_M = 10.0, RS_REAREND = 0.35, RS_ADV = 0.5,
+             ISO_REACH_M = 300.0, LONE_M = 50.0,
+             LANE_OFF = 0.45, LANE_APEX_M = 40.0, LANE_SCAN_M = 20.0, LANE_MAX_M = 900.0, LANE_LOCAL_M = 12.0, LANE_COL_GAP_M = 1.5 }   -- turn-1 lanes: offset, hold this far past the apex, corner-scan step, give up looking this far out   -- alone-on-track: a car ahead within this is 'catchable' for a top-tier driver; nobody within this either way = lone   -- road space: usable edge (track units), margin + fallback car width (m), scan window behind me / past the car ahead (m), rear-end ease left while pulling out, run needed (x the aggression-scaled minimum)
+local cv2 = { clock = nil, back = {}, thr = {}, bg = {}, base = {}, react = {}, crossed = {}, mvThr = {}, mvBg = {}, thrLast = {}, thrTog = {}, thrPrev = {}, thrSnap = {}, cvEng = {}, thrOut = {}, thrSlew = {} }      -- v2 state: lights-out clock, distance behind the front car, cars we throttled, guard applied, base brake hints
+R.cv2 = cv2                                                               -- (read by diag's contact trace)
+-- CONVOY v2 (harness A/B: R.CONVOY2_ON): throttle, never a speed cap. A follower closing on the car ahead on the
+-- same line loses throttle in proportion to the gap; the field is released from the lights row by row.
+R.CONVOY2_ON = true 
+R.ROWCAUT_X = 1.0             -- row-caution multiplier (A/B for big grids, 2026-09-19)
+R.CV_SMOOTH = true           -- (2026-10-27) SMOOTH THE LAP-0 CONVOY THROTTLE. ON BY DEFAULT in the release (owner decision, 27 Oct); switch retained so it can be turned off.
+                              -- Two changes together, both gated on this one switch: HYSTERESIS on the closing gate
+                              -- (engage above aheadSpd + CV.CLOSING, release only below aheadSpd - CV.HYST) and a
+                              -- one-sided SLEW of CV.THR_SLEW units/sec on the limit's RELEASE (a reduction is
+                              -- still immediate - see the slew site). WHY: the gate reads a quantity
+                              -- its own action removes - cut throttle, lose the closing speed, gate opens, limit
+                              -- snaps to 1.0 - so it pulses. MEASURED on the owner's shape, n=6: four of five AI
+                              -- cars pulse in EVERY race, thrSnap median 19 an opening lap, 69-91% of crossings
+                              -- genuine single-frame steps, and the one clean car was the POLE SITTER in all six
+                              -- rows (the gate needs aheadIdx >= 0). K.OFFSET_SLEW already does this on the
+                              -- LATERAL axis, commented "anti-dart"; this is the longitudinal equivalent.
+                              -- NOT a default until the gating cells pass: turning the easing OFF is already
+                              -- measured as WORSE (~3x heavy lap-0/1 hits on Monza GT3), so the aim is to keep the
+                              -- easing and remove the stepping, NOT to reduce the hold.
+R.START_T1_M = 0              -- >0: a first corner closer than this (m) to the line keeps the Calm easing whatever raceStart says (Spa's La Source)
+R.START_X = 1.0               -- RACE START (user option raceStart): scales the whole opening-lap easing. 1 = Calm (the default: caution,
+                              -- staggered release, convoy throttle), 0.5 = Racing (half of it), 0 = Stock (none of it, brake guard off too).
+                              -- Two OverTake users asked for faster backmarker launches (2026-09-21); measured by lap1_tally's start gain.
+R.ROW_T_X = 1.0               -- staggered-release per-row hold multiplier (A/B for big grids)
+R.OL_GRID_DEPTH = 0.5         -- DEFAULT 2026-09-21 (owner): 13 heavy-sprint pairs at 18-24 cars, better in 10, heavy hits down; neutral at 18. >0: on a deep grid the row caution keeps growing past CV.ROWCAUT_M up to the grid's depth, and the brake
+                              -- guard's reach grows x (1 + this x back / depth) for the cars that started furthest back (A/B 2026-09-20)
+R.OL_ROWCAUT = true           -- opening lap: brake earlier the further back you started (harness A/B)
+R.OL_SPINYELLOW = false       -- opening lap: a sideways / much slower car ahead is a yellow, not just a stopped one (harness A/B)
+R.OL_SIDEYIELD = false        -- opening lap: alongside a car whose nose is ahead, corner coming -> tuck in behind it (harness A/B)
+R.OL_SIDESPACE = false        -- laps 0-1: alongside a car -> move the lateral target away from it, leave a car's width (harness A/B)
+R.GRID_FADE_X = 1.0           -- multiplier on the grid-lane hold's fade distance (225 m x this; harness A/B)
+R.OL_STAR_FUNNEL = 0          -- 0-1: for a top-tier driver, shrink the grid-lane hold's FADE DISTANCE by this fraction times his
+                              -- pace edge over a rookie (same edge formula as OL_STAR_ROOM), capped at 60% shorter even at 1.0.
+                              -- He still plants his own lateral spot at the green like everyone else (the CAPTURE is untouched)
+                              -- -- this only lets him merge onto the racing line and start hunting gaps sooner than a rookie
+                              -- would. 0 = off (today's flat 225 m x GRID_FADE_X for every car).
+R.OL_AGGR_FORMULA = 0         -- laps 0-1: extra aggression trim (0..1) for formula / formula_jr (harness A/B)
+R.OL_REACT_MAX = 0            -- lights: per-driver reaction time up to this many s (0 = off; harness A/B)
+R.OL_REACT_STAR = 1           -- with OL_REACT_MAX > 0: a top-tier driver (tier 2, profile pace >= 0.75) draws his reaction from
+                              -- this fraction of the spread (0.25 = the quickest quarter): stars react like stars, rookies like rookies
+R.OL_CAUT_PROX = true         -- opening caution scaled by the gap ahead (leaders brake normally). DEFAULT 2026-09-18 (owner): F1 8.7 -> 5.8 in contact over 5 runs; with lanes Spa 7.0 vs 9.7
+R.OL_CORNER_PRIO = false      -- laps 0-1: alongside a car whose nose is ahead, corner coming -> take the outside line (harness A/B)
+R.FAST_TUCK = 0               -- km/h, 0 = off: above this on any lap, alongside a car whose nose is ahead with a bend coming -> lift to
+                              -- FAST_TUCK_THR and tuck in (Baku 0.743 kink 2026-09-26: two abreast at 260 km/h, one runs out of road)
+R.FAST_TUCK_THR = 0.85        -- throttle while tucking in
+R.FAST_TUCK_LOOK = 1.5        -- s: how far ahead (at my speed) the bend is looked for, besides right here
+R.FAST_TUCK_TS = false        -- true: only into a bend the trouble-spot map has learned
+R.FAST_TUCK_SIDE_S = 0        -- s, 0 = off: the fast tuck also counts a car CLOSE BEHIND AND OFFSET (not only overlapping): other car's nose
+                              -- ahead within max(CV.SIDE_M, speed x this) - 0.15 s is 11 m at 260 km/h
+R.FAST_TUCK_LATMAX = 0        -- 0 = off: RAISES the lateral band's upper bound for that test (half-widths; values under CV.SIDE_LAT_MAX 0.7
+                              -- change nothing). Second test PC 2026-09-26 ft200_3: the car behind sat 7-9 m back, its lateral gap went 0.46 -> 0.64
+                              -- -> 0.81 -> 0.94 in 0.25 s steps and left 0.2-0.7 between the 2nd and 3rd, so the tuck never fired
+R.FAST_TUCK_CLOSE = 15        -- km/h: with SIDE_S / LATMAX on, a car closing faster than this is committing to a pass, not squeezed - no tuck
+R.FAST_TUCK_MINLAP = 0        -- the rule acts from this lap on (Verve's lap count; 0 = every lap). Second test PC 2026-09-26: lap 0-1 incidents
+                              -- 25, 14 with FAST_TUCK 200 vs 5, 10 without - the lift into turn 1 in the opening pack concertinas
+R.fastTuckN = 0               -- diag: car-frames tucking in
+R.BG_T = 0                    -- >0: the guard's reach is closing speed x this many seconds (min CV.BG_M) and a much slower car ahead counts as braking (A/B)
+R.BG_RACE = false             -- the brake-zone guard keeps working after the opening lap (A/B with BG_T). 60% of the damaging
+                              -- nose-to-tail contacts on open-wheel grids happen from lap 2 on, where the guard is gated off today.
+R.BG_PASS = false             -- (A/B, with BG_RACE) beyond the opening lap the guard leaves a car in the middle of a pass alone: on a
+                              -- road-space run, a manoeuvre, or attacking and already pulled out (last frame's record). BG_RACE cut Monza
+                              -- passes 43% and raised Barcelona's 47% (4-5 Oct): a pass at Monza is a late brake into a chicane behind the
+                              -- car being passed, exactly where the guard brakes early. Lapping a yielder is NOT a pass here.
+R.bgN = 0; R.bgPassN = 0      -- diag: car-frames the race-long guard cut a brake hint / left a passing car its own (session bgN, bgPN)
+R.OL_BRAKEGUARD = true        -- opening lap: brake earlier when the car ahead on my line is already braking inside CV.BG_M (harness A/B)
+R.BG_ALL = 0                  -- >0: every AI car's brake hint x this all race (direction test only; 0 = off)
+R.BG_ALL_GATE = false         -- with BG_ALL: hold it off while the brake-zone guard is ACTIVE on this car (harness A/B; default off).
+                              -- Ungated, BG_ALL raises the hint on the same frames the guard cuts it: x1.5 field-wide gave 18/18 lap-1
+                              -- contact and 101 repairs (2026-09-16); the 2026-10-10 ladder put 2 of 3 higher-setting races into
+                              -- lap-1 pile-ups against 0 of 8 lower. Keyed on the guard's own predicate (cv2.gOn), not a lap test.
+-- ROAD SPACE (harness A/B: R.ROADSPACE): "use the whole road". The reactive pass aims a fixed small nudge off the racing
+-- line (ATTACK_OFFSET x class), and the intensity, crowd and opening-lap multipliers plus the deadzone then shrink it to
+-- nothing: a star behind a slow car ORBITS it instead of shooting the open side (kart grid 2026-09-16: 71% of attacking
+-- samples under 0.10 off-line, the star's offset 0 while sat in attack for 40 s). With this on, an attacker with a real
+-- run aims at a POINT ON THE ROAD: a car's width (+ margin) clear of the car ahead, on the inside of the next corner if
+-- that fits, else the roomier side -- bounded by the edges and by every other car around the pair. Geometry, so it skips
+-- the eagerness multipliers. DEFAULT since 2026-09-16: star from last Spa 10th -> won both, Monza 4th -> 2nd, star road use
+-- 5 -> 24 %, field 6 -> 17 %, re-passes down, contacts equal; regression suite not worse on any gate; Monza manoeuvre
+-- conversion 1/52 -> 8/60. Off on laps 0-1 for the pack (ungated it started pile-ups: 13/18 x2 vs 7-11); a top-tier
+-- driver is exempt above RS_OL_METER.
+R.ROADSPACE = true
+-- CRAWLER PASS (harness A/B: R.CRAWL_PASS > 0). The blockage rule is keyed to ABSOLUTE speeds (24 km/h, or a limper
+-- under 55 that I am arriving on 50 km/h faster). Baku 2026-09-24 warm race 1: a car with a broken suspension crawled
+-- the whole 2 km straight at 30 km/h and the entire field queued behind it at 30 km/h for 160 s - a follower that has
+-- matched the crawler's speed has no closing run (every pass rule needs one), and the offset is written every frame,
+-- so AC's own overtake never gets a vote; AC then retired eight of the queue at once. Relative rule instead: a car
+-- ahead below CRAWL_PASS x the pace this bit of road has been driven at this session (max speed per 1% bin, least of
+-- the three bins around it so a braking zone reads as its apex) is a blockage wherever two cars fit side by side.
+R.CRAWL_PASS = 0              -- 0 = off (today's rule only); 0.45 = a car under 45% of local pace is an obstacle
+R.CRAWL_DMG = 0               -- >0: only a DAMAGED slow car is a crawler (body damage >= this, or suspension >= 0.10); 0 = any
+R.CRAWL_CLOSE = 0             -- km/h, >0: closing on the crawler this fast takes the wider berth (plain 0.48 vs 'just clear')
+R.RS_SEE_STOPPED = false      -- road-space side choice counts cars under K.BLOCK_SPEED (Spa 2026-09-25: passes aimed at a wreck)
+R.CRAWL_T = 3.0               -- ...and has been for this many seconds (v2: the v1 A/B swerved for cars slow for a moment
+                              -- in the start pack - off-line contacts 19 -> 33 on laps 0-1 - and moved followers into each other)
+CV.CRAWL_PACE_MIN = 80        -- km/h: a bin must have seen at least this before it can call anyone a crawler
+CV.CRAWL_HALF_M = 5.0         -- m half-width: narrower than this, two open-wheelers do not fit -> queue as today
+-- ROOM MAP + TIGHT-ROOM DISCIPLINE (harness A/B: R.ROOM = 1 with ROOM_FOLLOW / ROOM_LINE). Baku 2026-09-24: radius-under-50 m
+-- road is 5.7% of the lap and carries 43% of the contacts; the castle alone (3.2 m half-width, 40 km/h) 23%. Verve's traffic
+-- rules act there exactly as on Silverstone's 8 m straights. Once per session the lap is mapped in 400 bins (half-width from
+-- the AI line's sides, radius from three samples 12 m apart, pace learned from the healthy cars) and tight = slow x narrow
+-- (see R.roomAt). FOLLOW: in tight room the convoy throttle, the rear-end guard and the brake guard act in TIME every lap
+-- (a car pulling out, passing, on a manoeuvre, lapping a yielder or being recovered is exempt). LINE: in tight room with no
+-- road-space side and no manoeuvre, the reactive attack nudge and the defend cover are zeroed - nobody passes in a corridor,
+-- so nobody moves in one. Wide tracks read tight 0: nothing changes there.
+R.ROOM = 0                    -- 0 = off (no map, nothing changes); 1 = build the map and count tight frames (R.roomN); consumers below
+R.ROOM_FOLLOW = false         -- FOLLOW consumer (needs ROOM = 1)
+R.ROOM_LINE = false           -- LINE consumer (needs ROOM = 1)
+R.ROOM_WLO = 3.5; R.ROOM_WHI = 7.0      -- m half-width: narrow = 1 at WLO, 0 at WHI (Silverstone 6.6-10.3 -> 0; a bin without sides is inert by construction)
+R.ROOM_VLO = 60; R.ROOM_VHI = 140       -- km/h learned pace: slow = 1 at VLO, 0 at VHI
+R.ROOM_RLO = 30; R.ROOM_RHI = 150       -- m radius: slow = 1 at RLO, 0 at RHI (stands in until the pace is learned, inside a lap)
+R.ROOM_ON = 0.3               -- tight at or above this (here, or ROOM_LOOK s ahead) = tight room
+R.ROOM_VMAX = 120             -- ...and only below this speed (km/h): the fast bits of a narrow track are left alone
+R.ROOM_TG = 1.0               -- FOLLOW: convoy gap = max(CV.GAP_M, speed x this many s x tight)
+R.ROOM_RE_T = 1.2             -- FOLLOW: rear-end window = max(K.REAREND_GAP, speed x this many s x tight); closing threshold x (1 - 0.6 x tight)
+R.ROOM_BG = 0.5               -- FOLLOW: brake-guard reach x (1 + this x tight)
+R.ROOM_LOOK = 0.6             -- s of travel looked ahead for the tight read
+R.ROOM_WFLOOR = 0             -- narrow floor: 0.5 = wide slow corners count at half strength (owner question 6); 0 = width decides
+R.roomN = 0; R.roomAct = 0    -- diag: car-frames in tight room (the map's verdict, any speed) / car-frames a consumer changed something (session line roomN, roomAct)
+R.evalN = 0                   -- diag: AI car-frames R.evaluate ran (session line evalN): roomN / evalN = share of car-time in tight room, fps-independent
+-- ALONE ON TRACK (owner 2026-09-16: a lone star crawled through the Bus Stop with a car 140 m ahead). Two switches:
+R.ISO_PACE = true             -- bring-it-home is pace-aware: a top-tier driver (tier 2) with a car within CV.ISO_REACH_M ahead does
+                              -- not ease off -- that car is a target, not clear track. DEFAULT 2026-09-17 (owner): star from last
+                              -- 10/8/6 vs lap-down/8/lap-down, passes 11.3 vs 6.3, field incidents 7 vs 15 (3 runs each, clean map)
+R.LONE_FRAC = 0.4             -- with nobody within CV.LONE_M either way, the trouble-spot and crash-damping caution apply at this
+                              -- fraction -- they exist to stop cars hitting each other. DEFAULT 2026-09-17 with ISO_PACE (0 = off)
+-- (tried and dropped 2026-09-16: manoeuvres resolved on this geometry -- conversion unchanged at 13 %, fewer overtakes; a
+-- lower caution cap for a committed star on laps 0-1 -- no gain. Both A/B'd, both removed.)
+-- STAR ON THE OPENING LAP (harness A/B, 2026-09-16 night): room (the exemption) and a lower caution cap did not move a star
+-- from last (16-17th at the end of lap 1 either way); the traces show him alongside and then losing the corner. What still
+-- treats him like a rookie on lap 0: the convoy throttle limit and the opening-lap aggression trim.
+R.OL_STAR_CONVOY = false      -- a top-tier driver is exempt from the convoy's gap-based throttle limit (the staggered release and the
+                              -- reaction time stay: he launches with his row, then may close on the car ahead)
+R.OL_STAR_AGGR = 0            -- >0: a top-tier driver keeps this fraction of the opening-lap aggression trim (0.5 = half of it)
+R.OL_STAR_ROOM = 0            -- 0-1: a top-tier driver's row caution and opening-lap caution scale down by this fraction times his
+                              -- PACE EDGE over a rookie (0 = a 0.30-pace driver, 1 = a 0.96+ one; NOT a flat cut like OL_STAR_AGGR,
+                              -- so a midfielder gets little relief and a star gets most of it). Capped at 70% relief even at 1.0:
+                              -- scaling row caution down by aggression alone sent the star off the road at 127 km/h (2026-09-16);
+                              -- caution still protects him from a closing-speed mistake, this just asks for less of it. 0 = off.
+R.SHIFT_UP = 0                -- >0: AI shift-up threshold handed to physics.setAIShiftingThresholds (units per CSP; probe first). Harness A/B
+R.SHIFT_DOWN = 0.5            -- ...and the shift-down threshold that goes with it
+-- TURN-1 LANE DISCIPLINE (harness A/B: R.OL_LANES): from the lights to just past the first apex, odd rows hold the INSIDE
+-- lane of turn 1 and even rows the OUTSIDE, then the normal grid funnel takes over. Nobody moves sideways in the pack --
+-- each car only holds a lane (every lateral rule that MOVED cars in the pack made F1 opening laps worse). Real F1 starts
+-- look like this for the first 300 m. Owner's pick 2026-09-17.
+R.OL_CROSSED = true           -- DEFAULT 0.14.3: the lap-0 grid wrap (olS = spline - 1 for a grid before the line) applies only until the car has
+                              -- CROSSED the line. Off = today: the wrap also fires in the second half of lap 0, so the lanes,
+                              -- grid hold, convoy and row caution re-engage at full speed (54% of Baku's heavy hits, 2026-09-24)
+R.BLOCK_MIN_HALF = 0          -- m: no blockage sweep when the half-width here is below this - stop behind the obstacle (0 = today;
+                              -- 5.0 = two F1s must fit). Amalfi 2026-09-25: the sweep's 'open side' on a 3 m road is the wall.
+R.LANE_MIN_HALF = 0           -- m: no turn-1 lanes when the half-width at the front row is below this (0 = today; 5.0 = two F1s must fit).
+                              -- Amalfi review 2026-09-24: a 0.45 lane on a 3 m road is the wall.
+R.GRID_HOLD_MAXLAT = 0        -- track units: a car whose grid lateral is beyond this is not held at it (0 = today; 0.6 = the road-space
+                              -- edge). A plaza start puts the grid box off the road; holding the car there is the crash.
+-- (0.15, grid survey 2026-09-29) OL_LANES_LOCAL: judge each car's column against the slots within LANE_LOCAL_M of it (the AI line
+-- crosses some grids diagonally: the whole-grid median mislabelled 6 of 24 at the Nurburgring, Las Vegas, Highlands, Mosport), and
+-- give NO lane where the grid there is not two columns (single file: Targa, hill climbs; 3-wide / 3-2-3 / 4-2-4: Silverstone 1967,
+-- Monza 1966, Donington 1938, Deutschlandring). LANE_MIN_HALF then reads the road only up to the lane's end (turn 1), not 900 m
+-- (Spa and Monza narrow below 5 m after 350-570 m). false = today.
+R.OL_LANES_LOCAL = true   -- DEFAULT 0.15
+R.OL_LATE_KMH = 80          -- (0.15.1) lights-out capture with an AI car already above this: Verve came on after the start (no start hold)
+R.OL_LANES = true             -- DEFAULT 2026-09-18 (owner): regression suite passed (Spa 8.7 vs 9.7, Barcelona 8.3 vs 8.7, Monza 12 laps not worse); stars at meter >= RS_OL_METER exempt
+R.CONCEDE = 0                 -- >0: a defender concedes the line to a tier-2 driver behind whose pace rating beats his by this much (A/B)
+R.ACX_LAP = 0                 -- ATTACK_CAUT_X applies from this lap on (0 = always; 2 = keep the opening laps as they are) (A/B)
+R.ATTACK_CAUT_X = 1.0         -- multiplier on the attack's negative caution (A/B; applied caution while attacking was 1.11 vs AC's 1.0)
+R.FASTER_MARGIN_X = 1.0       -- multiplier on K.FASTER_MARGIN (3.0 km/h), the speed term in the attack gate (A/B
+                              -- 2026-10-24). 1.0 = today's behaviour exactly, so the default changes nothing.
+                              -- Why this lever: starclimb2 (16 Oct, n=5) found that at a REALISTIC pace edge
+                              -- (~1.2 s/lap realised) a faster car from P18 reaches about P6 and NEVER leads in 16
+                              -- laps, while the same car from P1 wins wire-to-wire - so PASSING, not pace, is the
+                              -- limit. The lunge analysis put all 256 'left' exits on the SPEED term:
+                              -- `gapA < attackGap and spd >= aheadSpd - K.FASTER_MARGIN`. A car that is slower than
+                              -- the one ahead by more than the margin never opens an attack at all, which is exactly
+                              -- the car trying to come through a field. Loosening it should let a quicker car start
+                              -- moves it currently cannot.
+                              -- APPLIED ON THE ATTACK SIDE ONLY: this gate and the `fasterMargin` handed to
+                              -- strategy. The defend gate and the yield stay on plain K.FASTER_MARGIN (cfec772).
+                              -- CORRECTED 2026-10-25: this comment used to say "all four read sites, deliberately",
+                              -- which cfec772 made false the same night it was written. A stale comment about which
+                              -- sites a lever touches is worse than none - it is the first thing anyone reads when
+                              -- deciding whether a result generalises.
+                              -- RESULT, s71b stage 2 (25 Oct, n=4/5): NOT CREDITED. x30 median P13 v x10 P9.5, led
+                              -- 0 of 9, ranges overlapping - and the lever demonstrably ACTED (a third of all AI
+                              -- car-frames entered the widened band at X=3.0). So the 'left' exits were real and
+                              -- relieving them is not what the climb needed.
+-- NOTE (2026-10-27, owner item 26): the oval-threshold commit 2a30a0f's message asserts the two faults are
+-- "INVERTED" and that detection "NEVER fired true on a genuine oval since 19 Sep". THAT CLAIM WAS WITHDRAWN
+-- (commits f848837 / 5103802 / 85d1488): the 41 "oval" races were Bahrain ROAD courses swept in by a bad glob,
+-- 00c5c43's retry worked, and there is no inversion. The commit message is left as-is (honest history, no rewrite);
+-- the settled account is the block below. Daytona on the CURRENT build remains UNMEASURED.
+R.OVAL_ONEWAY = 0.90          -- detectOval's threshold: |signed turn| / total turn above this = an oval (item 13,
+                              -- the owner's yes of 2026-10-24: "only purpose-built ovals count", general and NOT
+                              -- track-specific). WAS A HARDCODED 0.6, which called SEVEN of 160 installed layouts
+                              -- ovals and FIVE of those wrongly: ks_monza66/full 0.7980, /junior 0.7655, /road
+                              -- 0.6707, ks_red_bull_ring/layout_national 0.6434, and acu_unitedstates/east 0.6141 -
+                              -- COTA East, which the OWNER RACES. Each got the whole BOOK.nascar playbook on a road
+                              -- course. 0.90 has 0.102 of headroom above the highest false positive and 0.074 below
+                              -- the lowest true oval (bahrain .../test 0.9737; daytona_2017/oval 0.9872).
+                              -- WHAT THE RUNTIME ACTUALLY DOES ON A REAL OVAL, corrected 2026-10-25 after I got
+                              -- this badly wrong in this very comment. I wrote that detection is "INVERTED" and
+                              -- has "NEVER fired true on a genuine oval since 19 Sep - 42 consecutive races".
+                              -- THAT CAME FROM A GLOB OF *daytona* PLUS *bahrain*, AND ZERO OF THOSE 41 BAHRAIN
+                              -- RACES WERE ON THE OVAL LAYOUT: 37 grandprix, 2 outer, 1 paddock, 1 endurance, all
+                              -- ROAD COURSES, all correctly classified. bahrain .../test, the 0.9737 oval, has
+                              -- NEVER been raced. The only genuine oval ever raced here is Daytona, 10 diags:
+                              -- 2 real races false and 1 failed launch (2 snapshots) BEFORE 00c5c43 (19 Sep
+                              -- 08:20), then 6 TRUE and 1 false after it.
+                              -- SO: 00c5c43's retry WORKED and there is NO inversion. The false positives this
+                              -- threshold fixes were real and independently confirmed (COTA East observed true
+                              -- as recently as 23 Oct); the oval playbook is NOT left applying to nothing.
+                              -- STATE THE DAYTONA FIGURE AS WHAT IT IS, AND NOT AS A RATE (verve-47, 25 Oct):
+                              -- SIX CORRECT READINGS AND ONE MISS, ALL SEVEN ON 19 SEPTEMBER, on that day's
+                              -- build and that day's CSP. "1 in 7" is one miss, not a rate, and n=7 supports
+                              -- neither. DAYTONA HAS NOT BEEN RACED SINCE 19 SEP 14:10:56, so what detection
+                              -- does on the CURRENT build is UNMEASURED - "detection works" describes a
+                              -- five-week-old tree. A short fresh-launch Daytona cell on the current build,
+                              -- reading the oval fields below, would measure it; it should come BEFORE any
+                              -- false-negative fix, because that fix now needs a measured miss to justify it.
+                              -- THE FALSE NEGATIVE'S LIKELY CAUSE (verve-47's, confirmed by reading this function
+                              -- and not yet by a log): `sampled = true` is set as soon as all 96 samples are
+                              -- non-nil, BEFORE any geometry is judged. DEGENERATE points - all equal, or zeros at
+                              -- load - leave m1,m2 <= 1e-3, so nothing accumulates, total stays 0, oval stays false
+                              -- and `ovalChecked` is committed. The beginFrame retry then never runs, because it
+                              -- only retries while NOT ovalChecked and only guards the NIL case (00c5c43, 19 Sep,
+                              -- added for this very Daytona symptom). The fix - treat total <= 1e-3 as NOT sampled
+                              -- so the retry continues - is a SEPARATE named change: it re-enables the playbook on
+                              -- a track where the groove offset once wrecked Daytona (e79ea2d), so it needs a test.
+                              -- The diag now logs sampled/total/ratio at commit time so one Daytona row tells
+                              -- degenerate-at-load from wrong-ratio from never-sampled.
+R.COMMIT_HOLD_X = 1.0         -- multiplier on K.COMMIT_HOLD for an ATTACK commitment only (defend untouched) (A/B 2026-10-24).
+                              -- Why: s59_lunget measured a lunge at 2.1-2.8 s (median; capped 2.2 s at LUNGE_OUT_T 1.3 and 3.5 s
+                              -- at 2.6) against a COMMIT_HOLD of 0.7 s, so the move outlives the state that authorises it by 3-4x.
+                              -- strategy.lua:1378 clears the move the frame `state ~= 1`, with how = 'left'. rawAttack needs BOTH
+                              -- gapA < attackGap AND spd >= aheadSpd - K.FASTER_MARGIN (3 km/h), and a car pulling off-line to lunge
+                              -- scrubs exactly that speed - so the lunge trips its own authorising condition. Doubling the commit
+                              -- window did not help and inverted the ending (base 2/3 'run', long 2/3 'left'), and a WINNING lunge is
+                              -- SHORTER than a losing one in both arms, which is what "the rope is not the constraint" looks like.
+R.PC_TS = 1.0                 -- trouble-spot + crash caution multiplier for a committed passer (PASS_COMMIT; A/B)
+R.PASS_ABORT = 0              -- >0: not this much alongside the car I'm passing by the braking zone -> tuck back in behind it (A/B)
+R.TOW_ATTACK = 0              -- >0: on a STRAIGHT (steer < 0.1), above TOW_MIN km/h, within TOW_M of the car ahead, with a pace edge of
+                              -- TOW_EDGE, the applied caution is floored at -this (corners untouched). Tow diagnostic 2026-09-21: a veteran
+                              -- in the tow LOSES 0.6-1.2 m/s to the car ahead - AC's AI following distance, and Verve never got under 1.0
+R.TOW_MIN = 150; R.TOW_M = 60; R.TOW_EDGE = 0.15
+R.PASS_OPP = 0                -- >0: OPPORTUNIST - the car ahead this many km/h under its own bin's typical speed (cv2.ys) for PASS_OPP_T s ->
+                              -- the tow floor at -PASS_OPP_CAUT on the straight for PASS_OPP_HOLD s, no pace rating needed (A/B; F1 25 stock 12 / 0.25)
+R.PASS_OPP_T = 0.25; R.PASS_OPP_HOLD = 3.0; R.PASS_OPP_CAUT = 0.5
+R.PULL = false                -- STRAIGHT-LINE PASS (verve-47 2026-11-01, DESIGN_pullout_20261101.md): armed in the tow with a pace edge (or the OPP
+                              -- hold) and closing -> pull out PULL_LEAD s + the lateral time before the braking point (cv2.ys), just clear of the
+                              -- car ahead; at the brake commit (overlap >= PULL_OVL, +PULL_CAUT, no brake-hint change) or abort (PASS_ABORT body);
+                              -- past the apex release to the line over PULL_EXIT_T s. The lunge is suppressed while a move is pulled/committed/aborting.
+R.PULL_LEAD = 0.4; R.PULL_SLEW = 0.8; R.PULL_DROP = 15; R.PULL_LOOK = 4.0; R.PULL_BRAKE_FB = 1.0; R.PULL_CLOSE = 1.0
+R.PULL_OVL = 0.5; R.PULL_OVL_P = 0.7; R.PULL_CAUT = 0.05; R.PULL_EXIT_T = 1.0; R.PULL_EXIT_S = 2.0; R.PULL_COOL = 4.0
+R.pullArmN = 0; R.pullOutN = 0; R.pullComN = 0; R.pullAbN = 0; R.pullExitN = 0; R.pullFbN = 0; R.pullLostN = 0
+R.pullLog = {}; R.pullW = 0   -- per-move ring (32 reused records), R.pullW = records written; diag drains it
+R.PULL_ARM_M = 14             -- (verve-47 2026-11-01, after the 4-lap smoke: 60/61 aborts from ~18 m back) arm only within ~3 car lengths,
+                              -- and pull out only if the overlap is REACHABLE by the brake: gap - closing x tB <= 4.6 x (1 - PULL_OVL[_P]);
+                              -- otherwise stay armed in the tow and wait for the next straight.
+R.pullUnrN = 0                -- brake points where an armed car held its pull-out (overlap not reachable), one per brake
+R.pullGapH = {}               -- gap (m, 2 m bins, index 1 = 0-2 m, 31 = 60 m+) at each pull-out decision, reachable or not
+R.PULL_REACH = 0.65; R.PULL_REACH_P = 0.8   -- (verve-47 2026-11-01, gate re-smoke: projection optimistic, 0.52 -> 0.07 actual) the PULL-OUT
+                              -- needs this projected overlap (vs the player: _P); the commit at the brake still tests the ACTUAL ovl vs PULL_OVL[_P]
+R.PULL_TOW = 0.5              -- while ARMED (phase 1) the caution is floored at -this away from the brake (tB false or > PULL_LEAD + 1 s):
+                              -- tow to close, pull to pass. AC's following distance parked armed cars 8-14 m back. 0 = off.
+R.PULL_NOLUNGE = false        -- true: while ARMED the strategy lunge is not evaluated (an armed car waits for the straight-line pass)
+R.pullTowN = 0; R.pullNlN = 0 -- car-frames with the armed tow floor applied / with the lunge suppressed by NOLUNGE
+R.PULL_AGGR = 0               -- >0: in the same armed window as PULL_TOW, AI aggression is raised to at least this (smoke 3: caution cannot
+                              -- beat AC's following distance; aggression is the next lever). Counter pullAggrN = car-frames raised. 0 = off.
+R.pullAggrN = 0
+R.PULL_TOW_STEER = true      -- (audit C1) the armed tow floor / PULL_AGGR only with the wheel straight (the arm test's steer check). false = 8b84529
+R.TOW_CORNER = 0              -- >0: the tow attack floor is off when a corner begins within this many seconds of travel (straight-only, for real)
+R.PASS_FINISH = 0             -- >0: a committed quicker driver (PASS_COMMIT) offline beside the car ahead, within this many car lengths of level,
+                              -- finishes the pass: caution floored at PASS_CAUT, full aggression, later braking on the inside (A/B 2026-09-19)
+R.PASS_BH = 1.06              -- ...brake hint multiplier on the inside line into the corner (> 1 = later braking; 1 = off)
+R.PASS_CAUT = 0.0             -- ...the caution ceiling while finishing (0 = the stacked back-off terms are cancelled for the move)
+R.PASS_COMMIT = 0             -- >0: a driver this much quicker (pace rating) than the car ahead commits to the pass from ATTACK_GAP (A/B)
+R.RS_OL_REAREND = 0.35        -- rear-end guard trim for a road-space pass on laps 0-1 (CV.RS_REAREND from lap 2); 1.0 = no trim (A/B)
+R.RS_OL_CROWD = 99            -- the star exemption below applies only with at most this many cars close by (A/B)
+R.OL_FUEL_K = 0.5             -- DEFAULT 2026-09-20 (owner): seven heavy pairs, incidents 10.2 -> 8.3, heavy hits down at every track. >0: the opening-lap brake-guard reach and row caution grow with the fuel on board: x (1 + K x (fuel - 20) / 50),
+                              -- so a 67 L race start (+50 kg over a sprint's 15 L) brakes earlier. Every opening-lap rule was tuned on
+                              -- 2-lap sprints; Spa 12-lap starts ran 16-18/18 in contact vs 7-12/18 for sprints the same night (2026-09-20)
+R.CV_TGAP = 0                 -- >0: the opening-lap convoy gap is this many SECONDS of travel at my speed (never less than CV.GAP_M);
+                              -- the floor scales with it. 24-car Spa: the deepest rows arrive fastest onto the slowest pack (A/B 2026-09-19)
+R.GROOVE_X = 0.0              -- DEFAULT OFF 2026-09-19 (owner-reported Daytona: on 48/39/34 incidents, off 6/3). Oval groove offset multiplier (0 = no groove; A/B 2026-09-19: at Daytona the 0.62 lane offset pinned a 20-car
+                              -- Euro NASCAR field at 242 km/h and produced 48 incidents; with the oval undetected the same cars ran 300 with 15)
+R.RS_OL_METER = 95            -- laps 0-1: road space is allowed for a TOP-TIER driver (profile pace >= 0.75, the manoeuvre layer's tier 2)
+                              -- when the difficulty meter is at or above this (0 = never). The pack stays gated; a star may go
+                              -- round from the lights (owner 2026-09-16: 'Max behind a slow car with 75% of the track open')
+K.YIELD_GAP_FAR = 0.027 -- ...but a car on a HIGHER LAP or a faster CLASS gets its blue flag from this far (real blue
+                             -- flags come at 1-2 s; a prototype closing only on the straights never got inside 45 m of a GT3
+                             -- before the next corner at Spa, so the GT3 never yielded: 88-104 s lap-arounds, 2026-09-15)
+K.YIELD_MAX_T = 4.0   -- a boxed-in car lifts for at most this long per lapper; then it races on
+local yieldT = {}
+K.YIELD_OFFSET = 0.45  -- move this far off-line to let a faster car through. Was 0.58: at speed that put
+                             -- yielding cars (damaged ones especially) into the gravel mid-corner -- a car
+                             -- width is enough, and it's speed-damped below like every other line change
+K.DAMAGE_YIELD_HOLD = 4.0 -- a damaged car commits to its off-line side this long (vs SIDE_HOLD) -- no weaving
+K.DAMAGE_YIELD = 55    -- body damage above which a car NURSES it: no diving for passes, moves over for a faster car.
+                             -- Was 38: a 41 km/h first-lap tap turned a star driver into a backmarker for 15 laps (Imola 2026-09-14).
+K.DAMAGE_HEAVY = 95    -- above this the car nurses it for the rest of the race
+K.DAMAGE_NURSE_LAPS = 2  -- lighter damage: nurse for this many laps after the last hit, then race again
+local dmgSeen, dmgLap = {}, {}   -- per car: worst damage reading seen, and the lap it was seen on
+                            -- so healthy cars can pass. Lowered so a moderately-hurt car yields cleanly
+                            -- instead of limping down the middle and weaving as it tries to race.
+K.YIELD_AGGR = 0.45  -- ease off only slightly while being lapped -- you're still racing
+K.YIELD_LIFT_GAP = 0.004 -- only actually lift once the lapper is THIS close (else keep racing pace)
+K.YIELD_CAUT = 0.18  -- small lift as the faster car draws right up (was a big early slowdown)
+-- DECISIVE LET-BY: yielding for this long with the lapper still right behind (equal pace) -> one proper lift on a
+-- straight for LETBY_T seconds, then back to racing. Not in corners, once per lapper.
+K.LETBY_AFTER_T = 6.0   -- s of yielding before the proper lift
+K.LETBY_T = 3.0   -- s the proper lift lasts
+K.LETBY_CAUT = 0.55  -- how much it lifts (on top of the small lift)
+local letbyT, letbyDone, letbyFor = {}, {}, {}
+K.ALONGSIDE_GAP = 0.0025-- on-track gap counting as "alongside" (overlap)
+K.ALONGSIDE_LAT = 0.45  -- lateral separation under which two cars overlap
+K.LEAVEROOM_CAUT = 0.20  -- lift when overlapping and not the car with the corner
+-- PASSING PACKAGE (owner 2026-09-28: no same-lap pace yield except hurt or crawling cars; pursuers more effective at passing). Every
+-- switch defaults to 0.14.8's behaviour; K.* is not harness-reachable, so the A/B'd values are R.* fields with the K default.
+R.PACE_YIELD_MODE = 1         -- DEFAULT 0.14.9. 0 = today: a same-class car whose best lap is PACE_YIELD_RATIO slower moves over for a quicker one closing.
+                              -- 1 = only a HURT car (R.hurtOf) does, from lap 1. Blue flags, the class yield and damage nursing are
+                              -- unchanged. Mode 1 also stops the AI moving over for the human player on pace (changelog)
+R.PACE_YIELD_RATIO = 1.04     -- mode 0 threshold (was K.PACE_YIELD_RATIO)
+R.PACE_YIELD_DMG = 45         -- DEFAULT 0.14.9 (25 kept lightly hit cars yielding). mode 1: km/h of damage since the last repair that can make a car hurt (nursing starts at K.DAMAGE_YIELD 55)...
+R.PACE_YIELD_SLOW = 0.02      -- ...when fresh (K.DAMAGE_NURSE_LAPS) or still costing pace: last lap > best lap x (1 + this)
+R.hurtSeen, R.hurtLap = {}, {} -- mode 1 only: per car, damage since repair last seen and the lap of the last fresh hit (a repair lowers it;
+                              -- nursing's dmgSeen / dmgLap keep today's worst-seen reading)
+R.LEAVEROOM_MODE = 0          -- 0 = today: leave-room fires for any car ahead within 11 m on my line. From lap 1 past OPENLAP_TAIL (the
+                              -- lap-0 pack keeps today's spacing): 1 = only a car I overlap (centre gap < LEAVEROOM_LEN_M); 2 = as 1, and
+                              -- not when I hold the inside of the corner ahead (the corner is mine)
+R.LEAVEROOM_LEN_M = 5.0       -- m centre to centre that counts as overlapping (GT3 4.6-4.8 m long, F1 5.6)
+R.DEFEND_ROOM = false         -- lap 2+, defending: a car behind already overlapping me (LEAVEROOM_LEN_M) 0.25+ to one side -> I don't move toward it
+R.RE_PULLOUT = false          -- lap 2+: the rear-end guard is trimmed to CV.RS_REAREND for a lunge / switchback (Strategy.last 1-2) whose
+                              -- pull-out really clears the car ahead (|target| x intensity x crowd damping > K.REAREND_LAT + 0.05)
+R.PASS_COMMIT_LAP = 0         -- >0: PASS_COMMIT's commit (paceEdge) on MEASURED pace, any car: my best lap beats the car ahead's last lap
+                              -- (else its best) by this fraction (0.02 = 2 %). Lap 1 past OPENLAP_TAIL on
+R.CAUTION_DEFEND = -0.25      -- defend relief from lap 2 (laps 0-1 keep K.CAUTION_DEFEND); x intensity => -0.175 applied (the rubber band)
+R.DEFEND_V2 = true            -- (2026-11-03 phantom-defend fix; DEFAULT ON for 0.16.2, owner 2026-11-04) replace the defend trigger's "not slower by FASTER_MARGIN"
+                              -- speed term with a GENUINE-THREAT test: defend only if the car behind is CLOSING (gapB shrank
+                              -- over DEFEND_CLOSE_WIN) or genuinely FASTER (> spd + FASTER_MARGIN), same lap, not pitting, not
+                              -- recovering. Default off = byte-for-byte the shipped 0.16.1 trigger. Changes only WHICH frames
+                              -- enter the defend state; the committed-state machine, hold and relief are untouched.
+R.DEFEND_CLOSE_WIN = 0.5      -- s, window the DEFEND_V2 closing test measures gapB reduction over
+R.DEFEND_CLOSE_MIN = 0.4      -- m, min gapB reduction over that window to count as "closing" (m()-scaled at the use site)
+R.PACK_STRETCH = 0.14         -- pack-leader stretch from lap 2 (laps 0-1 keep K.PACK_STRETCH)
+R.ISO_PACE_ALL = false        -- ISO_PACE's exemption from the lone ease-off for EVERY car with a car within CV.ISO_REACH_M ahead (not only tier 2)
+R.STEER_FRAC = true           -- DEFAULT 0.15. pounce and TOW_ATTACK read the wheel angle as a fraction of lock (R.steerIn) instead of raw degrees
+R.POUNCE_STEER = 0.02         -- STEER_FRAC: pounce under this fraction of lock (a straight reads under 0.02), off the brakes, lap 2+
+R.TOW_STEER = 0.02            -- STEER_FRAC: TOW_ATTACK under this fraction of lock
+R.MV_SIDE_M = 6.0             -- (H.MISTAKE_V2) no run-wide into a car overlapping this close (centre to centre, m) on the side it runs to
+R.MV_CHASE = 0                -- (H.MISTAKE_V2, optional) caution relief behind a car mid-mistake that has left my line; 0 = off
+R.MV_CHASE_M = 40             -- ...within this many metres
+R.humanMv = nil               -- set by Verve.lua: lib/human.lua's H.mv (a visible mistake's levers per car), applied in R.evaluate
+
+K.ATTACK_GAP = 0.008
+K.PASS_GAP = 0.0035
+K.DEFEND_GAP = 0.005
+K.FASTER_MARGIN = 3.0
+K.ATTACK_OFFSET = 0.35
+-- opportunistic outside pass: with a real exit-speed run, use more of the track (wider off-line, and
+-- allowed closer to the edge) to sweep around a slower car -- rather than a token move on the line.
+K.OUTSIDE_MIN_ADV = 8.0    -- km/h faster than the car ahead before we start using extra width
+K.OUTSIDE_RANGE = 20.0   -- full extra width by this much faster (min_adv + range)
+K.OUTSIDE_EDGE = 0.30   -- how much closer to the edge a full speed-run may run (raises EDGE_SOFT)
+K.DEFEND_OFFSET = 0.30
+K.EDGE_SOFT = 0.5       -- start easing the offset once the car is this far toward an edge
+K.EDGE_HARD = 0.9       -- fully suppressed by here (keeps cars off kerbs -> no trip/rollover)
+K.CAUTION_ATTACK = -0.6
+K.CAUTION_DEFEND = -0.25
+-- aggression = the car's own slider value (car.aiAggression) plus a small delta when fighting,
+-- so the Quick Race aggression slider stays meaningful instead of being overwritten.
+K.ATTACK_AGGR_ADD = 0.25
+K.DEFEND_AGGR_ADD = 0.12
+K.AGGR_CRUISE = 0.55       -- fallback baseline only if the car's aggression can't be read
+-- AGGRESSION BASE (harness A/B: R.AGGR_BASE_FIX). car.aiAggression reads back what Verve itself last wrote with
+-- physics.setAIAggression, so for a car without a profile 'the car's own value' above was last frame's OUTPUT: the
+-- per-driver spread and every attack/defend boost compounded frame on frame (a positive-spread car ratchets to 1.0
+-- while cruising, a negative one sinks to 0.15). With this on, each car's own aggression is read ONCE per session,
+-- before Verve's first write to it that session (R.aggrBase), and stays its base all session.
+R.AGGR_BASE_FIX = true  -- DEFAULT 0.14.8.   -- STATUS 2026-09-28: proven (7/7 regression pairs at launcher aggression 60, no cost; a no-op for profiled cars), proposed as the 0.14.8 default
+R.AGGR_BASE_TOL = 0.03       -- a session's first read this close to Verve's last write is Verve's value (the override survives a restart)
+R.baseAggr = {}              -- [i] = the car's own aggression as read this session (-1 = unreadable); cleared by R.reset
+R.aggrPrev = {}              -- [i] = { base, set }: the last session's capture and Verve's last write to the car, for that guard
+-- WRECKING CREW (owner 2026-09-28): the chaos driver profile (lib/drivers.lua, key wrecking_crew, wild=true). Everything below
+-- acts ONLY on a car assigned a wild profile: assigning the profile is the opt-in, and with no wild car on the grid none of it
+-- runs. R.WILD=false keeps the row's own numbers (pace 0.95, aggr and risk 1.0) and switches this layer off: the A/B control.
+-- Two pace rules in lib/drivers.lua stay on with R.WILD=false (he is never the pace anchor; with relative pace he runs at the
+-- slider level), so the field's pace is the same in both arms.
+-- The risky extras (WILD_START, WILD_DIVE0, WILD_BH, WILD_BLUE, WILD_TILT) are harness switches, off.
+R.WILD = true                 -- master; mirrored to Drivers.WILD_ON each frame (Verve.lua) for the human, strategy and recovery modules
+R.WILD_CAUT = 0.40            -- flat caution removed
+R.WILD_SAFE = 0.5             -- share of the stacked positive back-off he keeps (rear-end guard, leave room, opening lap)
+R.WILD_BASEA = 1.3            -- aggression used only by the pass thresholds (and so the outside-pass width: the edge cap is always on for him) and strategy eagerness; capped at 1.35 (minAdv goes negative at 1.4)
+R.WILD_AFLOOR = 0.9           -- aggression floor once the opening lap has faded, except while nursing damage or yielding
+R.WILD_OL = 0.5               -- share of the opening-lap aggression trim and brake-guard cut he ignores
+R.WILD_CONVOY = true          -- exempt from the lap-0 convoy throttle (reaction time and the staggered release stay)
+R.WILD_START = false          -- harness arm: also exempt on laps 0-1 from the brake guard, lanes, funnel and road-space ban
+R.WILD_ELBOWS = 0.5           -- alongside a car that has the corner: target x(0.2 + 0.8 x this) instead of x0.2
+R.WILD_LUNGE = 1.25           -- lunge chance multiplier (each class's playbook is kept)
+R.WILD_COOL = 6               -- s between his manoeuvres (the strategy layer's own cooldown is 12)
+R.WILD_REACH = 1.5            -- lunge from further back: the strategy layer's close-in gap x this
+R.WILD_DIVE0 = false          -- harness arm: lunges on lap 0 and in packs
+R.WILD_BH = 1.0               -- harness arm: brake-hint multiplier while attacking; above 1 = later braking (1 = off)
+R.WILD_BLUE = 0               -- harness arm: chance per lapper per lap that he ignores a blue flag (0 = always obeys)
+R.BLUE_REC_EXEMPT = 0         -- TEST SWITCH, a MODE (0 = today). 1 = a car recovery holds (.rec) skips the blue-flag yield entirely.
+                              -- 2 = while .rec OR its reposition is unjudged (stateOf().dropPending), the car still MOVES ASIDE for
+                              -- a lapper but does NOT LIFT. Mode 2 is the proposal: mode 1 missed car 14 (PC #2 8 Oct, mixed-era
+                              -- grid) whose .rec was already 0 at age 4 while it crawled for lappers on 0-3 % gas - recovery clears
+                              -- recT at a successful teleport - and mode 1 also stops a rescued car moving off the line for a
+                              -- leader arriving at full speed. The yield's own comment says a lapped car should 'EASE aside and keep
+                              -- rolling, NOT crawl'; mode 2 is exactly that, for the one car that most needs to keep rolling.
+                              -- Original note (mode 1), kept for the record: A car still inside its RECOVERY window does not obey a blue flag.
+                              -- Traced 8 Oct (PC #2, pc2_rep3_imola22_1 car 6): stuck at spline 0.587, gated back to 0.314 so
+                              -- a lap down, and the moment it was set back on the road a lapping car came by. It conceded and
+                              -- lifted - 30 km/h on 17-24 % throttle for 14 s, the slowest clear of 89 drops that day, letting
+                              -- go only once the lapper was beyond 60 m. Its damage was NOT the cause (effective damage 0: it
+                              -- had just been repaired), and the convoy cap was not either (that floors throttle at 0.35).
+                              -- It was the blue flag, with rec = 1 the whole time.
+                              -- Convoy v2, the room-follow test and the fast-tuck all already exempt a car in recovery; this
+                              -- rule never did - the same shape as the gateSafe stagger that only ran on the gate-first path.
+                              -- On the merits a car accelerating from a standstill after a rescue cannot meaningfully concede
+                              -- anything: it is far off the pace and the lapper passes it regardless. All it does is crawl.
+R.WILD_NOLEARN = true         -- his own incidents don't feed trouble-spot heat or crashiness; his drops don't count toward the reposition switch-off
+R.WILD_TILT = false           -- harness arm (night 2): after losing a place or an 8 km/h hit, 14-26 s of caution -0.30 more and lunge chance x1.5
+R.WILD_TILT_T = 20            -- (WILD_TILT) mean tilt length, s (x0.7-1.3 per tilt)
+R.WILD_TILT_COOL = 25         -- (WILD_TILT) s after a tilt ends before the next one can start
+R.WILD_TILT_CAUT = 0.30       -- (WILD_TILT) extra caution removed while tilted
+R.WILD_TILT_LUNGE = 1.5       -- (WILD_TILT) lunge chance multiplier while tilted
+R.WILD_MAX_HITS = 4           -- (WILD_TILT) no more tilts after this many 8 km/h hits
+R.wild = { till = {}, cool = {}, pos = {}, posT = {}, dmg = {}, hits = {}, tilts = 0 }   -- (WILD_TILT) per-car state; cleared by R.reset
+-- EDGE_CAP (found 2026-09-28 reading for the Wrecking Crew): edgeSoft = EDGE_SOFT + wide x OUTSIDE_EDGE passes EDGE_HARD once
+-- wide > 4/3 (aggression above ~0.83 with a real run), and the kerb guard is then off on outside passes. The existing 0.84
+-- rows (Diablo Blastoya, Hansel Struck) already reach it. On in every wild harness arm; a default only after the suite.
+R.EDGE_CAP = false            -- harness switch: cap edgeSoft at EDGE_HARD - 0.05 (any car; always on for a wild car)
+K.OFFSET_SLEW = 0.8        -- units/sec offset may move (lower = smoother, less skittish)
+K.DEADZONE = 0.12       -- ignore tiny offsets (stay on the line)
+K.SIDE_HOLD = 1.2        -- s to hold a chosen side before allowing a flip (anti-dart)
+K.OFFLINE_MAX = 0.75      -- don't defend against a car this far off the racing line
+K.SPEED_MIN = 30.0
+K.CROWD_GAP = 0.006     -- cars within this spline gap count as "in the pack"
+K.SAMPLE_D = 0.004     -- spline fraction between racing-line samples (~20m on a 5km track)
+K.CORNER_TURN = 0.01      -- min (1 - dot) between tangents to count as "a corner ahead" (~8 deg)
+K.CLASS_YIELD_FRAC = 0.08 -- a faster CLASS closing at least this fraction of my speed faster gets let through
+K.CLASS_YIELD_MIN = 8.0  -- ...but never less than this many km/h (15 km/h flat was a huge margin for a kart at 70)
+-- PACE-aware yield: the same thing by MEASURED pace, not class label. A mixed grid of "formula" mods spans
+-- F3.5s to F1s -- all one class key, so the class rule never fired -- and the data shows it: the slowest
+-- mod on today's grid (a Formula Renault 3.5 among F1s) averaged 1.9 laps before being collected. A car
+-- whose best lap is this much slower than the one closing on it is being LAPPED in all but name: let it by.
+-- (the threshold is R.PACE_YIELD_RATIO, with the passing-package switches after K.LEAVEROOM_CAUT)
+-- YELLOW FLAG: a stopped car on the road ahead gets everyone arriving a hard speed cap that tightens as they
+-- approach -- double-waved yellows. Class-agnostic absolute caps: no racing car should pass a stationary
+-- car faster than this. (The go-around handles the LATERAL part; this is the "slow down".) Before this, a
+-- car sat sideways on the line after a spin was hit twice by cars arriving at full speed, and a just-
+-- rescued car was T-boned at 150 km/h.
+K.YELLOW_NEAR = 40    -- metres from the obstacle at which the cap is at its tightest...
+K.YELLOW_CAP = 60    -- ...this (km/h). 80 let cars arrive at a blocked road at 80-95 and hit it; 45 had
+                             -- the whole field crawling through a zone with one stopped car and stacking up
+K.YELLOW_FAR = 250   -- the zone starts this far out...
+K.YELLOW_CAP_FAR = 200   -- ...at this cap (km/h), easing linearly to YELLOW_CAP
+K.FREEPASS_CAUT = 0.15  -- caution taken OFF a car lapping a yielding backmarker
+R.CAUT_BASE = 0.0       -- flat caution offset on every AI car (harness: is there pace in braking later? 0 = as today)
+-- TOP PACE (owner 2026-09-29: Veterans and stars must lap like the best humans; the Wrecking Crew's control arm showed how much
+-- margin the AI keeps). A car's weight w = its profile pace from TOP_FROM (0) to TOP_FULL (1); unprofiled cars count as
+-- TOP_UNPROF (0 = today). From lap 1 on, not while yielding: caution - TOP_CAUT x w, and the lone-car ease-off x (1 - w x TOP_ISO).
+R.TOP_CAUT = 0.0; R.TOP_ISO = 0.0; R.TOP_FROM = 0.80; R.TOP_FULL = 0.95; R.TOP_UNPROF = 1.0   -- DEFAULT 0.15: TOP_UNPROF
+R.ISO_X = 1.0           -- x the lone-car ease-off (K.ISOLATED_CAUT / _AGGR) for every car (harness A/B; 1 = today, 0 = off)
+R.TOP_GRIP = 0.15       -- DEFAULT 0.14.9. extra AI grip x the car's top-pace weight (Verve.lua; 29 Sep: grip is the one lever past AC's level-100 ceiling -
+                        -- 1.20 -> 1.40 took Monza GT3 from +4.0 % to +3.1 % off the RSR top-10; 0 = off)
+K.YELLOW_LAT = 1.3   -- a stopped car this far from the centre line still counts (edge/kerb); deep in the gravel doesn't
+-- SLOW-CAR YELLOW (harness A/B: R.YELLOW_SLOW > 0). The yellow above only sees a car under K.BLOCK_SPEED (24 km/h), so at
+-- Baku's flat-out kink (0.74, 255-270 km/h) cars ran into a damaged crawler or a just-repositioned car doing 30-90 km/h with
+-- no warning at all. With this on, a car ahead is ALSO a yellow when it is under YELLOW_SLOW x the speed ITS OWN bit of road
+-- is normally driven at: the typical-speed map (cv2.ys), one sample per car per ~20 m bin crossing, from lap 1 on, from every
+-- moving car not in the pit lane, finished, damaged, yielding, driven by recovery or in the rejoin ramp; a bin reads as the
+-- slowest trusted one of itself and its two neighbours, so a braking zone reads as its slow end. Judged against the road,
+-- not against me: a car braking for a hairpin is at the hairpin's normal speed and never counts (the lap-0 OL_SPINYELLOW
+-- test, 'far slower than me', would fire behind every one). It counts only IN THE WAY: within CV.YS_LANE of the racing
+-- line where it is, or of me (a car braking on the edge for the pit entry, or pulled aside, is passed). Each slow car gets
+-- the stopped-car cap (a crawler passed at its speed + 40) on its own, and the tighter of that and the stopped-car yellow
+-- applies: a slow car queueing in front of a wreck must never hide the wreck and lift the cap.
+R.YELLOW_SLOW = 0             -- fraction of the road's typical speed, 0 = off (no map, nothing changes); 0.35 = a car under 35% of it is a yellow (Baku kink 2026-09-26)
+-- (0.16) CSP'S OWN AI GRIP KEY, read ONCE and cached. Read-only: Verve never writes a CSP config.
+-- WHY: at the shipped NEW_LATERAL_GRIP_ESTIMATION=1 a formula field running Verve retires 12-20 of 20 against
+-- stock AC's 4-9 (cspf1), and the key ALONE is enough (cspf2). Verve cannot warn about that without knowing
+-- the value. THREE STATES, because "absent" and "0" are different facts and neither is "could not look":
+--   'ok'      read; R.CSP_LATGRIP is its value
+--   'absent'  config readable, key not present - EXPECTED ON CSP 3465, where the key does not exist and
+--             PC #2 measures Verve as clean, so a warning here would be noise
+--   'noapi'   enum entry or config missing - we know nothing, and that must not read as 'absent'
+-- Any future warning fires ONLY on 'ok' with a non-zero value. 'noapi' and 'absent' are silence.
+R.CSP_LATGRIP = nil
+R.CSP_LATGRIP_STATE = 'unread'
+
+function R.cspLatGrip()
+    if R.CSP_LATGRIP_STATE ~= 'unread' then return R.CSP_LATGRIP, R.CSP_LATGRIP_STATE end
+    local state, val = 'noapi', nil
+    pcall(function()
+        local id = ac.CSPModuleID and ac.CSPModuleID.NewBehaviour
+        if id == nil then return end
+        local cfg = ac.INIConfig.cspModule(id)
+        if not cfg then return end
+        state = 'absent'                                   -- config readable; key may still be missing
+        local v = cfg:get('AI_TWEAKS', 'NEW_LATERAL_GRIP_ESTIMATION', -999)
+        if type(v) == 'number' and v ~= -999 then val, state = v, 'ok' end
+    end)
+    R.CSP_LATGRIP, R.CSP_LATGRIP_STATE = val, state
+    -- logged once, and the harness KEEPS AC's log.txt per run, so this is checkable against results.csv's
+    -- csp_ai across rows that set the key differently - testing the API instead of trusting it
+    pcall(ac.log, string.format('Verve csp: NEW_LATERAL_GRIP_ESTIMATION state=%s value=%s',
+        state, tostring(val)))
+    return val, state
+end
+
+R.YELLOW_LAT = 2.0            -- DEFAULT 0.16 (owner yes 8 Oct). How far off the centre line a stopped car still raises a yellow (half-widths);
+                              -- 1.3 (K.YELLOW_LAT) was the old value. F1 cars stopped at 1.5-1.7 after a crash at Lesmo 2 fell outside 1.3, so no
+                              -- yellow was raised for them at all and the next car arrived flat out (5 Oct analysis). Of the three yellow changes
+                              -- tried on Monza SF70H (3 races each on one fixed grid), this one carried the whole effect: retirements 1.7 -> 0.0 and
+                              -- heavy hits 2.7 -> 0.7 against a control on the same grid, for about two more light contacts per race. The brake
+                              -- assist (incidents 16.0 -> 22.7) and the slow-car yellow were dropped with it.
+CV.YS_M = 20.0                -- m per bin of the typical-speed map (bin count = track length / this, 50..1000)
+CV.YS_MIN = 10                -- crossings before a bin is trusted (a running mean until then); 10+ cars trust the lap during lap 1
+CV.YS_UP = 0.20; CV.YS_DN = 0.05   -- EMA rates once trusted: quick up, slow down, so cars slowed through a yellow zone do not teach the map the zone is slow
+CV.YS_REJ = 0.5               -- a crossing under this fraction of a trusted bin is not learned (the crawler, the queue behind it); fixed, so every YELLOW_SLOW reads the same map
+CV.YS_LANE = 0.45             -- track half-widths (latOf units): a slow car this close to the racing line at its spot, or to me, is in the way (K.ALONGSIDE_LAT's overlap) (2026-09-26)
+R.yellowSlowN = 0             -- diag: pair-frames a slow car in the way capped a car behind it (session line yellowSlowN)
+
+-- TRACK-LENGTH SCALING: every gap above is a spline FRACTION, and the tuning was done on ~4.5 km circuits.
+-- A fraction is a different distance on every track (0.008 is 36 m at Zandvoort, 160 m at the
+-- Nordschleife, 8 m on a kart track), so racecraft that felt right at one length was blind or twitchy at
+-- another. The gaps are re-derived from METRES each session -- same names, identical values at 4.5 km.
+K.REF_LEN = 4500
+local trackLen = K.REF_LEN
+local scaled   = false
+local function scaleToTrack(len)
+    trackLen = (type(len) == 'number' and len > 200) and len or K.REF_LEN
+    local function m(x) return x / trackLen end
+    K.GROOVE_RANGE  = m(90);   K.ISOLATED_GAP = m(135);  K.PACK_LEAD_GAP = m(54);   K.REAREND_GAP   = m(22.5)
+    K.BLOCK_GAP     = m(27);   K.YIELD_GAP    = m(45);   K.YIELD_LIFT_GAP = m(18);  K.ALONGSIDE_GAP = m(11)
+    K.YIELD_GAP_FAR = m(120)
+    CV.GAP = m(25)
+    K.ATTACK_GAP    = m(36);   K.PASS_GAP     = m(16);   K.DEFEND_GAP   = m(22.5);  K.CROWD_GAP     = m(27)
+    K.SAMPLE_D      = m(18);   K.GRID_FADE_END = m(225); K.GRID_CAPTURE = m(90)
+end
+
+-- per-class racecraft tactics: gap = striking range, offset = how far off-line, corner = how hard
+-- it commits to an inside dive (vs a straight slipstream pass), defend = defensive firmness.
+-- follow = how close it tucks in behind (high-downforce cars keep MORE distance -> dirty air
+-- costs them front grip, so tucking right up makes them twitchy/crash-prone).
+local TACTICS = {
+    formula   = { gap = 1.3,  offset = 0.7, corner = 0.5, defend = 1.0, follow = 0.25 }, -- slipstream from far, precise, keeps well back (dirty air + fragile)
+    formula_jr= { gap = 1.25, offset = 0.9, corner = 0.9, defend = 1.0, follow = 0.85 }, -- low-downforce: slipstream packs, races close (no dirty air)
+    prototype = { gap = 1.3,  offset = 0.8, corner = 0.6, defend = 1.0, follow = 0.35 },
+    hypercar  = { gap = 1.2,  offset = 0.8, corner = 0.7, defend = 1.0, follow = 0.4 },
+    gt        = { gap = 1.0,  offset = 1.0, corner = 1.1, defend = 1.1, follow = 0.9 },  -- out-brakes, close racing
+    touring   = { gap = 0.85, offset = 1.1, corner = 1.2, defend = 1.15, follow = 1.05 }, -- dive-bomb, elbows out (moderated so it isn't chaotic)
+    road      = { gap = 1.0,  offset = 1.0, corner = 1.0, defend = 1.0, follow = 0.9 },
+    vintage   = { gap = 1.1,  offset = 0.9, corner = 0.8, defend = 0.9, follow = 0.8 },  -- momentum, wider lines
+    drift     = { gap = 1.0,  offset = 1.0, corner = 1.0, defend = 1.0, follow = 1.0 },
+    kart      = { gap = 1.0,  offset = 0.9, corner = 1.2, defend = 1.15, follow = 1.3 }, -- bumper-to-bumper, out-brakes, big slipstream
+    rally     = { gap = 1.0,  offset = 1.0, corner = 1.05, defend = 1.0, follow = 0.9 }, -- AWD, races like a grippy road car on tarmac
+    nascar    = { gap = 1.2,  offset = 1.2, corner = 0.8, defend = 1.1, follow = 1.4 }, -- pack/draft: run right up in the tow, use the whole width (high/low lines), block the draft
+}
+local curOffset = {}
+local latNow = {}           -- every car's lateral track position this frame (one projection per car, not per pair; filled in beginFrame)
+local gridLat = {}          -- each car's captured starting-lane lateral, for the grid funnel
+local holdSign, holdUntil = {}, {}
+local pounceT = {}
+local commitState, commitUntil = {}, {}
+local defGbT, defGbV, defGbI = {}, {}, {}   -- (R.DEFEND_V2) per-car lagged gapB sample + the behind car it was taken against; V2-on only
+local function clamp(x, a, b) if x < a then return a elseif x > b then return b end return x end
+local function sgn(x) if x > 0.1 then return 1 elseif x < -0.1 then return -1 else return 0 end end
+local function hash01(n)
+    local x = (n * 2654435761) % 2147483647
+    x = (x * 1103515245 + 12345) % 2147483647
+    return x / 2147483647
+end
+local function latOf(pos)
+    local x = 0
+    pcall(function() local tc = ac.worldCoordinateToTrack(pos); if tc then x = tc.x end end)
+    return x
+end
+
+-- corner ahead: returns (isCorner, insideSign) using three racing-line samples + a lateral probe
+-- Detect an oval/speedway: sample the racing line around the whole lap and measure how one-directional
+-- the turning is. An oval turns the same way the entire lap (|sum of turns| ~ total turning); a road
+-- course balances left and right (sum near zero). Computed once per session.
+local function detectOval()
+    local oval, sampled = false, false
+    pcall(function()
+        local N = 96
+        local pts = {}
+        for k = 0, N - 1 do
+            local p = ac.trackProgressToWorldCoordinate(k / N, false)
+            if not p then return end
+            pts[k] = p
+        end
+        sampled = true
+        local signed, total = 0, 0
+        for k = 0, N - 1 do
+            local a, b, c = pts[k], pts[(k + 1) % N], pts[(k + 2) % N]
+            local v1x, v1z = b.x - a.x, b.z - a.z
+            local v2x, v2z = c.x - b.x, c.z - b.z
+            local m1 = math.sqrt(v1x * v1x + v1z * v1z)
+            local m2 = math.sqrt(v2x * v2x + v2z * v2z)
+            if m1 > 1e-3 and m2 > 1e-3 then
+                local turn = (v1x * v2z - v1z * v2x) / (m1 * m2)   -- signed turn between segments
+                signed = signed + turn
+                total = total + math.abs(turn)
+            end
+        end
+        -- mostly one-way = oval. R.OVAL_ONEWAY, not a literal, so it is A/B-able and so that the audit tool has
+        -- something to mirror by name rather than by a number buried here.
+        if total > 1e-3 then oval = (math.abs(signed) / total) > R.OVAL_ONEWAY end
+        R.ovalTotal = total                                  -- item 14 logging, no behaviour change: these three
+        R.ovalRatio = total > 1e-3 and (math.abs(signed) / total) or -1   -- distinguish degenerate-at-load (total
+        R.ovalSampled = true                                 -- ~0) from wrong-ratio from never-sampled (no values)
+    end)
+    return oval, sampled
+end
+
+local function LANE_APEX_M_frac(len) return 40.0 / (len or 4500) end   -- turn-1 lane hold: metres past the apex, as a lap fraction
+local function cornerAhead(prog)
+    local isCorner, insideSign = false, 0
+    pcall(function()
+        local p0 = ac.trackProgressToWorldCoordinate(prog % 1, false)
+        local p1 = ac.trackProgressToWorldCoordinate((prog + K.SAMPLE_D) % 1, false)
+        local p2 = ac.trackProgressToWorldCoordinate((prog + 2 * K.SAMPLE_D) % 1, false)
+        if not (p0 and p1 and p2) then return end
+        local v1 = (p1 - p0):normalize()
+        local v2 = (p2 - p1):normalize()
+        if (1 - v1:dot(v2)) < K.CORNER_TURN then return end             -- basically straight
+        isCorner = true
+        local centripetal = (v2 - v1)                                 -- points toward the inside (v1,v2 unchanged by dot)
+        if centripetal:length() < 1e-4 then return end
+        local latHere  = latOf(p1)
+        local latInside = latOf(p1 + centripetal:normalize() * 3.0)   -- 3 m toward the inside
+        insideSign = (latInside >= latHere) and 1 or -1               -- track frame: +1 = right
+    end)
+    return isCorner, insideSign
+end
+
+-- ROAD SPACE geometry (R.ROADSPACE, and R.PULL's side pick): the centre-to-centre gap that clears a car, and the free lateral
+-- room per side of the car ahead (at lateral aLat) out to just past it. Returns need and the reused table room[-1|1]: read it
+-- before the next call. Factored out of the road-space rule unchanged (the per-call room table is now one reused table).
+local roomT = { [-1] = 0, [1] = 0 }   -- read immediately; the next call overwrites it
+local function roomSides(i, me, mySpline, aLat, gapA, aheadIdx, carsCount)
+    local half = 6.0                                          -- half track width here (m): track units per metre
+    pcall(function() local sd = ac.getTrackAISplineSides(mySpline); if sd then half = math.max(3.0, (sd.x + sd.y) * 0.5) end end)
+    local carW = CV.RS_CARW_M
+    pcall(function() local ab = me.aabbSize; if ab and ab.x > 0.8 and ab.x < 4.0 then carW = ab.x end end)
+    local need = (carW + CV.RS_MARGIN_M) / half               -- centre-to-centre lateral gap that clears a car
+    roomT[-1], roomT[1] = aLat + CV.RS_EDGE, CV.RS_EDGE - aLat   -- how far from the car ahead I may sit, per side
+    local back, fwd = CV.RS_BACK_M / trackLen, gapA + CV.RS_FWD_M / trackLen
+    for j = 0, carsCount - 1 do
+        if j ~= i and j ~= aheadIdx then
+            local oc = ac.getCar(j)
+            if oc and oc.splinePosition and ((oc.speedKmh or 0) > K.BLOCK_SPEED or (R.RS_SEE_STOPPED and not oc.isInPitlane)) then
+                local sd = oc.splinePosition - mySpline; if sd < -0.5 then sd = sd + 1 elseif sd > 0.5 then sd = sd - 1 end
+                if sd > -back and sd < fwd then                       -- from just behind me to just past the car ahead
+                    local dl = (latNow[j] or 0) - aLat
+                    local s = (dl >= 0) and 1 or -1
+                    local r = math.abs(dl) - need                     -- I must clear that car too
+                    if r < roomT[s] then roomT[s] = r end
+                end
+            end
+        end
+    end
+    return need, roomT
+end
+
+-- (R.PULL) the next braking point from the typical-speed map: scanning forward from my bin, the first trusted bin more than
+-- PULL_DROP km/h under the fastest trusted bin seen so far. Returns seconds to it at my speed, its bin, and the apex bin (the
+-- first bin after it where the map speeds up again); nil when my bin is untrusted (the caller falls back), false when the map
+-- is trusted but shows no brake within PULL_LOOK s.
+local function ysBrake(s, spd)
+    local ys = cv2.ys
+    if not ys or spd < 1 then return nil end
+    local nb = ys.nb
+    local x = (s % 1) * nb
+    local b0 = math.floor(x) % nb
+    if (ys.n[b0] or 0) < CV.YS_MIN then return nil end
+    local binM = trackLen / nb
+    local v = spd / 3.6
+    local maxK = math.min(nb - 1, math.ceil(R.PULL_LOOK * v / binM) + 1)
+    local top = ys.v[b0]
+    for k = 1, maxK do
+        local b = (b0 + k) % nb
+        if (ys.n[b] or 0) >= CV.YS_MIN then
+            local vb = ys.v[b]
+            if vb > top then top = vb
+            elseif vb < top - R.PULL_DROP then
+                local ab, av = b, vb                              -- the apex: walk on while the map keeps slowing
+                for k2 = 1, 40 do
+                    local b2 = (b + k2) % nb
+                    if (ys.n[b2] or 0) < CV.YS_MIN or ys.v[b2] > av then break end
+                    ab, av = b2, ys.v[b2]
+                end
+                return (k - (x - math.floor(x))) * binM / v, b, ab
+            end
+        end
+    end
+    return false                                              -- a trusted map, no brake within PULL_LOOK: keep waiting (no fallback)
+end
+
+-- (R.PULL) close one move: write its record into the 32-slot ring (records reused, no garbage) and cool the car down.
+-- verdict 1 commit, 2 abort, 3 lost (the target got away / a safety layer took the line), 4 timeout (no brake reached in 3 s)
+local function pullFinish(i, p, verdict, won, exitSpd, exitTv, lap, now)
+    local k = (R.pullW % 32) + 1
+    local r = R.pullLog[k]
+    if not r then r = {}; R.pullLog[k] = r end
+    r.car, r.tgt, r.lap, r.tArm, r.tOut, r.src, r.side, r.need = i, p.tgt, lap, p.tArm, p.tOut, p.src, p.sideK, p.need
+    r.ovl, r.verdict, r.apexSpd, r.apexTv, r.exitSpd, r.exitTv, r.won = p.ovl, verdict, p.apexSpd, p.apexTv, exitSpd, exitTv, won
+    r.caut, r.latRate = p.caut, p.latRate
+    r.tp, r.pOvl, r.gapOut = p.tp, p.pOvl, p.gapOut                -- teleport in the window (exclude from latRate), projection at pull-out
+    R.pullW = R.pullW + 1
+    if verdict >= 3 then R.pullLostN = R.pullLostN + 1 end
+    p.ph, p.cool, p.latPrev, p.ovl, p.apexSpd, p.apexTv, p.caut = 0, now + R.PULL_COOL, nil, 0, 0, -1, 0
+end
+
+-- ROOM MAP accessor (R.ROOM): 0 = wide or fast road, 1 = a slow corridor. tight = slow x max(narrow, ROOM_WFLOOR): narrow ramps
+-- from ROOM_WHI (7 m half-width -> 0) to ROOM_WLO (3.5 m -> 1); slow is the larger of the radius term (ROOM_RHI 150 m -> 0 ..
+-- ROOM_RLO 30 m -> 1) and the learned-pace term (ROOM_VHI 140 km/h -> 0 .. ROOM_VLO 60 -> 1). By construction Silverstone
+-- (7.1-8.3 m) reads 0 everywhere and Baku's castle (3.2 m, 40 km/h) reads 1; a track without sides reads 6.0 m -> 0.29 < ROOM_ON.
+function R.roomAt(s)
+    local rm = cv2.room
+    if not rm or not rm.done then return 0 end
+    local k = math.floor((s % 1) * rm.n) % rm.n
+    local h = rm.half[k]
+    if not h then return 0 end                                        -- no sides read for this bin (or never filled): inert, whatever the radius
+    local narrow = clamp((R.ROOM_WHI - h) / math.max(0.1, R.ROOM_WHI - R.ROOM_WLO), 0, 1)
+    local slow = clamp((R.ROOM_RHI - (rm.rad[k] or 1e4)) / math.max(1, R.ROOM_RHI - R.ROOM_RLO), 0, 1)
+    if rm.pace[k] then slow = math.max(slow, clamp((R.ROOM_VHI - rm.pace[k]) / math.max(1, R.ROOM_VHI - R.ROOM_VLO), 0, 1)) end
+    return slow * math.max(narrow, R.ROOM_WFLOOR or 0)
+end
+
+-- AGGR_BASE_FIX: the car's own aggression, read once per session. Called from R.evaluate before its setAIAggression, so
+-- the first call in a session reads the launcher's value -- unless CSP kept Verve's last write over a restart or a
+-- session change, which R.aggrPrev recognises (the previous capture is used then). A hot reload loses both tables:
+-- the first read after it is Verve's last write, a fixed error for the rest of that session (it no longer compounds).
+function R.aggrBase(i, car)
+    local b = R.baseAggr[i]
+    if b then return b end
+    local ok, a = pcall(function() return car.aiAggression end)
+    if not ok or type(a) ~= 'number' then a = -1 end
+    local p, read = R.aggrPrev[i], a
+    if p and p.set and math.abs(a - p.set) <= R.AGGR_BASE_TOL then a = p.base end
+    R.baseAggr[i] = a
+    pcall(ac.log, string.format('Verve: aggression base car %d = %.3f (read %.3f%s)', i, a, read, a ~= read and ', kept from last session' or ''))
+    return a
+end
+
+-- (R.WILD_TILT) the chaos driver's temper: 1 = tilted, 0 = calm. Its own function, so R.evaluate's upvalue count is unchanged.
+function R.wildTick(i, me, myLap, myDmg)
+    local w, now = R.wild, os.clock()
+    local pos = me.racePosition or 0
+    local lost = w.pos[i] ~= nil and now - (w.posT[i] or 0) < 1.0 and pos > w.pos[i] and myLap >= 1
+                 and not (R.last[i] and R.last[i].yield)          -- (a >1 s gap = pit/recovery: resync, no verdict)
+    w.pos[i], w.posT[i] = pos, now
+    local hit = myDmg >= (w.dmg[i] or 0) + 8
+    w.dmg[i] = myDmg
+    if hit then w.hits[i] = (w.hits[i] or 0) + 1 end
+    if (w.hits[i] or 0) >= R.WILD_MAX_HITS then w.till[i] = nil; return 0 end
+    if (lost or (hit and myLap >= 1)) and now > (w.cool[i] or 0) then
+        w.till[i] = now + R.WILD_TILT_T * (0.7 + 0.6 * hash01(i * 17 + w.tilts)); w.cool[i] = w.till[i] + R.WILD_TILT_COOL; w.tilts = w.tilts + 1
+    end
+    return now < (w.till[i] or 0) and 1 or 0
+end
+
+-- (R.PACE_YIELD_MODE 1) is car i HURT enough to move over for a quicker car on its own lap? Damage since repair >= PACE_YIELD_DMG that is
+-- fresh (inside K.DAMAGE_NURSE_LAPS of the hit) or still costing pace (last lap > best x (1 + PACE_YIELD_SLOW)); a suspension hit >= 0.10;
+-- or the rejoin ramp after a reposition (the 'crawling' case). Called lazily, once per car-frame, only when a quicker car is closing.
+function R.hurtOf(i, me, myLap)
+    local hurt = false
+    pcall(function()
+        if Recovery.damageOf(i) >= R.PACE_YIELD_DMG then
+            local best, prev = me.bestLapTimeMs, me.previousLapTimeMs
+            hurt = (myLap - (R.hurtLap[i] or myLap)) < K.DAMAGE_NURSE_LAPS
+                or (type(best) == 'number' and best > 0 and type(prev) == 'number' and prev > best * (1 + R.PACE_YIELD_SLOW))
+        end
+        if not hurt and me.wheels then
+            for k = 0, 3 do local w = me.wheels[k]; if w and (w.suspensionDamage or 0) >= 0.10 then hurt = true; break end end
+        end
+        if not hurt and Recovery.rampCap(i) < 1e9 then hurt = true end
+    end)
+    return hurt
+end
+-- (H.MISTAKE_V2) Verve.lua skips R.evaluate for a pit-lane car, so a visible mistake's throttle cap or late-brake hint set on the
+-- way in would ride down the pit lane: release them. Only the mistake's own flags: at defaults they are never set (no-op)
+-- (0.15, owner 2026-09-29: 'yes they can get the extra grip') a car WITHOUT a profile gets TOP_UNPROF of the top-pace weight
+-- tapered by how far its difficulty puts it off level-100 pace (Difficulty.pctOf, lap-time %): full at 0 %, none at TOP_UNPROF_PCT
+-- (5 % = slider 90 on every class curve), so the slider's lower steps keep their pace. No pct known (difficulty off) = no extra grip.
+R.TOP_UNPROF_PCT = 5.0
+function R.gripW(prof, pct)
+    local w = R.topW(prof)
+    if prof or w <= 0 then return w end
+    if type(pct) ~= 'number' then return 0 end
+    return w * clamp(1 - pct / math.max(0.01, R.TOP_UNPROF_PCT), 0, 1)
+end
+function R.topW(prof)   -- (R.TOP_*) 0..1: how much of the top-pace trim a car gets (its profile pace; unprofiled = TOP_UNPROF)
+    if not prof then return R.TOP_UNPROF end
+    return clamp(((prof.pace or 0) - R.TOP_FROM) / math.max(0.01, R.TOP_FULL - R.TOP_FROM), 0, 1)
+end
+function R.pitRelease(i)
+    if cv2.mvThr[i] then cv2.mvThr[i] = nil; cv2.thr[i] = nil; pcall(physics.setAIThrottleLimit, i, 1.0) end
+    if cv2.mvBg[i] then
+        cv2.mvBg[i] = nil
+        if cv2.bg[i] and cv2.base[i] then cv2.bg[i] = nil; pcall(physics.setAIBrakeHint, i, cv2.base[i]) end
+    end
+end
+-- (0.15.1) Verve switched OFF mid-session (or 'Control AI grip' unticked): hand every car back to AC as stock, once. What Verve
+-- writes stays in physics until something writes it again - a yellow-zone top-speed cap, a penalty or convoy throttle cap, a brake
+-- hint, a spline offset, the aggression, the grip, the caution, the AI level - so turning Verve off in a race left cars capped
+-- (audit 2026-09-30). Switching back on needs nothing more: every value is rewritten each frame (the level: Drivers.handBack).
+-- A car Verve parked stays parked. stockLevel(i): the launcher's level for car i (0..1.2) or nil.
+-- (0.16.3) the grip a hand-back restores. CSP's own default for extra AI grip is 1.2 (lua-sdk ac_apps/lib.lua,
+-- physics.setExtraAIGrip: "Changes extra AI grip (120% by default)"; Verve's baseGrip tooltip says the same). Handing back 1.0
+-- left the field ~17% BELOW stock for the rest of the session (our tests, Nov 2026: at grip 1.0 the AI ran off and got stuck
+-- far more often than with Verve off).
+R.STOCK_AI_GRIP = 1.20
+R.offState = { on = false, grip = false }
+function R.offSwitch(on, gripOn, stockLevel)
+    local s = R.offState
+    local dropAll, dropGrip = s.on and not on, s.grip and on and not gripOn
+    s.on, s.grip = on, on and gripOn
+    if not (dropAll or dropGrip) then return end
+    local sim = ac.getSim(); if not sim then return end
+    for i = 0, sim.carsCount - 1 do
+        local car = ac.getCar(i)
+        if car and car.isAIControlled and not Recovery.isParked(i) and not car.isRaceFinished then   -- (0.16.1) a finished car was handed back at the flag
+            pcall(physics.setExtraAIGrip, i, R.STOCK_AI_GRIP)
+            if dropAll then
+                pcall(physics.setAIThrottleLimit, i, 1.0); pcall(physics.setAITopSpeed, i, 1e9)   -- (no stop-counter write: Verve holds only parked cars, and AC's own post-incident wait is AC's)
+                if cv2.base[i] then pcall(physics.setAIBrakeHint, i, cv2.base[i]) end
+                pcall(physics.setAISplineOffset, i, 0, false)
+                local b = R.baseAggr[i]; if b and b >= 0 then pcall(physics.setAIAggression, i, b) end
+                pcall(physics.setAICaution, i, 1.0)
+                cv2.thr[i] = nil; cv2.mvThr[i] = nil; cv2.bg[i] = nil; cv2.mvBg[i] = nil
+                pcall(Drivers.handBack, i, stockLevel and stockLevel(i))
+            end
+        end
+    end
+    pcall(ac.log, dropAll and 'Verve: switched off - every car handed back to AC (grip, caution, caps, offset, aggression, level)'
+        or 'Verve: AI grip control off - grip handed back to AC')
+end
+-- (0.16.1, community ask: CSP's AI cooldown lap) a car past the flag is handed back ONCE, then Verve writes nothing more to it,
+-- so CSP's cooldown limits (new_behaviour.ini [AI_RACE_COOLDOWN], a throttle limiter) are the only ones left. Called by Verve.lua's
+-- car loop the frame isRaceFinished turns true. Each value only if Verve changed it, never a blanket 1 / 1e9 (that would lift a
+-- CSP limit): the throttle only under a Verve cap, the top speed only if Verve's last write was a cap. Grip / caution / offset /
+-- aggression / level are written every frame by Verve, so those always go back. Recovery releases its own rejoin ramp.
+R.topCap = {}; R.finished = {}   -- (R.finished: the once-per-car latch Verve.lua's car loop reads, set by the hand-back below)
+function R.finishHandBack(i, gripOn, behaviourOn, stockLevel)
+    R.finished[i] = true
+    if gripOn then pcall(physics.setExtraAIGrip, i, R.STOCK_AI_GRIP) end
+    if behaviourOn then pcall(physics.setAICaution, i, 1.0) end
+    if cv2.thr[i] or cv2.mvThr[i] then pcall(physics.setAIThrottleLimit, i, 1.0) end
+    if (R.topCap[i] or 1e9) < 1e9 then pcall(physics.setAITopSpeed, i, 1e9) end
+    if (cv2.bg[i] or cv2.mvBg[i]) and cv2.base[i] then pcall(physics.setAIBrakeHint, i, cv2.base[i]) end
+    if R.last[i] then
+        pcall(physics.setAISplineOffset, i, 0, false)
+        local b = R.baseAggr[i]; if b and b >= 0 then pcall(physics.setAIAggression, i, b) end
+        R.last[i].state = 0; R.last[i].yield = false; R.last[i].block = 0
+    end
+    cv2.thr[i] = nil; cv2.mvThr[i] = nil; cv2.bg[i] = nil; cv2.mvBg[i] = nil; R.topCap[i] = nil
+    pcall(Strategy.clear, i, 'finish')
+    pcall(Drivers.handBack, i, stockLevel and stockLevel(i))
+    R.finishN = (R.finishN or 0) + 1
+end
+-- (0.15.1) the top-driver grip (R.TOP_GRIP x gripW) moves at most R.TOP_EASE per second on a moving car: Clear drivers mid-race
+-- gave two unprofiled midfielders TOP_UNPROF's +0.13..0.16 grip in one frame, side by side into the Parabolica, and they collided
+-- (mc15b_clear_1, 1 Oct). The grid, the pits and the first value of a session are set at once.
+-- The same for the profile's base aggression (R.AGG_EASE per second): Clear drivers dropped a Veteran 0.58 -> 0.15 in one frame and
+-- two cars were in contact 0.3-0.5 s later in both mc15b_clear races; the attack / defend / yield changes on top stay instant.
+R.TOP_EASE = 0.05; R.AGG_EASE = 0.1; R.topV = {}; R.aggV = {}
+function R.ease(tbl, i, target, car, dt, rate)   -- toward target at `rate` per second for a moving car; at once otherwise
+    local v = tbl[i]
+    if v and rate > 0 and (car.speedKmh or 0) > 30 and not car.isInPitlane then
+        local mx = rate * (dt or 0)
+        if target > v + mx then target = v + mx elseif target < v - mx then target = v - mx end
+    end
+    tbl[i] = target
+    return target
+end
+function R.topEase(i, target, car, dt) return R.ease(R.topV, i, target, car, dt, R.TOP_EASE) end
+function R.aggEase(i, target, car, dt) return R.ease(R.aggV, i, target, car, dt, R.AGG_EASE) end
+function R.lockOf(car) return car.steerLock end   -- (read under pcall: an older CSP's car state may not have the field)
+-- (R.STEER_FRAC) the steering wheel angle as a fraction of lock (car.steer and car.steerLock are both degrees); nil when unreadable
+function R.steerIn(car)
+    local st = car.steer
+    if type(st) ~= 'number' then return nil end
+    local ok, lk = pcall(R.lockOf, car)
+    if ok and type(lk) == 'number' and lk > 1 then return st / lk end
+    return nil
+end
+
+-- (lean016) The evaluate body is ONE closure for the whole session. It was a pcall(function() ... end) built per car per frame:
+-- the closure plus the locals it captured, ~1 KB of garbage each time, and the owner-video repro (3 Oct) showed Verve's garbage
+-- feeding the GC inside the hitch bursts. Its inputs and outputs live in this do-block (nothing else in the file sees them);
+-- R.evaluate is the only caller, from Verve.lua's car loop, one car at a time, never re-entered. The body is unchanged.
+do
+local i, dt, caut, state = 0, 0, 0, 0
+local evalBody = function()
+        local me = ac.getCar(i)
+        if not me or not me.isAIControlled then return end
+        local spd = me.speedKmh or 0
+        if spd < K.SPEED_MIN or me.isInPitlane then
+            -- clear last frame's flags: a car that stops or retires otherwise keeps its last yield/attack/block in the
+            -- diag for the rest of the race (Baku read 292 "yield congas", 12 once dead cars were excluded, 2026-09-24)
+            if R.last[i] then R.last[i].yield = false; R.last[i].state = 0; R.last[i].block = 0; R.last[i].rs = false end
+            if cv2.mvThr[i] then cv2.mvThr[i] = nil; cv2.thr[i] = nil; pcall(physics.setAIThrottleLimit, i, 1.0) end   -- (H.MISTAKE_V2) a lift's cap never outlives a stop
+            return
+        end
+        local mySpline = me.splinePosition
+        if mySpline == nil then return end
+        R.evalN = (R.evalN or 0) + 1
+        local startX = R.START_X
+        if R.START_T1_M > 0 and startX < 1 then
+            if cv2.t1 == nil then          -- once per load: the distance from the line to the first corner
+                cv2.t1 = 1e9
+                for k = 0.004, 0.2, 0.002 do if cornerAhead(k) then cv2.t1 = k * trackLen; break end end
+                pcall(function() ac.log(string.format('Verve: first corner %.0f m from the line (START_T1_M %d)', cv2.t1, R.START_T1_M)) end)
+            end
+            if cv2.t1 < R.START_T1_M then startX = 1 end
+        end
+
+        local classKey = Classes.keyOf(i)
+        local t = TACTICS[classKey] or TACTICS.road
+        local crash = Troublespots.crashiness()    -- 0..1: how crash-prone this track has proven
+        local prof = Drivers.statsOf(i)            -- the driver profile (moved up from the aggression block: the start rules below need it)
+        local wild = R.WILD and prof ~= nil and prof.wild == true   -- (R.WILD) the Wrecking Crew: his margins are relaxed below
+
+        local myLap = Recovery.lapsOf(i)           -- Verve's own count: AC's drops a lap after a teleport
+        -- lap-0 progress with the grid's wrap undone: a grid before the line reads 0.98-0.99, which made every
+        -- "start of the opening lap" rule below treat the run to turn one as the END of the lap (2026-09-16)
+        local olS = mySpline
+        if R.OL_CROSSED then
+            if myLap == 0 and mySpline < 0.1 then cv2.crossed[i] = true end   -- past the line: from here on lap 0 is a lap
+            if myLap == 0 and mySpline > 0.5 and not cv2.crossed[i] then olS = mySpline - 1 end
+        elseif myLap == 0 and mySpline > 0.5 then olS = mySpline - 1 end
+
+        -- nearest ahead / behind (gap, speed, index)
+        local gapA, aheadSpd, aheadIdx = 1e9, 0, -1
+        local gapB, behindSpd, behindIdx = 1e9, 0, -1
+        local nearGap, nearIdx, nearAhead = 1e9, -1, true   -- closest car by on-track gap (either side)
+        local lapperIdx, lapperGap = -1, 1e9                -- nearest car on a higher lap coming through
+        local crowd = 0
+        local myPace = me.bestLapTimeMs                     -- (0 until the car has set a lap)
+        if type(myPace) ~= 'number' or myPace <= 0 then myPace = nil end
+        local yellowD, yellowSpd = 1e9, 0                   -- nearest STOPPED car on the road ahead (yellow flag)
+        local ysCap = 1e9                                   -- R.YELLOW_SLOW: the tightest cap any slow car in the way asks for (1e9 = none)
+        local lappedAhead = false                           -- the car ahead is a lap down and letting me through
+        local hurt = nil                                    -- (R.PACE_YIELD_MODE 1) R.hurtOf, at most once a frame and only when needed
+        local yellowRange = K.YELLOW_FAR / trackLen
+        local sideBy = false                                -- lap 0: a car alongside with its nose just ahead of mine
+        local sideSign = 0                                  -- laps 0-1: a car alongside -> which way is AWAY from it (+/-1)
+        local fastBy = false                                -- FAST_TUCK_SIDE_S / _LATMAX: the fast tuck's own, wider alongside test
+        local sim = ac.getSim()
+        for j = 0, sim.carsCount - 1 do
+            if j ~= i then
+                local oc = ac.getCar(j)
+                if oc and oc.splinePosition then
+                    local ocSpd = oc.speedKmh or 0
+                    local d = oc.splinePosition - mySpline; if d < 0 then d = d + 1 end
+                    local b = mySpline - oc.splinePosition; if b < 0 then b = b + 1 end
+                    local ocLat = latNow[j] or 0
+                    if ((R.OL_SIDEYIELD or R.OL_SIDESPACE) and myLap <= 1 or (R.FAST_TUCK > 0 and spd > R.FAST_TUCK)) and ocSpd > 30 then
+                        local sd = d < 0.5 and d or d - 1                   -- signed spline gap: + their nose ahead of mine
+                        if math.abs(sd) * trackLen < CV.SIDE_M then
+                            local dl = math.abs(ocLat - (latNow[i] or 0))
+                            if dl > CV.SIDE_LAT and dl < CV.SIDE_LAT_MAX then
+                                if sd > 0 then sideBy = true end
+                                sideSign = ((latNow[i] or 0) >= ocLat) and 1 or -1
+                            end
+                        end
+                        if sd > 0 and R.FAST_TUCK > 0 and spd > R.FAST_TUCK and (R.FAST_TUCK_SIDE_S > 0 or R.FAST_TUCK_LATMAX > 0)
+                           and spd - ocSpd < R.FAST_TUCK_CLOSE and not oc.isInPitlane
+                           and sd * trackLen < math.max(CV.SIDE_M, spd / 3.6 * R.FAST_TUCK_SIDE_S) then
+                            local dl = math.abs(ocLat - (latNow[i] or 0))
+                            if dl > CV.SIDE_LAT and dl < (R.FAST_TUCK_LATMAX > 0 and R.FAST_TUCK_LATMAX or CV.SIDE_LAT_MAX) then fastBy = true end
+                        end
+                    end
+                    -- a stopped (or crawling) car ON the road ahead is a yellow flag, not a rival
+                    local hazard = ocSpd < K.BLOCK_SPEED
+                    if not hazard and R.OL_SPINYELLOW and myLap == 0 and d > 0 and d < yellowRange and math.abs(ocLat) < R.YELLOW_LAT then
+                        -- lap 0: a car ahead going sideways, or far slower than me, is about to be hit by the next arrivals
+                        if ocSpd < spd * CV.SPIN_FRAC and spd > 60 then hazard = true
+                        else
+                            local v, lk = oc.velocity, oc.look
+                            if v and lk and ocSpd > 30 then
+                                local vl = math.sqrt(v.x * v.x + v.z * v.z)
+                                if vl > 1 and (v.x * lk.x + v.z * lk.z) / vl < CV.SPIN_DOT then hazard = true end
+                            end
+                        end
+                    end
+                    -- SLOW-CAR YELLOW (R.YELLOW_SLOW): far under the speed its own bit of road is normally driven at (cv2.ys, beginFrame).
+                    -- Capped on its own (ysCap), never as the nearest hazard: in front of a wreck it would hide the wreck and lift the cap.
+                    if not hazard and R.YELLOW_SLOW > 0 and cv2.ys and d > 0 and d < yellowRange and math.abs(ocLat) < R.YELLOW_LAT and not oc.isInPitlane then   -- (cv2.ys exists only while the switch is on)
+                        local ys = cv2.ys
+                        local nb = ys.nb
+                        local ob = math.floor(oc.splinePosition * nb) % nb
+                        if (ys.n[ob] or 0) >= CV.YS_MIN then
+                            local tv = ys.v[ob]
+                            local o2 = (ob + nb - 1) % nb                          -- the slowest trusted of the bin and its neighbours
+                            if (ys.n[o2] or 0) >= CV.YS_MIN and ys.v[o2] < tv then tv = ys.v[o2] end
+                            o2 = (ob + 1) % nb
+                            if (ys.n[o2] or 0) >= CV.YS_MIN and ys.v[o2] < tv then tv = ys.v[o2] end
+                            if ocSpd < R.YELLOW_SLOW * tv then
+                                -- in the way: near the racing line at its spot, or near me (a car braking on the edge for the pit entry is not)
+                                local lnLat = ocLat
+                                local okL, lp = pcall(ac.trackProgressToWorldCoordinate, oc.splinePosition, false)
+                                if okL and lp then lnLat = latOf(lp) end
+                                if math.abs(ocLat - lnLat) < CV.YS_LANE or math.abs(ocLat - (latNow[i] or 0)) < CV.YS_LANE then
+                                    local dm = d * trackLen                        -- the stopped-car cap below, for this car
+                                    local yc = K.YELLOW_CAP + (K.YELLOW_CAP_FAR - K.YELLOW_CAP) * clamp((dm - K.YELLOW_NEAR) / (K.YELLOW_FAR - K.YELLOW_NEAR), 0, 1)
+                                    if ocSpd > 15 then yc = math.max(yc, ocSpd + 40) end
+                                    if yc < ysCap then ysCap = yc end
+                                    R.yellowSlowN = (R.yellowSlowN or 0) + 1
+                                end
+                            end
+                        end
+                    end
+                    if d > 0 and d < yellowRange and hazard and math.abs(ocLat) < R.YELLOW_LAT and d < yellowD then
+                        yellowD = d; yellowSpd = ocSpd
+                    end
+                    -- stopped or off-track cars aren't rivals to attack/defend against (the blockage scan and
+                    -- the yellow handle them). A repaired car once "attacked" a wreck parked 40 m out in the
+                    -- gravel and drove itself off the road doing it.
+                    if ocSpd >= K.BLOCK_SPEED and math.abs(ocLat) <= K.OFFLINE_MAX and not oc.isRaceFinished then   -- (0.16.1) a car on its cooldown lap is no rival
+                        if d > 0 and d < gapA then
+                            gapA = d; aheadSpd = ocSpd; aheadIdx = j
+                            local L2 = R.last[j]
+                            lappedAhead = Recovery.lapsOf(j) < myLap and L2 ~= nil and L2.yield == true
+                        end
+                        if b > 0 and b < gapB then gapB = b; behindSpd = ocSpd; behindIdx = j end
+                        if d < K.CROWD_GAP or b < K.CROWD_GAP then crowd = crowd + 1 end
+                        local nd = d < b and d or b                       -- true nearest on track
+                        if nd < nearGap then nearGap = nd; nearIdx = j; nearAhead = (d <= b) end
+                        -- a car on a higher lap (blue flag) -- or, in a MIXED field, a faster CLASS closing on me:
+                        -- multi-class racing lets the prototypes through rather than fighting them corner by corner.
+                        -- (Same class = a rival, however fast: that's racing.)
+                        if b < K.YIELD_GAP_FAR and b < lapperGap then
+                            local faster = ocSpd > spd + math.max(K.CLASS_YIELD_MIN, spd * K.CLASS_YIELD_FRAC)
+                            local slowerPace = false
+                            if faster and R.PACE_YIELD_MODE == 1 then          -- (R.PACE_YIELD_MODE 1) only a hurt car moves over on its own lap, from lap 1
+                                if myLap >= 1 then
+                                    if hurt == nil then hurt = R.hurtOf(i, me, myLap) end
+                                    slowerPace = hurt
+                                end
+                            elseif faster and myPace then
+                                local op = oc.bestLapTimeMs
+                                slowerPace = type(op) == 'number' and op > 0 and myPace > op * R.PACE_YIELD_RATIO
+                            end
+                            local otherClass = Classes.keyOf(j) ~= classKey
+                            if Recovery.lapsOf(j) > myLap or (faster and otherClass) then
+                                lapperIdx = j; lapperGap = b                                   -- blue flag from YIELD_GAP_FAR
+                            elseif b < K.YIELD_GAP and faster and slowerPace then
+                                lapperIdx = j; lapperGap = b                                   -- same class, clearly quicker: short range
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        -- ROOM (R.ROOM): how tight is the road here and ROOM_LOOK s ahead (0 = wide/fast, 1 = a slow corridor; see R.roomAt).
+        -- roomOn gates the LINE consumer; roomF adds the FOLLOW switch and its exemptions (P3: a car already pulling out, on a
+        -- road-space pass or a manoeuvre, lapping a yielder, or being recovered is never throttled).
+        -- roomN counts the MAP's verdict (any speed); roomOn adds the ROOM_VMAX gate for the convoy throttle, the rear-end guard and
+        -- LINE; roomB is the brake guard's gate: tight room at ANY speed, since its case is the braking zone INTO the corridor.
+        local tightHere, roomOn, roomF, roomB = 0, false, false, false
+        if cv2.roomEn then
+            tightHere = math.max(R.roomAt(mySpline), R.roomAt(mySpline + spd / 3.6 * R.ROOM_LOOK / trackLen))
+            if tightHere >= R.ROOM_ON then
+                R.roomN = (R.roomN or 0) + 1
+                local L0 = R.last[i]
+                roomB = (cv2.roomFollow and not lappedAhead and not (Recovery.stateOf(i) or R.NOSTATE).rec
+                        and not (L0 and (math.abs(L0.off or 0) > 0.25 or L0.rs or (L0.mv or 0) > 0))) or false
+                roomOn = spd < R.ROOM_VMAX
+                roomF = roomOn and roomB
+            end
+        end
+        -- YELLOW FLAG speed cap (cleared -- 1e9 -- every frame it doesn't apply), combined with recovery's
+        -- own cap for a car that's just been set back on the track (the two are the only writers of it)
+        local cap = 1e9
+        if yellowD < 1e9 then
+            local dm = yellowD * trackLen
+            cap = K.YELLOW_CAP + (K.YELLOW_CAP_FAR - K.YELLOW_CAP) * clamp((dm - K.YELLOW_NEAR) / (K.YELLOW_FAR - K.YELLOW_NEAR), 0, 1)
+            -- a CRAWLING obstacle (a car just set back on the road, getting going) is passed at moderate speed,
+            -- not matched: two repositioned cars capping each other crawled at 50 km/h for 30 s (Silverstone)
+            if yellowSpd > 15 then cap = math.max(cap, yellowSpd + 40) end
+        end
+        if ysCap < cap then cap = ysCap end                 -- SLOW-CAR YELLOW: only ever tighter than the stopped-car cap (1e9 while off)
+        if R.CONVOY_ON and myLap == 0 and olS < CV.END and aheadIdx >= 0 and gapA < CV.GAP and crowd >= 1 then
+            local aCar = ac.getCar(aheadIdx)
+            if aCar and math.abs(latOf(aCar.position) - latOf(me.position)) < CV.LAT then
+                cap = math.min(cap, math.max(aheadSpd + CV.MARGIN, 40))
+            end
+        end
+        pcall(function() cap = math.min(cap, Recovery.rampCap(i)) end)
+        R.topCap[i] = cap                       -- (0.16.1 cooldown) Verve's last top-speed write: finishHandBack lifts only a real cap
+        pcall(function() physics.setAITopSpeed(i, cap) end)
+        -- CONVOY v2: throttle only (see the constants). Left alone for a car recovery is driving (its own throttle ramp).
+        local thr = 1.0
+        if R.CONVOY2_ON and (myLap == 0 or roomF) and crowd >= 1 and not (Recovery.stateOf(i) or R.NOSTATE).rec then
+            if myLap == 0 and cv2.clock and cv2.back[i] then
+                local tl0 = os.clock() - cv2.clock
+                if tl0 < (cv2.react[i] or 0) then thr = math.min(thr, CV.REACT_THR)   -- reaction time: not on the gas yet
+                elseif tl0 < (cv2.react[i] or 0) + CV.ROW_T * R.ROW_T_X * startX * (cv2.back[i] / CV.ROW_M) then thr = math.min(thr, CV.THR + (1 - CV.THR) * (1 - startX)) end   -- staggered release
+            end
+            local cvGap, cvNear = CV.GAP_M, CV.NEAR_M
+            if R.CV_TGAP > 0 then cvGap = math.max(CV.GAP_M, spd / 3.6 * R.CV_TGAP); cvNear = cvGap * (CV.NEAR_M / CV.GAP_M) end   -- a time gap: the faster I arrive, the further out I ease
+            if roomF then cvGap = math.max(cvGap, spd / 3.6 * R.ROOM_TG * tightHere); cvNear = cvGap * (CV.NEAR_M / CV.GAP_M) end   -- ROOM_FOLLOW: a time gap in tight room, every lap
+            -- (2026-10-26, R.CV_SMOOTH, DEFAULT OFF) HYSTERESIS ON THE CLOSING GATE. Measured on the owner's own
+            -- shape, n=6: four of five AI cars pulse in EVERY race, thrSnap median 19 an opening lap, 69-91% of
+            -- throttle-limit crossings being genuine single-frame STEPS. The loop is that this gate reads
+            -- `spd > aheadSpd + CV.CLOSING`, cutting throttle REMOVES the closing speed, the gate opens, and the
+            -- limit snaps back to 1.0 - THE GATED QUANTITY IS THE ONE THE ACTION REMOVES. Confirmed by a
+            -- prediction that could have failed: the only non-pulsing AI car was the POLE SITTER in all six rows,
+            -- which is what `aheadIdx >= 0` requires.
+            -- Once engaged, hold until the car is clearly NOT closing (CV.HYST below the car ahead) instead of
+            -- releasing the instant it stops gaining. Same idea as K.OFFSET_SLEW on the lateral axis, whose own
+            -- comment reads "anti-dart" - that axis was given this treatment and the longitudinal one never was.
+            local closeEnough = spd > aheadSpd + CV.CLOSING
+            if R.CV_SMOOTH and cv2.cvEng[i] then closeEnough = spd > aheadSpd - CV.HYST end
+            if ((olS < CV.END and myLap == 0) or roomF) and aheadIdx >= 0 and gapA * trackLen < cvGap and closeEnough
+               and not (R.OL_STAR_CONVOY and Strategy.tierOf(i) >= 2) and not (wild and myLap == 0 and (R.WILD_CONVOY or R.WILD_START)) then
+                cv2.cvEng[i] = true
+                local aCar = ac.getCar(aheadIdx)
+                if aCar and math.abs(latOf(aCar.position) - latOf(me.position)) < CV.LAT then
+                    local gm = gapA * trackLen
+                    local lim = clamp(CV.THR_MIN + (1 - CV.THR_MIN) * (gm - cvNear) / (cvGap - cvNear), CV.THR_MIN, 1)
+                    if myLap == 0 then lim = lim + (1 - lim) * (1 - startX) end   -- Racing / Stock: less of the convoy hold (lap 0 only: the room rule is not a start option)
+                    thr = math.min(thr, lim)
+                    if roomF and myLap > 0 then R.roomAct = (R.roomAct or 0) + 1 end
+                end
+            else
+                cv2.cvEng[i] = nil   -- the gate must RELEASE, or the hysteresis latches on for the session
+            end
+            -- SIDE YIELD: two-abreast into a corner on lap 0 is how same-row pairs touch (Barcelona F1 2026-09-16:
+            -- six of nine lap-0 contacts). The car behind by a nose eases and tucks in.
+            if myLap == 0 and R.OL_SIDEYIELD and sideBy and cornerAhead(mySpline) then thr = math.min(thr, CV.SIDE_THR) end
+        else
+            cv2.cvEng[i] = nil   -- the OUTER gate dropped (recovery, crowd, a lap with no roomF): the
+                                 -- hysteresis latch must not survive it, or the next episode begins already
+                                 -- engaged and gets the loose release test on its very first frame.
+        end
+        -- FAST TUCK (R.FAST_TUCK): two abreast at speed into a bend, the car behind by a nose backs out instead of squeezing
+        if R.FAST_TUCK > 0 and (sideBy or fastBy) and spd > R.FAST_TUCK and myLap >= R.FAST_TUCK_MINLAP and not (Recovery.stateOf(i) or R.NOSTATE).rec then
+            local look = (mySpline + spd / 3.6 * R.FAST_TUCK_LOOK / trackLen) % 1
+            if (cornerAhead(look) or cornerAhead(mySpline))
+               and (not R.FAST_TUCK_TS or Troublespots.cautionAt(look, classKey) > 0 or Troublespots.cautionAt(mySpline, classKey) > 0) then
+                thr = math.min(thr, R.FAST_TUCK_THR); R.fastTuckN = R.fastTuckN + 1
+            end
+        end
+        local pc = R.penCap and R.penCap[i]                 -- serving a penalty (lib/fault.lua): throttle cap until it's paid
+        if pc and os.clock() < pc.till then thr = math.min(thr, pc.cap) end
+        -- VISIBLE MISTAKE (lib/human.lua H.MISTAKE_V2): human wrote this frame's levers just before (Verve.lua: getModifiers, then evaluate);
+        -- lv = valid-until. A lift's throttle cap here, a late brake's hint in the guard below, a run-wide's offset after the side-hold.
+        local hm = R.humanMv and R.humanMv[i]
+        if hm and (os.clock() >= (hm.lv or 0) or (Recovery.stateOf(i) or R.NOSTATE).rec) then hm = nil end
+        if hm and hm.thr then thr = math.min(thr, hm.thr); cv2.mvThr[i] = true end
+        -- (2026-10-25) THROTTLE-LIMIT PULSE COUNT, logging only, no behaviour change. The owner reported cars
+        -- "jumpy right off the line" and the census cannot see it: it counts DAMAGE, and their game has
+        -- DAMAGE=0, so their own sessions registered 0 contact events against 7 counted contacts.
+        -- WHAT IS COUNTED, and the choice matters: BOUNDARY CROSSINGS between capped and uncapped, NOT raw
+        -- value changes. `thr` comes off a gap ramp (:1109) and so moves almost every frame, which would
+        -- measure the ramp rather than the complaint. The suspected mechanism is bang-bang: the gate at
+        -- :1105 needs `spd > aheadSpd + CV.CLOSING`, cutting throttle removes the closing speed, the gate
+        -- opens, and the line below snaps the limit back to 1.0 - the gated quantity is the one the action
+        -- removes. That shows up as crossings, not as ramp motion.
+        -- TWO counters, because each alone has a blind spot and only the PAIR discriminates (verve-47, 19:13):
+        --   thrTog  boundary crossings capped <-> uncapped. Blind spot: when the gap opens past CV.GAP_M the
+        --           ramp at :1109 rises smoothly to 1.0 and crosses the boundary with NO step, which counts
+        --           the same as the gate slamming 0.35 -> 1.0. A raw value count has the opposite blind spot:
+        --           it is dominated by that same smooth ramp motion.
+        --   thrSnap single-frame changes of >= SNAP in either direction. A step that size IS a snap whatever
+        --           the frame rate, and a ramp never makes one. So: thrSnap near thrTog = the gate really is
+        --           pulsing; thrSnap near zero with thrTog large = the crossings are smooth and the
+        --           jumpiness is NOT this mechanism.
+        -- Known limitation, stated rather than hidden: a car that skips this block on some frames (not
+        -- managed) leaves thrPrev stale, which can log one spurious snap on its next pass. Acceptable for a
+        -- logging-only counter; it cannot inflate a whole race's count.
+        -- (2026-10-26, R.CV_SMOOTH, DEFAULT OFF) SLEW ON THE RELEASE OF THE THROTTLE LIMIT, the second half of
+        -- the fix, applied BEFORE the counters so thrSnap measures what the car actually gets. Takes the dt guard
+        -- and step form from K.OFFSET_SLEW at :1964 ("slew the offset (anti-dart)") - dt can arrive as 0 or huge
+        -- after a stall, and `(dt > 0 and dt < 0.5 and dt or 0.016)` is the house answer to both.
+        -- ONE-SIDED, AND THAT IS THE POINT, which is where it departs from OFFSET_SLEW's symmetric form: a
+        -- REDUCTION is a car easing off for something ahead and is applied the same frame it is decided, because
+        -- this value is also written by FAST_TUCK and OL_SIDEYIELD, and delaying one of those by the slew's own
+        -- 0.25 s would be ~14 m at 200 km/h - an unmeasured safety change smuggled into a smoothing switch. Only
+        -- the RISE is slewed, which is the edge the pulsing is actually made of (gate opens, limit snaps to 1.0).
+        -- (2026-10-26 v2) START-ONLY: gate the slew to lap 0. v1 put the slew at the throttle-write site with no
+        -- lap condition, so FAST_TUCK/OL_SIDEYIELD writes on LATER laps got slewed too (measured: 9-20% of the
+        -- slew's activity happened after lap 0). The lights-out convoy smoothing is a lap-0 concern; `myLap == 0`
+        -- confines it and leaves later-lap FAST_TUCK/side-yield releases immediate. Default still OFF.
+        -- (review 27 Oct) not for a car recovery is driving: the convoy gate already excludes .rec, the slew did not
+        local recNow = (Recovery.stateOf(i) or R.NOSTATE).rec
+        if R.CV_SMOOTH and myLap == 0 and not recNow then
+            local prev = cv2.thrOut[i]
+            if prev and thr > prev then
+                local step = CV.THR_SLEW * (dt > 0 and dt < 0.5 and dt or 0.016)
+                if thr > prev + step then thr = prev + step
+                    -- thrSlew: the DIRECT "this code executed" counter, and the reason it exists is the
+                    -- project's own failure pattern - 0042, START_X, the aiLapsLeft raise and the fuel
+                    -- top-up were all changes that shipped and were INERT because the lever was not where
+                    -- it looked. Without this, a null result on thrSnap cannot be told apart from the
+                    -- switch never reaching the code. Logging only; nothing reads it in the sim.
+                    cv2.thrSlew[i] = (cv2.thrSlew[i] or 0) + 1
+                end
+            end
+            cv2.thrOut[i] = thr
+        elseif recNow then
+            cv2.thrOut[i] = nil
+        end
+        local capped = thr < 1.0
+        if capped ~= (cv2.thrLast[i] == true) then cv2.thrTog[i] = (cv2.thrTog[i] or 0) + 1 end
+        cv2.thrLast[i] = capped
+        local tp = cv2.thrPrev[i]
+        if tp and math.abs(thr - tp) >= CV.SNAP then cv2.thrSnap[i] = (cv2.thrSnap[i] or 0) + 1 end
+        cv2.thrPrev[i] = thr
+        if thr < 1.0 then cv2.thr[i] = true; pcall(physics.setAIThrottleLimit, i, thr)
+        elseif cv2.thr[i] then cv2.thr[i] = nil; cv2.mvThr[i] = nil; pcall(physics.setAIThrottleLimit, i, 1.0) end
+        -- BRAKE-ZONE GUARD (lap 0): the car ahead on my line is on the brakes and I'm inside CV.BG_M -> raise my brake
+        -- hint (earlier brake point) in proportion to the gap. R.BG_ALL: whole-race multiplier, direction test only.
+        if (R.OL_BRAKEGUARD or R.BG_ALL > 0 or roomB or (wild and R.WILD_BH ~= 1) or (hm and hm.bh) or cv2.mvBg[i]) and physics.setAIBrakeHint then
+            if cv2.base[i] == nil then
+                cv2.base[i] = 1.0
+                pcall(function() cv2.base[i] = ac.INIConfig.carData(i, 'ai.ini'):get('PEDALS', 'BRAKE_HINT', 1.0) end)
+            end
+            -- ONE predicate for "the brake-zone guard is active on this car", used by the guard itself and by the
+            -- BG_ALL gate (R.BG_ALL_GATE, see its declaration), so the two can never disagree on startX / BG_RACE /
+            -- WILD_START / roomB. Kept in cv2 rather than a new local: the evaluator is near LuaJIT's limits.
+            cv2.gOn = ((R.OL_BRAKEGUARD and ((startX > 0 and myLap <= 1) or (myLap > 1 and R.BG_RACE)) and not (wild and R.WILD_START)) or roomB) and aheadIdx >= 0 and not (Recovery.stateOf(i) or R.NOSTATE).rec
+            local mul = (R.BG_ALL > 0 and not (R.BG_ALL_GATE and cv2.gOn)) and R.BG_ALL or 1.0
+            if wild and R.WILD_BH ~= 1 and R.last[i] and R.last[i].state == 1 then mul = mul * R.WILD_BH end   -- (R.WILD_BH) attacking: his own brake point
+            if cv2.gOn then
+                local gm = gapA * trackLen
+                local reach = CV.BG_M
+                if roomB then reach = reach * (1 + R.ROOM_BG * tightHere) end   -- ROOM_FOLLOW: a longer reach into tight room (the corridor entries, at any speed)
+                if myLap <= 1 and R.OL_FUEL_K > 0 then reach = reach * (1 + R.OL_FUEL_K * clamp(((me.fuel or 20) - 20) / 50, 0, 1.5)) end   -- heavier car, longer braking
+                if myLap <= 1 and R.OL_GRID_DEPTH > 0 and cv2.back[i] and (cv2.depth or 0) > 0 then reach = reach * (1 + R.OL_GRID_DEPTH * cv2.back[i] / cv2.depth) end   -- the deeper you started, the earlier
+                if R.BG_T > 0 then reach = math.max(reach, (spd - aheadSpd) / 3.6 * R.BG_T) end
+                if gm < reach then
+                    local aCar = ac.getCar(aheadIdx)
+                    if aCar and ((aCar.brake or 0) > CV.BG_BRAKE or (R.BG_T > 0 and spd > 120 and spd - aheadSpd > CV.BG_CLOSE))
+                       and math.abs(latOf(aCar.position) - latOf(me.position)) < CV.LAT then
+                        local Lp = (myLap > 1 and not roomB) and R.last[i]   -- the race-long guard (BG_RACE) is the only reason here
+                        if Lp and R.BG_PASS and (Lp.rs or (Lp.mv or 0) > 0 or (Lp.state == 1 and math.abs(Lp.off or 0) > 0.25)) then
+                            R.bgPassN = R.bgPassN + 1                          -- (R.BG_PASS) mid-pass: he keeps his own brake point
+                        else
+                            -- LOWER hint = earlier braking (x1.5 field-wide: 18/18 lap-1 contact, 101 repairs, 2026-09-16).
+                            -- The cut scales with how fast I'm closing on a braking car and how close it already is.
+                            local closing = clamp((spd - aheadSpd) / CV.BG_CLOSE, 0, 1)
+                            mul = mul * (1 - CV.BG_HINT * closing * clamp(1 - gm / reach, 0, 1) * ((wild and myLap <= 1) and (1 - R.WILD_OL) or 1))   -- (R.WILD_OL) he takes part of the opening-lap cut
+                            if roomB and myLap > 1 then R.roomAct = (R.roomAct or 0) + 1 end
+                            if myLap > 1 and not roomB then R.bgN = R.bgN + 1 end
+                        end
+                    end
+                end
+            end
+            if hm and hm.bh then mul = mul * hm.bh end      -- (H.MISTAKE_V2) the late brake; the release below resets it (cv2.bg)
+            cv2.mvBg[i] = (hm and hm.bh) and true or nil     -- ...and brings this block back the frame after, whatever the guard switches say
+            if mul ~= 1.0 then cv2.bg[i] = true; pcall(physics.setAIBrakeHint, i, cv2.base[i] * mul)
+            elseif cv2.bg[i] then cv2.bg[i] = nil; pcall(physics.setAIBrakeHint, i, cv2.base[i]) end
+        end
+
+        local attackGap = K.ATTACK_GAP * t.gap
+        local defendGap = K.DEFEND_GAP
+        -- baseline aggression: a driver profile sets it directly; otherwise the car's own (slider)
+        -- value plus a per-driver spread (scaled by Variability) so the field isn't uniform. (prof: read above)
+        local baseA
+        if R.AGGR_BASE_FIX then baseA = R.aggrBase(i, me) end   -- read once per session, every car (a profile can be cleared mid-race)
+        if prof then
+            baseA = wild and math.min(math.max(prof.aggr, R.WILD_BASEA), 1.35) or clamp(prof.aggr, 0.15, 1.0)   -- (R.WILD_BASEA) above 1: pass thresholds only
+        else
+            baseA = baseA or me.aiAggression                     -- (switch off: the per-frame read-back, as before)
+            if not baseA or baseA < 0 then baseA = K.AGGR_CRUISE end
+            baseA = clamp(baseA, R.AGGR_FLOOR, 1.0)   -- (R.AGGR_FLOOR) 0.2 = today
+            baseA = clamp(baseA + (hash01(i * 11 + 5 + (R.SESSION_SALT and R.salt or 0) * 61) * 2 - 1) * K.AGGR_SPREAD * R.VARIABILITY, math.min(0.15, R.AGGR_FLOOR), 1.0)   -- (0.15) per-session salt
+        end
+        baseA = R.aggEase(i, baseA, me, dt)       -- (0.15.1) a profile change mid-race eases the base in (attack/defend stay instant)
+        local myLat = latOf(me.position)          -- current lateral on track (-1 left .. +1 right)
+        local target, aggr, wide = 0, math.min(baseA, 1.0), 0    -- wide = 0..1 extra track width earned by an exit-speed run (baseA passes 1 only for a wild car)
+        -- body damage SINCE the car's last repair (km/h). Not raw `me.damage`: that's a never-decreasing
+        -- record of the worst hit, so a repaired car would read as wrecked for the rest of the race.
+        local myDmg = 0
+        pcall(function() myDmg = Recovery.damageOf(i) end)
+        local wm = (wild and R.WILD_TILT) and R.wildTick(i, me, myLap, myDmg) or 0   -- (R.WILD_TILT) 1 = tilted
+
+        -- BLOCKAGE detect: scan a short window ahead for the SLOWEST car -- a stalled/crashed/crawling car
+        -- is an obstacle, not a rival. Crucially we key off the genuinely-slow car (usually the crash),
+        -- not just whoever's nearest (which, once a queue forms, is another queued car), and we only need
+        -- to be a little faster than it -- so cars ALREADY crawling in the queue behind it still peel off
+        -- and filter past, instead of everyone sitting nose-to-tail. Route to the OPEN side (away from
+        -- where the obstacle sits), so a car stopped on the right sends the field around it on the left.
+        local blockSide = 0
+        do
+            local slowIdx, slowSpd = -1, 1e9
+            local blockLook = math.max(K.BLOCK_GAP, (spd / 3.6) * K.BLOCK_TIME / trackLen)   -- speed-scaled lookahead
+            for j = 0, sim.carsCount - 1 do
+                if j ~= i then
+                    local oc = ac.getCar(j)
+                    if oc and oc.splinePosition then
+                        local d = oc.splinePosition - mySpline; if d < 0 then d = d + 1 end
+                        if d > 0 and d < blockLook and (oc.speedKmh or 1e9) < slowSpd then
+                            slowSpd = oc.speedKmh or 1e9; slowIdx = j
+                        end
+                    end
+                end
+            end
+            -- CRAWLER (R.CRAWL_PASS): learn the pace of each 1% of the lap from every healthy car, then judge the slow
+            -- car against the road it is on - not against me, since queued behind it I am exactly as slow.
+            cv2.crawlNeed = nil
+            if R.CRAWL_PASS > 0 then
+                cv2.pace = cv2.pace or {}
+                local b = math.floor(mySpline * 100) % 100
+                if spd > (cv2.pace[b] or 0) and myDmg < K.DAMAGE_YIELD then cv2.pace[b] = spd end
+                cv2.slowSince = cv2.slowSince or {}
+                if cv2.slowSince[i] then
+                    local pbMe = math.min(cv2.pace[(b + 99) % 100] or 1e9, cv2.pace[b] or 1e9, cv2.pace[(b + 1) % 100] or 1e9)
+                    if pbMe < 1e9 and spd >= pbMe * R.CRAWL_PASS then cv2.slowSince[i] = nil end   -- back up to pace: not a crawler
+                end
+                if slowIdx >= 0 and spd >= slowSpd - K.BLOCK_MARGIN then
+                    local sb = math.floor((ac.getCar(slowIdx).splinePosition or mySpline) * 100) % 100
+                    local pb = math.min(cv2.pace[(sb + 99) % 100] or 1e9, cv2.pace[sb] or 1e9, cv2.pace[(sb + 1) % 100] or 1e9)
+                    if pb < 1e9 and pb > CV.CRAWL_PACE_MIN and slowSpd < pb * R.CRAWL_PASS then
+                        cv2.slowSince[slowIdx] = cv2.slowSince[slowIdx] or os.clock()   -- first observer stamps it
+                    elseif pb < 1e9 and slowSpd >= pb * R.CRAWL_PASS then
+                        cv2.slowSince[slowIdx] = nil   -- seen back at pace: the only clear a human-driven car gets (R.evaluate skips it)
+                    end
+                    if pb < 1e9 and pb > CV.CRAWL_PACE_MIN and slowSpd < pb * R.CRAWL_PASS
+                       and os.clock() - (cv2.slowSince[slowIdx] or os.clock()) >= R.CRAWL_T
+                       and (R.CRAWL_DMG <= 0 or (function()                 -- CRAWL_DMG: a limping DAMAGED car, not a healthy queue
+                            local oc, mx, su = ac.getCar(slowIdx), 0, 0
+                            local d = oc and oc.damage
+                            if d then for k = 0, 4 do local v = d[k]; if type(v) == 'number' and v > mx then mx = v end end end
+                            if oc and oc.wheels then for k = 0, 3 do local w = oc.wheels[k]; local v = w and w.suspensionDamage; if type(v) == 'number' and v > su then su = v end end end
+                            return mx >= R.CRAWL_DMG or su >= 0.10 end)()) then
+                        local half = 6.0
+                        pcall(function() local sd = ac.getTrackAISplineSides(mySpline); if sd then half = math.max(3.0, (sd.x + sd.y) * 0.5) end end)
+                        if half >= CV.CRAWL_HALF_M then
+                            local carW = CV.RS_CARW_M
+                            pcall(function() local ab = me.aabbSize; if ab and ab.x > 0.8 and ab.x < 4.0 then carW = ab.x end end)
+                            cv2.crawlNeed = (carW + CV.RS_MARGIN_M) / half      -- centre-to-centre lateral gap that clears it
+                            R.crawlN = (R.crawlN or 0) + 1
+                        end
+                    end
+                end
+            end
+            if slowIdx >= 0 and (cv2.crawlNeed
+               or (spd > slowSpd + K.BLOCK_MARGIN
+                   and (slowSpd < K.BLOCK_SPEED or (slowSpd < K.BLOCK_LIMP and (spd - slowSpd) > K.BLOCK_DELTA)))) then
+                local aLat = latOf(ac.getCar(slowIdx).position)
+                cv2.crawlLat = aLat
+                cv2.crawlSpd = slowSpd
+                -- ONLY sweep around an obstacle that's actually on the racing surface / in the path. A car
+                -- already parked well off to the side needs no berth -- just pass it on the line, don't
+                -- swerve all the way to the far side of the road for it.
+                local roomForSweep = true
+                if R.BLOCK_MIN_HALF > 0 then                                         -- a one-car road: no side to sweep to
+                    pcall(function() local sd = ac.getTrackAISplineSides(mySpline); if sd and math.max(3.0, (sd.x + sd.y) * 0.5) < R.BLOCK_MIN_HALF then roomForSweep = false end end)
+                end
+                if roomForSweep and math.abs(aLat) < K.BLOCK_EDGE then
+                    if math.abs(aLat) > 0.1 then blockSide = -sgn(aLat)             -- obstacle off to a side -> go the other way (the open track)
+                    elseif sgn(myLat) ~= 0 then blockSide = -sgn(myLat)             -- obstacle mid-track -> head toward the roomier half
+                    else blockSide = (hash01(i * 5 + 2) < 0.5) and -1 or 1 end      -- dead-centre -> pick a side and commit
+                end
+            end
+        end
+        local yielding = false   -- set when we're being lapped (blue flag) -- suppresses obstacle-swerving
+        local rsPass = false     -- set when the road-space rule picked a side this frame (R.ROADSPACE)
+        local paceEdge = false   -- R.PASS_COMMIT: I am the clearly quicker driver and I'm committing to the pass
+
+        -- raw instantaneous reads: is there a fight on right now?
+        -- NARROWED 2026-10-24 (the cloud's objection, and it is right): the multiplier applies to the ATTACK
+        -- side ONLY - this gate and the `fasterMargin` handed to strategy's move PICK. rawDefend below and the
+        -- yield both stay on the plain K.FASTER_MARGIN.
+        -- WHY: X>1 at every site would make a star attack more AND make the cars ahead defend harder against it
+        -- AND make damaged cars yield less. In a star climb those pull against each other, so a null would have
+        -- been CANCELLATION rather than a finding. The mechanism is attack-side - the lunge analysis put all 256
+        -- 'left' exits on this gate's speed term - and `R.COMMIT_HOLD_X` sets the house precedent by being
+        -- "ATTACK commitment only (defend untouched)". My first version cited that precedent and then did the
+        -- opposite of what it does. c16d4e7's de-dup concern was attack STATE v move PICK, which these two
+        -- still share, so nothing diverges.
+        local fasterM = K.FASTER_MARGIN * R.FASTER_MARGIN_X    -- ATTACK side only: this gate + strategy's pick
+        local rawAttack = (gapA < attackGap and spd >= aheadSpd - fasterM)
+        -- the premise counter: an entry the DEFAULT margin refuses and the loosened one admits. 0 at X=1.0 by
+        -- construction, because the two comparisons become mutually exclusive.
+        if gapA < attackGap and spd < aheadSpd - K.FASTER_MARGIN and spd >= aheadSpd - fasterM then
+            R.fmOnlyN = R.fmOnlyN + 1
+        end
+        local behindLat = behindIdx >= 0 and latOf(ac.getCar(behindIdx).position) or 0
+        local rawDefend
+        if R.DEFEND_V2 then
+            -- (R.DEFEND_V2) genuine-threat gate: the car behind must be CLOSING or genuinely FASTER, same lap, not
+            -- pitting, not recovering. Replaces the shipped "not slower by FASTER_MARGIN" term that fires for an
+            -- equal-speed follower (phantom defend; pc2/defend_instrument_result_20261103.md: ~48% of defend-frames).
+            local nc = os.clock()
+            local pv = (defGbI[i] == behindIdx) and defGbV[i] or nil   -- trust the sample only if the SAME car is still behind
+            local closingB = pv and (pv - gapB) >= (R.DEFEND_CLOSE_MIN / trackLen) or false   -- a new car slotting in closer is NOT "closing"
+            if not defGbT[i] or defGbI[i] ~= behindIdx or (nc - defGbT[i]) >= R.DEFEND_CLOSE_WIN then
+                defGbT[i] = nc; defGbV[i] = gapB; defGbI[i] = behindIdx
+            end
+            local genuine = behindIdx >= 0
+                and (closingB or behindSpd > spd + K.FASTER_MARGIN)
+                and Recovery.lapsOf(behindIdx) == myLap
+                and not ac.getCar(behindIdx).isInPitlane
+                and not (Recovery.stateOf(behindIdx) or R.NOSTATE).rec
+            rawDefend = (gapB < defendGap and math.abs(behindLat) < K.OFFLINE_MAX and genuine)
+        else
+            rawDefend = (gapB < defendGap and behindSpd > spd - K.FASTER_MARGIN
+                         and math.abs(behindLat) < K.OFFLINE_MAX)   -- ignore a car miles off-line (shipped 0.16.1)
+        end
+
+        -- resolve the COMMITTED state (see COMMIT_* notes): a genuine read (re)commits and refreshes
+        -- the hold; otherwise coast the last decision until a wider release threshold clears it.
+        local nowd = os.clock()
+        if rawAttack then
+            commitState[i], commitUntil[i], state = 1, nowd + K.COMMIT_HOLD * R.COMMIT_HOLD_X, 1   -- (R.COMMIT_HOLD_X) attack only
+        elseif rawDefend then
+            commitState[i], commitUntil[i], state = 2, nowd + K.COMMIT_HOLD, 2
+        elseif commitState[i] and (commitUntil[i] or 0) > nowd then
+            if commitState[i] == 1 and gapA < attackGap * K.COMMIT_RELEASE then state = 1
+            elseif commitState[i] == 2 and gapB < defendGap * K.COMMIT_RELEASE then state = 2
+            else state = 0; commitState[i] = nil end
+        else
+            state = 0; commitState[i] = nil
+        end
+
+        if state == 1 then
+            aggr = math.min(1, baseA + K.ATTACK_AGGR_ADD)
+            caut = K.CAUTION_ATTACK * ((myLap >= R.ACX_LAP) and R.ATTACK_CAUT_X or 1.0) * clamp(1 - gapA / attackGap, 0, 1) * (t.follow or 1.0)   -- aero cars keep more distance
+            -- Start MOVING for the pass earlier when there's a genuine speed run on the car ahead -- not
+            -- only when almost touching. Fixes a fast car sitting in the slipstream too long before it
+            -- commits to the open space beside a slower car (most visible off the start, but present
+            -- everywhere). Still needs a real closing-speed advantage, so it isn't a constant weave.
+            local runAdv = spd - aheadSpd
+            if aheadIdx >= 0 and (myLap >= 2 or (myLap == 1 and mySpline >= K.OPENLAP_TAIL)) then   -- not in the opening-lap pack (14/18 in contact with it on, Monza)
+                if R.PASS_COMMIT > 0 and prof then
+                    local ap = Drivers.statsOf(aheadIdx)
+                    if ap and prof.pace - ap.pace >= R.PASS_COMMIT then paceEdge = true end
+                end
+                if not paceEdge and R.PASS_COMMIT_LAP > 0 and myPace then   -- (R.PASS_COMMIT_LAP) MEASURED edge, any car: my best vs its last lap (else its best)
+                    local aCar = ac.getCar(aheadIdx)
+                    local op = aCar and aCar.previousLapTimeMs
+                    if type(op) ~= 'number' or op <= 0 then op = aCar and aCar.bestLapTimeMs end
+                    if type(op) == 'number' and op > 0 and myPace * (1 + R.PASS_COMMIT_LAP) < op then paceEdge = true end
+                end
+            end
+            local passActive = (gapA < K.PASS_GAP) or (gapA < attackGap and runAdv > K.OUTSIDE_MIN_ADV * 0.6) or (paceEdge and gapA < attackGap)
+            local myTc = ac.worldCoordinateToTrack(me.position)
+            local progZ = myTc and myTc.z or mySpline
+            local dLat = aheadIdx >= 0 and latOf(ac.getCar(aheadIdx).position) or 0
+            local off = K.ATTACK_OFFSET * t.offset
+            local isCorner, inside = false, 0
+            if passActive then
+                isCorner, inside = cornerAhead(progZ)
+                -- a genuine exit-speed run earns extra width -- and how readily a car takes it scales
+                -- with AGGRESSION (the driver profile's aggr, or the Quick Race slider, via baseA): an
+                -- aggressive driver pounces on a smaller advantage AND commits harder to it; a cautious
+                -- one needs a bigger gap and uses less width. An attacker takes every opening; a measured driver picks his.
+                local minAdv = K.OUTSIDE_MIN_ADV * (1.4 - baseA)
+                wide = clamp(clamp((spd - aheadSpd - minAdv) / K.OUTSIDE_RANGE, 0, 1) * (0.5 + baseA), 0, 1.5)
+                if isCorner and inside ~= 0 then
+                    if dLat * inside < 0.3 then          -- inside is OPEN -> dive in, committing harder with a real run
+                        target = inside * off * (0.5 + 0.5 * t.corner) * (1 + 0.7 * wide)
+                    else                                 -- inside covered -> go AROUND THE OUTSIDE, wider with a run
+                        target = -inside * off * (0.6 + 1.4 * wide)
+                    end
+                elseif math.abs(dLat) > 0.15 then        -- straight/exit: pass where the defender isn't, wider with a run
+                    target = -sgn(dLat) * off * (1 + 1.5 * wide)
+                elseif inside ~= 0 then                  -- straight: pre-position for the next corner's inside (fully, when committed)
+                    target = inside * off * (paceEdge and 1.0 or 0.5)
+                elseif paceEdge then                     -- committed, long straight, no corner in sight: the side the defender isn't
+                    target = ((dLat >= 0) and -1 or 1) * off
+                end
+            end
+            -- STRATEGY: a planned manoeuvre (set-up, late-brake lunge, switchback, slingshot) overrides the
+            -- reactive pass above. Skill- and difficulty-gated inside; nil = no opinion.
+            -- (R.PULL) a straight-line pass that has pulled out / committed / is aborting owns the line: no planned manoeuvre on top
+            local plq = R.PULL and cv2.pl and cv2.pl[i]
+            local ov = nil
+            -- (R.PULL_NOLUNGE) and while merely ARMED: wait for the straight-line pass instead of diving from behind
+            local nolunge = plq and plq.ph == 1 and R.PULL_NOLUNGE
+            if nolunge then R.pullNlN = R.pullNlN + 1 end
+            -- (Strategy.LUNGE_MAX_M) the lunge gate's inputs: metres to the car ahead and the projected overlap at the brake,
+            -- PULL's projection (ysBrake, else the cornerAhead fallback). Only while the gate is on and a lunge is in range.
+            local lgGap, lgPOvl, lgTB, lgSrc = nil, nil, nil, nil
+            if Strategy.LUNGE_MAX_M and aheadIdx >= 0 and gapA < K.PASS_GAP * 1.5 then
+                lgGap, lgSrc = gapA * trackLen, 1
+                local tB = ysBrake(mySpline, spd)
+                if tB == nil then
+                    lgSrc = 2
+                    for k = 1, 4 do
+                        local tt = k * R.PULL_LOOK / 4
+                        if cornerAhead((mySpline + spd / 3.6 * tt / trackLen) % 1) then tB = tt - R.PULL_BRAKE_FB; break end
+                    end
+                end
+                lgTB = math.max(0, tonumber(tB) or 0)            -- false (no brake within LOOK) / none found -> 0: overlap must exist now
+                lgPOvl = 1 - (lgGap - (spd - aheadSpd) / 3.6 * lgTB) / 4.6
+            end
+            if not (plq and plq.ph >= 2 and plq.ph <= 4) and not nolunge then ov = Strategy.evaluate(i, { dt = dt, gapA = gapA, spd = spd, aheadSpd = aheadSpd, aheadIdx = aheadIdx,
+                lgGap = lgGap, lgPOvl = lgPOvl, lgTB = lgTB, lgSrc = lgSrc,
+                prog = progZ, dLat = dLat, myLat = myLat, wide = wide, baseA = baseA, prof = prof, classKey = classKey,
+                off = off, passGap = K.PASS_GAP, attackGap = attackGap, fasterMargin = fasterM, isOval = R.isOval, lap = myLap, crowd = crowd, lapped = lappedAhead,
+                wild = wild or nil, wLunge = R.WILD_LUNGE * (wm > 0 and R.WILD_TILT_LUNGE or 1), wCool = R.WILD_COOL, wReach = R.WILD_REACH, wDive0 = R.WILD_DIVE0 }) end
+            if ov then
+                if ov.target ~= nil then target = ov.target end
+                caut = caut + (ov.caut or 0)
+                aggr = math.min(1, aggr + (ov.aggr or 0))
+                if ov.hold and sgn(target) ~= 0 then holdSign[i] = sgn(target); holdUntil[i] = os.clock() + ov.hold end
+            end
+            -- ROAD SPACE (see R.ROADSPACE): no planned manoeuvre running, a genuine run on the car ahead -> where is the
+            -- open road? Measure the free lateral room on each side of the car ahead, then aim just clear of it.
+            -- Not while the opening-lap easing is in force (lap 0, and lap 1 until OPENLAP_TAIL): in the pack it started
+            -- pile-ups (Spa sprint 2026-09-16: 13/18 in contact x2 vs 7-11 baseline, both chains begun by a car aiming
+            -- for a gap on lap 1). Once the field has strung out it is neutral-to-better on contact.
+            if R.ROADSPACE and ov == nil and passActive and aheadIdx >= 0
+               and (myLap >= 2 or (myLap == 1 and mySpline >= K.OPENLAP_TAIL)
+                    or (R.RS_OL_METER > 0 and crowd <= R.RS_OL_CROWD and Strategy.tierOf(i) >= 2 and Strategy.meterOK(R.RS_OL_METER)) or (wild and R.WILD_START))
+               and runAdv > K.OUTSIDE_MIN_ADV * (1.4 - baseA) * CV.RS_ADV then
+                local need, room = roomSides(i, me, mySpline, dLat, gapA, aheadIdx, sim.carsCount)   -- (factored out for R.PULL, unchanged)
+                local side = 0
+                if isCorner and inside ~= 0 and room[inside] >= need then side = inside              -- the inside fits: take it
+                elseif room[1] >= need or room[-1] >= need then side = (room[1] >= room[-1]) and 1 or -1   -- else the roomier side
+                end
+                if side ~= 0 then
+                    target = clamp(dLat + side * need, -CV.RS_EDGE, CV.RS_EDGE)
+                    rsPass = true
+                end
+            end
+            -- ROOM LINE (R.ROOM_LINE): tight room, no road-space side, no manoeuvre -> the reactive nudge is dropped. The geometric
+            -- 'no room' verdict used to leave the 0.35 x class nudge standing: nobody passes in a corridor, so nobody moves in one.
+            if cv2.roomLine and roomOn and ov == nil and not rsPass and target ~= 0 then target = 0; R.roomAct = (R.roomAct or 0) + 1 end
+        elseif state == 2 then
+            aggr = math.min(1, baseA + K.DEFEND_AGGR_ADD)
+            caut = (myLap >= 2) and R.CAUTION_DEFEND or K.CAUTION_DEFEND   -- (R.CAUTION_DEFEND from lap 2; laps 0-1 as tuned)
+            local concede = false
+            if R.CONCEDE > 0 and myLap >= 2 and behindIdx >= 0 and Strategy.tierOf(behindIdx) >= 2 then   -- not in the opening-lap pack
+                local bp = Drivers.statsOf(behindIdx)
+                if bp and bp.pace >= ((prof and prof.pace) or 0.6) + R.CONCEDE then concede = true end
+            end
+            if concede then
+                -- a clearly faster star behind: stay on the racing line, no extra aggression, no elbows (owner: Max takes the space)
+                aggr = math.min(baseA, 1.0); caut = 0; target = 0; state = 3   -- state 3 = conceding, visible in the diag 'st' field
+            elseif gapA >= K.PACK_LEAD_GAP then
+                -- clear road ahead: don't defend a slow line -- just drive away on the racing line.
+                target = 0
+            else
+                local myTc = ac.worldCoordinateToTrack(me.position)
+                local progZ = myTc and myTc.z or mySpline
+                local isCorner, inside = cornerAhead(progZ)
+                if isCorner and inside ~= 0 then
+                    if cv2.roomLine and roomOn then target = 0; R.roomAct = (R.roomAct or 0) + 1   -- ROOM LINE: no cover move in a corridor
+                    else target = inside * (K.DEFEND_OFFSET * t.defend) end   -- hold the inside line (stable, corner-based)
+                end
+                -- on straights, keep the racing line -- don't weave to mirror the attacker
+            end
+        end
+
+        -- COMMIT OR ABORT (R.PASS_ABORT): a corner within ~1.2 s and I'm offline beside the car ahead but not alongside enough
+        -- -> the corner is theirs: back onto their line behind them, with a lift, and try again after the corner
+        if R.PASS_ABORT > 0 and myLap >= 2 and state == 1 and aheadIdx >= 0 and math.abs(target) > 0.25 and spd > 60 then   -- lap 2+: on lap 0 the lanes ARE an offset
+            local sd = gapA * trackLen                                  -- their nose ahead of mine, metres
+            local overlap = 1 - sd / 4.6                                 -- 1 = level, 0 = a full car length back
+            local aLat = latOf(ac.getCar(aheadIdx).position)
+            if overlap < R.PASS_ABORT and overlap > -0.5 and math.abs(aLat - myLat) > 0.25 then
+                local isC = cornerAhead((mySpline + (spd / 3.6) * 1.2 / trackLen) % 1)
+                if isC then
+                    caut = caut + 0.5; rsPass = false; Strategy.clear(i, 'abort')        -- lift first...
+                    if overlap <= 0 then target = clamp(aLat, -0.85, 0.85)               -- ...and only tuck in once fully behind
+                    else target = curOffset[i] or 0 end                                   -- still beside them: hold my line
+                end
+            end
+        end
+        -- FINISH THE PASS (R.PASS_FINISH): the committed quicker driver, offline beside the car ahead and within reach of level,
+        -- stops hedging: full aggression now, a later brake point when he holds the inside into the corner, and (below, after
+        -- the back-off terms) his caution is capped at PASS_CAUT. PASS_ABORT still tucks him in when the corner is not his.
+        -- (2026-09-17: veterans passed midfielders in a third of episodes; pre-positioning alone ended side by side into the
+        -- braking zone, so the missing piece is the brake point, not the line.)
+        local passFinish = false
+        if R.PASS_FINISH > 0 and state == 1 and paceEdge and aheadIdx >= 0 and myLap >= 2 and math.abs(target) > 0.25 and spd > 60 then
+            local overlap = 1 - gapA * trackLen / 4.6
+            local aLat = latOf(ac.getCar(aheadIdx).position)
+            if overlap > -R.PASS_FINISH and math.abs(aLat - myLat) > 0.25 then
+                passFinish = true; aggr = 1
+                if R.PASS_BH > 1 and cv2.base[i] then
+                    local isC, ins = cornerAhead((mySpline + (spd / 3.6) * 1.2 / trackLen) % 1)
+                    if isC and ins ~= 0 and target * ins > 0 then cv2.bg[i] = true; pcall(physics.setAIBrakeHint, i, cv2.base[i] * R.PASS_BH) end
+                end
+                R.passFinishN = (R.passFinishN or 0) + 1      -- diag: frames spent finishing a pass this session
+            end
+        end
+        if state ~= 1 then Strategy.clear(i, 'left') end
+        local eff = R.INTENSITY
+
+        -- pounce: after following a car, stay eager to fill the space for a moment (fixes the
+        -- "slow to pounce when the gap opens" lag). Refreshes while attacking, decays after.
+        pounceT[i] = math.max((pounceT[i] or 0) - dt, 0)
+        if state == 1 then pounceT[i] = K.POUNCE_HOLD
+        elseif state == 0 and pounceT[i] > 0 and (t.follow or 1) >= 0.7 then
+            -- only pounce on a straight/fast bit, never while braking into a corner (that just
+            -- bunches the pack up in the braking zone). Close-quarters classes only.
+            local st = me.steer
+            local ok
+            if R.STEER_FRAC then                    -- (R.STEER_FRAC) the input as a fraction of lock, off the brakes, lap 2+ (state-0 relief: not in the pack)
+                local fr = R.steerIn(me)
+                if fr then ok = math.abs(fr) < R.POUNCE_STEER else ok = type(st) ~= "number" or math.abs(st) < 0.2 end
+                ok = ok and myLap >= 2 and (me.brake or 0) < 0.1
+            else
+                ok = type(st) ~= "number" or math.abs(st) < 0.2
+            end
+            if ok then
+                caut = caut + K.POUNCE_CAUT * (pounceT[i] / K.POUNCE_HOLD)
+            end
+        end
+
+        -- pack damping: in a crowd (race start, traffic) damp the LINE-CHANGING only, so the field
+        -- doesn't all dart around at once. NOT applied to caution/closing -- cars must stay willing
+        -- to tuck up and pass in traffic, or the pack over-gaps and concertinas to a crawl.
+        local crowdDamp = clamp(1 - math.max(0, crowd - 1) * 0.25, 0.35, 1)   -- eased: was over-damping pull-outs in packs
+        -- a car with a genuine speed run (wide > 0) resists the crowd damping, so a fast car CAN still
+        -- pull out into open space in a pack instead of being pinned on the line behind a slower car.
+        local passResist = clamp(wide, 0, 1)
+        crowdDamp = crowdDamp + (1 - crowdDamp) * passResist
+        caut = caut * eff
+
+        -- RACE AWARENESS (added after the intensity scale, so safety terms hold at any intensity):
+        -- opening-lap caution -- calmer + more spacing off the line, fading across the first lap.
+        local openingLap = 0
+        if crowd >= 1 then
+            if myLap == 0 then openingLap = clamp(1 - math.max(0, olS) * (1 - K.OPENLAP_FLOOR), K.OPENLAP_FLOOR, 1)   -- 1.0 at the lights (and on the grid before the line) -> 0.3 at the line
+            elseif myLap == 1 then openingLap = K.OPENLAP_FLOOR * clamp(1 - mySpline / K.OPENLAP_TAIL, 0, 1) end   -- tail into lap 1
+            openingLap = openingLap * startX
+        end
+        if openingLap > 0 then
+            local roomEase = 0   -- (R.OL_STAR_ROOM) this car's caution relief, 0-0.7, computed first so caut/rowcaut below can use it
+            if R.OL_STAR_ROOM > 0 and Strategy.tierOf(i) >= 2 then
+                local st = Drivers.statsOf(i)
+                local edge = clamp(((st and st.pace or 0) - 0.30) / 0.70, 0, 1)   -- 0.30 = rookie, 1.0 = a 1.0-pace driver
+                roomEase = clamp(R.OL_STAR_ROOM * edge, 0, 0.7)
+            end
+            -- caution by the gap ahead: extra caution only matters with a car a few lengths ahead; the leaders keep
+            -- braking normally, so they don't trigger the concertina behind them
+            local prox = 1
+            if R.OL_CAUT_PROX then prox = clamp((CV.PROX_FAR - gapA * trackLen) / (CV.PROX_FAR - CV.PROX_NEAR), 0, 1) end
+            caut = caut + K.OPENLAP_CAUT * openingLap * (1 + crash) * prox * (1 - roomEase)   -- crashy tracks get extra start caution (kills the opening-lap pile-ups); (R.OL_STAR_ROOM) less of it for a fast driver
+            if R.OL_ROWCAUT and myLap == 0 and cv2.back[i] then    -- row ten brakes on the lights of the car ahead: earlier the further back
+                -- (scaling this by aggression was tried 2026-09-16: the star went off the road at 127 km/h; it protects him)
+                local fuelX = (R.OL_FUEL_K > 0) and (1 + R.OL_FUEL_K * clamp(((me.fuel or 20) - 20) / 50, 0, 1.5)) or 1
+                local rowCap = (R.OL_GRID_DEPTH > 0) and math.max(1, (cv2.depth or 0) / CV.ROWCAUT_M) or 1   -- a deep grid: the ramp does not stop at 90 m
+                caut = caut + CV.ROWCAUT * R.ROWCAUT_X * fuelX * clamp(cv2.back[i] / CV.ROWCAUT_M, 0, rowCap) * openingLap * prox * (1 - roomEase)
+            end
+            local olAggr = K.OPENLAP_AGGR
+            if R.OL_STAR_AGGR > 0 and Strategy.tierOf(i) >= 2 then olAggr = K.OPENLAP_AGGR * R.OL_STAR_AGGR end
+            if wild then olAggr = olAggr * (1 - R.WILD_OL) end   -- (R.WILD_OL) he ignores part of the opening-lap trim
+            aggr = aggr * (1 - olAggr * openingLap)
+            if R.OL_AGGR_FORMULA > 0 and (classKey == 'formula' or classKey == 'formula_jr') then
+                aggr = aggr * (1 - R.OL_AGGR_FORMULA * openingLap)   -- open-wheelers: no bodywork to lean on
+            end
+            if state == 1 and caut < 0 then caut = caut * (1 - K.OPENLAP_ATTACK * openingLap) end   -- still attacking, just not diving in
+        end
+        -- bring-it-home -- clear track both ways: nothing to race, so ease off a touch.
+        local catchable = R.ISO_PACE and aheadIdx >= 0 and gapA * trackLen < CV.ISO_REACH_M and (R.ISO_PACE_ALL or Strategy.tierOf(i) >= 2)
+        if gapA > K.ISOLATED_GAP and gapB > K.ISOLATED_GAP and not catchable and not wild then   -- (a wild car never eases off)
+            local isoX = R.ISO_X                              -- (R.ISO_X, R.TOP_ISO) how much of the ease-off this car takes
+            if R.TOP_ISO > 0 then isoX = isoX * (1 - R.TOP_ISO * R.topW(prof)) end
+            aggr = aggr * (1 - K.ISOLATED_AGGR * isoX)
+            caut = caut + K.ISOLATED_CAUT * isoX
+        -- pack leader -- clear road ahead but a pack right behind: a small pace stretch so the leader
+        -- noses away and strings the field out, instead of the front artificially anchoring the bunch.
+        elseif gapA > K.PACK_LEAD_GAP and crowd >= 2 then
+            caut = caut - ((myLap >= 2) and R.PACK_STRETCH or K.PACK_STRETCH) * (1 - crash)   -- don't stretch away (more catching) on a crashy track
+        end
+        -- trouble-spot learning: a bit more caution approaching a corner this class keeps crashing at.
+        local tsCaut = Troublespots.cautionAt(mySpline, classKey)
+        local lone = (R.LONE_FRAC > 0 and nearGap * trackLen > CV.LONE_M) and R.LONE_FRAC or 1.0   -- nobody near: a fraction
+        local pcx = (paceEdge and state == 1) and R.PC_TS or 1.0   -- a committed passer carries less of the 'careful here' margin
+        caut = caut + tsCaut * lone * pcx
+        -- adaptive crash damping: on a track that keeps wrecking cars, calm the whole field (more caution,
+        -- less aggression) so the crash RATE falls, not just the after-the-fact repairs.
+        if crash > 0 then
+            caut = caut + R.CRASH_CAUT * crash * lone * pcx
+            aggr = aggr * (1 - R.CRASH_AGGR * crash)
+        end
+        -- anti rear-end: closing fast, right behind, and still ON the same line (not pulling out to
+        -- pass) -> ease the approach. Risk lowers how much a driver backs off, but never to nothing.
+        local reGap = roomF and math.max(K.REAREND_GAP, spd / 3.6 * R.ROOM_RE_T * tightHere / trackLen) or K.REAREND_GAP   -- ROOM_FOLLOW: a time window in tight room
+        if gapA < reGap and aheadIdx >= 0 and blockSide == 0 then    -- (going around a blockage? don't also brake to a crawl behind it)
+            local closing = spd - aheadSpd
+            local reClose = roomF and K.REAREND_CLOSE * (1 - 0.6 * tightHere) or K.REAREND_CLOSE   -- ROOM_FOLLOW: a 3 km/h creep in a 40 km/h corridor counts
+            if closing > reClose and math.abs(myLat - latOf(ac.getCar(aheadIdx).position)) < K.REAREND_LAT then
+                local urgency = clamp((closing - reClose) / K.REAREND_RANGE, 0, 1) * clamp(1 - gapA / reGap, 0, 1)
+                local riskF = prof and clamp(1.0 - 0.6 * prof.risk, 0.4, 1.0) or 0.8
+                if rsPass or (paceEdge and math.abs(target) > 0.25)
+                   or (R.RE_PULLOUT and myLap >= 2 and ((Strategy.last[i] or 0) == 1 or (Strategy.last[i] or 0) == 2)
+                       and math.abs(target) * eff * crowdDamp > K.REAREND_LAT + 0.05) then   -- pulling out to pass: don't kill the run first
+                    urgency = urgency * ((myLap >= 2) and CV.RS_REAREND or R.RS_OL_REAREND)
+                end
+                caut = caut + K.REAREND_CAUT * urgency * riskF
+                if roomF then R.roomAct = (R.roomAct or 0) + 1 end
+            end
+        end
+        -- (R.MV_CHASE) the car ahead is mid-mistake and has left my line: the door is open, go
+        if R.MV_CHASE > 0 and aheadIdx >= 0 and myLap >= 2 and gapA * trackLen < R.MV_CHASE_M then
+            local ah = R.humanMv and R.humanMv[aheadIdx]
+            if ah and ah.t0 and os.clock() < (ah.lv or 0) and math.abs(myLat - latOf(ac.getCar(aheadIdx).position)) >= K.REAREND_LAT then
+                caut = caut - R.MV_CHASE
+            end
+        end
+
+        -- high-speed damping: smaller line changes at speed (a big lateral move at 300 km/h is
+        -- what unsettles fast cars). Full effect up to ~180 km/h, tapering to half by ~360.
+        local speedDamp = clamp(1 - math.max(0, spd - 180) / 400, 0.5, 1)
+        local phaseOff  = 1 - K.OPENLAP_OFFSET * openingLap        -- less line-swapping at the start
+        if rsPass then target = clamp(target * speedDamp, -1, 1)   -- a point on the road, not an eagerness: only the speed damping applies
+        else target = clamp(target * eff * speedDamp * crowdDamp * phaseOff, -1, 1) end
+
+        -- leave room -- genuinely alongside (overlapping) and NOT the car with the corner: don't
+        -- pinch into them and lift a touch. Can only reduce contact; never forces a move.
+        -- (R.LEAVEROOM_MODE, from lap 1 past OPENLAP_TAIL: 1 = only a car I overlap; 2 = and not when the corner ahead is mine)
+        local lrNew = R.LEAVEROOM_MODE > 0 and (myLap >= 2 or (myLap == 1 and mySpline >= K.OPENLAP_TAIL))
+        if nearIdx >= 0 and nearGap < K.ALONGSIDE_GAP and nearAhead and (not lrNew or nearGap * trackLen < R.LEAVEROOM_LEN_M) then
+            local nearLat = latOf(ac.getCar(nearIdx).position)
+            if math.abs(nearLat - myLat) < K.ALONGSIDE_LAT then
+                local mine = false
+                if lrNew and R.LEAVEROOM_MODE == 2 then
+                    local isC, ins = cornerAhead(mySpline)
+                    if not isC then isC, ins = cornerAhead((mySpline + spd / 3.6 * 1.2 / trackLen) % 1) end   -- the braking zone: 1.2 s out
+                    mine = isC and ins ~= 0 and (myLat - nearLat) * ins > 0.15   -- I hold the inside of the corner ahead: it is mine
+                end
+                if not mine then
+                    local towardSign = (nearLat >= myLat) and 1 or -1
+                    if target * towardSign > 0 then target = target * (wild and (0.2 + 0.8 * R.WILD_ELBOWS) or 0.2) end   -- stop leaning into them ((R.WILD_ELBOWS) he leans)
+                    caut = caut + K.LEAVEROOM_CAUT
+                end
+            end
+        end
+        -- DEFEND ROOM (R.DEFEND_ROOM): the defender's half of leave-room. From lap 2, a car behind already overlapping me (centre gap under
+        -- LEAVEROOM_LEN_M) 0.25+ to one side: no lateral move toward it this frame - the door is not shut on a car already in it
+        if R.DEFEND_ROOM and state == 2 and myLap >= 2 and behindIdx >= 0 and gapB * trackLen < R.LEAVEROOM_LEN_M then
+            local dl = behindLat - myLat
+            local cur0 = curOffset[i] or 0
+            if math.abs(dl) >= 0.25 and (target - cur0) * dl > 0 then target = cur0 end
+        end
+
+        -- blue-flag yield -- a car on a higher lap is coming through: concede the line and lift,
+        -- rather than racing the leader. Overrides attack/defend; edge-safety below keeps it honest.
+        if wild and lapperIdx >= 0 and R.WILD_BLUE > 0 and hash01(i * 31 + lapperIdx * 17 + myLap * 7) < R.WILD_BLUE then lapperIdx = -1 end   -- (R.WILD_BLUE) not this lap
+        -- (R.BLUE_REC_EXEMPT) ...and a car that recovery still holds is not asked to concede: it is getting back up to speed.
+        -- Zeroed here rather than at the detection above so only the yield changes; lapperIdx is not read in between,
+        -- and the line below then clears the yield bookkeeping for us.
+        local bm = tonumber(R.BLUE_REC_EXEMPT) or (R.BLUE_REC_EXEMPT == true and 1 or 0)   -- (harness JSON may hand us a boolean)
+        local stB = bm > 0 and lapperIdx >= 0 and (Recovery.stateOf(i) or R.NOSTATE) or nil
+        if bm == 1 and stB and stB.rec then lapperIdx = -1 end   -- mode 1: no yield at all while recovery holds the car
+        local noLift = bm >= 2 and stB ~= nil and (stB.rec or stB.dropPending) or false   -- mode 2: move aside, no lift
+        if lapperIdx < 0 then yieldT[i] = 0; letbyDone[i] = nil; letbyFor[i] = nil; letbyT[i] = nil end
+        if lapperIdx >= 0 and letbyFor[i] ~= lapperIdx then letbyFor[i] = lapperIdx; letbyDone[i] = nil; letbyT[i] = nil; yieldT[i] = 0 end
+        if lapperIdx >= 0 then
+            yielding = true
+            local lapLat = latOf(ac.getCar(lapperIdx).position)
+            local side = (lapLat >= myLat) and -1 or 1                              -- off-line, the side the lapper isn't
+            -- IS THAT SIDE CLEAR? A car being lapped is often mid-fight with cars on its own lap; moving aside into
+            -- one of them made the start-of-race pile-ups (Zandvoort star test, 2026-09-14). If a same-lap car is
+            -- alongside or right behind on that side, hold the line and just lift -- the lapper goes round.
+            local sideClear = true
+            for j = 0, sim.carsCount - 1 do
+                if j ~= i and j ~= lapperIdx then
+                    local oc = ac.getCar(j)
+                    if oc and oc.splinePosition and (oc.speedKmh or 0) > K.BLOCK_SPEED then
+                        local dd = oc.splinePosition - mySpline; if dd < -0.5 then dd = dd + 1 elseif dd > 0.5 then dd = dd - 1 end
+                        local ol = latNow[j] or 0
+                        if math.abs(dd) < K.ALONGSIDE_GAP * 1.6 and ((side > 0 and ol > myLat) or (side < 0 and ol < myLat)) then sideClear = false; break end
+                    end
+                end
+            end
+            -- ONLY THE CAR DIRECTLY AHEAD OF THE LAPPER YIELDS. Every car within 45 m used to yield at once, so a
+            -- train of backmarkers all lifted together and nobody got past anybody (the "conga line"). If there's
+            -- another car between me and the lapper, it's that car's job; I keep racing.
+            local nearestToLapper = true
+            for j = 0, sim.carsCount - 1 do
+                if j ~= i and j ~= lapperIdx then
+                    local oc = ac.getCar(j)
+                    if oc and oc.splinePosition and (oc.speedKmh or 0) > K.BLOCK_SPEED then
+                        local db = mySpline - oc.splinePosition; if db < 0 then db = db + 1 end   -- oc behind me by db
+                        if db > 0 and db < lapperGap then nearestToLapper = false; break end
+                    end
+                end
+            end
+            if not nearestToLapper then
+                yielding = false
+            elseif sideClear then
+                target = side * K.YIELD_OFFSET * speedDamp
+                holdSign[i] = side; holdUntil[i] = os.clock() + K.SIDE_HOLD   -- commit to the move-aside
+                yieldT[i] = (yieldT[i] or 0) + dt
+            else
+                -- boxed in: hold the line, lift a touch, and only for a few seconds -- if the lapper hasn't gone by
+                -- in that time it will have to make the move itself (it has attack + free-pass on its side)
+                yieldT[i] = (yieldT[i] or 0) + dt
+                -- the boxed-in cutoff is for a SAME-class lapper (equal pace: nothing more the yielder can do). A faster
+                -- CLASS coming through keeps its blue flag: the rivals boxing this car in are about to be lapped too.
+                -- (Spa 2026-09-15: prototypes sat 48-72 s behind GT3s that had yielded for 4 s and raced on.)
+                if yieldT[i] > K.YIELD_MAX_T and Classes.keyOf(lapperIdx) == classKey then yielding = false end
+            end
+            if yielding then aggr = math.min(aggr, K.YIELD_AGGR) end
+            -- A lapped car should EASE aside and keep rolling, NOT crawl. Cap the total caution so the
+            -- other back-off terms (crash-damping, anti-rear-end, trouble-spots) can't stack into a near
+            -- stop -- that's what makes traffic pile up and rear-end a car being lapped. Lift a touch more
+            -- only as the faster car draws right alongside, to wave it by.
+            local lift = (lapperGap < K.YIELD_LIFT_GAP) and K.YIELD_CAUT * clamp(1 - lapperGap / K.YIELD_LIFT_GAP, 0, 1) or 0
+            if noLift then lift = 0 end   -- (R.BLUE_REC_EXEMPT 2) a rescued car eases aside but keeps accelerating
+            -- the proper lift: yielded long enough, lapper still on the tail, on a straight, not done yet for this lapper
+            if yielding and not noLift and not letbyDone[i] and (yieldT[i] or 0) > K.LETBY_AFTER_T and lapperGap < K.YIELD_GAP then
+                if letbyT[i] == nil then
+                    local isCornerY = cornerAhead(mySpline)
+                    if not isCornerY then letbyT[i] = os.clock() end
+                end
+            end
+            if letbyT[i] and not noLift then
+                if os.clock() - letbyT[i] < K.LETBY_T then lift = lift + K.LETBY_CAUT
+                else letbyDone[i] = true; letbyT[i] = nil end
+            end
+            if yielding then
+                caut = math.min(caut, K.YIELD_CAUT + tsCaut) + lift   -- (never capped BELOW the corner's own trouble-spot caution)
+                state  = 0
+            end
+        end
+
+        -- DAMAGED CAR: a significantly damaged car stops RACING (no attack/defend, eased aggression,
+        -- stays on the line) and, when a healthy car is right behind, pulls OFF the line to let it
+        -- through -- a self-imposed blue flag. It does NOT live off-line permanently and its caution is
+        -- NOT capped: an earlier build did both, and over ten Zandvoort races 73% of the cars that
+        -- crossed the damage threshold went off AGAIN within 24-40 s -- driving every corner 0.58 off
+        -- the racing line with less caution than a healthy car. (It also took out the leader and the
+        -- player together: P1 picked up 48 km/h of damage, was sent off-line into the banked corner
+        -- with the player 30 m behind, and both were collected.) A real driver nurses a damaged car
+        -- ON the line and moves over when someone's on their tail.
+        -- how fresh is the damage? (a real driver nurses a fresh hit, then gets on with it unless the car is wrecked)
+        if myDmg > (dmgSeen[i] or 0) + 3 then dmgSeen[i] = myDmg; dmgLap[i] = myLap end
+        if R.PACE_YIELD_MODE == 1 then                     -- (R.PACE_YIELD_MODE 1) R.hurtOf's clock: a repair resets it, a new hit restarts it
+            local hs = R.hurtSeen[i] or 0
+            if myDmg < hs - 3 then R.hurtSeen[i] = myDmg elseif myDmg > hs + 3 then R.hurtSeen[i] = myDmg; R.hurtLap[i] = myLap end
+        end
+        local nursing = myDmg > K.DAMAGE_YIELD and (myDmg > K.DAMAGE_HEAVY or (myLap - (dmgLap[i] or myLap)) < K.DAMAGE_NURSE_LAPS)
+        if not yielding and nursing then
+            state = 0
+            target = 0                                                 -- no diving for passes with a bent car
+            aggr = math.min(aggr, K.YIELD_AGGR)
+            -- NARROWED 2026-10-24: back on the plain K.FASTER_MARGIN. The multiplier is ATTACK-side only, and a
+            -- damaged car yielding LESS to a faster car works against the attack change it was meant to test.
+            if behindIdx >= 0 and gapB < K.YIELD_GAP and behindSpd > spd + K.FASTER_MARGIN then
+                yielding = true
+                -- keep whatever side we've already committed to (don't re-pick and weave); only choose
+                -- one the first time, or if the current side is against an edge.
+                local side = holdSign[i] or ((hash01(i * 5 + 7) < 0.5) and -1 or 1)
+                if (side > 0 and myLat > K.EDGE_SOFT) or (side < 0 and myLat < -K.EDGE_SOFT) then side = -side end
+                target = side * K.YIELD_OFFSET * speedDamp
+                holdSign[i] = side; holdUntil[i] = os.clock() + K.DAMAGE_YIELD_HOLD   -- long hold: pick a side and STAY
+            end
+        end
+
+        -- track-edge safety: never push a car further toward an edge it's already near (keeps cars off
+        -- kerbs). A car with a real speed run is allowed a bit closer to the edge to finish an outside
+        -- pass, but EDGE_HARD still keeps it on the road.
+        local edgeSoft = K.EDGE_SOFT + wide * K.OUTSIDE_EDGE
+        if (R.EDGE_CAP or wild) and edgeSoft > K.EDGE_HARD - 0.05 then edgeSoft = K.EDGE_HARD - 0.05 end   -- (R.EDGE_CAP) keep the kerb guard alive (always for a wild car: his baseA widens `wide`)
+        if (target > 0 and myLat > edgeSoft) or (target < 0 and myLat < -edgeSoft) then
+            target = target * clamp((K.EDGE_HARD - math.abs(myLat)) / (K.EDGE_HARD - edgeSoft), 0, 1)
+        end
+
+        -- deadzone + side-hold: ignore tiny offsets (stay on the line), and hold the chosen side
+        -- briefly so the car doesn't dart back and forth when the other car moves around.
+        if math.abs(target) < K.DEADZONE then
+            target = 0
+        else
+            local nowc = os.clock()
+            local want = target > 0 and 1 or -1
+            if holdSign[i] == nil or (want ~= holdSign[i] and nowc > (holdUntil[i] or 0)) then
+                holdSign[i] = want; holdUntil[i] = nowc + K.SIDE_HOLD
+            end
+            target = math.abs(target) * (holdSign[i] or want)
+        end
+
+        -- OVAL GROOVE (stock cars on a speedway): in a pack, commit to a high or low LANE and run it
+        -- side-by-side through the banking, holding it (not darting back to one line). Take the lane
+        -- the car ahead isn't in, else a stable personal groove. Edge-safety below still keeps it off
+        -- the wall. This is what turns oval running into real pack racing.
+        if R.isOval and classKey == 'nascar' and gapA < K.GROOVE_RANGE and R.GROOVE_X > 0 then
+            local dLatA = aheadIdx >= 0 and latOf(ac.getCar(aheadIdx).position) or 0
+            local side = (math.abs(dLatA) > 0.12) and -sgn(dLatA) or ((hash01(i * 7 + 3) < 0.5) and -1 or 1)
+            target = side * K.GROOVE_OFFSET * R.GROOVE_X
+            holdSign[i] = side; holdUntil[i] = os.clock() + K.GROOVE_HOLD    -- commit to the lane
+        end
+
+        -- GRID FUNNEL (race start only): hold the car near its own grid lane and merge it onto the
+        -- racing line gradually over the run to turn 1, so the field funnels down instead of all
+        -- converging at once. Overrides the racecraft offset here (after the deadzone) so the fade
+        -- stays smooth. Gated to a packed field (crowd) so it never fires on a lone practice lap.
+        local laneHeld = false
+        if R.OL_LANES and myLap == 0 and crowd >= 1 and cv2.lane and cv2.back[i] and olS < cv2.lane.endS and not (cv2.lane.skip and cv2.lane.skip[i])
+           and not (R.RS_OL_METER > 0 and Strategy.tierOf(i) >= 2 and Strategy.meterOK(R.RS_OL_METER)) and not (wild and R.WILD_START) then   -- stars shoot the gaps (owner)
+            -- hold the side you STARTED on (your grid column), at a full lane's offset, until past the first apex. By column, not
+            -- by row: assigning a row's two cars the same side sent them into each other off the line (Barcelona 2026-09-17,
+            -- 13/18 in contact). A car that started dead centre takes the side its row parity gives it.
+            local side = cv2.lane.side and cv2.lane.side[i] or 0     -- fixed at the lights from the grid box, not from a moving car
+            if side == 0 then side = (math.floor(cv2.back[i] / CV.ROW_M + 0.5) % 2 == 0) and cv2.lane.inside or -cv2.lane.inside end
+            target = side * CV.LANE_OFF
+            holdSign[i] = side; holdUntil[i] = os.clock() + K.SIDE_HOLD
+            laneHeld = true
+        end
+        local funnelFade = K.GRID_FADE_END * R.GRID_FADE_X   -- (R.OL_STAR_FUNNEL) shrunk below for a fast driver
+        if R.OL_STAR_FUNNEL > 0 and Strategy.tierOf(i) >= 2 then
+            local st = Drivers.statsOf(i)
+            local edge = clamp(((st and st.pace or 0) - 0.30) / 0.70, 0, 1)
+            funnelFade = funnelFade * (1 - clamp(R.OL_STAR_FUNNEL * edge, 0, 0.6))
+        end
+        if not laneHeld and myLap == 0 and crowd >= 1 and olS < funnelFade
+           and not (R.LANE_MIN_HALF > 0 and (cv2.halfMin or 6.0) < R.LANE_MIN_HALF) and not (wild and R.WILD_START) then   -- a one-car road has no columns to hold
+            if gridLat[i] == nil and olS < K.GRID_CAPTURE then
+                gridLat[i] = myLat
+                if R.GRID_HOLD_MAXLAT > 0 and math.abs(myLat) > R.GRID_HOLD_MAXLAT then gridLat[i] = 0 end   -- off the road: aim for the line
+            end
+            if gridLat[i] then
+                target = clamp(gridLat[i] * K.GRID_HOLD * clamp(1 - math.max(0, olS) / funnelFade, 0, 1), -1, 1)
+            end
+        end
+        -- LEAVE A CAR'S WIDTH (laps 0-1): alongside another car, move the target away from it. Both cars of a pair
+        -- move apart; nobody lifts (a lifting car became the next car's hazard, Barcelona 2026-09-16).
+        if R.OL_SIDESPACE and myLap <= 1 and sideSign ~= 0 then
+            target = clamp(target + sideSign * CV.SIDE_SPACE, -0.85, 0.85)
+        end
+        -- CORNER-ENTRY PRIORITY (laps 0-1): alongside a car whose nose is ahead of mine with a corner coming, the corner
+        -- is theirs: take the outside line (a lateral move, not a lift)
+        if R.OL_CORNER_PRIO and myLap <= 1 and sideBy then
+            local isC, inside = cornerAhead(mySpline)
+            if isC and inside ~= 0 then target = clamp(-inside * CV.PRIO_OUT, -0.85, 0.85) end
+        end
+
+        -- VISIBLE MISTAKE (lib/human.lua H.MISTAKE_V2): a lock-up or a missed apex runs wide toward the outside of the corner. Here, after
+        -- the edge easing and the side-hold (a run-wide goes toward the edge by definition); the blockage sweep keeps the last word.
+        if hm and hm.wide and not yielding then
+            if (hm.side or 0) == 0 and os.clock() >= (hm.scanT or 0) then     -- which way is out: the next corner within ~2.5 s of travel
+                hm.scanT = os.clock() + 0.25                                  -- (cached once found; a miss rescans 4x a second)
+                local from = hm.lookM or 0
+                for m = from, from + math.max(40, spd / 3.6 * 2.5), 20 do
+                    local isC, ins = cornerAhead(mySpline + m / trackLen)
+                    if isC and ins ~= 0 then hm.side = -ins; break end
+                end
+            end
+            local s = hm.side or 0
+            if s ~= 0 and not (nearIdx >= 0 and nearGap * trackLen < R.MV_SIDE_M
+                               and (latOf(ac.getCar(nearIdx).position) - myLat) * s > 0.1) then   -- a car overlapping on that side: hold the line
+                local add = hm.wide
+                if not hm.big then add = add * clamp((K.EDGE_HARD - myLat * s) / (K.EDGE_HARD - K.EDGE_SOFT), 0, 1) end   -- an ordinary one stays on the road
+                local lim = hm.big and 1.0 or K.EDGE_HARD
+                target = clamp(target + s * add, -lim, lim)
+            end
+        end
+
+        -- BLOCKAGE sweep (final word): a stopped/crawling car is on my line just ahead -> commit to the
+        -- open side and go around, overriding the normal line, groove and funnel. Kept off the wall by
+        -- flipping to the roomier side if the chosen one is already near an edge.
+        if blockSide ~= 0 and not yielding then                          -- (a car being lapped holds its move-aside line)
+            if (blockSide > 0 and myLat > K.EDGE_SOFT) or (blockSide < 0 and myLat < -K.EDGE_SOFT) then
+                blockSide = -blockSide                                   -- that side's against the edge -> take the other
+            end
+            if cv2.crawlNeed then target = clamp(cv2.crawlLat + blockSide * cv2.crawlNeed, -CV.RS_EDGE, CV.RS_EDGE)   -- a crawler: just clear of it
+                if R.CRAWL_CLOSE > 0 and spd - (cv2.crawlSpd or spd) >= R.CRAWL_CLOSE then   -- arriving fast: the wider of the two berths
+                    local wide = blockSide * K.BLOCK_OFFSET
+                    if math.abs(wide - cv2.crawlLat) > math.abs(target - cv2.crawlLat) then target = wide end
+                end
+            else target = blockSide * K.BLOCK_OFFSET end
+            holdSign[i] = blockSide; holdUntil[i] = os.clock() + K.BLOCK_HOLD
+        end
+
+        -- FREE PASS: the car ahead is a lap down and already yielding -- go by, don't tiptoe. Lapping cars ran
+        -- 6-13 km/h under their own pace behind yielding backmarkers (Zandvoort 72-lap GP, 2026-09-14).
+        if lappedAhead then caut = caut - K.FREEPASS_CAUT; if state == 0 then state = 1 end end
+        -- (R.WILD) the chaos driver keeps only part of the stacked back-off, then drops a flat slice of caution
+        if wild and not yielding then   -- (not while yielding: the cut would cancel the blue-flag lift)
+            if caut > 0 then caut = caut * R.WILD_SAFE end
+            caut = caut - R.WILD_CAUT - (wm > 0 and R.WILD_TILT_CAUT or 0)
+        end
+        if R.TOP_CAUT > 0 and myLap >= 1 and not yielding then caut = caut - R.TOP_CAUT * R.topW(prof) end   -- (R.TOP_CAUT)
+        -- cap the stacked back-off (see CAUT_MAX); the attack/defend NEGATIVE caution is left alone
+        if caut > K.CAUT_MAX then caut = K.CAUT_MAX end
+        if passFinish and caut > R.PASS_CAUT then caut = R.PASS_CAUT end   -- finishing a pass: no hedging (see PASS_FINISH)
+        -- TOW ATTACK (R.TOW_ATTACK): straight, fast, close, and clearly quicker -> stop keeping AC's following distance
+        if R.TOW_ATTACK > 0 and state == 1 and aheadIdx >= 0 and myLap >= 2 and spd > R.TOW_MIN and gapA * trackLen < R.TOW_M then
+            local st, lim = me.steer, 0.1
+            if R.STEER_FRAC then local fr = R.steerIn(me); if fr then st, lim = fr, R.TOW_STEER end end   -- (R.STEER_FRAC) a fraction of lock
+            if type(st) == 'number' and math.abs(st) < lim and prof then
+                local ap = Drivers.statsOf(aheadIdx)
+                local clear = true
+            if R.TOW_CORNER > 0 then
+                local look = spd / 3.6 * R.TOW_CORNER / math.max(1, trackLen)
+                clear = not (cornerAhead(mySpline) or cornerAhead(mySpline + look * 0.5) or cornerAhead(mySpline + look))
+            end
+            if clear and ap and prof.pace - ap.pace >= R.TOW_EDGE and caut > -R.TOW_ATTACK then caut = -R.TOW_ATTACK; R.towN = (R.towN or 0) + 1 end
+            end
+        end
+        -- OPPORTUNIST (R.PASS_OPP, F1 25 brief via verve-47 2026-10-31): the car ahead has run PASS_OPP km/h under the typical
+        -- speed of ITS OWN bit of road (cv2.ys) for PASS_OPP_T s -> go now, on the straight: the tow floor's geometry (straight,
+        -- above TOW_MIN, within TOW_M, no corner within TOW_CORNER s), held PASS_OPP_HOLD s from the trigger. Judged against the
+        -- road, not against my pace rating, so it needs no profile on either car and fires behind the player too (verve-47).
+        if R.PASS_OPP > 0 and cv2.ys and aheadIdx >= 0 and myLap >= 2 and spd > R.TOW_MIN and gapA * trackLen < R.TOW_M then
+            local oc = ac.getCar(aheadIdx)
+            local ys = cv2.ys
+            local now = os.clock()
+            cv2.oppS = cv2.oppS or {}; cv2.oppU = cv2.oppU or {}
+            if oc and oc.splinePosition and not oc.isInPitlane then
+                local ob = math.floor(oc.splinePosition * ys.nb) % ys.nb
+                local tv = (ys.n[ob] or 0) >= CV.YS_MIN and ys.v[ob] or nil
+                if tv and (oc.speedKmh or 0) < tv - R.PASS_OPP then
+                    cv2.oppS[aheadIdx] = cv2.oppS[aheadIdx] or now
+                    if now - cv2.oppS[aheadIdx] >= R.PASS_OPP_T then cv2.oppU[i] = now + R.PASS_OPP_HOLD end
+                elseif tv then
+                    cv2.oppS[aheadIdx] = nil
+                end
+            end
+            if (cv2.oppU[i] or 0) > now then
+                local st, lim = me.steer, 0.1
+                if R.STEER_FRAC then local fr = R.steerIn(me); if fr then st, lim = fr, R.TOW_STEER end end
+                local clear = type(st) == 'number' and math.abs(st) < lim
+                if clear and R.TOW_CORNER > 0 then
+                    local look = spd / 3.6 * R.TOW_CORNER / math.max(1, trackLen)
+                    clear = not (cornerAhead(mySpline) or cornerAhead(mySpline + look * 0.5) or cornerAhead(mySpline + look))
+                end
+                if clear and caut > -R.PASS_OPP_CAUT then caut = -R.PASS_OPP_CAUT; R.oppN = (R.oppN or 0) + 1 end
+            end
+        end
+        -- STRAIGHT-LINE PASS (R.PULL): one reused state table per car. Phases 0 idle, 1 armed, 2 pulled out, 3 committed,
+        -- 4 aborting, 5 exit. Runs after the line layers so its target holds; a yield or a blockage sweep ends the move ('lost').
+        local pullStep, pullAggr = nil, false
+        if R.PULL and myLap >= 2 then
+            cv2.pl = cv2.pl or {}
+            local p = cv2.pl[i]
+            if not p then
+                p = { ph = 0, tgt = -1, t0 = 0, tArm = 0, cool = 0, side = 0, sideK = 0, off = 0, need = 0, src = 0, tOut = 0, tB = 0,
+                      ovl = 0, apexS = -1, tApex = 0, apexSpd = 0, apexTv = -1, latPrev = nil, latRate = 0, caut = 0, exitR = 0,
+                      tp = 0, pOvl = 0, gapOut = 0, unrT = 0 }
+                cv2.pl[i] = p
+            end
+            local now = os.clock()
+            local h = (dt > 0 and dt < 0.5) and dt or 0.016
+            local ys = cv2.ys
+            if p.ph >= 2 then                                     -- darting check: my own lateral rate (track units / s) during the move
+                if p.latPrev then
+                    local r = math.abs(myLat - p.latPrev) / h
+                    if r > 10 or Recovery.rampCap(i) < 1e9 then p.tp = 1          -- a reposition in the window, not steering
+                    elseif r > p.latRate then p.latRate = r end
+                end
+                p.latPrev = myLat
+            end
+            local tc = (p.ph >= 1 and p.tgt >= 0) and ac.getCar(p.tgt) or nil
+            local tGap = (tc and tc.splinePosition) and ((tc.splinePosition - mySpline) % 1) or 0.5
+            if tGap > 0.5 then tGap = tGap - 1 end                -- < 0: I am ahead of the target
+            local ovl = 1 - tGap * trackLen / 4.6                  -- the PASS_ABORT measure: 1 = level, 0 = a car length back
+            local safety = yielding or blockSide ~= 0
+            if p.ph == 0 then
+                if now >= p.cool and state == 1 and aheadIdx >= 0 and not safety and spd > R.TOW_MIN and gapA * trackLen < R.PULL_ARM_M
+                   and spd >= aheadSpd + R.PULL_CLOSE and math.abs((latNow[aheadIdx] or 0) - myLat) < 0.25 then
+                    local st, lim = me.steer, 0.1
+                    if R.STEER_FRAC then local fr = R.steerIn(me); if fr then st, lim = fr, R.TOW_STEER end end
+                    local edge = false
+                    if prof then local ap = Drivers.statsOf(aheadIdx); edge = ap ~= nil and prof.pace - ap.pace >= R.TOW_EDGE end
+                    if not edge and R.PASS_OPP > 0 and cv2.oppU and (cv2.oppU[i] or 0) > now then edge = true end
+                    if edge and type(st) == 'number' and math.abs(st) < lim then
+                        p.ph, p.tgt, p.tArm = 1, aheadIdx, now; R.pullArmN = R.pullArmN + 1
+                        if R.PULL_NOLUNGE then Strategy.clear(i, 'pull') end   -- (no stale lunge while it is not evaluated)
+                    end
+                end
+            elseif p.ph == 1 then
+                if aheadIdx ~= p.tgt or state ~= 1 or safety or gapA * trackLen > R.TOW_M or spd < aheadSpd - R.PULL_CLOSE then
+                    p.ph = 0                                      -- disarm quietly: no move was made
+                else
+                    local v = spd / 3.6
+                    local tB, _, aB = ysBrake(mySpline, spd)
+                    local src = 1
+                    if tB == nil then                             -- untrusted map here: the corner look-ahead minus a fixed brake lead
+                        src = 2
+                        for k = 1, 4 do
+                            local tt = k * R.PULL_LOOK / 4
+                            if cornerAhead((mySpline + v * tt / trackLen) % 1) then tB = tt - R.PULL_BRAKE_FB; break end
+                        end
+                    end
+                    local away = not tB or tB > R.PULL_LEAD + 1.0  -- the closing window: armed, the brake not yet near
+                    if away and R.PULL_TOW_STEER then              -- (audit C1) ...and on a STRAIGHT: ysBrake reads false from mid-corner
+                        local st, lim = me.steer, 0.1             -- to the exit, so without this the floor ran through corners
+                        if R.STEER_FRAC then local fr = R.steerIn(me); if fr then st, lim = fr, R.TOW_STEER end end
+                        away = type(st) == 'number' and math.abs(st) < lim
+                    end
+                    if R.PULL_TOW > 0 and away and caut > -R.PULL_TOW then   -- (R.PULL_TOW) close up in the tow
+                        caut = -R.PULL_TOW; R.pullTowN = R.pullTowN + 1
+                    end
+                    if R.PULL_AGGR > 0 and away then pullAggr = true end   -- (R.PULL_AGGR) applied at the aggression write below
+                    if tB and tB <= R.PULL_LEAD + 1.5 then          -- (the room scan only near the brake)
+                        local aLat = latNow[p.tgt] or 0
+                        local need, room = roomSides(i, me, mySpline, aLat, gapA, p.tgt, sim.carsCount)
+                        local gapM = tGap * trackLen                -- centre to centre, the ovl measure's own distance
+                        local pOvl = 1 - (gapM - (spd - aheadSpd) / 3.6 * math.max(tB, 0)) / 4.6   -- projected overlap at the brake
+                        local reach = pOvl >= ((p.tgt == 0) and R.PULL_REACH_P or R.PULL_REACH)
+                        local fire = tB <= R.PULL_LEAD + need / math.max(0.1, R.PULL_SLEW)
+                        if fire and now >= p.unrT then
+                            local hb = math.max(1, math.min(31, math.floor(gapM / 2) + 1))
+                            R.pullGapH[hb] = (R.pullGapH[hb] or 0) + 1
+                            if not reach then R.pullUnrN = R.pullUnrN + 1 end
+                            p.unrT = now + math.max(tB, 0) + 0.5        -- one decision per brake point
+                        end
+                        if fire and reach then
+                            local _, ins = cornerAhead((mySpline + v * math.max(tB, 0) / trackLen) % 1)
+                            local side, sk = 0, 0
+                            if ins ~= 0 and room[ins] >= need then side, sk = ins, 1                       -- the inside fits
+                            elseif room[1] >= need or room[-1] >= need then side, sk = (room[1] >= room[-1]) and 1 or -1, 2 end   -- the free side
+                            if side ~= 0 then
+                                p.ph, p.side, p.sideK, p.need, p.src, p.tOut, p.t0 = 2, side, sk, need, src, tB, now
+                                p.off = clamp(aLat + side * need, -CV.RS_EDGE, CV.RS_EDGE)
+                                p.tArm = now - p.tArm; p.latPrev, p.latRate = myLat, 0
+                                p.tp, p.pOvl, p.gapOut = 0, pOvl, gapM
+                                p.tB = now + math.max(tB, 0)
+                                p.apexS = (aB and ys) and ((aB + 0.5) / ys.nb) or -1
+                                R.pullOutN = R.pullOutN + 1; if src == 2 then R.pullFbN = R.pullFbN + 1 end
+                                Strategy.clear(i, 'pull')
+                            end
+                        end
+                    end
+                end
+            elseif p.ph == 2 then
+                if safety or not tc or tGap * trackLen > 2 * R.TOW_M then pullFinish(i, p, 3, -1, 0, -1, myLap, now)
+                elseif now >= p.tB then                           -- the braking point: commit or abort
+                    p.ovl, p.caut, p.t0 = ovl, caut, now
+                    if ovl >= ((p.tgt == 0) and R.PULL_OVL_P or R.PULL_OVL) then p.ph = 3; R.pullComN = R.pullComN + 1
+                    else p.ph = 4; R.pullAbN = R.pullAbN + 1 end
+                elseif now - p.t0 > 3.0 then pullFinish(i, p, 4, -1, 0, -1, myLap, now)
+                else target = p.off; pullStep = R.PULL_SLEW end
+            end
+            if p.ph == 3 or p.ph == 4 then
+                if safety or not tc then pullFinish(i, p, 3, -1, 0, -1, myLap, now)
+                else
+                    local passed
+                    if p.apexS >= 0 then passed = ((mySpline - p.apexS) % 1) < 0.5 or now - p.t0 > 4.0
+                    else passed = now - p.t0 > 3.0 end            -- (fallback map: no apex bin)
+                    if passed then
+                        p.ph, p.tApex, p.apexSpd = 5, now, spd
+                        local b = ys and math.floor(mySpline * ys.nb) % ys.nb
+                        p.apexTv = (b and (ys.n[b] or 0) >= CV.YS_MIN) and ys.v[b] or -1
+                        p.exitR = math.abs(curOffset[i] or 0) / math.max(0.1, R.PULL_EXIT_T)
+                        R.pullExitN = R.pullExitN + 1
+                    elseif p.ph == 3 then                         -- committed: hold the side, brake normally or a touch earlier
+                        target = p.off; caut = caut + R.PULL_CAUT
+                    else                                          -- aborting: the PASS_ABORT body (lift; tuck in once fully behind)
+                        caut = caut + 0.5
+                        if ovl <= 0 then target = clamp(latNow[p.tgt] or 0, -0.85, 0.85) else target = curOffset[i] or 0 end
+                    end
+                end
+                if caut > K.CAUT_MAX then caut = K.CAUT_MAX end
+            end
+            if p.ph == 5 then                                     -- exit: release to the line over PULL_EXIT_T, sample the exit at PULL_EXIT_S
+                local age = now - p.tApex
+                if age < R.PULL_EXIT_T and not safety then target = 0; pullStep = math.max(0.05, p.exitR) end
+                if age >= R.PULL_EXIT_S then
+                    local b = ys and math.floor(mySpline * ys.nb) % ys.nb
+                    local tv = (b and (ys.n[b] or 0) >= CV.YS_MIN) and ys.v[b] or -1
+                    pullFinish(i, p, (p.ovl >= ((p.tgt == 0) and R.PULL_OVL_P or R.PULL_OVL)) and 1 or 2, tGap < 0 and 1 or 0, spd, tv, myLap, now)
+                end
+            end
+        end
+
+        if R.CAUT_FLOOR > 0 and not wild and caut < -R.CAUT_FLOOR then caut = -R.CAUT_FLOOR end   -- (R.CAUT_FLOOR) boldness floor, after tow + pass-finish
+
+        -- slew the offset (anti-dart)
+        local cur = curOffset[i] or 0
+        local step = (pullStep or K.OFFSET_SLEW) * (dt > 0 and dt < 0.5 and dt or 0.016)   -- (R.PULL) its own slew during a move
+        if target > cur + step then cur = cur + step
+        elseif target < cur - step then cur = cur - step
+        else cur = target end
+        curOffset[i] = cur
+
+        physics.setAISplineOffset(i, clamp(cur, -1, 1), false)
+        if wild and openingLap == 0 and not nursing and not yielding then aggr = math.max(aggr, R.WILD_AFLOOR) end   -- (R.WILD_AFLOOR) elbows out once the start has faded
+        if pullAggr and aggr < R.PULL_AGGR then aggr = R.PULL_AGGR; R.pullAggrN = R.pullAggrN + 1 end   -- (R.PULL_AGGR) armed: try to close AC's gap
+        physics.setAIAggression(i, clamp(aggr, 0, 1))
+        -- what we actually applied this frame, for the diagnostics log (reused table: no per-frame garbage)
+        local L = R.last[i] or {}
+        L.off, L.aggr, L.caut, L.state, L.yield, L.block, L.dmg = cur, aggr, caut, state, yielding, blockSide, myDmg
+        L.rs = rsPass
+        L.wild = wild and (wm > 0 and 'tilt' or 'calm') or nil   -- (R.WILD) the feed's verve.wild
+        L.mv = Strategy.last[i] or 0
+        R.last[i] = L
+    end
+function R.evaluate(i_, dt_)
+    if not R.ENABLED then return 0 end
+    i, dt, caut, state = i_, dt_, 0, 0
+    local ok, err = pcall(evalBody)
+    if not ok then                                      -- (R.errN) the fault was always swallowed here
+        R.errN = R.errN + 1
+        if not R.errFirst then R.errFirst = tostring(err) end
+        if R.onError then R.onError('racecraft.evaluate', err) end
+    end
+    if state == 1 then R.attacking = R.attacking + 1
+    elseif state == 2 then R.defending = R.defending + 1 end
+    return caut + (R.CAUT_BASE or 0)
+end
+end   -- (lean016) the evaluate do-block
+
+-- (R.errN) RACECRAFT ERRORS MADE LOUD. R.evaluate has always wrapped evalBody in a pcall and discarded the
+-- result. A fault anywhere inside evalBody means that car skips its remaining control writes for the frame -
+-- physics.setAIAggression is called near the END of evalBody - while R.evaluate still returns caut + CAUT_BASE
+-- with whatever PARTIAL caut had been assigned before the fault. So a race could drive differently from what the
+-- switches say and every number from it would look clean. This records it and changes nothing else: no rethrow,
+-- nothing shown to players, the partial return left exactly as it was. Whether a faulting car should instead get
+-- a safe default is a separate question and a separate commit.
+-- onError is set by Verve.lua to its own noteErr, which already counts, logs each DISTINCT message once and caps
+-- at 25 per session - one shared mechanism instead of a second logger. It stays nil when the module runs alone.
+-- The `where` string passed to it must be FIXED and must never include the car index: noteErr keys on
+-- `where .. ': ' .. err`, so a per-car `where` would make one bug on an 18-car grid look like 18 distinct
+-- messages and burn 18 of the shared cap. The car index belongs in errFirst, which is ours and uncapped.
+R.onError = nil             -- (R.errN) injected reporter; nil = run silently, for standalone use and tests
+R.errN = 0                  -- racecraft's OWN fault count: lua_errors is an aggregate over every module
+R.errFirst = nil            -- the first message seen this session, for the diag row
+R.NOSTATE = {}              -- (lean016) read-only stand-in for 'no recovery state': never write to it
+R.last = {}                 -- per-car applied values (offset/aggr/caution/state) -- diagnostics only
+-- (R.HINT_SHIP, 0.16.x) TIME GAP AHEAD, for lib/tyrehint.lua's clean-air fade. The geometry the faded hint was raced
+-- with (diag rows AB_5arm / HH_fadedA, 2026-10-30/31), unchanged: AHEAD = the nearest car whose nose is ahead of mine
+-- and within HINT_LAT_LINE of my lateral (same line); ALONGSIDE = any car within HINT_SIDE_M along the track and
+-- HINT_LAT_SIDE across, either side. Returns (s to the nearest AI car ahead, s to the PLAYER (car 0) if ahead, alongside),
+-- gaps as metres / my speed (floor 1 m/s), 1e9 = none. Reads latNow, which beginFrame fills every frame before
+-- tyrehint runs (Verve.lua). One O(n) scan, no allocation. Not used by evaluate.
+R.HINT_LAT_LINE = 0.30
+R.HINT_SIDE_M = 5.0
+R.HINT_LAT_SIDE = 0.60
+R.HINT_CLOSE_MIN = 0.5     -- (TP, R.HINT_FADE 'ttc') m/s: the closing-speed floor of the time-to-contact, so a steady follower reads gap / 0.5
+-- (TP 2026-11-01) 4th return: the time to contact with the AI cars ahead on my line, min over them of gap / max(closing, HINT_CLOSE_MIN)
+function R.timeGapAhead(i)
+    local s = ac.getSim()
+    local me = ac.getCar(i)
+    if not (s and me and me.splinePosition) then return 1e9, 1e9, false, 1e9 end
+    local tl = (s.trackLengthM and s.trackLengthM > 200) and s.trackLengthM or 7000
+    local myS, myLat = me.splinePosition, latNow[i] or 0
+    local gA, gP, side = 1e9, 1e9, false
+    local myV, ttc = (me.speedKmh or 0) / 3.6, 1e9
+    local cmin = tonumber(R.HINT_CLOSE_MIN) or 0.5
+    for j = 0, s.carsCount - 1 do
+        if j ~= i then
+            local oc = ac.getCar(j)
+            if oc and oc.splinePosition and not oc.isInPitlane then   -- (audit A4) a pit-box car neither fades nor zeroes the hint
+                local g = (oc.splinePosition - myS) % 1
+                local gm = (g < 0.5 and g or g - 1) * tl                 -- + ahead, - behind (m)
+                local dlat = math.abs((latNow[j] or 0) - myLat)
+                if gm >= 0 and dlat < R.HINT_LAT_LINE then
+                    if j ~= 0 then
+                        if gm < gA then gA = gm end
+                        local tt = gm / math.max(myV - (oc.speedKmh or 0) / 3.6, cmin)
+                        if tt < ttc then ttc = tt end
+                    elseif gm < gP then gP = gm end   -- car 0 = the player (offline AC), by index: the harness autopilot reads isAIControlled
+                end
+                if math.abs(gm) < R.HINT_SIDE_M and dlat < R.HINT_LAT_SIDE then side = true end
+            end
+        end
+    end
+    local v = math.max((me.speedKmh or 0) / 3.6, 1.0)
+    return gA < 1e8 and gA / v or 1e9, gP < 1e8 and gP / v or 1e9, side, ttc
+end
+
+function R.beginFrame()
+    R.attacking = 0; R.defending = 0
+    pcall(Strategy.tick)
+    -- lights out: the first frame an AI car on lap 0 is moving. Record how far behind the front car everyone started
+    -- (spline with the wrap undone: a grid that straddles the line has its back rows at 0.99), for the staggered release.
+    if (R.CONVOY2_ON or R.OL_ROWCAUT) and not cv2.clock then
+        pcall(function()
+            local s = ac.getSim()
+            local moving, front, sp, top = false, -1e9, {}, 0
+            for j = 0, s.carsCount - 1 do
+                local c = ac.getCar(j)
+                if c and c.splinePosition then
+                    local x = c.splinePosition; if x > 0.5 then x = x - 1 end
+                    sp[j] = x; if x > front then front = x end
+                    if c.isAIControlled and (c.lapCount or 0) == 0 and (c.speedKmh or 0) > 20 then moving = true; top = math.max(top, c.speedKmh) end
+                end
+            end
+            -- (0.15.1) Verve switched on AFTER the lights: the field is already strung out, so its 'rows' would be wrong (a car
+            -- 200 m back held for ~3 s mid-lap, audit 2026-09-30). No staggered release, row caution or lanes this start.
+            if moving and top > R.OL_LATE_KMH then cv2.clock = os.clock(); pcall(ac.log, 'Verve: switched on after the start - no start hold this race'); return end   -- (cv2.back stays empty: no hold)
+            if moving then
+                cv2.clock = os.clock()
+                -- turn 1: scan forward from the front row for the first corner; remember its inside sign and where it is
+                cv2.lane = nil
+                if R.OL_LANES then
+                    -- the grid's median lateral: 'left or right' is judged against the grid itself. Judged against the AI line,
+                    -- Barcelona (line along one edge of the straight) put all 18 cars in the same lane (2026-09-17)
+                    local lats = {}
+                    for j in pairs(sp) do lats[#lats + 1] = latNow[j] or 0 end
+                    table.sort(lats)
+                    local n = #lats
+                    local mid = 0
+                    if n > 0 then mid = (n % 2 == 0) and (lats[n / 2] + lats[n / 2 + 1]) / 2 or lats[(n + 1) / 2] end   -- true midpoint of a two-column grid
+                    local side, skip = {}, nil
+                    if R.OL_LANES_LOCAL then   -- (R.OL_LANES_LOCAL) local columns: split at the biggest lateral gap among the nearby slots
+                        skip = {}
+                        local win = CV.LANE_LOCAL_M / trackLen
+                        for j, xj in pairs(sp) do
+                            local ls = {}
+                            for k, xk in pairs(sp) do if math.abs(xk - xj) <= win then ls[#ls + 1] = latNow[k] or 0 end end
+                            table.sort(ls)
+                            local hw = 6.0
+                            pcall(function() local sd = ac.getTrackAISplineSides(xj % 1); if sd then hw = math.max(3.0, (sd.x + sd.y) * 0.5) end end)
+                            local cols, gap, split = 1, -1, 0
+                            for q = 2, #ls do
+                                local g = ls[q] - ls[q - 1]
+                                if g * hw > CV.LANE_COL_GAP_M then cols = cols + 1 end
+                                if g > gap then gap = g; split = (ls[q] + ls[q - 1]) / 2 end
+                            end
+                            if cols == 2 then side[j] = sgn((latNow[j] or 0) - split) else side[j] = 0; skip[j] = true end
+                        end
+                    else
+                        for j in pairs(sp) do side[j] = sgn((latNow[j] or 0) - mid) end
+                    end
+                    local x = front
+                    -- LANE_MIN_HALF: the road AHEAD decides. Sample the half-width along the window the lane scan walks and keep
+                    -- the minimum (cv2.halfMin, read by the grid hold too): a grid on a wide plaza before a 3 m road (Amalfi) has
+                    -- no lanes and no columns to hold. v1 read the front row only and passed there (2026-09-25).
+                    cv2.halfMin = 6.0
+                    if R.LANE_MIN_HALF > 0 and not R.OL_LANES_LOCAL then
+                        pcall(function()
+                            local xs, hm = front, 99
+                            while xs < front + CV.LANE_MAX_M / trackLen do
+                                local sd = ac.getTrackAISplineSides(xs % 1)
+                                if sd then local h = math.max(3.0, (sd.x + sd.y) * 0.5); if h < hm then hm = h end end
+                                xs = xs + CV.LANE_SCAN_M / trackLen
+                            end
+                            if hm < 99 then cv2.halfMin = hm end
+                        end)
+                        if cv2.halfMin < R.LANE_MIN_HALF then x = front + CV.LANE_MAX_M / trackLen end   -- skip the scan: no lane
+                    end
+                    while x < front + CV.LANE_MAX_M / trackLen do
+                        local isC, ins = cornerAhead(x % 1)
+                        if isC and ins ~= 0 then cv2.lane = { inside = ins, mid = mid, side = side, skip = skip, endS = x + 2 * K.SAMPLE_D + LANE_APEX_M_frac(trackLen) }; break end
+                        x = x + CV.LANE_SCAN_M / trackLen
+                    end
+                    if R.OL_LANES_LOCAL and cv2.lane and R.LANE_MIN_HALF > 0 then   -- (R.OL_LANES_LOCAL) the road up to turn 1 only
+                        local hm = 99
+                        pcall(function()
+                            local xs = front
+                            while xs < cv2.lane.endS do
+                                local sd = ac.getTrackAISplineSides(xs % 1)
+                                if sd then local h = math.max(3.0, (sd.x + sd.y) * 0.5); if h < hm then hm = h end end
+                                xs = xs + CV.LANE_SCAN_M / trackLen
+                            end
+                        end)
+                        if hm < 99 then cv2.halfMin = hm end
+                        if cv2.halfMin < R.LANE_MIN_HALF then cv2.lane = nil end
+                    end
+                end
+                for j, x in pairs(sp) do
+                    cv2.back[j] = math.max(0, (front - x) * trackLen)
+                    if cv2.back[j] > (cv2.depth or 0) then cv2.depth = cv2.back[j] end     -- the grid's depth (m), for OL_GRID_DEPTH
+                    -- reaction time at the lights: a human grid never launches as one
+                    cv2.react[j] = (R.OL_REACT_MAX > 0) and (CV.REACT_MIN + math.max(0, R.OL_REACT_MAX - CV.REACT_MIN) * math.random()
+                        * ((R.OL_REACT_STAR < 1 and Strategy.tierOf(j) >= 2) and R.OL_REACT_STAR or 1)) or 0   -- (R.OL_REACT_STAR)
+                end
+            end
+        end)
+    end
+    pcall(function()
+        local s = ac.getSim()
+        local rm = cv2.roomEn and cv2.room or nil
+        -- SLOW-CAR YELLOW map (R.YELLOW_SLOW > 0 only, built once the track is scaled): typical speed per bin, one sample per car per crossing
+        local ys = nil
+        if ((type(R.YELLOW_SLOW) == 'number' and R.YELLOW_SLOW > 0) or (tonumber(R.PASS_OPP) or 0) > 0 or R.PULL == true or Strategy.LUNGE_MAX_M ~= nil) and scaled then   -- (R.PASS_OPP and R.PULL read it too)
+            ys = cv2.ys
+            if not ys then ys = { nb = clamp(math.floor(trackLen / CV.YS_M), 50, 1000), v = {}, n = {}, b = {} }; cv2.ys = ys end
+        end
+        for j = 0, s.carsCount - 1 do
+            local c = ac.getCar(j)
+            latNow[j] = c and latOf(c.position) or 0
+            -- ROOM MAP pace: the fastest any healthy AI car has driven this bin this session (lap 1 on, not recovering, not yielding)
+            if rm and c and c.isAIControlled and c.splinePosition and (c.speedKmh or 0) > 30 and Recovery.lapsOf(j) >= 1
+               and not (Recovery.stateOf(j) or {}).rec and not (R.last[j] and R.last[j].yield) then
+                local b = math.floor(c.splinePosition * rm.n) % rm.n
+                if c.speedKmh > (rm.pace[b] or 0) then rm.pace[b] = c.speedKmh end
+            end
+            if ys and c and c.splinePosition then
+                local b = math.floor(c.splinePosition * ys.nb) % ys.nb
+                if b ~= ys.b[j] then                                          -- a new bin: its entry speed is one sample
+                    ys.b[j] = b
+                    local v = c.speedKmh or 0
+                    if v > K.SPEED_MIN and not c.isInPitlane and not c.isRaceFinished and Recovery.lapsOf(j) >= 1
+                       and Recovery.damageOf(j) < K.DAMAGE_YIELD and not (R.last[j] and R.last[j].yield) then
+                        local st = Recovery.stateOf(j) or {}                  -- (a table per crossing, only for a car that passed the rest)
+                        if not st.rec and (st.ramp or 1) >= 1 then           -- not driven by recovery, not in the rejoin ramp (rampCap reads 1e9 even then)
+                            local n, tv = (ys.n[b] or 0) + 1, ys.v[b] or v
+                            if n <= CV.YS_MIN or v >= tv * CV.YS_REJ then   -- (trusted: a crossing far under it is not learned)
+                                ys.n[b] = n
+                                ys.v[b] = tv + (v - tv) * ((n <= CV.YS_MIN) and 1 / n or (v > tv and CV.YS_UP or CV.YS_DN))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    if not R.ovalChecked then   -- the session-start check can run before the AI line is loaded (Daytona 2026-09-19: an oval read as a road course)
+        local o, ok = detectOval(); if ok then R.isOval = o; R.ovalChecked = true end
+    end
+    if not scaled then      -- (re)derive the metre-based gaps for this track (also self-heals after a hot-reload)
+        scaled = true
+        pcall(function() local s = ac.getSim(); scaleToTrack(s and s.trackLengthM) end)
+    end
+    -- ROOM MAP (R.ROOM): once per session, after scaleToTrack, 50 bins a frame, retried until the AI line is loaded (like detectOval)
+    if scaled and (R.ROOM == true or (type(R.ROOM) == 'number' and R.ROOM > 0)) and not (cv2.room and cv2.room.done) then
+        if not cv2.room then cv2.room = { half = {}, rad = {}, pace = {}, n = 400, k = 0, done = false, miss = 0, err = 0 } end
+        local okMap = pcall(function()
+            local rm = cv2.room
+            local ds = 12.0 / trackLen                                     -- three samples 12 m apart (the cornerAhead method)
+            for _ = 1, 50 do
+                if rm.k >= rm.n then break end
+                local s = rm.k / rm.n
+                local p0 = ac.trackProgressToWorldCoordinate(s, false)
+                local p1 = ac.trackProgressToWorldCoordinate((s + ds) % 1, false)
+                local p2 = ac.trackProgressToWorldCoordinate((s + 2 * ds) % 1, false)
+                if not (p0 and p1 and p2) then return end                 -- the AI line is not loaded yet: same bin next frame
+                local ax, az = p1.x - p0.x, p1.z - p0.z
+                local bx, bz = p2.x - p1.x, p2.z - p1.z
+                local cx, cz = p2.x - p0.x, p2.z - p0.z
+                local cross = math.abs(ax * bz - az * bx)
+                local r = 1e4                                              -- circumradius of the three points (m); 1e4 = straight
+                if cross > 1e-6 then r = math.sqrt((ax * ax + az * az) * (bx * bx + bz * bz) * (cx * cx + cz * cz)) / (2 * cross) end
+                rm.rad[rm.k] = math.min(1e4, math.max(1, r))
+                local half, okS = 6.0, false                               -- half-width (m): fallback 6.0, floor 3.0, as the road-space block reads it
+                pcall(function() local sd = ac.getTrackAISplineSides(s); if sd and (sd.x + sd.y) > 1.0 then half = math.max(3.0, (sd.x + sd.y) * 0.5); okS = true end end)
+                if not okS then rm.miss = rm.miss + 1 end
+                rm.half[rm.k] = okS and half or false                    -- false = no sides here: R.roomAt reads it as inert
+                rm.k = rm.k + 1
+            end
+            if rm.k >= rm.n then
+                rm.done = true
+                local hmin, hmax, tightB, runs, a = 1e9, 0, 0, {}, nil
+                for k = 0, rm.n do
+                    local h = k < rm.n and rm.half[k]
+                    if h then
+                        if h < hmin then hmin = h end
+                        if h > hmax then hmax = h end
+                    end
+                    local on = k < rm.n and R.roomAt(k / rm.n) >= R.ROOM_ON
+                    if on then tightB = tightB + 1 end
+                    -- the tight runs as lap fractions: check them against the offline replica (proof_room.py) before scoring a race on them
+                    if on and not a then a = k elseif not on and a then runs[#runs + 1] = string.format('%.3f-%.3f', a / rm.n, k / rm.n); a = nil end
+                end
+                rm.tightB = tightB
+                if hmin > hmax then hmin, hmax = 0, 0 end
+                ac.log(string.format('Verve: room map %d bins, half-width %.1f-%.1f m (%d bins without sides: inert), %d bins tight >= %.2f before the pace is learned%s: %s',
+                    rm.n, hmin, hmax, rm.miss, tightB, R.ROOM_ON, (rm.miss >= rm.n) and ' - this track has no sides: ROOM is inert here' or '', table.concat(runs, ' ')))
+            end
+        end)
+        if not okMap then      -- a build that keeps erroring (no such API on this CSP build) gives up: unfilled bins read 6.0 m / straight -> inert
+            cv2.room.err = cv2.room.err + 1
+            if cv2.room.err > 600 then cv2.room.done = true; pcall(ac.log, 'Verve: room map could not be built on this build/track: ROOM is inert here') end
+        end
+    end
+    cv2.roomEn = cv2.room ~= nil and cv2.room.done == true and (R.ROOM == true or (type(R.ROOM) == 'number' and R.ROOM > 0))
+    cv2.roomFollow = cv2.roomEn and (R.ROOM_FOLLOW == true or (type(R.ROOM_FOLLOW) == 'number' and R.ROOM_FOLLOW > 0)) or false   -- (true or 1 from the harness)
+    cv2.roomLine = cv2.roomEn and (R.ROOM_LINE == true or (type(R.ROOM_LINE) == 'number' and R.ROOM_LINE > 0)) or false
+end
+-- (0.15, code review R6) attack + lunge + TOP_CAUT stack with no floor, so applied caution can reach 0 (kamikaze). >0: the summed
+-- negative caution is floored at -CAUT_FLOOR before intensity (the chaos driver is exempt). 0 = no floor (today). A/B 0.8.
+R.CAUT_FLOOR = 0
+-- (0.15, player-settings check 2026-09-29) AC maps the launcher's aggression 0 / 50 / 100 % to car.aiAggression 0.05 / 0.175 / 0.65.
+-- A car without a profile had its base floored at 0.2, so every slider value from 0 to ~55 % raced the same. AGGR_FLOOR 0.05 keeps
+-- AC's own value (the spread's lower clamp follows it). 0.2 = today.
+R.AGGR_FLOOR = 0.2
+R.LAUNCH_WRAP = false   -- (0.15, code review) Verve.lua launch assist also for a grid behind the line (spline > 0.9 on lap 0), until the car first
+                        -- reaches 90 km/h. false = today: only spline < 0.012, so back rows before the line get none until they cross.
+R.SESSION_SALT = true; R.salt = ((os.time() + math.floor(os.clock() * 1000)) % 9973)   -- (drawn at load too: no onSessionStart for the first session) (0.15, code review) re-drawn each session (R.reset): the aggression spread isn't pinned to the grid slot
+function R.reset()
+    R.salt = ((os.time() + math.floor(os.clock() * 1000)) % 9973)
+    dmgSeen, dmgLap = {}, {}
+    R.fmOnlyN = 0               -- cumulative premise counter: zeroed per SESSION, never per frame
+    R.hurtSeen, R.hurtLap = {}, {}
+    curOffset = {}; holdSign = {}; holdUntil = {}; pounceT = {}; commitState = {}; commitUntil = {}; gridLat = {}
+    R.topCap = {}; R.finished = {}; R.finishN = 0   -- (0.16.1 cooldown) per session
+    letbyT, letbyDone, letbyFor = {}, {}, {}
+    cv2 = { clock = nil, back = {}, thr = {}, bg = {}, base = {}, react = {}, lane = nil, depth = 0, crossed = {}, mvThr = {}, mvBg = {}, thrLast = {}, thrTog = {}, thrPrev = {}, thrSnap = {}, cvEng = {}, thrOut = {}, thrSlew = {} }; R.cv2 = cv2
+    R.crawlN = 0; R.topV = {}; R.aggV = {}
+    R.roomN = 0; R.roomAct = 0; R.evalN = 0; R.fastTuckN = 0; R.yellowSlowN = 0; R.bgN = 0; R.bgPassN = 0
+    R.errN = 0; R.errFirst = nil   -- (R.errN) per SESSION, matching how Verve.lua zeroes luaErrors
+    -- AGGR_BASE_FIX: the next session reads each car afresh; this session's capture and Verve's last write carry over for
+    -- R.aggrBase's guard (empty while the switch is off: nothing happens)
+    for k, b in pairs(R.baseAggr) do
+        local L, p = R.last[k], R.aggrPrev[k]
+        local set = (L and type(L.aggr) == 'number') and clamp(L.aggr, 0, 1) or (p and p.set) or nil
+        R.aggrPrev[k] = { base = b, set = set }
+    end
+    R.baseAggr = {}
+    R.last = {}
+    R.wild = { till = {}, cool = {}, pos = {}, posT = {}, dmg = {}, hits = {}, tilts = 0 }
+    pcall(Strategy.reset)
+    scaled = false
+    R.isOval, R.ovalChecked = detectOval()     -- classify the track (oval vs road course); re-checked in beginFrame until the AI line samples
+end
+
+return R
