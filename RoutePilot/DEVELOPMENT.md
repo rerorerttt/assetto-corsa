@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-11-23
 Active branch: `routepilot-traffic-coordinator`
-Reviewed implementation before this documentation sync: `593db56fba3565b8e286fc95254ecd18f1b267e6`
+Latest code change: `97f4c64540f74a7f73e38ae127dd8e0d0d4c3ead` (direct radar rendering, speed slider removal, re-enabled oncoming and crossing conflict blocks).
 Main implementation: `RoutePilot/RoutePilot.lua`
 Latest supplied telemetry: `RoutePilot/routepilot_trace.txt`
 CSP SDK snapshot: `lua-sdk/`, especially `lua-sdk/ac_apps/README.md`.
@@ -64,6 +64,8 @@ SDK limitation: `physics.raycastTrack()` tests physics surfaces. It does not gua
 - Stock AI spline/track-coordinate functions do not replace custom-route geometry for an oval crossover.
 
 ## Latest user test review — 2026-11-23, after route/cache upload
+
+Current source file SHA after UI/coordinator correction: `1d92b67d6616918d67d211882b6791b68fb2f108`. README and this handoff were then synchronized in later documentation-only commits.
 
 Reviewed branch snapshot after the user's upload commit `8d7e9930cff67fb8981ed6d553d82bc456b812a6`; the uploaded route file now contains a version-2 cache (`#RP_OBSTACLE_V1 2 209560670 452`) with 452 obstacle hits. The uploaded trace contains 800 AI telemetry samples across five cars, approximately 160 seconds of driving. Aggregate mean speed is 8.71 m/s (31.4 km/h) against mean target speed 20.93 m/s (75.3 km/h); 114 samples have brake >0.05, 322 samples have target speed <=5 m/s, 226 samples have line error >5 m, and 37 recovery successes are recorded. The log has 852 `TRAFFIC_REJECT` events, 33 `TRAFFIC_PLAN` events and 12 `PASS_RELEASE` events. No new obstacle scan occurred during this session: the version-2 cache was loaded from the uploaded route file.
 
