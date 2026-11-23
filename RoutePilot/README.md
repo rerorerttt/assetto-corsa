@@ -26,7 +26,7 @@ Routes and bounds are stored per track/layout. The map is drawn directly inside 
 ## Driving model
 
 - **Native AI spline:** RoutePilot writes the version-7 binary structure used by `AISplineEditor`. The native game AI follows that spline and retains its normal vehicle physics and gearbox logic.
-- **Speed profile:** the spline receives curvature-derived speed hints, a 300 km/h straight-line cap, a 10.5 m/s² lateral-acceleration target and a 12 m/s² braking envelope. Actual speed still depends on the car, tyres, setup and track.
+- **Speed profile:** the spline receives curvature-derived speed hints, an 8–300 km/h speed range, a 10.5 m/s² lateral-acceleration target and a 12 m/s² braking envelope. Actual speed still depends on the car, tyres, setup and track.
 - **Pace variation:** each AI receives a small deterministic variation around its configured AI level (94–106%, clamped to 0.0–1.15) and maximum CSP AI aggression (1.0). This creates faster and slower traffic without overriding the throttle.
 - **Lanes:** cars are ranked by pace. Faster groups are assigned to the leftmost lane; slower groups use the lanes to the right. Lane centres are calculated from the selected 3/7/11/15 m road width and are accepted only when the saved boundaries leave enough room.
 - **Overtaking:** a faster follower can move to an adjacent free lane, pass, then return to its assigned lane. The leader is never given a pass-specific steering, throttle, brake, speed or lateral-offset command. CSP AI awareness remains enabled because the offset API is called with `overrideAiAwareness=false`.
