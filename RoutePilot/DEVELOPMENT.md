@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-11-23
 Active branch: `routepilot-traffic-coordinator`
-Latest code change: `97f4c64540f74a7f73e38ae127dd8e0d0d4c3ead` (direct radar rendering, speed slider removal, re-enabled oncoming and crossing conflict blocks).
+Latest code changes: arcade pace/overtake tuning (`773605a1f32b44a9e4c01a0a0a452a7a5cd8bc6b`), explicit main-window flag (`0ec3d824cd0d2e02e3e1a3347a57a416fb4ce57a`), embedded radar child region (`35a675f9143a4c9516dda980aee4ceb0a4ca03d2`).
 Main implementation: `RoutePilot/RoutePilot.lua`
 Latest supplied telemetry: `RoutePilot/routepilot_trace.txt`
 CSP SDK snapshot: `lua-sdk/`, especially `lua-sdk/ac_apps/README.md`.
@@ -110,3 +110,29 @@ The newest trace also shows the overall controller remains unstable and slow; di
 ## Rollback after startup regression — 2026-11-23
 
 The attempted change from global `function windowMain(dt)` to `function script.windowMain(dt)` did not restore the app in the user's game and must not be treated as a verified fix. The source was restored byte-for-byte to the immediately preceding code revision, commit `32b30b667f390e5e3695f7a5a8d9d1e5d2e97d4b`, by rollback commit `c44a3054b0155e9f45124913c25ebbf27041e6d6`. This restores the prior global `windowMain(dt)` declaration while retaining the user's existing AI/coordinator and obstacle-sensing diagnostic changes. No further runtime or UI changes are allowed until the first CSP Lua error and an in-game result are available. Future changes must be isolated, syntax-checked, diff-reviewed, and documented; do not infer a working state from SDK examples alone.
+
+
+
+## Arcade racing and embedded radar revision — 2026-11-23
+
+The user confirmed that the rollback build launches and runs. The next requested direction is deliberately simple arcade racing: high pace, visible speed differences, decisive overtakes, and no timid procession. This revision keeps the proven global `function windowMain(dt)` callback unchanged; do not switch it to `script.windowMain` without a separate in-game reproduction on the user's exact CSP build.
+
+### Embedded radar UI
+
+- The manifest still defines exactly one `[WINDOW_...]` section and now explicitly marks it `FLAGS = MAIN`.
+- The radar is rendered inside `ui.childWindow("##route_map", ...)`, a documented ImGui child region of the existing main window. It is not a second manifest window and cannot be independently dragged as a top-level app window.
+- The child region contains an `ui.invisibleButton` that establishes the map canvas rectangle before drawing. Keep this item; `ui.getItemRectMin/Max()` must refer to the canvas item, not to a preceding control.
+- SDK references: official Lua Apps manifest/window documentation (first `WINDOW_...` is main by default; `FLAGS = MAIN` explicitly marks it): https://github.com/ac-custom-shaders-patch/acc-lua-sdk/wiki/Lua-apps ; CSP SDK child-window examples use `ui.childWindow(id, size, function() ... end)`: https://github.com/ac-custom-shaders-patch/app-csp-defaults/blob/main/ext_controls/src/UI/windows/window_sdk.lua and https://github.com/ac-custom-shaders-patch/acc-lua-internal/blob/main/included-apps/CspDebug/CspDebug.lua.
+
+### Arcade pace and overtaking
+
+- `MAX_LATERAL_ACCEL`: 11.5 -> 20.0 m/s²; `LATERAL_ACCEL_LIMIT`: 17 -> 27 m/s². This raises the corner-speed plan and delays the high-slip throttle reduction.
+- `MIN_CORNER_SPEED`: 9 -> 14 m/s. Tight bends no longer force the controller into the previous very low corner-speed floor.
+- `BRAKE_ACCEL`: 12 -> 16 m/s²; `SPEED_GAIN`: 0.55 -> 0.85. Throttle response and the planner's braking-distance estimate are now more arcade-oriented.
+- Steering response: `STEER_RATE` 2.4 -> 3.6 and `STEER_FILTER` 0.18 -> 0.14. Lane offset response: `TRAFFIC_OFFSET_RATE` 3 -> 5.
+- Overtake planning horizon: 42 -> 60 m. A pass can now be requested with a real closing speed above 0.65 m/s or a deterministic pace advantage above 2.5%, provided the follower has at least the computed setup distance. The old 2.5 m/s closing-speed gate prevented most small-but-real pace differences from turning into passes.
+- Existing centralized reservation, third-car lane checks, player-yield rules, oncoming/crossing coordination, and immediate-overlap braking remain in place. Track raycast/static obstacle avoidance remains disabled pending a validated implementation.
+
+### Validation status and next test
+
+Source-level review confirms the working global main callback and update callback were preserved, the manifest has one explicit main window, the radar is inside a child region, and the overtaking gate uses the new pace/closing-speed condition. The SDK examples confirm the child-window call shape. No Lua interpreter or Assetto Corsa runtime is available in this development environment, so syntax/runtime and actual racing performance are not claimed as tested. On the next in-game run, inspect that the map is visually contained inside the RoutePilot panel, then check that AI accelerate harder through bends and complete actual passes. Upload a fresh `routepilot_trace.txt` if they still crawl or fail to pass; inspect target speed, gas/brake, pass roles, route progress and pass completion before tuning further.
