@@ -489,14 +489,16 @@ local function wakeAIAfterTeleport(carIndex)
   if type(physics)~="table" then return end
   -- A teleport can leave CSP's post-incident stop counter or parked-input
   -- state active. Clear both before handing control back to the native AI.
+  local stopOK,inputOK=true,true
   if physics.setAIStopCounter then
-    local ok,err=pcall(physics.setAIStopCounter,carIndex,0)
-    if not ok then writeLog("AI_WAKE_ERROR id=%d api=setAIStopCounter err=%s",carIndex,tostring(err)) end
+    stopOK=pcall(physics.setAIStopCounter,carIndex,0)
+    if not stopOK then writeLog("AI_WAKE_ERROR id=%d api=setAIStopCounter",carIndex) end
   end
   if physics.setAINoInput then
-    local ok,err=pcall(physics.setAINoInput,carIndex,false,false)
-    if not ok then writeLog("AI_WAKE_ERROR id=%d api=setAINoInput err=%s",carIndex,tostring(err)) end
+    inputOK=pcall(physics.setAINoInput,carIndex,false,false)
+    if not inputOK then writeLog("AI_WAKE_ERROR id=%d api=setAINoInput",carIndex) end
   end
+  writeLog("AI_WAKE id=%d stopCounter=%s noInput=%s",carIndex,tostring(stopOK),tostring(inputOK))
 end
 
 local function spotIsClear(pos, exceptIndex, ignored)
