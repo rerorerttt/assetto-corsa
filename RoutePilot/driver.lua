@@ -184,13 +184,13 @@ local function ensureCar(index, car, dt)
   local p = S.p[index]
   if not p then
     local baseLevel = number(car.aiLevel, 1.0)
-    if baseLevel <= 0 then baseLevel = 1.0 end
-    local baseAggression = number(car.aiAggression, 0.95)
-    if baseAggression < 0 then baseAggression = 0.95 end
+    if baseLevel < 0 then baseLevel = 1.0 end
+    local baseAggression = number(car.aiAggression, 1.0)
+    if baseAggression < 0 then baseAggression = 1.0 end
     local pace = 0.94 + deterministic(index) * 0.12
     p = {
       segIdx = 1, baseLevel = baseLevel, baseAggression = baseAggression,
-      pace = pace, targetLevel = clamp(baseLevel * pace, 0.70, 1.15),
+      pace = pace, targetLevel = clamp(baseLevel * pace, 0.0, 1.15),
       splinePath = nil, splineLoaded = false, splineAge = 0, splineRetry = 0, settingsApplied = false,
       currentOffset = 0, targetOffset = 0, passState = nil, passLeader = nil,
       passSide = 0, passTimer = 0, passLoggedTimeout = false,
@@ -218,9 +218,9 @@ local function ensureCar(index, car, dt)
 
   if not p.settingsApplied then
     local okLevel, errLevel = pcall(physics.setAILevel, index, p.targetLevel)
-    local okAgg, errAgg = pcall(physics.setAIAggression, index, 0.95)
+    local okAgg, errAgg = pcall(physics.setAIAggression, index, 1.0)
     p.settingsApplied = okLevel and okAgg
-    H.log('AI_PROFILE id=%d level=%.3f aggression=0.95 levelOK=%s aggressionOK=%s',
+    H.log('AI_PROFILE id=%d level=%.3f aggression=1.00 levelOK=%s aggressionOK=%s',
       index, p.targetLevel, tostring(okLevel), tostring(okAgg))
     if not okLevel then H.log('AI_PROFILE_ERROR id=%d kind=level err=%s', index, tostring(errLevel)) end
     if not okAgg then H.log('AI_PROFILE_ERROR id=%d kind=aggression err=%s', index, tostring(errAgg)) end
