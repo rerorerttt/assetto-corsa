@@ -234,6 +234,17 @@ function Driver.setup(cfg, state, helpers)
 end
 
 function Driver.beginFrame(sim, dt)
+  if sim.customAISplinesAllowed == false then
+    S.customAIBlocked=true
+    S.status='CSP запретил custom AI spline в этой сессии'
+    if not S.customAIBlockedLogged then
+      S.customAIBlockedLogged=true
+      H.log('AI_SPLINE_BLOCKED reason=session_policy')
+    end
+    return
+  end
+  S.customAIBlocked=false
+  S.customAIBlockedLogged=false
   if not S.aiSplineBuilt or not S.aiSplinePath then return end
   local metrics = buildMetrics()
   if not metrics then
@@ -326,6 +337,7 @@ function Driver.beginFrame(sim, dt)
 end
 
 function Driver.update(index, car, dt)
+  if S.customAIBlocked then return end
   local p = S.p[index]
   if not p then p = ensureCar(index, car, dt) end
   if not p.splineLoaded then return end
