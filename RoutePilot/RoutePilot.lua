@@ -1835,21 +1835,11 @@ local function updateTrafficCoordinator(sim, dt)
               local routeAligned = routeGap and routeGap > 4.0 and
                 routeGap < CFG.OVERTAKE_DISTANCE and
                 math.abs(routeGap - gap) < 12.0 and routeLateral < 5.5
-              -- A meaningful pace advantage must initiate the pass before
-              -- the cars reach the same speed. Actual closing speed remains
-              -- sufficient on its own; the reserved-lane clearance check below
-              -- still decides whether the manoeuvre is safe to start.
-              local followerPace = follower.p and follower.p.paceMultiplier or 1.0
-              local leaderPace = leader.p and leader.p.paceMultiplier or 1.0
-              local paceAdvantage = followerPace - leaderPace
-              local setupDistance = math.max(
-                8.0,
-                math.max(0, closingSpeed) * 0.8 + 5.0
-              )
-              local canPass = (
-                (closingSpeed > 0.65 or paceAdvantage > 0.025) and
-                gap > setupDistance
-              ) or leaderStopped
+              -- Personality pace is not a physical reason to change lanes.
+              -- Start the lane change early enough to finish it before reaching
+              -- the leader. At high closing speed, a seven-metre trigger is too late.
+              local setupDistance = math.max(7.0, math.abs(closingSpeed) * 0.65 + 4.0)
+              local canPass = (closingSpeed > 2.5 and gap > setupDistance) or leaderStopped
 
               if routeAligned and gap > 7.0 and gap < CFG.OVERTAKE_DISTANCE and
                  lateral < 5.5 and canPass then
