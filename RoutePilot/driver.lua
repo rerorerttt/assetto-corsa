@@ -1,32 +1,24 @@
--- RoutePilot/driver.lua — v0.5.1 (CSP 0.3.2-preview2)
---
--- v0.5.1 fixes:
---  * ZIGZAG ROOT CAUSE: the pass offset was computed by rotating the
---    car->target vector 90 degrees — that vector flips sign when the target
---    is straight ahead, throwing the steering left/right every other frame.
---    The pass target is now computed in the STABLE line frame (lateral
---    coordinate from the line), so it cannot oscillate.
---  * NO TELEPORTS WHILE MOVING: rescue fires ONLY after the car has been
---    genuinely stuck (speed < 1.5 m/s for 3.5 s). Out-of-bounds cars are
---    steered back, not teleported.
---  * Blocker lateral offset is measured with a proper segment hint (the old
---    code used segment 1 for far-away cars — garbage values caused phantom
---    overtakes at spawn).
+-- RoutePilot/driver.lua — v0.5.2 (CSP 0.3.2-preview2)
+-- CORE: the PROVEN RoutePilot_Back (v0.3) controller — slip-compensated
+-- steering (slipAngle*0.62), Back steering constants, stability-based gas
+-- damping. On top of it: arcade speed planner, player-recorded bounds,
+-- physically-fitting overtakes, stuck-only rescue.
+-- FIX: the v0.5.1 "center pull" had the wrong sign and pushed cars OFF the
+-- line (trace: CAR=1 OFF=3.6 with bounds ±1). Removed entirely — the pure
+-- pursuit (which Back proved smooth) keeps the car on the line.
 
 local Driver = {}
-
 local CFG, state, H
 
-local BOUND_MARGIN    = 1.0
-local CENTER_PULL     = 0.35
-local TRIGGER_TIME    = 0.6
-local FORCE_TIME      = 2.5
-local PASS_TIMEOUT    = 6.0
-local PASS_WIDTH      = 2.6
-local CAR_HALF        = 1.1
-local RESCUE_SPEED    = 1.5
-local RESCUE_TIME     = 3.5
-local OUTSIDE_LIMIT   = 6.0
+-- local tuning
+local BOUND_MARGIN = 0.4    -- targets stay this far inside a bound, m
+local TRIGGER_TIME = 0.6    -- follow a slower car this long, then pass
+local FORCE_TIME   = 2.5    -- stopped behind a blocker this long -> force
+local PASS_TIMEOUT = 6.0
+local CAR_HALF     = 1.1    -- half a car width, m
+local PASS_CLEAR   = 2.5    -- clearance beside the blocker for a pass, m
+local RESCUE_SPEED = 1.5
+local RESCUE_TIME  = 3.5
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -55,8 +47,12 @@ function Driver.setup(cfg, st, helpers)
   H = helpers
 end
 
+------------------------------------------------------------
+-- personality
+------------------------------------------------------------
+
 local function newPersonality(carIndex)
-  local pace = 0.86 + carRand(carIndex, 1) * 0.28
+  local pace = 0.86 + carRand(carIndex, 1) * 0.28   -- 0.86..1.14
   local kmh = clamp(safeNumber(state.speedMax, 170) * pace, 80, 240)
   local p = {
     segIdx = 1, pace = pace, cruiseSpeed = kmh / 3.6,
@@ -72,6 +68,10 @@ local function newPersonality(carIndex)
   state.p[carIndex] = p
   H.log("CAR_INIT id=%d cruise=%.1fkmh pace=%.2f", carIndex, kmh, pace)
 end
+
+------------------------------------------------------------
+-- dynamics (Back-style)
+------------------------------------------------------------
 
 local function readVehicleDynamics(car, p, dt)
   local v = car.velocity
@@ -95,14 +95,19 @@ end
 local function calculateStability(p, speed)
   local slip = math.abs(p.slipAngle)
   local severity = 0
+  -- real slides only (Back-style thresholds, arcade grip from CFG)
   if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
     local ss = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
     local as = clamp((p.lateralAccel - CFG.MAX_LATERAL_ACCEL) / (CFG.MAX_LATERAL_ACCEL * 0.7), 0, 1)
-    severity = math.max(ss, as) * 0.7
+    severity = math.max(ss, as)
   end
   p.slipSeverity = severity
   p.stability = 1 - severity
 end
+
+------------------------------------------------------------
+-- speed planner (arcade tempo on the proven curvature base)
+------------------------------------------------------------
 
 local function planTargetSpeed(p)
   local nodes = state.nodes
@@ -130,34 +135,43 @@ local function planTargetSpeed(p)
       break
     end
   end
+  p.lastCurve = 0
   return math.max(0, target)
 end
 
-local function linePointAtLateral(seg, t, ahead, lat)
-  local pt = H.walkLine(seg, t, ahead)
-  local a = state.nodes[seg]
-  local b = H.segEnd(seg)
-  local lx, lz = normalize2(b.x - a.x, b.z - a.z)
-  local bx, bz = pt.x, pt.z
-  return bx - lz * lat, bz + lx * lat
-end
+------------------------------------------------------------
+-- steering (Back-proven pure pursuit + bounds clamp)
+------------------------------------------------------------
 
 local function clampLat(seg, lat)
   local bl, br = H.boundsAt(seg)
   return clamp(lat, bl + BOUND_MARGIN, br - BOUND_MARGIN)
 end
 
+local function linePointAtLateral(seg, t, ahead, lat)
+  local pt = H.walkLine(seg, t, ahead)
+  if not pt then
+    local b = H.segEnd(seg)
+    pt = b
+  end
+  local a = state.nodes[seg]
+  local b = H.segEnd(seg)
+  local lx, lz = normalize2(b.x - a.x, b.z - a.z)
+  return pt.x - lz * lat, pt.z + lx * lat
+end
+
 local function calculateSteering(car, p, speed, fx, fz)
   local seg, t, lineDist = H.findNearestSeg(car.position, p.segIdx)
   p.segIdx = seg
   p.lineDist = lineDist
-  local latOff = H.lateralOf(car.position, seg)
-  p.latOff = latOff
+  p.latOff = H.lateralOf(car.position, seg)
 
+  -- Back-proven lookahead
   local ahead = clamp(
     CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN, CFG.LOOKAHEAD_MAX)
 
+  -- desired lateral: 0 (follow the line) or the pass lane
   local wantLat = 0
   if p.overtakeSide ~= 0 then
     wantLat = p.passLat
@@ -170,16 +184,11 @@ local function calculateSteering(car, p, speed, fx, fz)
   local dz = tz - car.position.z
   local dist = math.sqrt(dx * dx + dz * dz)
   if dist < 0.001 then return p.steer end
-  local steer = signedAngle(fx, fz, dx / dist, dz / dist) * CFG.STEER_GAIN
-    - p.yawRate * 0.04
 
-  if p.overtakeSide == 0 then
-    local pull = clamp(latOff / 12, -1, 1) * CENTER_PULL
-    steer = steer - pull
-  end
-  local bl, br = H.boundsAt(seg)
-  if latOff > br + OUTSIDE_LIMIT then steer = -1 end
-  if latOff < bl - OUTSIDE_LIMIT then steer = 1 end
+  local angle = signedAngle(fx, fz, dx / dist, dz / dist)
+
+  -- Back-proven steering: pursuit + slip (counter-steer) compensation
+  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.62
 
   return clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
 end
@@ -193,14 +202,18 @@ local function filterSteering(p, target, dt)
   return p.steer
 end
 
+------------------------------------------------------------
+-- overtaking (sign-safe: lanes go through the pursuit target)
+------------------------------------------------------------
+
 local function beginOvertake(carIndex, p, gap)
   p.followTimer = 0
   p.blockedT = 0
   p.passT = 0
   local seg = p.segIdx
   local bl, br = H.boundsAt(seg)
-  local laneR = p.blockerOff + (CAR_HALF + PASS_WIDTH)
-  local laneL = p.blockerOff - (CAR_HALF + PASS_WIDTH)
+  local laneR = p.blockerOff + (CAR_HALF + PASS_CLEAR)
+  local laneL = p.blockerOff - (CAR_HALF + PASS_CLEAR)
   local side
   if laneR <= br - BOUND_MARGIN and laneL >= bl + BOUND_MARGIN then
     side = (carRand(carIndex, 2) > 0.5) and 1 or -1
@@ -209,7 +222,7 @@ local function beginOvertake(carIndex, p, gap)
   elseif laneL >= bl + BOUND_MARGIN then
     side = -1
   else
-    return false
+    return false   -- physically does not fit on either side
   end
   p.overtakeSide = side
   p.passLat = clampLat(seg, (side > 0) and laneR or laneL)
@@ -241,14 +254,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       H.log("CAR=%d OVERTAKE_END timeout", carIndex)
       return targetSpeed
     end
-    local bl, br = H.boundsAt(p.segIdx)
-    local okWindow = (p.passLat > p.blockerOff and p.passLat <= br - 0.3)
-      or (p.passLat < p.blockerOff and p.passLat >= bl + 0.3)
-    if not okWindow then
-      p.overtakeSide = 0
-      H.log("CAR=%d OVERTAKE_END closed_window", carIndex)
-      return targetSpeed
-    end
+    -- keep the pace around the blocker; brake only to avoid contact
     local safe = math.sqrt(math.max(0,
       (leaderSpeed or 0) * (leaderSpeed or 0) +
       2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - 5)))
@@ -261,6 +267,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
 
+  -- ANY slower car ahead (including a STANDING PLAYER) is a blocker
   if (leaderSpeed or 0) < math.min(p.cruiseSpeed, targetSpeed + 3) - 2 then
     p.followTimer = p.followTimer + dt
     local safe = math.sqrt(math.max(0,
@@ -280,6 +287,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return math.min(targetSpeed, safe)
   end
 
+  -- same-speed or faster traffic: safe following
   p.followTimer = 0
   p.blockedT = 0
   local safe = math.sqrt(math.max(0,
@@ -291,15 +299,24 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   return math.min(targetSpeed, safe)
 end
 
+------------------------------------------------------------
+-- throttle / brake (Back-style with arcade gains)
+------------------------------------------------------------
+
 local function calculateThrottle(p, speed, targetSpeed)
   local error = targetSpeed - speed
   local gas = clamp(error * CFG.GAS_GAIN, 0, CFG.MAX_GAS)
   local brake = clamp(-error * CFG.BRAKE_GAIN, 0, CFG.MAX_BRAKE)
+  -- Back-proven stability damping (mild, arcade)
   gas = gas * lerp(1.0, 0.15, p.slipSeverity)
   if error >= 0 then brake = 0 end
   p.gas = clamp(gas, 0, CFG.MAX_GAS)
   p.brake = clamp(brake, 0, CFG.MAX_BRAKE)
 end
+
+------------------------------------------------------------
+-- main per-car update
+------------------------------------------------------------
 
 function Driver.update(carIndex, car, dt)
   local p = state.p[carIndex]
@@ -308,6 +325,7 @@ function Driver.update(carIndex, car, dt)
     p = state.p[carIndex]
   end
 
+  -- keep CSP from retiring (despawning) this AI car
   p.retireT = p.retireT + dt
   if p.retireT >= 2.0 then
     p.retireT = 0
@@ -319,6 +337,7 @@ function Driver.update(carIndex, car, dt)
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   calculateStability(p, speed)
 
+  -- rescue ONLY when genuinely stuck (never while driving)
   if speed < RESCUE_SPEED then
     p.stuck = p.stuck + dt
     if p.stuck > RESCUE_TIME then
