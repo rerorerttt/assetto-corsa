@@ -825,8 +825,10 @@ local function drawCornerArrows(startSeg,partial,maxDistance)
   local travelled,nextArrow=0,0
   for _=1,count do
     if partial and seg>=n then break end
-    local prevIndex=partial and math.max(1,seg-1) or (seg-2)%n+1
-    local nextIndex=seg%n+1
+    if not state.loopRoute and seg>=n then break end
+    local prevIndex=(partial or not state.loopRoute) and math.max(1,seg-1) or (seg-2)%n+1
+    local nextIndex=state.loopRoute and (seg%n+1) or (seg+1)
+    if nextIndex>n then break end
     local prev,cur,nxt=state.nodes[prevIndex],state.nodes[seg],state.nodes[nextIndex]
     local ax,az=cur.x-prev.x,cur.z-prev.z
     local bx,bz=nxt.x-cur.x,nxt.z-cur.z
