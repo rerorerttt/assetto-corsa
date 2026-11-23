@@ -1,22 +1,24 @@
--- RoutePilot/driver.lua — v0.5.2 (CSP 0.3.2-preview2)
--- CORE: the PROVEN RoutePilot_Back (v0.3) controller — slip-compensated
--- steering (slipAngle*0.62), Back steering constants, stability-based gas
--- damping. On top of it: arcade speed planner, player-recorded bounds,
--- physically-fitting overtakes, stuck-only rescue.
--- FIX: the v0.5.1 "center pull" had the wrong sign and pushed cars OFF the
--- line (trace: CAR=1 OFF=3.6 with bounds ±1). Removed entirely — the pure
--- pursuit (which Back proved smooth) keeps the car on the line.
+-- RoutePilot/driver.lua — v0.7.0 (CSP 0.3.2-preview2)
+-- Proven RoutePilot_Back core + far-ahead route planning:
+--  * LOOKAHEAD 12 + 0.65*speed (up to 45 m): the car plans its line tens of
+--    meters ahead (user's diagnosis: it used to steer point-to-point).
+--  * OVERTAKE GATE FIXED: the trace showed degenerate passes (lane=0.0 — the
+--    lane clamped into the bounds collapsed onto the blocker, causing the
+--    zigzag crashes). Now a pass is committed ONLY if the lane, AFTER
+--    clamping into the bounds, still leaves REQ_SEP (3.0 m) from the blocker
+--    center. Narrow tracks (1-car width) simply never overtake — single file.
+--  * Slip-compensated steering 0.62 (Back-proven), no center-pull.
+--  * Rescue teleports only genuinely stuck cars; the main script picks a
+--    SAFE spot on the line (clear of all other cars, forward of the stuck one).
 
 local Driver = {}
 local CFG, state, H
 
--- local tuning
-local BOUND_MARGIN = 0.4    -- targets stay this far inside a bound, m
-local TRIGGER_TIME = 0.6    -- follow a slower car this long, then pass
-local FORCE_TIME   = 2.5    -- stopped behind a blocker this long -> force
+local BOUND_MARGIN = 0.4
+local REQ_SEP      = 3.0    -- required center-to-center gap for a pass, m
+local TRIGGER_TIME = 0.6
+local FORCE_TIME   = 2.5
 local PASS_TIMEOUT = 6.0
-local CAR_HALF     = 1.1    -- half a car width, m
-local PASS_CLEAR   = 2.5    -- clearance beside the blocker for a pass, m
 local RESCUE_SPEED = 1.5
 local RESCUE_TIME  = 3.5
 
@@ -47,12 +49,8 @@ function Driver.setup(cfg, st, helpers)
   H = helpers
 end
 
-------------------------------------------------------------
--- personality
-------------------------------------------------------------
-
 local function newPersonality(carIndex)
-  local pace = 0.86 + carRand(carIndex, 1) * 0.28   -- 0.86..1.14
+  local pace = 0.86 + carRand(carIndex, 1) * 0.28
   local kmh = clamp(safeNumber(state.speedMax, 170) * pace, 80, 240)
   local p = {
     segIdx = 1, pace = pace, cruiseSpeed = kmh / 3.6,
@@ -68,10 +66,6 @@ local function newPersonality(carIndex)
   state.p[carIndex] = p
   H.log("CAR_INIT id=%d cruise=%.1fkmh pace=%.2f", carIndex, kmh, pace)
 end
-
-------------------------------------------------------------
--- dynamics (Back-style)
-------------------------------------------------------------
 
 local function readVehicleDynamics(car, p, dt)
   local v = car.velocity
@@ -95,7 +89,6 @@ end
 local function calculateStability(p, speed)
   local slip = math.abs(p.slipAngle)
   local severity = 0
-  -- real slides only (Back-style thresholds, arcade grip from CFG)
   if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
     local ss = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
     local as = clamp((p.lateralAccel - CFG.MAX_LATERAL_ACCEL) / (CFG.MAX_LATERAL_ACCEL * 0.7), 0, 1)
@@ -104,10 +97,6 @@ local function calculateStability(p, speed)
   p.slipSeverity = severity
   p.stability = 1 - severity
 end
-
-------------------------------------------------------------
--- speed planner (arcade tempo on the proven curvature base)
-------------------------------------------------------------
 
 local function planTargetSpeed(p)
   local nodes = state.nodes
@@ -135,13 +124,8 @@ local function planTargetSpeed(p)
       break
     end
   end
-  p.lastCurve = 0
   return math.max(0, target)
 end
-
-------------------------------------------------------------
--- steering (Back-proven pure pursuit + bounds clamp)
-------------------------------------------------------------
 
 local function clampLat(seg, lat)
   local bl, br = H.boundsAt(seg)
@@ -166,12 +150,11 @@ local function calculateSteering(car, p, speed, fx, fz)
   p.lineDist = lineDist
   p.latOff = H.lateralOf(car.position, seg)
 
-  -- Back-proven lookahead
+  -- far-ahead pursuit: the route is planned tens of meters forward
   local ahead = clamp(
     CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN, CFG.LOOKAHEAD_MAX)
 
-  -- desired lateral: 0 (follow the line) or the pass lane
   local wantLat = 0
   if p.overtakeSide ~= 0 then
     wantLat = p.passLat
@@ -186,8 +169,6 @@ local function calculateSteering(car, p, speed, fx, fz)
   if dist < 0.001 then return p.steer end
 
   local angle = signedAngle(fx, fz, dx / dist, dz / dist)
-
-  -- Back-proven steering: pursuit + slip (counter-steer) compensation
   local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.62
 
   return clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
@@ -202,30 +183,28 @@ local function filterSteering(p, target, dt)
   return p.steer
 end
 
-------------------------------------------------------------
--- overtaking (sign-safe: lanes go through the pursuit target)
-------------------------------------------------------------
-
+-- overtake: commit ONLY where it physically fits (after clamping)
 local function beginOvertake(carIndex, p, gap)
   p.followTimer = 0
   p.blockedT = 0
   p.passT = 0
   local seg = p.segIdx
-  local bl, br = H.boundsAt(seg)
-  local laneR = p.blockerOff + (CAR_HALF + PASS_CLEAR)
-  local laneL = p.blockerOff - (CAR_HALF + PASS_CLEAR)
+  local laneR = clampLat(seg, p.blockerOff + REQ_SEP)
+  local laneL = clampLat(seg, p.blockerOff - REQ_SEP)
+  local fitR = (laneR - p.blockerOff) >= REQ_SEP - 0.05
+  local fitL = (p.blockerOff - laneL) >= REQ_SEP - 0.05
   local side
-  if laneR <= br - BOUND_MARGIN and laneL >= bl + BOUND_MARGIN then
+  if fitR and fitL then
     side = (carRand(carIndex, 2) > 0.5) and 1 or -1
-  elseif laneR <= br - BOUND_MARGIN then
+  elseif fitR then
     side = 1
-  elseif laneL >= bl + BOUND_MARGIN then
+  elseif fitL then
     side = -1
   else
-    return false   -- physically does not fit on either side
+    return false   -- no room: do NOT overtake (single file instead)
   end
   p.overtakeSide = side
-  p.passLat = clampLat(seg, (side > 0) and laneR or laneL)
+  p.passLat = (side > 0) and laneR or laneL
   H.log("CAR=%d OVERTAKE_BEGIN side=%d lane=%.1f gap=%.1f",
     carIndex, side, p.passLat, gap or -1)
   return true
@@ -249,12 +228,15 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       H.log("CAR=%d OVERTAKE_END clear", carIndex)
       return targetSpeed
     end
-    if p.passT > PASS_TIMEOUT then
+    -- the window must STILL fit while passing
+    local laneNow = clampLat(p.segIdx, p.passLat)
+    local fits = (laneNow - p.blockerOff) * p.overtakeSide >= REQ_SEP - 0.05
+    if p.passT > PASS_TIMEOUT or not fits then
       p.overtakeSide = 0
-      H.log("CAR=%d OVERTAKE_END timeout", carIndex)
+      H.log("CAR=%d OVERTAKE_END %s", carIndex, fits and "timeout" or "closed")
       return targetSpeed
     end
-    -- keep the pace around the blocker; brake only to avoid contact
+    p.passLat = laneNow
     local safe = math.sqrt(math.max(0,
       (leaderSpeed or 0) * (leaderSpeed or 0) +
       2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - 5)))
@@ -287,7 +269,6 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return math.min(targetSpeed, safe)
   end
 
-  -- same-speed or faster traffic: safe following
   p.followTimer = 0
   p.blockedT = 0
   local safe = math.sqrt(math.max(0,
@@ -299,24 +280,15 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   return math.min(targetSpeed, safe)
 end
 
-------------------------------------------------------------
--- throttle / brake (Back-style with arcade gains)
-------------------------------------------------------------
-
 local function calculateThrottle(p, speed, targetSpeed)
   local error = targetSpeed - speed
   local gas = clamp(error * CFG.GAS_GAIN, 0, CFG.MAX_GAS)
   local brake = clamp(-error * CFG.BRAKE_GAIN, 0, CFG.MAX_BRAKE)
-  -- Back-proven stability damping (mild, arcade)
   gas = gas * lerp(1.0, 0.15, p.slipSeverity)
   if error >= 0 then brake = 0 end
   p.gas = clamp(gas, 0, CFG.MAX_GAS)
   p.brake = clamp(brake, 0, CFG.MAX_BRAKE)
 end
-
-------------------------------------------------------------
--- main per-car update
-------------------------------------------------------------
 
 function Driver.update(carIndex, car, dt)
   local p = state.p[carIndex]
@@ -325,7 +297,6 @@ function Driver.update(carIndex, car, dt)
     p = state.p[carIndex]
   end
 
-  -- keep CSP from retiring (despawning) this AI car
   p.retireT = p.retireT + dt
   if p.retireT >= 2.0 then
     p.retireT = 0
