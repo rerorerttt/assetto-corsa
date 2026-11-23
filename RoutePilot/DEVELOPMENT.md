@@ -53,7 +53,7 @@ Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 
 - Width presets are 3, 7, 11 and 15 metres, representing one through four lanes.
 - Default is preset 1 (3 m), preserving the requested initial selection. Select preset 2 (7 m) or wider to enable adjacent-lane passing; one lane intentionally disables passing.
-- AI cars receive a small deterministic pace spread around their existing AI level (0.94–1.06 multiplier, clamped to 0.70–1.15) and 1.0 aggression.
+- AI cars receive a small deterministic pace spread around their existing AI level (0.94–1.06 multiplier, clamped to 0.0–1.15) and 1.0 aggression.
 - Cars are sorted by pace: the fastest group receives the leftmost lane; progressively slower groups receive lanes to the right.
 - The leader is not assigned a pass-specific offset, speed reduction, throttle reduction or brake command. If a faster follower catches a car in its own lane, it may move to an adjacent lane only when the recorded limits and traffic-occupancy check leave enough room.
 - A pass is complete when the follower is more than seven metres ahead; it then returns to its assigned home lane.
