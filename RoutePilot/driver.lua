@@ -1,26 +1,28 @@
--- RoutePilot/driver.lua — v0.7.0 (CSP 0.3.2-preview2)
--- Proven RoutePilot_Back core + far-ahead route planning:
---  * LOOKAHEAD 12 + 0.65*speed (up to 45 m): the car plans its line tens of
---    meters ahead (user's diagnosis: it used to steer point-to-point).
---  * OVERTAKE GATE FIXED: the trace showed degenerate passes (lane=0.0 — the
---    lane clamped into the bounds collapsed onto the blocker, causing the
---    zigzag crashes). Now a pass is committed ONLY if the lane, AFTER
---    clamping into the bounds, still leaves REQ_SEP (3.0 m) from the blocker
---    center. Narrow tracks (1-car width) simply never overtake — single file.
---  * Slip-compensated steering 0.62 (Back-proven), no center-pull.
---  * Rescue teleports only genuinely stuck cars; the main script picks a
---    SAFE spot on the line (clear of all other cars, forward of the stuck one).
+-- RoutePilot/driver.lua — v0.9.0 (CSP 0.3.2-preview2)
+-- FUNDAMENTAL RETHINK:
+--  * The user trace showed ZERO CAR_INIT lines: the main script never adopted
+--    the cars (spawn gate blocked driving forever), so the cars drove on the
+--    STOCK game AI — that is where the zigzags, burnouts, wall-hunting and
+--    ignoring the player came from. The main script now adopts every AI car
+--    instantly; this driver only does the driving.
+--  * STEERING DEADBAND: on a straight the angle error is tiny — steering 0
+--    instead of micro-correcting left/right every frame (zigzag source).
+--  * DECISIVE OVERTAKES: side is picked ONCE from the free room and LOCKED
+--    for the whole pass; no flapping between sides mid-manoeuvre.
+--  * SOFT START: gas capped at low speed (no burnout launch).
+--  * Route planned tens of meters ahead (lookahead 14 + 0.8*speed, max 50).
 
 local Driver = {}
 local CFG, state, H
 
 local BOUND_MARGIN = 0.4
-local REQ_SEP      = 3.0    -- required center-to-center gap for a pass, m
-local TRIGGER_TIME = 0.6
-local FORCE_TIME   = 2.5
-local PASS_TIMEOUT = 6.0
+local REQ_SEP      = 2.8    -- center-to-center gap needed to pass, m
+local TRIGGER_TIME = 0.5
+local FORCE_TIME   = 2.0
+local PASS_TIMEOUT = 8.0
 local RESCUE_SPEED = 1.5
 local RESCUE_TIME  = 3.5
+local STEER_DEAD   = 0.015  -- rad: below this, hold the wheel still
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -59,7 +61,7 @@ local function newPersonality(carIndex)
     previousFx = nil, previousFz = nil,
     stuck = 0, blockedT = 0, passT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0,
-    slipSeverity = 0, stability = 1, lastCurve = 0,
+    slipSeverity = 0, stability = 1,
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     retireT = 2.0,
   }
@@ -135,8 +137,7 @@ end
 local function linePointAtLateral(seg, t, ahead, lat)
   local pt = H.walkLine(seg, t, ahead)
   if not pt then
-    local b = H.segEnd(seg)
-    pt = b
+    pt = H.segEnd(seg)
   end
   local a = state.nodes[seg]
   local b = H.segEnd(seg)
@@ -150,7 +151,6 @@ local function calculateSteering(car, p, speed, fx, fz)
   p.lineDist = lineDist
   p.latOff = H.lateralOf(car.position, seg)
 
-  -- far-ahead pursuit: the route is planned tens of meters forward
   local ahead = clamp(
     CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN, CFG.LOOKAHEAD_MAX)
@@ -169,8 +169,14 @@ local function calculateSteering(car, p, speed, fx, fz)
   if dist < 0.001 then return p.steer end
 
   local angle = signedAngle(fx, fz, dx / dist, dz / dist)
-  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.62
 
+  -- DEADBAND: a straight needs no steering. Micro-corrections every frame
+  -- were the zigzag; below the deadband the wheel simply holds still.
+  if math.abs(angle) < STEER_DEAD then
+    return 0
+  end
+
+  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.62
   return clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
 end
 
@@ -183,30 +189,33 @@ local function filterSteering(p, target, dt)
   return p.steer
 end
 
--- overtake: commit ONLY where it physically fits (after clamping)
+-- free room from a lateral offset to each bound, at a segment
+local function roomAt(seg, off)
+  local bl, br = H.boundsAt(seg)
+  return off - bl, br - off
+end
+
+-- DECISIVE pass: pick the roomier side ONCE and lock it for the whole pass
 local function beginOvertake(carIndex, p, gap)
   p.followTimer = 0
   p.blockedT = 0
   p.passT = 0
   local seg = p.segIdx
-  local laneR = clampLat(seg, p.blockerOff + REQ_SEP)
-  local laneL = clampLat(seg, p.blockerOff - REQ_SEP)
-  local fitR = (laneR - p.blockerOff) >= REQ_SEP - 0.05
-  local fitL = (p.blockerOff - laneL) >= REQ_SEP - 0.05
+  local roomL, roomR = roomAt(seg, p.blockerOff)
   local side
-  if fitR and fitL then
-    side = (carRand(carIndex, 2) > 0.5) and 1 or -1
-  elseif fitR then
+  if roomR >= REQ_SEP and roomL >= REQ_SEP then
+    side = (roomR >= roomL) and 1 or -1
+  elseif roomR >= REQ_SEP then
     side = 1
-  elseif fitL then
+  elseif roomL >= REQ_SEP then
     side = -1
   else
-    return false   -- no room: do NOT overtake (single file instead)
+    return false   -- genuinely no room: single file, keep rolling
   end
   p.overtakeSide = side
-  p.passLat = (side > 0) and laneR or laneL
-  H.log("CAR=%d OVERTAKE_BEGIN side=%d lane=%.1f gap=%.1f",
-    carIndex, side, p.passLat, gap or -1)
+  p.passLat = clampLat(seg, p.blockerOff + side * REQ_SEP)
+  H.log("CAR=%d OVERTAKE_BEGIN side=%d lane=%.1f gap=%.1f roomL=%.1f roomR=%.1f",
+    carIndex, side, p.passLat, gap or -1, roomL, roomR)
   return true
 end
 
@@ -228,9 +237,8 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       H.log("CAR=%d OVERTAKE_END clear", carIndex)
       return targetSpeed
     end
-    -- the window must STILL fit while passing
-    local laneNow = clampLat(p.segIdx, p.passLat)
-    local fits = (laneNow - p.blockerOff) * p.overtakeSide >= REQ_SEP - 0.05
+    local laneNow = clampLat(p.segIdx, p.blockerOff + p.overtakeSide * REQ_SEP)
+    local fits = (laneNow - p.blockerOff) * p.overtakeSide >= REQ_SEP - 0.3
     if p.passT > PASS_TIMEOUT or not fits then
       p.overtakeSide = 0
       H.log("CAR=%d OVERTAKE_END %s", carIndex, fits and "timeout" or "closed")
@@ -274,7 +282,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   local safe = math.sqrt(math.max(0,
     (leaderSpeed or 0) * (leaderSpeed or 0) +
     2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
-  if (gap or 0) < safeNumber(state.followGap, 8) then
+  if (gap or 0) < safeNumber(state.followGap, 8) * 0.5 then
     return 0
   end
   return math.min(targetSpeed, safe)
@@ -285,6 +293,10 @@ local function calculateThrottle(p, speed, targetSpeed)
   local gas = clamp(error * CFG.GAS_GAIN, 0, CFG.MAX_GAS)
   local brake = clamp(-error * CFG.BRAKE_GAIN, 0, CFG.MAX_BRAKE)
   gas = gas * lerp(1.0, 0.15, p.slipSeverity)
+  -- SOFT START: no burnout launches from a standstill
+  if speed < 5 then
+    gas = math.min(gas, 0.6)
+  end
   if error >= 0 then brake = 0 end
   p.gas = clamp(gas, 0, CFG.MAX_GAS)
   p.brake = clamp(brake, 0, CFG.MAX_BRAKE)
@@ -308,7 +320,6 @@ function Driver.update(carIndex, car, dt)
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   calculateStability(p, speed)
 
-  -- rescue ONLY when genuinely stuck (never while driving)
   if speed < RESCUE_SPEED then
     p.stuck = p.stuck + dt
     if p.stuck > RESCUE_TIME then
