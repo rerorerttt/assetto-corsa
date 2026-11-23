@@ -45,7 +45,7 @@ Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 
 - RoutePilot stores the editable route and bounds as text files per track/layout.
 - The native spline is generated alongside those files. The filename includes a timestamp/revision so CSP is asked to load a new spline after edits. The builder rejects a start/end gap greater than 30 m to prevent a long diagonal closure segment.
-- Payload speed hints are derived from horizontal curvature. Straight sections are capped at 300 km/h; the curve target uses 10.5 m/s² lateral acceleration, and a two-pass cyclic braking envelope uses 12 m/s² deceleration.
+- Payload speed hints are derived from horizontal curvature. The hint range is 8–300 km/h so hairpins can request genuinely low speeds; straight sections can use the full 300 km/h cap. The curve target uses 10.5 m/s² lateral acceleration, and a two-pass cyclic braking envelope uses 12 m/s² deceleration.
 - Throttle and brake hints are left neutral. The game AI remains responsible for actual inputs.
 - Left and right side widths come from the user's signed boundary arrays. The spline builder stores their positive magnitudes in the native payload.
 - Each route point is snapped to the track surface and lifted 0.3 m, matching AISplineEditor. The same downward ray supplies the payload surface normal; these rays do not search for obstacles.
