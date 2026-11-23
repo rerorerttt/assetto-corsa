@@ -316,33 +316,6 @@ local function laneOffsetForCar(carIndex,seg)
   if offset<1.0 then return 0.0,false end
   return (carIndex%2==1) and offset or -offset,true
 end
-local function carAheadFull(carIndex,car,lateralWidth)
-  local fx,fz=normalize2(car.look.x,car.look.z)
-  local sim=ac.getSim()
-  if not sim then return nil,nil,nil end
-  local bestGap,bestSpeed,bestIndex=nil,nil,nil
-  for i=0,sim.carsCount-1 do
-    if i~=carIndex then
-      local other=ac.getCar(i)
-      if other and other.isActive then
-        local dx=other.position.x-car.position.x
-        local dz=other.position.z-car.position.z
-        local forward=dx*fx+dz*fz
-        if forward>0 and forward<90 then
-          local lateral=math.abs(dx*fz-dz*fx)
-          if lateral<=(lateralWidth or 5.0) then
-            if not bestGap or forward<bestGap then
-              bestGap=forward
-              bestSpeed=math.max(0,safeNumber(other.speedMs))
-              bestIndex=i
-            end
-          end
-        end
-      end
-    end
-  end
-  return bestGap,bestSpeed,bestIndex
-end
 local function recordSecondTelemetry(sim)
   local any=false
   for i=1,sim.carsCount-1 do
@@ -807,7 +780,7 @@ local function drawMapInRect(q0,q1)
             ui.drawCircleFilled(s,5,rgbm(0.0,0.8,1.0,1.0),12)
           else
             local p=state.p[i]
-            if p and p.overtakeSide~=0 then
+            if p and p.laneRole=="LEFT_FAST" then
               ui.drawCircleFilled(s,4,rgbm(0.2,1.0,0.4,1.0),10)
             else
               ui.drawCircleFilled(s,4,rgbm(1,1,1,0.95),10)
