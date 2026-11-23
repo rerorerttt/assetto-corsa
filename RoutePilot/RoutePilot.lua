@@ -967,7 +967,7 @@ local function drawMapInRect(q0,q1)
     local bp=toScreen(state.nodes[i+1])
     if segVisible(a,bp) then ui.drawLine(a,bp,rgbm(1.0,0.85,0.0,0.95),3) end
   end
-  if state.loopRoute and not state.recLine then
+  if state.loopRoute and not state.recLine and not state.recBounds then
     local a=toScreen(state.nodes[n])
     local bp=toScreen(state.nodes[1])
     if segVisible(a,bp) then ui.drawLine(a,bp,rgbm(1.0,0.85,0.0,0.95),3) end
