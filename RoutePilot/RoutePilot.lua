@@ -128,6 +128,7 @@ local function buildAISpline()
   end
   state.aiSplinePath=path
   state.aiSplineBuilt=true
+  state.lanesAssigned=false
   state.loaded=true
   state.spawnDone=false
   state.spawnPerformed=false
@@ -196,7 +197,16 @@ local function loadBounds()
         end
         if #L==n then
           state.boundsL,state.boundsR=L,R
-          writeLog("BOUNDS_LOADED points=%d",n)
+          local avgWidth=0
+          for i=1,n do avgWidth=avgWidth+(R[i]-L[i]) end
+          avgWidth=avgWidth/n
+          local best,bestError=1,math.huge
+          for i=1,#WIDTH_PRESETS do
+            local e=math.abs(WIDTH_PRESETS[i]-avgWidth)
+            if e<bestError then best,bestError=i,e end
+          end
+          state.widthPreset=best
+          writeLog("BOUNDS_LOADED points=%d avgWidth=%.2f preset=%d",n,avgWidth,best)
           return true
         end
       end
@@ -928,7 +938,7 @@ function windowMain(dt)
   local okDraw,errDraw=pcall(function()
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
     for idx=1,4 do
-      local label=string.format("%d %s",idx,idx==1 and "машина" or "машины")
+      local label=string.format("%s%d %s",idx==state.widthPreset and "● " or "",idx,idx==1 and "машина" or "машины")
       if idx>1 then ui.sameLine(0,4) end
       if ui.button(label,vec2(92,22)) then
         applyWidthPreset(idx)
