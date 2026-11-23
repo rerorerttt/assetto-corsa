@@ -1520,6 +1520,11 @@ end
 ------------------------------------------------------------
 
 local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
+  -- A pass is not authorized while the static corridor scan is incomplete.
+  if not state.obstacleReady then
+    return false, "map_not_ready"
+  end
+
   -- Check the complete reserved lane, not one point beside the car.
   -- Other cars are projected forward in time; static hits are checked at
   -- every sample so a wall or a post cannot be hidden between two samples.
@@ -1925,6 +1930,13 @@ local function updateTrafficCoordinator(sim, dt)
       p.trafficDirectionSign = info.directionSign
       p.trafficCoordinated = plan ~= nil
       p.passCorridorClear = plan ~= nil
+      if plan and plan.role == "pass" then
+        writeLog("PASS_AUTHORIZED car=%d target=%d side=left corridor=clear",
+          index, plan.target or -1)
+      elseif plan and plan.role == "yield" then
+        writeLog("YIELD_AUTHORIZED car=%d target=%d action=hold_right_no_brake",
+          index, plan.target or -1)
+      end
 
       local alpha = clamp(dt * CFG.TRAFFIC_OFFSET_RATE, 0, 1)
       p.routeOffset = lerp(p.routeOffset or 0, desired, alpha)
@@ -1993,9 +2005,18 @@ local function carAhead(carIndex, car, personality)
         local reservedLaneSeparated = reservedPassPair and
           math.abs(reservedLateral) >= 2.65 and math.abs(forward) > 3.2
 
+        -- Immediate physical overlap is never waived, even for an agreed pass.
+        if math.abs(forward) < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
+           lateral < 1.55 then
+          riskTarget = 0
+          riskCar = i
+          riskTTC = 0
+          riskLong = math.abs(forward)
+          riskLat = lateral
+        end
+
         -- Once the coordinator has verified both swept corridors, the pair
         -- must not treat each other as a same-lane leader and brake to a stop.
-        -- The hard physical overlap test below remains active.
         if not reservedLaneSeparated then
           if sameDirection and forward > 0 and forward < 110 and
              lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
@@ -2005,20 +2026,9 @@ local function carAhead(carIndex, car, personality)
             end
           end
 
-          -- Immediate collision: use a rectangular vehicle envelope instead
-          -- of treating every small Euclidean distance as a head-on impact.
-          if math.abs(forward) < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
-             lateral < 1.55 then
-            riskTarget = 0
-            riskCar = i
-            riskTTC = 0
-            riskLong = math.abs(forward)
-            riskLat = lateral
-          end
-
           -- Predict relative motion for every unrelated vehicle. A verified
           -- pass reservation supplies a different lane trajectory for this pair.
-          if distance < 130 and not reservedLaneSeparated then
+          if distance < 130 then
             local rvx = ownVx - ovx
             local rvz = ownVz - ovz
             local rv2 = rvx * rvx + rvz * rvz
