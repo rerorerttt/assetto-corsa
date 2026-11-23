@@ -1513,7 +1513,6 @@ local function updateTrafficCoordinator(sim, dt)
         end
       end
     end
-  end
 
   -- Second priority: same-direction traffic. Faster follower passes on the left;
   -- slower leader yields to the right. The player is never asked to move.
