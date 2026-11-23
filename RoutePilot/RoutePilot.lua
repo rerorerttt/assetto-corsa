@@ -485,6 +485,20 @@ local function sampleSpawnRoute(metrics,distance)
   end
   return nil,nil
 end
+local function wakeAIAfterTeleport(carIndex)
+  if type(physics)~="table" then return end
+  -- A teleport can leave CSP's post-incident stop counter or parked-input
+  -- state active. Clear both before handing control back to the native AI.
+  if physics.setAIStopCounter then
+    local ok,err=pcall(physics.setAIStopCounter,carIndex,0)
+    if not ok then writeLog("AI_WAKE_ERROR id=%d api=setAIStopCounter err=%s",carIndex,tostring(err)) end
+  end
+  if physics.setAINoInput then
+    local ok,err=pcall(physics.setAINoInput,carIndex,false,false)
+    if not ok then writeLog("AI_WAKE_ERROR id=%d api=setAINoInput err=%s",carIndex,tostring(err)) end
+  end
+end
+
 local function spotIsClear(pos, exceptIndex, ignored)
   local sim=ac.getSim()
   if not sim then return true end
@@ -613,6 +627,7 @@ local function trySpawnTeleport(sim,dt)
       if ok and result~=false then
         moved=moved+1
         planned[#planned+1]=position
+        wakeAIAfterTeleport(carIndex)
         if Driver.resetAfterTeleport then Driver.resetAfterTeleport(carIndex) end
         writeLog("SPAWN_CAR id=%d order=%d routeDistance=%.1f pos=(%.2f,%.2f,%.2f) direction=AI_SPLINE",
           carIndex,order,routeDistance,position.x,position.y,position.z)
@@ -646,6 +661,7 @@ local function teleportHome(carIndex,car)
     if pos and spotIsClear(pos,carIndex) then
       local ok,result=pcall(physics.setAICarPosition,carIndex,pos,nil)
       if ok and result~=false then
+        wakeAIAfterTeleport(carIndex)
         if Driver and Driver.resetAfterTeleport then Driver.resetAfterTeleport(carIndex) end
         writeLog("RESCUE id=%d offset=%.1f pos=(%.2f,%.2f,%.2f) direction=AI_SPLINE",
           carIndex,offset,pos.x,pos.y,pos.z)
