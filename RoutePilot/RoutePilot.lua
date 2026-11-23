@@ -1217,7 +1217,8 @@ end
 local function calculateSteering(car, p, speed, fx, fz)
   local targetX, targetZ, routeFx, routeFz = getLookaheadTarget(car, p, speed)
   local routeOffset = safeNumber(p.routeOffset, 0)
-  local travelSign = (routeFx * fx + routeFz * fz) >= 0 and 1 or -1
+  local travelSign = p.trafficDirectionSign or
+    ((routeFx * fx + routeFz * fz) >= 0 and 1 or -1)
   targetX = targetX + routeFz * routeOffset * travelSign
   targetZ = targetZ - routeFx * routeOffset * travelSign
 
@@ -1608,6 +1609,7 @@ local function updateTrafficCoordinator(sim, dt)
       p.passSide = 0
       p.desiredRouteOffset = desired
       p.routeOffsetActual = info.routeOffsetActual
+      p.trafficDirectionSign = info.directionSign
       p.trafficCoordinated = plan ~= nil
 
       local alpha = clamp(dt * CFG.TRAFFIC_OFFSET_RATE, 0, 1)
