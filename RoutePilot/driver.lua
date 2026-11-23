@@ -246,11 +246,11 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
         local sameLane = math.abs(actualOffset - p.laneOffset) <= LANE_HALF_WIDTH
         if otherP then
           sameLane = sameLane or
-            math.abs(actualOffset - otherP.laneTargetOffset) <= LANE_HALF_WIDTH
+            math.abs(otherP.laneTargetOffset - p.laneOffset) <= LANE_HALF_WIDTH
           if otherP.laneChangeProgress < 1.0 then
             sameLane = sameLane or
-              math.abs(actualOffset - otherP.laneStartOffset) <= LANE_HALF_WIDTH or
-              math.abs(actualOffset - otherP.laneTargetOffset) <= LANE_HALF_WIDTH
+              math.abs(otherP.laneStartOffset - p.laneOffset) <= LANE_HALF_WIDTH or
+              math.abs(otherP.laneTargetOffset - p.laneOffset) <= LANE_HALF_WIDTH
           end
         end
         if p.laneChangeProgress < 1.0 then
