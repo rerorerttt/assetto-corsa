@@ -1,22 +1,8 @@
--- RoutePilot.lua — v0.9.0 (CSP 0.3.2-preview2)
--- THE TRACE SAID IT ALL: 184 s of session, ZERO CAR_INIT/CAR= lines — the
--- cars were never adopted (the spawn gate blocked driving forever) and drove
--- on the STOCK game AI: that is where the zigzags, burnouts, wall-hunting
--- and ignoring the player came from. Fixes:
---  * INSTANT ADOPTION: every active AI car is adopted from the very first
---    update, unconditionally. Spawn teleport runs in parallel and never
---    blocks driving. Telemetry (CAR= lines) returns to the trace.
---  * UI errors are LOGGED now (were silently swallowed) — any windowMain
---    failure lands in routepilot_trace.txt as UI_ERROR.
---  * Recording render: line/bounds shown 30 m AHEAD of the player only
---    (data still written only under the car); loop closing segment is
---    never drawn far away. Finished track ("Показать линии"): the whole
---    route renders at long distance (600 m from camera).
---  * Map: bigger scale (padding 16 -> 6), thicker lines (3 px), bounds
---    drawn with a minimum 10 px offset from the AI line so they are
---    clearly separate. Every AI car is also drawn as a labeled dot.
---  * Bounds re-record button "Запись границ" works from anywhere (denied
---    only if the player starts outside the current bounds), smooth joints.
+-- RoutePilot.lua — v0.9.1 (CSP 0.3.2-preview2)
+-- Existing route recording, boundary recording, save/load, map and world-line UI
+-- are retained. AI traffic uses two independent virtual lanes:
+-- first active AI: left/fast; second: right/40 km/h; then alternates.
+-- No car-following, yielding, overtaking decisions or inter-car speed control.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -24,15 +10,11 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE=14.0, LOOKAHEAD_SPEED=0.8, LOOKAHEAD_MIN=14.0, LOOKAHEAD_MAX=50.0,
-  STEER_GAIN=0.72, STEER_LIMIT=0.75, STEER_RATE=2.0, STEER_FILTER=0.18,
-  MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0, MIN_APEX_SPEED=11.0,
-  CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
-  SLIP_START=0.09, SLIP_FULL=0.45, SLIP_DAMP_MIN_SPEED=8.0,
-  SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
-  SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
+  MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0,
+  CURVE_MIN=0.002,
+  SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
-  PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
+  PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
   MAP_TOP=175.0, MAP_PAD=6.0, MAP_MIN_OFFSET=10.0,
 }
@@ -40,9 +22,9 @@ local WIDTH_PRESETS = {3, 7, 11, 15}
 
 local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
-  speedMax=170, followGap=8.0, widthPreset=1,
+  widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
-  spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
+  spawnDone=false, spawnStable=0, spawnLastRoster="",
   nodes={}, p={}, laneAssignments={}, status="Готов", logAccum=0, loaded=false,
 }
 local logger=nil
@@ -172,7 +154,6 @@ local function saveLine()
   if wroteFile then
     state.loaded=true
     state.spawnDone=false
-    state.spawnWait=0
     state.spawnStable=0
     state.spawnLastRoster=""
     state.status=string.format("Сохранено: %d точек",#state.nodes)
@@ -197,9 +178,7 @@ local function loadLine()
   end
   if loaded then
     state.nodes=loaded; state.p={}; state.loaded=true
-    if not state.spawnPerformed then
-      state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
-    end
+    state.spawnDone=false; state.spawnStable=0; state.spawnLastRoster=""
     state.status=string.format("Загружено: %d точек",#loaded)
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
     loadBounds(); flushLog()
@@ -425,7 +404,6 @@ end
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone then return end
   if not state.loaded or state.recLine or #state.nodes<2 then return end
-  state.spawnWait=state.spawnWait+dt
   local aiCars={}
   for i=1,sim.carsCount-1 do
     local car=ac.getCar(i)
