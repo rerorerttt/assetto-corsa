@@ -1,31 +1,39 @@
--- RoutePilot/driver.lua — v0.10.0 (CSP 0.3.2-preview2)
--- LANE-BASED RETHINK (user's design):
---  * The width preset defines N FIXED LANES (1..4). Every car is assigned a
---    home lane by pace: SLOW cars in the RIGHT lane, FAST cars in the LEFT
---    lane. A car drives its rail and does not wander.
---  * 1 lane = no overtakes (single file). 2+ lanes: a faster car changes to
---    a free lane ONCE, decisively, and only when that lane is actually clear
---    of cars for the whole pass distance; then it may return home.
---  * HARD BOUNDS: steering targets are clamped inside the bounds AND an
---    edge-correction term pushes back if the car is near a bound. Crossing
---    the recorded bounds (walls/pillars) is now impossible by steering.
---  * PATH SMOOTHING: the pursuit point is averaged over three samples of
---    the line ahead — no per-node wiggle, no zigzag. Deadband keeps the
---    wheel still on straights.
---  * No standstill overtakes at spawn (cars must be moving to overtake).
+-- RoutePilot/driver.lua — v0.11.0 RAILS AI (CSP 0.3.2-preview2)
+-- A textbook PURE PURSUIT controller (bicycle model):
+--    ld = clamp(K_DD * v, LD_MIN, LD_MAX)     -- lookahead distance
+--    alpha = angle(heading -> target)
+--    delta = atan(2 * L * sin(alpha) / ld)     -- front wheel angle
+--    steer = delta / STEER_LOCK                -- normalized -1..1
+-- Pure pursuit is self-stabilizing: it cannot zigzag by construction. The
+-- target is ONE point on the rail ld meters ahead. No averaging, no
+-- edge-correction terms (the v0.10 three-point average cut corners outside
+-- the bounds and fought the edge term -> the giant zigzags).
+-- Burnouts are killed with wheel slip control (car.wheels[2]/[3].slipRatio,
+-- guarded) plus a standstill gas cap.
+-- Blockers are cars in OUR OWN lane only (v0.10 saw diagonal neighbors on
+-- the 7 m track as blockers and braked the whole queue to a stop).
+-- Lanes: 1..4 from the width preset; a faster car changes to a CLEAR lane
+-- once, decisively.
 
 local Driver = {}
 local CFG, state, H
 
+-- pure pursuit constants
+local WHEELBASE  = 2.6    -- m, typical AC car
+local K_DD       = 0.55   -- lookahead seconds
+local LD_MIN     = 6.0    -- m
+local LD_MAX     = 35.0   -- m
+local STEER_LOCK = 0.6    -- rad, front wheel lock for normalization
+
+-- bounds / lanes
 local BOUND_MARGIN = 0.5
-local EDGE_ZONE    = 1.2    -- m from a bound where correction kicks in
-local EDGE_GAIN    = 0.5
-local PASS_CLEAR   = 14.0   -- m of clear road needed in the target lane
+local PASS_CLEAR   = 18.0
 local TRIGGER_TIME = 0.4
 local PASS_TIMEOUT = 10.0
+local FOLLOW_LAT   = 2.2   -- blocker must be within this lateral distance of OUR rail
+local MIN_GAP      = 6.0
 local RESCUE_SPEED = 1.5
 local RESCUE_TIME  = 3.5
-local STEER_DEAD   = 0.012
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -54,10 +62,9 @@ function Driver.setup(cfg, st, helpers)
   H = helpers
 end
 
--- lane centers for N lanes (lateral offsets from the AI line)
 local function laneCenters()
   local n = clamp(safeNumber(state.laneCount, 1), 1, 4)
-  local width = safeNumber(state.trackWidth, 7)
+  local width = safeNumber(state.trackWidth, 3)
   local half = width / 2
   local centers = {}
   if n == 1 then
@@ -72,21 +79,10 @@ local function laneCenters()
   return centers
 end
 
--- lane lateral offset of a car position, rounded to the nearest lane index
-local function nearestLaneIndex(off, centers)
-  local best, bestD = 1, math.huge
-  for i = 1, #centers do
-    local d = math.abs(off - centers[i])
-    if d < bestD then best, bestD = i, d end
-  end
-  return best
-end
-
 local function newPersonality(carIndex)
   local pace = 0.86 + carRand(carIndex, 1) * 0.28
   local kmh = clamp(safeNumber(state.speedMax, 170) * pace, 80, 240)
   local centers = laneCenters()
-  -- home lane: fast cars left (low index = negative offset = left), slow right
   local homeLane
   if pace >= 1.0 then
     homeLane = 1 + math.floor(carRand(carIndex, 3) * math.min(2, #centers))
@@ -97,13 +93,11 @@ local function newPersonality(carIndex)
   local p = {
     segIdx = 1, pace = pace, cruiseSpeed = kmh / 3.6,
     homeLane = homeLane, curLane = homeLane,
-    steer = 0, steerFiltered = 0, gas = 0, brake = 0,
-    slipAngle = 0, lateralAccel = 0, yawRate = 0,
-    previousFx = nil, previousFz = nil,
+    steer = 0, gas = 0, brake = 0,
+    slipAngle = 0,
     stuck = 0, passT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0,
-    slipSeverity = 0, stability = 1,
-    overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
+    overtakeSide = 0, followTimer = 0,
     retireT = 2.0,
   }
   state.p[carIndex] = p
@@ -111,35 +105,35 @@ local function newPersonality(carIndex)
     carIndex, kmh, pace, homeLane, #centers)
 end
 
-local function readVehicleDynamics(car, p, dt)
-  local v = car.velocity
+local function readHeading(car, p, dt)
   local look = car.look
   local fx, fz = normalize2(look.x, look.z)
+  local v = car.velocity
   local rx, rz = fz, -fx
   local vx, vz = safeNumber(v.x), safeNumber(v.z)
   local longVel = vx * fx + vz * fz
   local latVel = vx * rx + vz * rz
   p.slipAngle = math.atan2(latVel, math.max(0.5, longVel))
-  p.yawRate = 0
-  if p.previousFx and dt > 0.0001 then
-    p.yawRate = signedAngle(p.previousFx, p.previousFz, fx, fz) / dt
-  end
   local speed = math.max(0, safeNumber(car.speedMs, longVel))
-  p.previousFx, p.previousFz = fx, fz
-  p.lateralAccel = math.abs(p.yawRate * speed)
   return speed, fx, fz
 end
 
-local function calculateStability(p, speed)
-  local slip = math.abs(p.slipAngle)
-  local severity = 0
-  if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
-    local ss = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
-    local as = clamp((p.lateralAccel - CFG.MAX_LATERAL_ACCEL) / (CFG.MAX_LATERAL_ACCEL * 0.7), 0, 1)
-    severity = math.max(ss, as)
+-- driven wheel slip (guarded; nil if unavailable)
+local function wheelSlip(car)
+  local okW, wheels = pcall(function() return car.wheels end)
+  if not okW or type(wheels) ~= "table" then return nil end
+  local maxSlip = nil
+  for i = 2, 3 do
+    local okW2, wheel = pcall(function() return wheels[i] end)
+    if okW2 and wheel then
+      local okS, sr = pcall(function() return wheel.slipRatio end)
+      if okS and type(sr) == "number" and sr == sr then
+        local a = math.abs(sr)
+        if not maxSlip or a > maxSlip then maxSlip = a end
+      end
+    end
   end
-  p.slipSeverity = severity
-  p.stability = 1 - severity
+  return maxSlip
 end
 
 local function planTargetSpeed(p)
@@ -171,96 +165,67 @@ local function planTargetSpeed(p)
   return math.max(0, target)
 end
 
-local function clampLat(seg, lat)
-  local bl, br = H.boundsAt(seg)
-  return clamp(lat, bl + BOUND_MARGIN, br - BOUND_MARGIN)
-end
-
-local function linePointAtLateral(seg, t, ahead, lat)
-  local pt = H.walkLine(seg, t, ahead)
-  if not pt then
-    pt = H.segEnd(seg)
-  end
-  local a = state.nodes[seg]
-  local b = H.segEnd(seg)
-  local lx, lz = normalize2(b.x - a.x, b.z - a.z)
-  return pt.x - lz * lat, pt.z + lx * lat
-end
-
--- SMOOTHED pursuit target: average of three points along the line ahead
--- (kills per-node wiggle: the car cuts corners smoothly, never zigzags)
-local function smoothedTarget(seg, t, ahead, lat)
-  local pts = { ahead * 0.6, ahead, ahead * 1.4 }
-  local sx, sz, cnt = 0, 0, 0
-  for k = 1, 3 do
-    local tx, tz = linePointAtLateral(seg, t, pts[k], lat)
-    sx = sx + tx
-    sz = sz + tz
-    cnt = cnt + 1
-  end
-  return sx / cnt, sz / cnt
-end
-
+-- PURE PURSUIT steering. One target point on the rail, bicycle model.
 local function calculateSteering(car, p, speed, fx, fz)
   local seg, t, lineDist = H.findNearestSeg(car.position, p.segIdx)
   p.segIdx = seg
   p.lineDist = lineDist
   p.latOff = H.lateralOf(car.position, seg)
 
-  local ahead = clamp(
-    CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
-    CFG.LOOKAHEAD_MIN, CFG.LOOKAHEAD_MAX)
+  local ld = clamp(K_DD * math.max(speed, 5.0), LD_MIN, LD_MAX)
 
-  -- rail: home lane or the passing lane
+  -- rail lateral offset (clamped inside the bounds)
   local centers = laneCenters()
-  local wantLat = centers[clamp(p.curLane, 1, #centers)]
-  if p.overtakeSide ~= 0 then
-    wantLat = p.passLat
-  end
-  wantLat = clampLat(seg, wantLat)
+  local rail = centers[clamp(p.curLane, 1, #centers)]
+  local bl, br = H.boundsAt(seg)
+  rail = clamp(rail, bl + BOUND_MARGIN, br - BOUND_MARGIN)
 
-  local tx, tz = smoothedTarget(seg, t, ahead, wantLat)
+  -- target: the path point ld meters ahead, shifted onto the rail
+  local a = state.nodes[seg]
+  local b = H.segEnd(seg)
+  local lx, lz = normalize2(b.x - a.x, b.z - a.z)
+  local pt = H.walkLine(seg, t, ld)
+  local tx, tz
+  if pt then
+    tx = pt.x - lz * rail
+    tz = pt.z + lx * rail
+  else
+    -- always-valid fallback: the segment end on the rail (NEVER a full lock)
+    tx = b.x - lz * rail
+    tz = b.z + lx * rail
+  end
 
   local dx = tx - car.position.x
   local dz = tz - car.position.z
   local dist = math.sqrt(dx * dx + dz * dz)
-  if dist < 0.001 then return p.steer end
+  if dist < 1.0 then return p.steer end
 
-  local angle = signedAngle(fx, fz, dx / dist, dz / dist)
+  -- alpha: heading-to-target angle
+  local alpha = signedAngle(fx, fz, dx / dist, dz / dist)
 
-  -- deadband: a straight needs no steering
-  if math.abs(angle) < STEER_DEAD then
-    angle = 0
-  end
+  -- bicycle-model pure pursuit
+  local delta = math.atan(2.0 * WHEELBASE * math.sin(alpha) / ld)
 
-  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.62
-
-  -- HARD BOUNDS: edge correction pushes the car away from a bound
-  local bl, br = H.boundsAt(seg)
-  local off = p.latOff
-  if off < bl + EDGE_ZONE then
-    steer = steer + (bl + EDGE_ZONE - off) * EDGE_GAIN
-  elseif off > br - EDGE_ZONE then
-    steer = steer - (off - (br - EDGE_ZONE)) * EDGE_GAIN
-  end
+  -- normalize to the steering input; slight slip damping on top
+  local steer = delta / STEER_LOCK + p.slipAngle * 0.2
 
   return clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
-  local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
-  p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  local maxChange = CFG.STEER_RATE * dt
-  p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
+  -- rails need fast, direct steering: minimal filtering, bounded rate
+  local alpha = clamp(dt / (0.08 + dt), 0, 1)
+  p.steer = clamp(lerp(p.steer, target, alpha),
     -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
   return p.steer
 end
 
--- is a lane clear of other cars for PASS_CLEAR meters ahead of us?
-local function laneClear(carIndex, car, lat, centers)
+-- is the given rail clear of other cars for PASS_CLEAR meters ahead?
+local function railClear(carIndex, car, railLat)
   local sim = ac.getSim()
   if not sim then return true end
   local fx, fz = normalize2(car.look.x, car.look.z)
+  local seg = select(1, H.findNearestSeg(car.position, 1))
   for i = 0, sim.carsCount - 1 do
     if i ~= carIndex then
       local other = ac.getCar(i)
@@ -268,12 +233,10 @@ local function laneClear(carIndex, car, lat, centers)
         local dx = other.position.x - car.position.x
         local dz = other.position.z - car.position.z
         local forward = dx * fx + dz * fz
-        if forward > -2 and forward < PASS_CLEAR then
-          local oseg = select(1, H.findNearestSeg(other.position, 1))
+        if forward > -3 and forward < PASS_CLEAR then
+          local oseg = select(1, H.findNearestSeg(other.position, seg))
           local ooff = H.lateralOf(other.position, oseg)
-          local oLane = nearestLaneIndex(ooff, centers)
-          local mLane = nearestLaneIndex(lat, centers)
-          if oLane == mLane then
+          if math.abs(ooff - railLat) < FOLLOW_LAT then
             return false
           end
         end
@@ -283,102 +246,124 @@ local function laneClear(carIndex, car, lat, centers)
   return true
 end
 
--- DECISIVE single lane change to a CLEAR adjacent lane
+-- blocker ahead IN OUR OWN RAIL (diagonal neighbors don't count)
+local function blockerAhead(carIndex, car, railLat)
+  local sim = ac.getSim()
+  if not sim then return nil, nil end
+  local fx, fz = normalize2(car.look.x, car.look.z)
+  local bestGap, bestSpeed = nil, nil
+  for i = 0, sim.carsCount - 1 do
+    if i ~= carIndex then
+      local other = ac.getCar(i)
+      if other and other.isActive then
+        local dx = other.position.x - car.position.x
+        local dz = other.position.z - car.position.z
+        local forward = dx * fx + dz * fz
+        if forward > 0 and forward < 60 then
+          local oseg = select(1, H.findNearestSeg(other.position, 1))
+          local ooff = H.lateralOf(other.position, oseg)
+          if math.abs(ooff - railLat) < FOLLOW_LAT then
+            if not bestGap or forward < bestGap then
+              bestGap = forward
+              bestSpeed = math.max(0, safeNumber(other.speedMs))
+            end
+          end
+        end
+      end
+    end
+  end
+  return bestGap, bestSpeed
+end
+
+-- decisive single lane change into a CLEAR adjacent lane
 local function beginOvertake(carIndex, p, car, gap, centers)
   p.followTimer = 0
   p.passT = 0
   local from = clamp(p.curLane, 1, #centers)
-  -- try left first (fast side), then right
   local targetLane
-  if from > 1 and laneClear(carIndex, car, centers[from - 1], centers) then
+  if from > 1 and railClear(carIndex, car, centers[from - 1]) then
     targetLane = from - 1
-  elseif from < #centers and laneClear(carIndex, car, centers[from + 1], centers) then
+  elseif from < #centers and railClear(carIndex, car, centers[from + 1]) then
     targetLane = from + 1
   end
   if not targetLane then return false end
   p.overtakeSide = (targetLane < from) and -1 or 1
-  p.passLat = clampLat(p.segIdx, centers[targetLane])
   p.curLane = targetLane
-  H.log("CAR=%d LANE_CHANGE from=%d to=%d lat=%.1f gap=%.1f",
-    carIndex, from, targetLane, p.passLat, gap or -1)
+  H.log("CAR=%d LANE_CHANGE from=%d to=%d gap=%.1f",
+    carIndex, from, targetLane, gap or -1)
   return true
 end
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   local centers = laneCenters()
-  if #centers < 2 then
-    -- single lane: NEVER overtake, keep the queue with a safe gap
-    p.overtakeSide = 0
-    local gap, leaderSpeed = H.carAheadFull(carIndex, car, 5.0)
-    if gap then
-      local safe = math.sqrt(math.max(0,
-        (leaderSpeed or 0) * (leaderSpeed or 0) +
-        2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
-      return math.min(targetSpeed, safe)
-    end
-    return targetSpeed
-  end
+  local railLat = centers[clamp(p.curLane, 1, #centers)]
 
+  -- passing: hold the lane; return home when the pass is done
   if p.overtakeSide ~= 0 then
-    -- passing: keep the lane; return home when clear ahead
     p.passT = p.passT + dt
-    local gap, leaderSpeed = H.carAheadFull(carIndex, car, 4.0)
-    if p.passT > PASS_TIMEOUT then
-      local from = p.curLane
-      if from ~= p.homeLane and laneClear(carIndex, car, centers[p.homeLane], centers) then
+    local gap, leaderSpeed = blockerAhead(carIndex, car, railLat)
+    if p.passT > PASS_TIMEOUT or (not gap and p.passT > 1.0) then
+      p.overtakeSide = 0
+      p.passT = 0
+      if p.curLane ~= p.homeLane and railClear(carIndex, car, centers[p.homeLane]) then
         p.curLane = p.homeLane
         H.log("CAR=%d LANE_RETURN home=%d", carIndex, p.homeLane)
       end
-      p.overtakeSide = 0
-      p.passT = 0
       return targetSpeed
     end
     if gap then
       local safe = math.sqrt(math.max(0,
         (leaderSpeed or 0) * (leaderSpeed or 0) +
-        2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - 5)))
-      return math.min(math.max(targetSpeed, (leaderSpeed or 0) + 4), math.max(safe, 6))
+        2 * CFG.BRAKE_ACCEL * math.max(0, gap - MIN_GAP)))
+      return math.min(math.max(targetSpeed, (leaderSpeed or 0) + 3), math.max(safe, 6))
     end
     return targetSpeed
   end
 
-  local gap, leaderSpeed = H.carAheadFull(carIndex, car, 4.5)
+  local gap, leaderSpeed = blockerAhead(carIndex, car, railLat)
   if not gap then
     p.followTimer = 0
     return targetSpeed
   end
 
-  -- blocker: slower car (or standing player) ahead in OUR lane
-  if (leaderSpeed or 0) < math.min(p.cruiseSpeed, targetSpeed + 3) - 2
-     and speed > 3 then
-    p.followTimer = p.followTimer + dt
-    if p.followTimer > TRIGGER_TIME then
-      if beginOvertake(carIndex, p, car, gap, centers) then
-        return math.max(targetSpeed, (leaderSpeed or 0) + 4)
-      end
-    end
+  -- slower blocker in our rail: follow at a safe speed; change lanes when moving
+  if (leaderSpeed or 0) < math.min(p.cruiseSpeed, targetSpeed + 3) - 2 then
     local safe = math.sqrt(math.max(0,
       (leaderSpeed or 0) * (leaderSpeed or 0) +
-      2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
+      2 * CFG.BRAKE_ACCEL * math.max(0, gap - MIN_GAP)))
+    if speed > 5 then
+      p.followTimer = p.followTimer + dt
+      if p.followTimer > TRIGGER_TIME and #centers >= 2 then
+        if beginOvertake(carIndex, p, car, gap, centers) then
+          return math.max(targetSpeed, (leaderSpeed or 0) + 3)
+        end
+      end
+    end
     return math.min(targetSpeed, safe)
   end
 
   p.followTimer = 0
-  local safe = math.sqrt(math.max(0,
-    (leaderSpeed or 0) * (leaderSpeed or 0) +
-    2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
-  return math.min(targetSpeed, safe)
+  return targetSpeed
 end
 
-local function calculateThrottle(p, speed, targetSpeed)
+local function calculateThrottle(p, car, speed, targetSpeed)
   local error = targetSpeed - speed
   local gas = clamp(error * CFG.GAS_GAIN, 0, CFG.MAX_GAS)
-  local brake = clamp(-error * CFG.BRAKE_GAIN, 0, CFG.MAX_BRAKE)
-  gas = gas * lerp(1.0, 0.15, p.slipSeverity)
-  if speed < 5 then
-    gas = math.min(gas, 0.6)
+
+  -- ANTI-BURNOUT: cut gas when the driven wheels slip
+  local slip = wheelSlip(car)
+  if slip and slip > 0.3 then
+    gas = gas * clamp(1.0 - (slip - 0.3) * 1.5, 0.15, 1.0)
   end
+  -- standstill: gentle launch, never a burnout
+  if speed < 3 then
+    gas = math.min(gas, 0.45)
+  end
+
+  local brake = clamp(-error * CFG.BRAKE_GAIN, 0, CFG.MAX_BRAKE)
   if error >= 0 then brake = 0 end
+  -- smooth in traffic: never slam to a full stop from far away
+  if brake > 0.5 and speed > 5 then brake = 0.5 end
   p.gas = clamp(gas, 0, CFG.MAX_GAS)
   p.brake = clamp(brake, 0, CFG.MAX_BRAKE)
 end
@@ -398,8 +383,7 @@ function Driver.update(carIndex, car, dt)
     end
   end
 
-  local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  calculateStability(p, speed)
+  local speed, fx, fz = readHeading(car, p, dt)
 
   if speed < RESCUE_SPEED then
     p.stuck = p.stuck + dt
@@ -419,7 +403,7 @@ function Driver.update(carIndex, car, dt)
   local steerTarget = calculateSteering(car, p, speed, fx, fz)
   local steer = filterSteering(p, steerTarget, dt)
 
-  calculateThrottle(p, speed, targetSpeed)
+  calculateThrottle(p, car, speed, targetSpeed)
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
@@ -432,12 +416,12 @@ function Driver.update(carIndex, car, dt)
 end
 
 function Driver.telemetryLine(i, car, p)
-  local bl, br = H.boundsAt(p.segIdx)
+  local bl, br2 = H.boundsAt(p.segIdx)
   return string.format(
     "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f LANE=%d/%d BOUNDS=[%.1f,%.1f] OFF=%.1f OT=%d",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
-    p.lineDist, p.segIdx, p.pace, p.curLane, p.homeLane, bl, br, p.latOff, p.overtakeSide)
+    p.lineDist, p.segIdx, p.pace, p.curLane, p.homeLane, bl, br2, p.latOff, p.overtakeSide)
 end
 
 return Driver
