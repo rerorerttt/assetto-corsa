@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-11-23
 Active development branch: `routepilot-traffic-coordinator`
-Reviewed HEAD: `a84ee9a11ae923d7daa6bf2a100bee49cf560d3b`
+Reviewed HEAD: `62fc5f5901c91f1408ea1335b4e13b12e2d1ab38`
 Main implementation: `RoutePilot/RoutePilot.lua`
 Latest reviewed telemetry: `RoutePilot/routepilot_trace.txt`
 CSP SDK snapshot in this repository: `lua-sdk/` (especially `lua-sdk/ac_apps/README.md`).
@@ -18,11 +18,11 @@ RoutePilot is an arcade-style, high-energy AI race controller that follows a pla
 - `updateTrafficCoordinator()` builds one snapshot, tries to reserve same-direction pass/yield pairs and oncoming pairs, then publishes offsets.
 - `trafficLaneIsClear()` currently rejects a planned lane if any third car is within 28 m longitudinally and within the lateral clearance. With a starting grid gap of 22 m this can reject most useful passes before they begin.
 - Same-direction pass initiation currently requires closing speed > 1.2 m/s or a stopped leader. All cars share the same configured cruise speed (140 km/h), so a pack following the same curvature often has no reason to initiate a pass.
-- Pass offset is 1.35 m while same-lane following/collision lateral clearance is 2.30 m. This makes a car displaced to pass still geometrically overlap the follower's same-lane corridor in checks that do not correctly exempt the reserved pair.
-- The pass offset is smoothed at 3.0 m/s, so lane changes are gradual; the coordinator does not reserve a time-parameterized future corridor.
+- The reviewed baseline used a 1.35 m pass offset against a 2.30 m lateral following/collision corridor, so a car could remain inside the same-lane envelope while attempting to pass. HEAD `62fc5f5` raises the shared traffic offset to 2.65 m and reduces the third-car lane rejection longitudinal window from 28 m to 18 m. These are first-pass tuning changes and still require in-game validation.
+- HEAD `62fc5f5` raises steering response, relaxes early slip-based throttle suppression, raises curvature/braking acceleration assumptions, increases default speed limit from 140 to 180 km/h, and gives odd/even AI indices different pace multipliers (1.08 / 0.96). The pace multiplier affects both cruise cap and curvature target, creating deliberate speed spread so faster followers have a reason to pass. These are arcade tuning values, not verified safe limits.
 - `carAhead()` combines same-direction following and predicted collision avoidance. A valid pass must be exempted from following/braking for the whole reserved manoeuvre, while true third-party and oncoming collision checks remain active.
 - `planTargetSpeed()` scans 40 route vertices and limits speed from curvature using `MAX_LATERAL_ACCEL = 5.5` m/s² and `BRAKE_ACCEL = 5.0` m/s². This is conservative for the requested arcade race feel; the speed planner needs a deliberate high-speed/arcade profile rather than simply raising throttle.
-- Telemetry from this HEAD has 977 lines, 951 car samples: roles none=761, pass=85, yield=85, yield_player=20; 117 samples with brake > 0.05; 307 with gas < 0.2; 65 with target speed < 1 m/s; maximum logged speed 30.94 m/s (~111 km/h). The counters show that coordination sometimes assigns roles, but manoeuvres are not being completed and speed control is frequently suppressing acceleration.
+- Baseline telemetry at `a84ee9a` has 977 lines, 951 car samples: roles none=761, pass=85, yield=85, yield_player=20; 117 samples with brake > 0.05; 307 with gas < 0.2; 65 with target speed < 1 m/s; maximum logged speed 30.94 m/s (~111 km/h). This is pre-tuning evidence; collect a fresh trace after testing `62fc5f5` before judging the changes.
 - The old `RoutePilot/README.md` describes v0.2.1 and is stale; update it when behaviour and file format are revised.
 
 ## Required traffic redesign
@@ -63,6 +63,10 @@ Recommended implementation:
 - `physics.setAICaution(carIndex, caution)`: alters AI following distance, experimental; do not rely on it as the main RoutePilot traffic controller.
 - `ac.worldCoordinateToTrack()`, `ac.trackCoordinateToWorld()`, `ac.worldCoordinateToTrackProgress()`, `ac.getTrackAISplineSides()`: stock AI spline/track coordinates and boundaries. They are not substitutes for custom-route geometry on an oval crossover.
 - `ac.getCarColliders()` returns car colliders, not a documented enumerator for static track KN5 meshes.
+
+## Latest code change and validation status
+
+Commit `62fc5f5901c91f1408ea1335b4e13b12e2d1ab38` applies the first arcade-pace/overtake tuning pass described above. The source was re-fetched after the write and the intended constants and code paths were confirmed present. No Lua interpreter/static parser or Assetto Corsa runtime validation has been performed in this environment; the changes must be tested in-game. Do not describe them as proven fixes until a new trace confirms higher sustained speed, actual completed passes, no repeated braking, and safe oncoming meetings.
 
 ## Development rules
 
