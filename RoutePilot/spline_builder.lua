@@ -147,14 +147,16 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
 
     -- Backward braking envelope. Two cyclic passes propagate corner limits
     -- around the complete loop without a quadratic point-by-point search.
-    for _ = 1, 2 do
-      for i = count, 1, -1 do
-        local nextIndex = i % count + 1
-        local allowed = math.sqrt(
-          speeds[nextIndex] * speeds[nextIndex] +
-          2 * BRAKE_ACCEL * distances[i]
-        )
-        if speeds[i] > allowed then speeds[i] = allowed end
+    if not (fixedSpeedKmh and fixedSpeedKmh > 0) then
+      for _ = 1, 2 do
+        for i = count, 1, -1 do
+          local nextIndex = i % count + 1
+          local allowed = math.sqrt(
+            speeds[nextIndex] * speeds[nextIndex] +
+            2 * BRAKE_ACCEL * distances[i]
+          )
+          if speeds[i] > allowed then speeds[i] = allowed end
+        end
       end
     end
 
