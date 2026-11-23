@@ -148,9 +148,10 @@ end
 
 local function signedAngle(ax, az, bx, bz)
   local dot = clamp(ax * bx + az * bz, -1, 1)
-  -- Positive angles must point toward the vehicle's local right (+X) side.
-  -- car.look is forward (+Z), and readVehicleDynamics() defines right as (fz, -fx).
-  local cross = az * bx - ax * bz
+  -- AC's normalized steering input is positive for a left turn.
+  -- With forward along +Z, the conventional X/Z cross product gives
+  -- positive angles for targets to the vehicle's left (-X).
+  local cross = ax * bz - az * bx
 
   return math.atan2(cross, dot)
 end
@@ -780,6 +781,10 @@ local function newPersonality(carIndex)
 
     targetX = 0,
     targetZ = 0,
+    targetDistance = 0,
+    targetAngle = 0,
+    controlActive = false,
+    actualSteer = 0,
 
     targetSpeed = 0,
 
@@ -1258,8 +1263,10 @@ local function calculateSteering(car, p, speed, fx, fz)
   local dz = targetZ - car.position.z
 
   local distance = math.sqrt(dx * dx + dz * dz)
+  p.targetDistance = distance
 
   if distance < 0.001 then
+    p.targetAngle = 0
     return 0
   end
 
@@ -1274,6 +1281,7 @@ local function calculateSteering(car, p, speed, fx, fz)
   )
 
   -- Basic route following.
+  p.targetAngle = angle
   local routeSteer = angle * CFG.STEER_GAIN
 
   -- Countersteering compensation.
@@ -1576,6 +1584,8 @@ local function updateLineCar(carIndex, car, dt)
     p.steer = 0
     p.steerFiltered = 0
     p.lastSteerTarget = 0
+    p.targetDistance = 0
+    p.targetAngle = 0
     if not p.headingGuardLogged then
       writeLog("HEADING_GUARD id=%d dot=%.3f segment=%d line_error=%.2f",
         carIndex, headingDot, routeSeg, p.lineDist)
@@ -1589,7 +1599,10 @@ local function updateLineCar(carIndex, car, dt)
       controls.gas = 0
       controls.brake = 1
       controls.handbrake = 0
+      local activeOk, active = pcall(function() return controls:active() end)
+      p.controlActive = activeOk and active == true
     end
+    p.actualSteer = safeNumber(car.steer, 0)
     return
   end
   p.headingGuardLogged = false
@@ -1655,7 +1668,11 @@ local function updateLineCar(carIndex, car, dt)
     controls.gas = gas
     controls.brake = brake
     controls.handbrake = 0
+    local activeOk, active = pcall(function() return controls:active() end)
+    p.controlActive = activeOk and active == true
   end
+
+  p.actualSteer = safeNumber(car.steer, 0)
 
   p.lineDist = select(
     3,
@@ -1689,6 +1706,11 @@ local function recordSecondTelemetry(sim)
         "SPEED=%.2f " ..
         "STEER=%.3f " ..
         "STEER_TARGET=%.3f " ..
+        "ACTUAL_STEER_DEG=%.2f " ..
+        "CTRL_ACTIVE=%s " ..
+        "HEADING_DOT=%.3f " ..
+        "TARGET_DIST=%.2f " ..
+        "TARGET_ANGLE=%.3f " ..
         "GAS=%.3f " ..
         "BRAKE=%.3f " ..
         "SLIP=%.4f " ..
@@ -1715,6 +1737,11 @@ local function recordSecondTelemetry(sim)
 
         p.steer,
         p.lastSteerTarget or 0,
+        p.actualSteer or 0,
+        tostring(p.controlActive == true),
+        p.headingDot or 0,
+        p.targetDistance or 0,
+        p.targetAngle or 0,
 
         p.gas,
         p.brake,
