@@ -477,12 +477,12 @@ local function sampleSpawnRoute(metrics, distance)
         lerp(a.z, b.z, t)
       )
 
-      -- CSP applies its own orientation convention to the direction
-      -- argument. This vector is the forward tangent of the recorded route.
+      -- physics.setAICarPosition() uses the opposite direction convention:
+      -- pass the negative route tangent so car.look faces along the recorded line.
       local direction = vec3(
-        b.x - a.x,
-        b.y - a.y,
-        b.z - a.z
+        a.x - b.x,
+        a.y - b.y,
+        a.z - b.z
       )
 
       if direction:length() < 0.0001 then
@@ -1522,19 +1522,13 @@ local function updateLineCar(carIndex, car, dt)
   -- 4. Calculate speed required for upcoming corners.
   local targetSpeed = planTargetSpeed(p, speed)
 
-  -- 5. Reserve the left corridor and accelerate through a pass.
-  local gap, leaderSpeed, leaderIndex
-  targetSpeed, gap, leaderSpeed, leaderIndex =
-    updatePassingPlan(carIndex, car, p, targetSpeed, dt)
-
-  -- Emergency-only spacing protection if a pass cannot be started.
-  -- The leading car is never asked to slow down or move aside.
-  if gap and not p.passState and gap < state.followGap then
-    local safeSpeed = math.sqrt(math.max(0,
-      leaderSpeed * leaderSpeed +
-      2 * CFG.BRAKE_ACCEL * math.max(0, gap - 2.5)))
-    targetSpeed = math.min(targetSpeed, safeSpeed)
-  end
+  -- 5. Lane-changing passes are temporarily disabled. The latest trace
+  -- showed unstable route tracking and wall impacts; first validate the
+  -- corrected spawn heading and route follower without lateral pass offsets.
+  p.passState = nil
+  p.passLeader = nil
+  p.passOffset = 0
+  state.passOwner = nil
 
   p.targetSpeed = targetSpeed
 
