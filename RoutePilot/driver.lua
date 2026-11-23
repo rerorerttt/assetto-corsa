@@ -383,16 +383,19 @@ function Driver.update(index, car, dt)
 
     -- No single airborne flag exists in the CSP car state. Four wheel loads
     -- are available, so require all four wheels to remain unloaded for 10 s.
-    local loadedWheels=0
+    local loadedWheels,hasWheelData=0,false
     pcall(function()
       if car.wheels then
         for wheelIndex=0,3 do
           local wheel=car.wheels[wheelIndex]
-          if wheel and number(wheel.load,0)>120 then loadedWheels=loadedWheels+1 end
+          if wheel then
+            hasWheelData=true
+            if number(wheel.load,0)>120 then loadedWheels=loadedWheels+1 end
+          end
         end
       end
     end)
-    if loadedWheels==0 and speed>3.0 then
+    if hasWheelData and loadedWheels==0 and speed>3.0 then
       p.airTimer=p.airTimer+dt
     else
       p.airTimer=0
