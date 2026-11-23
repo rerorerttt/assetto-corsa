@@ -497,16 +497,16 @@ local function teleportHome(carIndex,car)
   for k=0,n-1 do
     local i=((bestI-1+k)%n)+1
     local node=state.nodes[i]
-    if spotIsClear(node,carIndex) then
-      local nxt=state.nodes[(i%n)+1]
-      local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
-      local laneOffset=laneOffsetForCar(carIndex,i)
-      local pos=vec3(node.x-dz*laneOffset-dx*4,node.y+0.1,
-        node.z+dx*laneOffset-dz*4)
+    local nxt=state.nodes[(i%n)+1]
+    local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
+    local laneOffset=laneOffsetForCar(carIndex,i)
+    local pos=vec3(node.x-dz*laneOffset-dx*4,node.y+0.1,
+      node.z+dx*laneOffset-dz*4)
+    if spotIsClear(pos,carIndex) then
       local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
       if ok then
         state.p[carIndex]=nil
-        writeLog("RESCUE id=%d node=%d offset=%d",carIndex,i,k)
+        writeLog("RESCUE id=%d node=%d offset=%d lane=%.2f",carIndex,i,k,laneOffset)
         flushLog()
       end
       return ok
