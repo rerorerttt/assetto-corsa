@@ -27,12 +27,16 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 ## Current scope
 
-- Records player-car world X/Z coordinates and speed.
-- Stores and loads routes per track/layout, with autoload on app start.
-- Uses a Pure Pursuit-style steering controller and a curvature/braking speed planner.
-- Car-following collision avoidance (v0.2.0): each AI car checks for the nearest car ahead in its own lane (lateral offset within 2.4 m) and limits its target speed to a safe value based on the gap and the leader's speed. Below the minimum gap (adjustable, 3–15 m) the car stops completely.
-- Controls only steering, throttle and brake. No gear, clutch, reverse or stock AI spline commands are issued.
-- Applies to active AI-controlled cars with index 1 and above.
+- Records and replays the player's route per track/layout.
+- Keeps the existing boundary recorder and width presets (3, 7, 11 and 15 m).
+- Deterministic traffic assignment: odd AI car indices use the left lane; even indices use the right lane.
+- With a 7 m or wider recorded corridor, the two virtual lane centres are fixed at +1.75 m (left/fast) and -1.75 m (right/40 km/h) from the route centreline. The offsets use the route's local tangent, so the lanes follow bends without visible lane markings.
+- The right lane targets 40 km/h. The left lane has no fixed 40 km/h limiter and uses the route-curvature planner to brake for corners.
+- A 3 m corridor is treated as a single lane: all AI cars follow the centreline at 40 km/h; no passing lane is created.
+- Cars do not inspect, follow, yield to, brake for, or overtake one another. Passing happens naturally because the left lane is faster.
+- Steering uses a smoothed look-ahead controller to hold each car on its assigned lateral offset.
+- AI cars are initially placed at their assigned lane centres and retain that assignment during recovery.
+- Only steering, throttle and brake are overridden. Gear selection remains with the car's normal AI/automatic drivetrain.
 
 ## Changelog
 
