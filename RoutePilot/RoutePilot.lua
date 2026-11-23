@@ -1531,7 +1531,7 @@ local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
   local sampleSpeed = math.max(10.0, info.speed or 0)
   local candidateY = safeNumber(info.car.position.y)
 
-  for step = 0, 6 do
+  for step = 0, 8 do
     local distance = step * 5.0
     local travelTime = distance / sampleSpeed
     local candidateX = info.x + info.hx * distance + info.rightX * offset
@@ -1994,8 +1994,10 @@ local function carAhead(carIndex, car, personality)
         local otherReservedOffset = otherPersonality and
           safeNumber(otherPersonality.desiredRouteOffset, otherPersonality.routeOffset or 0) or 0
         local reservedLateral = lateralSigned + otherReservedOffset - ownReservedOffset
+        local relativeLongSpeed = math.abs((ownVx - ovx) * fx + (ownVz - ovz) * fz)
+        local passSetupGap = math.max(3.2, relativeLongSpeed * 0.65 + 4.0)
         local reservedLaneSeparated = reservedPassPair and
-          math.abs(reservedLateral) >= 2.65 and math.abs(forward) > 3.2
+          math.abs(reservedLateral) >= 2.65 and math.abs(forward) > passSetupGap
 
         -- Immediate physical overlap is never waived, even for an agreed pass.
         if math.abs(forward) < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
@@ -2883,7 +2885,7 @@ function windowMain(dt)
     end
   end
 
-  local canvas = vec2(math.max(300, ui.availableSpaceX()), 250)
+  local canvas = vec2(ui.availableSpaceX(), 250)
 
   ui.invisibleButton("line_radar", canvas)
 
@@ -2952,8 +2954,10 @@ function windowMain(dt)
           local oy = my + (obstacle.z - cz) * scale
           local rx = mx + (routeNode.x - cx) * scale
           local ry = my + (routeNode.z - cz) * scale
-          if ox >= p0.x - 8 and ox <= p1.x + 8 and
-             oy >= p0.y - 8 and oy <= p1.y + 8 then
+          if ox >= p0.x and ox <= p1.x and
+             oy >= p0.y and oy <= p1.y and
+             rx >= p0.x and rx <= p1.x and
+             ry >= p0.y and ry <= p1.y then
             ui.drawLine(
               vec2(rx, ry),
               vec2(ox, oy),
