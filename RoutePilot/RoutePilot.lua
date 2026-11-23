@@ -2938,7 +2938,7 @@ end
 -- UI
 ------------------------------------------------------------
 
-function windowMain(dt)
+function script.windowMain(dt)
   local player = ac.getCar(0)
 
   ui.text(string.format(
