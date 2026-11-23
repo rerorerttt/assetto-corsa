@@ -7,16 +7,16 @@
 local Driver = {}
 local CFG, S, H
 
-local PASS_TRIGGER_GAP = 48.0
+local PASS_TRIGGER_GAP = 120.0
 local PASS_MIN_GAP = 6.0
-local PASS_CLEAR_GAP = 7.0
+local PASS_CLEAR_GAP = 15.0
 local PASS_MAX_TIME = 18.0
-local PASS_OFFSET_RATE = 3.0
+local PASS_OFFSET_RATE = 5.0
 local PASS_SEPARATION = 0.28
 local PASS_EDGE_MARGIN = 0.12
 local WIDTH_PRESETS = {3, 7, 11, 15}
-local PASS_LOOKAHEAD = 42.0
-local PASS_OCCUPANCY_RANGE = 40.0
+local PASS_LOOKAHEAD = 140.0
+local PASS_OCCUPANCY_RANGE = 100.0
 local STUCK_SPEED = 0.8
 local STUCK_TIME = 10.0
 
@@ -107,23 +107,25 @@ local function assignLanes(snapshots,metrics)
     if snap.p and snap.p.splineLoaded then cars[#cars+1]=snap end
   end
   if #cars==0 then return false end
-  table.sort(cars,function(a,b)
-    if a.p.targetLevel==b.p.targetLevel then return a.index<b.index end
-    return a.p.targetLevel>b.p.targetLevel
-  end)
-  local laneCount,laneWidth,offsets=laneLayout()
-  local groupSize=math.max(1,math.ceil(#cars/laneCount))
-  for rank,snap in ipairs(cars) do
-    local lane=math.min(laneCount,math.floor((rank-1)/groupSize)+1)
-    local home=offsets[lane]
-    if not laneFits(snap.seg,home,snap.half,metrics) then home=0; lane=0 end
+
+  -- All cars cruise in the rightmost lane. The adjacent lane to the left
+  -- is reserved for a faster follower with a confirmed passing opportunity.
+  -- The slower leader is never moved, slowed down or asked to yield.
+  local laneCount,_,offsets=laneLayout()
+  local homeLane=laneCount
+  local homeOffset=offsets[homeLane]
+  for _,snap in ipairs(cars) do
+    local lane,home=homeLane,homeOffset
+    if not laneFits(snap.seg,home,snap.half,metrics) then
+      lane,home=0,0
+    end
     snap.p.laneIndex=lane
     snap.p.homeOffset=home
     snap.p.targetOffset=home
     snap.p.currentOffset=0
     snap.p.laneAssigned=true
-    H.log('LANE_ASSIGN car=%d rank=%d lane=%d offset=%.2f pace=%.3f',
-      snap.index,rank,lane,home,snap.p.targetLevel)
+    H.log('LANE_ASSIGN car=%d lane=%d offset=%.2f pace=%.3f',
+      snap.index,lane,home,snap.p.targetLevel)
   end
   S.lanesAssigned=true
   return true
@@ -166,16 +168,14 @@ end
 local function choosePassOffset(follower, leader, snapshots, metrics)
   local laneCount,_,offsets=laneLayout()
   if laneCount<2 or not follower.p or not follower.p.laneIndex or follower.p.laneIndex<1 then return nil,0 end
-  local lane=follower.p.laneIndex
-  local candidates={}
-  if lane>1 then candidates[#candidates+1]=lane-1 end
-  if lane<laneCount then candidates[#candidates+1]=lane+1 end
-  for _,nextLane in ipairs(candidates) do
-    local target=offsets[nextLane]
-    if laneFits(follower.seg,target,follower.half,metrics) and
-      laneIsFree(follower,leader,target,snapshots,metrics) then
-      return target,target<follower.lateral and -1 or 1
-    end
+  local nextLane=follower.p.laneIndex-1
+  if nextLane<1 then return nil,0 end
+
+  -- Never pass on the right: use only the immediately adjacent left lane.
+  local target=offsets[nextLane]
+  if laneFits(follower.seg,target,follower.half,metrics) and
+    laneIsFree(follower,leader,target,snapshots,metrics) then
+    return target,-1
   end
   return nil,0
 end
@@ -218,12 +218,18 @@ local function ensureCar(index, car, dt)
 
   if not p.settingsApplied then
     local okLevel, errLevel = pcall(physics.setAILevel, index, p.targetLevel)
-    local okAgg, errAgg = pcall(physics.setAIAggression, index, 1.0)
-    p.settingsApplied = okLevel and okAgg
-    H.log('AI_PROFILE id=%d level=%.3f aggression=1.00 levelOK=%s aggressionOK=%s',
-      index, p.targetLevel, tostring(okLevel), tostring(okAgg))
+    -- CSP documents 0.95 as the value corresponding to 100% aggression.
+    local okAgg, errAgg = pcall(physics.setAIAggression, index, 0.95)
+    local okCaution, errCaution = true, nil
+    if physics.setAICaution then
+      okCaution, errCaution = pcall(physics.setAICaution, index, 0.5)
+    end
+    p.settingsApplied = okLevel and okAgg and okCaution
+    H.log('AI_PROFILE id=%d level=%.3f aggression=0.95 caution=0.50 levelOK=%s aggressionOK=%s cautionOK=%s',
+      index, p.targetLevel, tostring(okLevel), tostring(okAgg), tostring(okCaution))
     if not okLevel then H.log('AI_PROFILE_ERROR id=%d kind=level err=%s', index, tostring(errLevel)) end
     if not okAgg then H.log('AI_PROFILE_ERROR id=%d kind=aggression err=%s', index, tostring(errAgg)) end
+    if not okCaution then H.log('AI_PROFILE_ERROR id=%d kind=caution err=%s', index, tostring(errCaution)) end
   end
   return p
 end
