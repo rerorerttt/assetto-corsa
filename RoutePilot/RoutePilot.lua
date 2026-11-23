@@ -170,6 +170,11 @@ local function saveLine()
   if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
   saveBounds()
   if wroteFile then
+    state.loaded=true
+    state.spawnDone=false
+    state.spawnWait=0
+    state.spawnStable=0
+    state.spawnLastRoster=""
     state.status=string.format("Сохранено: %d точек",#state.nodes)
     writeLog("SAVE_ROUTE points=%d",#state.nodes)
     flushLog()
@@ -301,6 +306,16 @@ local function boundsAt(index)
   elseif i<1 or i>n then i=clamp(i,1,n) end
   return safeNumber(state.boundsL[i],-1.5),safeNumber(state.boundsR[i],1.5)
 end
+local function laneOffsetForCar(carIndex,seg)
+  local left,right=boundsAt(seg)
+  local width=right-left
+  -- A 3 m boundary is a single lane: no passing and all cars hold 40 km/h.
+  if width<6.0 then return 0.0,false end
+  -- Keep two fixed 3.5 m lanes inside the recorded 7 m corridor.
+  local offset=math.min(1.75,right-0.65,-left-0.65)
+  if offset<1.0 then return 0.0,false end
+  return (carIndex%2==1) and offset or -offset,true
+end
 local function carAheadFull(carIndex,car,lateralWidth)
   local fx,fz=normalize2(car.look.x,car.look.z)
   local sim=ac.getSim()
@@ -423,9 +438,7 @@ local function trySpawnTeleport(sim,dt)
   end
   local roster=table.concat(aiCars,",")
   if #aiCars==0 then
-    if state.spawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
-      state.spawnDone=true
-    end
+    -- Keep waiting: AI cars can be added after the app has already started.
     return
   end
   if roster~=state.spawnLastRoster then
@@ -460,6 +473,16 @@ local function trySpawnTeleport(sim,dt)
         position,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
         moved=moved+1
+        local laneSeg=select(1,findNearestSeg(position,1))
+        local laneOffset,twoLane=laneOffsetForCar(carIndex,laneSeg)
+        local lanePosition=vec3(position.x-direction.z*laneOffset,position.y,
+          position.z+direction.x*laneOffset)
+        -- Re-apply at the lane centre after the initial route placement.
+        pcall(physics.setAICarPosition,carIndex,lanePosition,
+          vec3(-direction.x,-direction.y,-direction.z))
+        writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f",carIndex,
+          twoLane and (carIndex%2==1 and "LEFT_FAST" or "RIGHT_40") or "SINGLE_40",
+          laneOffset)
         state.p[carIndex]=nil  -- reset personality for the new position
       else failed=failed+1 end
     else failed=failed+1 end
@@ -485,7 +508,9 @@ local function teleportHome(carIndex,car)
     if spotIsClear(node,carIndex) then
       local nxt=state.nodes[(i%n)+1]
       local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
-      local pos=vec3(node.x-dx*4,node.y+0.1,node.z-dz*4)
+      local laneOffset=laneOffsetForCar(carIndex,i)
+      local pos=vec3(node.x-dz*laneOffset-dx*4,node.y+0.1,
+        node.z+dx*laneOffset-dz*4)
       local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
       if ok then
         state.p[carIndex]=nil
@@ -577,7 +602,8 @@ local function ensureDriver()
   Driver.setup(CFG,state,{
     segmentCount=segmentCount, segEnd=segEnd, walkLine=walkLine,
     findNearestSeg=findNearestSeg, lateralOf=lateralOf, boundsAt=boundsAt,
-    getVertexCurvature=getVertexCurvature, carAheadFull=carAheadFull,
+    laneOffset=laneOffsetForCar,
+    getVertexCurvature=getVertexCurvature,
     teleportHome=teleportHome, log=writeLog,
   })
   driverReady=true
