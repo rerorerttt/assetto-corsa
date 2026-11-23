@@ -277,7 +277,7 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
           math.max(0, safeNumber(car.speedMs, 0) - otherSpeed) * 1.5 + 10.0)
         local rearClear = math.max(LANE_REAR_CLEAR,
           math.max(0, otherSpeed - safeNumber(car.speedMs, 0)) * 1.5 + 10.0)
-        local inTransitionSweep = math.abs(longitudinal) < 10.0 and
+        local inTransitionSweep = math.abs(longitudinal) < 4.5 and
           otherLaneCoordinate >= math.min(p.laneOffset, targetOffset) - LANE_HALF_WIDTH and
           otherLaneCoordinate <= math.max(p.laneOffset, targetOffset) + LANE_HALF_WIDTH
         if (inTargetLane or reservingTarget) and
@@ -340,9 +340,21 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
   -- Recheck the target lane while crossing; a newly arriving car blocks
   -- acceleration until the transition is complete.
   if p.laneChangeProgress < 1.0 then
-    local clear = adjacentLaneIsClear(carIndex, car, p,
-      p.laneTargetOffset, tx, tz)
-    if not clear then p.trafficBlocked = true end
+    local clear, blockedBy, blockedGap = adjacentLaneIsClear(
+      carIndex, car, p, p.laneTargetOffset, tx, tz)
+    if not clear then
+      -- A car entered the destination lane after the merge began. Abort back
+      -- toward the original lane and brake behind the leader if one is present.
+      local returnOffset = p.laneStartOffset
+      p.laneStartOffset = p.laneOffset
+      p.laneTargetOffset = returnOffset
+      p.laneChangeProgress = 0
+      p.laneCooldown = LANE_CHANGE_COOLDOWN
+      p.laneRole = laneRoleForOffset(returnOffset, true)
+      p.trafficBlocked = true
+      H.log("LANE_CHANGE_ABORT id=%d blocked_by=%d gap=%.2f return=%.2f",
+        carIndex, blockedBy or -1, blockedGap or -1, returnOffset)
+    end
   end
 
   -- If the neighboring lane is unavailable, stay in lane and brake to a
