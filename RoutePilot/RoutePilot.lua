@@ -2523,6 +2523,48 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
   local correction = 0
   local speed = math.max(0, safeNumber(car.speedMs))
 
+  -- Cached track hits must protect the normal racing line too, not only
+  -- authorize overtakes. A post or wall recorded on the map is treated as
+  -- a forward threat even when a live ray misses its narrow collision mesh.
+  local staticThreatDistance = math.huge
+  local staticThreatSide = 0
+  if state.obstacleReady then
+    local carX = safeNumber(car.position.x)
+    local carY = safeNumber(car.position.y)
+    local carZ = safeNumber(car.position.z)
+    for i = 1, #state.obstacleMap do
+      local obstacle = state.obstacleMap[i]
+      if math.abs(safeNumber(obstacle.y) - carY) < 2.6 then
+        local dx = obstacle.x - carX
+        local dz = obstacle.z - carZ
+        local along = dx * fx + dz * fz
+        local lateral = dx * fz - dz * fx
+        if along > -1.5 and along < 18.0 and math.abs(lateral) < 3.4 and
+           along < staticThreatDistance then
+          staticThreatDistance = along
+          staticThreatSide = lateral
+        end
+      end
+    end
+  end
+
+  if staticThreatDistance < 14.0 then
+    if staticThreatSide >= 0 then
+      correction = -0.36
+    else
+      correction = 0.36
+    end
+    if staticThreatDistance < 9.0 then
+      targetSpeed = math.min(targetSpeed, math.max(9.0, speed * 0.72))
+    end
+    if staticThreatDistance < 4.0 then
+      targetSpeed = math.min(targetSpeed, math.max(5.0, speed * 0.42))
+    end
+    if staticThreatDistance < 2.0 then
+      targetSpeed = math.min(targetSpeed, 4.0)
+    end
+  end
+
   if center < 9.0 then
     if rightClear > leftClear + 0.35 then
       correction = -0.34
@@ -2550,6 +2592,12 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
   if rightClear < 2.0 and steer < 0 then steer = 0 end
 
   steer = clamp(steer + correction, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
+
+  if staticThreatDistance < 14.0 then
+    p.staticObstacleDistance = staticThreatDistance
+  else
+    p.staticObstacleDistance = -1
+  end
 
   if center < 2.0 and leftClear < 1.6 and rightClear < 1.6 and
      forwardClear < 2.0 then
