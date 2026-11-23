@@ -5,10 +5,10 @@
 local Driver = {}
 local CFG, state, H
 
-local LANE_CHANGE_TIME = 1.65
+local LANE_CHANGE_TIME = 2.3
 local LANE_CHANGE_COOLDOWN = 2.0
 local LANE_TRIGGER_DISTANCE = 10.0
-local LANE_TRIGGER_TTC = 2.2
+local LANE_TRIGGER_TTC = 3.0
 local LANE_FRONT_CLEAR = 32.0
 local LANE_REAR_CLEAR = 15.0
 local LANE_SAFETY_GAP = 5.0
