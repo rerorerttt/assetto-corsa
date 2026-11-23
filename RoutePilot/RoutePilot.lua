@@ -649,6 +649,10 @@ local function addPoint(pos)
   if #state.nodes>=CFG.MAX_ROUTE_POINTS then
     state.recLine=false; state.status="Достигнут лимит точек"; return
   end
+  if state.loopRoute and #state.nodes>=3 and
+    flatDist(state.nodes[1],pos)<CFG.RECORD_DISTANCE then
+    return
+  end
   if #state.nodes==0 or flatDist(state.nodes[#state.nodes],pos)>=CFG.RECORD_DISTANCE then
     state.nodes[#state.nodes+1]=vec3(pos.x,pos.y+0.1,pos.z)
     local half=WIDTH_PRESETS[state.widthPreset]/2
