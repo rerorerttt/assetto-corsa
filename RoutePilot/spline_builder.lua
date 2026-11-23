@@ -124,6 +124,10 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
       -- CSP SDK convention: negative lateral offset is the left side.
       local lanePoint = vec3(nodes[i].x + tz * laneOffset, nodes[i].y, nodes[i].z - tx * laneOffset)
       aiNodes[i],normals[i]=snapSurface(lanePoint)
+      -- Keep the shared center route at the real track height as well.
+      -- Spawn/recovery positions are sampled from state.nodes, not aiNodes.
+      local centerSnapped=snapSurface(nodes[i])
+      nodes[i].y=centerSnapped.y
     end
     local maxSpeed = math.max(MIN_SPEED_KMH, tonumber(maxSpeedKmh) or 300.0) / 3.6
 
