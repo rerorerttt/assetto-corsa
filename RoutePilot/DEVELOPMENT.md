@@ -65,7 +65,7 @@ Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 - Spawn waits for a stable AI roster and for every AI to report that the generated spline was accepted.
 - AI cars are spaced along the recorded loop. A nil direction argument asks CSP to align each car to its assigned spline.
 - A car below 0.8 m/s for 10 seconds after startup is treated as stuck. Recovery searches forward along the route for a position clear of other cars, then teleports with a nil direction so the spline controls heading.
-- Recovery does not yet handle a car airborne for 10 seconds. That remains open.
+- CSP does not expose a single airborne boolean in the inspected car state. RoutePilot uses the four `ac.StateWheel.load` values instead: all four below 120 N while the car is moving for 10 continuous seconds triggers the same free-position recovery. This is a heuristic, not a definitive flight-state API.
 
 ### Map and rendering
 
