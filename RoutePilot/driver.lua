@@ -456,11 +456,12 @@ end
 
 function Driver.telemetryLine(index, car, p)
   return string.format(
-    'CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f AI_LEVEL=%.3f PACE=%.3f SPLINE=%s LINE_ERROR=%.2f SEG=%d LAT=%.2f PASS=%s LEADER=%s OFFSET=%.2f TARGET_OFFSET=%.2f',
+    'CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f AI_LEVEL=%.3f PACE=%.3f SPLINE=%s LINE_ERROR=%.2f SEG=%d LAT=%.2f LANE=%d HOME=%.2f PASS=%s LEADER=%s OFFSET=%.2f TARGET_OFFSET=%.2f',
     index, car.position.x, car.position.y, car.position.z, number(car.speedMs, 0),
     p.targetLevel or -1, p.pace or -1, tostring(p.splineLoaded), number(p.lineDist, -1),
-    p.segIdx or -1, number(p.lateral, 0), tostring(p.passState or 'NONE'),
-    tostring(p.passLeader or '-'), number(p.currentOffset, 0), number(p.targetOffset, 0)
+    p.segIdx or -1, number(p.lateral, 0), p.laneIndex or 0, number(p.homeOffset, 0),
+    tostring(p.passState or 'NONE'), tostring(p.passLeader or '-'),
+    number(p.currentOffset, 0), number(p.targetOffset, 0)
   )
 end
 
