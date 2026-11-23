@@ -740,82 +740,104 @@ end
 -- Recording: only existing nodes within 8 m back .. 30 m ahead of the player
 -- (data is written only under the car; the loop segment is never shown far).
 -- Finished track ("Показать линии"): the whole route at long distance.
+-- Boundary vertices use the averaged tangent at each route node. This keeps
+-- the two edges connected when their width changes from point to point.
+local function boundaryPoint(index, offset, partial)
+  local n=#state.nodes
+  local prevIndex,nextIndex
+  if partial then
+    prevIndex=math.max(1,index-1)
+    nextIndex=math.min(n,index+1)
+  else
+    prevIndex=(index-2)%n+1
+    nextIndex=index%n+1
+  end
+  local prev,cur,nxt=state.nodes[prevIndex],state.nodes[index],state.nodes[nextIndex]
+  local tx,tz=normalize2(nxt.x-prev.x,nxt.z-prev.z)
+  return vec3(cur.x-tz*offset,cur.y+0.06,cur.z+tx*offset)
+end
+
 render.on('main.track.transparent', function()
   local n=#state.nodes
   if n<2 then return end
   local isRec=state.recLine or state.recBounds
   if not (state.showWorldLines or isRec) then return end
-  local ok=pcall(function()
+  local ok,err=pcall(function()
     local player=ac.getCar(0)
     if not player then return end
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
+    local partial=state.recLine
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
+
     if isRec then
-      -- forward window up to PREVIEW_AHEAD meters
-      fromI=seg; toI=seg
+      fromI,toI=seg,seg
       local dist=0
       local i=seg
       while dist<CFG.PREVIEW_AHEAD do
-        local a=state.nodes[i]
-        local b=state.nodes[(i%n)+1]
-        dist=dist+flatDist(a,b)
-        i=(i%n)+1
+        if partial and i>=n then break end
+        local nextIndex=i%n+1
+        dist=dist+flatDist(state.nodes[i],state.nodes[nextIndex])
+        i=nextIndex
         toI=i
         if i==seg then break end
       end
-      -- backward window up to PREVIEW_BACK meters
       local j=seg
       local back=0
       while back<CFG.PREVIEW_BACK do
-        local prev=(j-2)%n+1
-        back=back+flatDist(state.nodes[prev],state.nodes[j])
-        j=prev
-        fromI=prev
+        if partial and j<=1 then break end
+        local prevIndex=(j-2)%n+1
+        back=back+flatDist(state.nodes[prevIndex],state.nodes[j])
+        j=prevIndex
+        fromI=j
+        if j==seg then break end
       end
     end
-    -- draw all segments in [fromI..toI] (loop-aware); finished track: all
+
     local count=0
-    local maxSteps=n
     local i2=fromI
-    while count<=maxSteps do
+    while count<n do
       count=count+1
-      local node=state.nodes[i2]
-      local nx=state.nodes[(i2%n)+1]
-      local lx,lz=normalize2(nx.x-node.x,nx.z-node.z)
-      local al,ar=boundsAt(i2)
-      -- distance cull only for the finished track (long range view)
-      if isRec or true then
-        render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
-        render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
-          vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
-        render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
-          vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+      local nextIndex
+      if i2<n then
+        nextIndex=i2+1
+      elseif state.loopRoute and not partial then
+        nextIndex=1
+      else
+        break
       end
+      local node,nx=state.nodes[i2],state.nodes[nextIndex]
+      render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
+      local left,right=boundsAt(i2)
+      local a1=boundaryPoint(i2,left,partial)
+      local a2=boundaryPoint(nextIndex,boundsAt(nextIndex),partial)
+      local b1=boundaryPoint(i2,right,partial)
+      local b2=boundaryPoint(nextIndex,select(2,boundsAt(nextIndex)),partial)
+      render.debugLine(a1,a2,RED)
+      render.debugLine(b1,b2,RED)
       if i2==toI then break end
-      i2=(i2%n)+1
+      i2=nextIndex
     end
   end)
   if not ok then
-    writeLog("DRAW3D_ERROR"); flushLog()
+    writeLog("DRAW3D_ERROR err=%s",tostring(err))
+    flushLog()
   end
 end)
 
--- MAP: window-local coords (comfy_map pattern). Bigger scale, thick lines,
--- bounds with a minimum offset so they never merge with the AI line.
+-- MAP: drawn directly in the main app window (not a detached map window).
+-- The map uses the same real boundary vertices as the 3D overlay; no artificial
+-- pixel offsets are applied, so displayed road width matches the saved limits.
 local function computeMapBounds()
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
-  for i=1,#state.nodes do
-    local nd=state.nodes[i]
-    local l,r=boundsAt(i)
-    local b=segEnd(i)
-    local lx,lz=normalize2(b.x-nd.x,b.z-nd.z)
-    local pts={
-      {x=nd.x-lz*l,z=nd.z+lx*l},
-      {x=nd.x-lz*r,z=nd.z+lx*r},
-    }
+  local n=#state.nodes
+  for i=1,n do
+    local left,right=boundsAt(i)
+    local lp=boundaryPoint(i,left,state.recLine)
+    local rp=boundaryPoint(i,right,state.recLine)
+    local pts={lp,rp,state.nodes[i]}
     for _,q in ipairs(pts) do
       if q.x<minX then minX=q.x end
       if q.x>maxX then maxX=q.x end
@@ -826,6 +848,7 @@ local function computeMapBounds()
   if minX==math.huge then return nil end
   return {minX=minX,maxX=maxX,minZ=minZ,maxZ=maxZ}
 end
+
 local function drawMapInRect(q0,q1)
   local b=computeMapBounds()
   if not b then return end
@@ -838,67 +861,61 @@ local function drawMapInRect(q0,q1)
   local cz=(b.minZ+b.maxZ)*0.5
   local mx=(q0.x+q1.x)*0.5
   local my=(q0.y+q1.y)*0.5
-  local function segVisible(x1,y1,x2,y2)
-    return not (x1<q0.x and x2<q0.x) and not (x1>q1.x and x2>q1.x)
-      and not (y1<q0.y and y2<q0.y) and not (y1>q1.y and y2>q1.y)
+  local function toScreen(p)
+    return vec2(mx+(p.x-cx)*scale,my+(p.z-cz)*scale)
   end
+  local function segVisible(a,bp)
+    return not (a.x<q0.x and bp.x<q0.x) and not (a.x>q1.x and bp.x>q1.x)
+      and not (a.y<q0.y and bp.y<q0.y) and not (a.y>q1.y and bp.y>q1.y)
+  end
+
   local n=#state.nodes
-  local minOff=CFG.MAP_MIN_OFFSET
-  -- bounds: dark red, thick, min offset from the line
   for pass=1,2 do
-    local prev
-    for i=1,n do
-      local node=state.nodes[i]
-      local nxt=state.nodes[(i%n)+1]
-      local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
-      local l,r=boundsAt(i)
-      local off=(pass==1) and l or r
-      if math.abs(off)*scale<minOff then
-        off=(off>=0 and 1 or -1)*(minOff/math.max(scale,0.0001))
-      end
-      local px,pz=node.x-lz*off,node.z+lx*off
-      local sx=mx+(px-cx)*scale
-      local sy=my+(pz-cz)*scale
-      if prev and segVisible(prev.x,prev.y,sx,sy) then
-        ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),3)
-      end
-      prev=vec2(sx,sy)
+    local color=rgbm(0.55,0.05,0.05,1)
+    for i=1,n-1 do
+      local left,right=boundsAt(i)
+      local off=pass==1 and left or right
+      local a=toScreen(boundaryPoint(i,off,state.recLine))
+      local nextOff=pass==1 and select(1,boundsAt(i+1)) or select(2,boundsAt(i+1))
+      local bp=toScreen(boundaryPoint(i+1,nextOff,state.recLine))
+      if segVisible(a,bp) then ui.drawLine(a,bp,color,3) end
+    end
+    if state.loopRoute and not state.recLine then
+      local left,right=boundsAt(n)
+      local off=pass==1 and left or right
+      local a=toScreen(boundaryPoint(n,off,false))
+      local firstOff=pass==1 and select(1,boundsAt(1)) or select(2,boundsAt(1))
+      local bp=toScreen(boundaryPoint(1,firstOff,false))
+      if segVisible(a,bp) then ui.drawLine(a,bp,color,3) end
     end
   end
-  -- AI line: yellow, thick
-  do
-    local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
-    for i=2,n do
-      local sx=mx+(state.nodes[i].x-cx)*scale
-      local sy=my+(state.nodes[i].z-cz)*scale
-      if segVisible(prev.x,prev.y,sx,sy) then
-        ui.drawLine(prev,vec2(sx,sy),rgbm(1.0,0.85,0.0,0.95),3)
-      end
-      prev=vec2(sx,sy)
-    end
-    if state.loopRoute then
-      local first=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
-      if segVisible(prev.x,prev.y,first.x,first.y) then
-        ui.drawLine(prev,first,rgbm(1.0,0.85,0.0,0.95),3)
-      end
-    end
+
+  for i=1,n-1 do
+    local a=toScreen(state.nodes[i])
+    local bp=toScreen(state.nodes[i+1])
+    if segVisible(a,bp) then ui.drawLine(a,bp,rgbm(1.0,0.85,0.0,0.95),3) end
   end
-  -- cars: player = cyan, AI = white/green when overtaking
+  if state.loopRoute and not state.recLine then
+    local a=toScreen(state.nodes[n])
+    local bp=toScreen(state.nodes[1])
+    if segVisible(a,bp) then ui.drawLine(a,bp,rgbm(1.0,0.85,0.0,0.95),3) end
+  end
+
   local sim=ac.getSim()
   if sim then
     for i=0,sim.carsCount-1 do
       local car=ac.getCar(i)
       if car and car.isActive then
-        local s=vec2(mx+(car.position.x-cx)*scale,my+(car.position.z-cz)*scale)
-        if s.x>q0.x and s.x<q1.x and s.y>q0.y and s.y<q1.y then
+        local pnt=toScreen(car.position)
+        if pnt.x>q0.x and pnt.x<q1.x and pnt.y>q0.y and pnt.y<q1.y then
           if i==0 then
-            ui.drawCircleFilled(s,5,rgbm(0.0,0.8,1.0,1.0),12)
+            ui.drawCircleFilled(pnt,5,rgbm(0.0,0.8,1.0,1.0),12)
           else
             local p=state.p[i]
             if p and p.passState and p.passState~="RETURN" then
-              ui.drawCircleFilled(s,4,rgbm(0.2,1.0,0.4,1.0),10)
+              ui.drawCircleFilled(pnt,4,rgbm(0.2,1.0,0.4,1.0),10)
             else
-              ui.drawCircleFilled(s,4,rgbm(1,1,1,0.95),10)
+              ui.drawCircleFilled(pnt,4,rgbm(1,1,1,0.95),10)
             end
           end
         end
