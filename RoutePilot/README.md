@@ -29,7 +29,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 - Records and replays the player's route per track/layout.
 - Keeps the existing boundary recorder and width presets (3, 7, 11 and 15 m).
-- Deterministic traffic assignment: odd AI car indices use the left lane; even indices use the right lane.
+- Deterministic traffic assignment by active roster order: the first AI car uses the left lane, the second the right lane, then the assignment alternates. Existing assignments remain stable if cars are added or temporarily disappear.
 - With a 7 m or wider recorded corridor, the two virtual lane centres are fixed at +1.75 m (left/fast) and -1.75 m (right/40 km/h) from the route centreline. The offsets use the route's local tangent, so the lanes follow bends without visible lane markings.
 - The right lane targets 40 km/h. The left lane has no fixed 40 km/h limiter and uses the route-curvature planner to brake for corners.
 - A 3 m corridor is treated as a single lane: all AI cars follow the centreline at 40 km/h; no passing lane is created.
