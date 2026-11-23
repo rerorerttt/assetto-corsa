@@ -1649,6 +1649,8 @@ local function updateTrafficCoordinator(sim, dt)
 
       p.routeProgress = routeProgress
       p.routeTotalLength = routeTotalLength
+      p.routeOffsetActual = routeOffsetActual
+      p.trafficDirectionSign = directionSign
 
       infos[i] = {
         index = i,
