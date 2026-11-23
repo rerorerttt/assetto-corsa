@@ -510,8 +510,10 @@ local function spotIsClear(pos, exceptIndex, ignored)
       local other=ac.getCar(i)
       if other and other.isActive then
         local dx=other.position.x-pos.x
+        local dy=other.position.y-pos.y
         local dz=other.position.z-pos.z
-        if dx*dx+dz*dz < clearSq then return false end
+        -- Cars on a different bridge/deck do not occupy this spawn position.
+        if dx*dx+dy*dy+dz*dz < clearSq then return false end
       end
     end
   end
@@ -618,7 +620,11 @@ local function trySpawnTeleport(sim,dt)
     local plannedClear=true
     if position then
       for j=1,#planned do
-        if flatDist(position,planned[j])<CFG.SAFE_RESPAWN_CLEAR*2 then
+        local dx=position.x-planned[j].x
+        local dy=position.y-planned[j].y
+        local dz=position.z-planned[j].z
+        local clear=CFG.SAFE_RESPAWN_CLEAR*2
+        if dx*dx+dy*dy+dz*dz<clear*clear then
           plannedClear=false
           break
         end
