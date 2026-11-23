@@ -514,6 +514,9 @@ function Driver.release(index)
   if not p then return end
   pcall(physics.setAISplineAbsoluteOffset, index, 0, false)
   pcall(physics.setAISpline, index, nil, nil)
+  if physics.setAICaution then pcall(physics.setAICaution, index, 1.0) end
+  if physics.setAIThrottleLimit then pcall(physics.setAIThrottleLimit, index, 1.0) end
+  if physics.setAITopSpeed then pcall(physics.setAITopSpeed, index, 1e9) end
   if p.baseLevel then pcall(physics.setAILevel, index, p.baseLevel) end
   if p.baseAggression then pcall(physics.setAIAggression, index, p.baseAggression) end
   S.p[index], S.trafficHints[index] = nil, nil
