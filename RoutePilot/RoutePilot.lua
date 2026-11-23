@@ -61,6 +61,14 @@ local CFG = {
   COLLISION_RADIUS = 6.5,
   COLLISION_EMERGENCY_RADIUS = 3.2,
 
+  OVERTAKE_DISTANCE = 42.0,
+  OVERTAKE_REAR_DISTANCE = 30.0,
+  OVERTAKE_MIN_ADVANTAGE = 1.5,
+  OVERTAKE_OFFSET = 1.35,
+  OVERTAKE_CLEARANCE = 2.2,
+  OVERTAKE_RELEASE_DISTANCE = 14.0,
+  OVERTAKE_OFFSET_RATE = 1.8,
+
   LOG_INTERVAL = 1.0,
   MAX_ROUTE_POINTS = 50000,
 }
@@ -257,8 +265,7 @@ local function parseNodes(raw)
     return loaded
   end
 
-  return nil
-end
+  return nilend
 
 ------------------------------------------------------------
 -- SAVE ROUTE
@@ -428,6 +435,7 @@ end
 local function findRouteDistanceAtPosition(position, metrics)
   local bestDistanceSq = math.huge
   local bestRouteDistance = 0
+  local bestSignedOffset = 0
 
   for i = 1, #metrics.segments do
     local seg = metrics.segments[i]
@@ -453,11 +461,12 @@ local function findRouteDistanceAtPosition(position, metrics)
       if distanceSq < bestDistanceSq then
         bestDistanceSq = distanceSq
         bestRouteDistance = seg.start + seg.length * t
+        bestSignedOffset = (dx * vz - dz * vx) / math.sqrt(lenSq)
       end
     end
   end
 
-  return bestRouteDistance, math.sqrt(bestDistanceSq)
+  return bestRouteDistance, math.sqrt(bestDistanceSq), bestSignedOffset
 end
 
 local function sampleSpawnRoute(metrics, distance)
@@ -517,8 +526,7 @@ end
 local function teleportAICarsToRoute(aiCars)
   state.spawnPerformed = true
 
-  if type(physics) ~= "table" or type(physics.setAICarPosition) ~= "function" then
-    state.status = "CSP: physics.setAICarPosition недоступна"
+  if type(physics) ~= "table" or type(physics.setAICarPosition) ~= "function" then    state.status = "CSP: physics.setAICarPosition недоступна"
     writeLog("SPAWN_ABORT reason=setAICarPosition_unavailable")
     state.spawnDone = true
     flushLog()
@@ -777,11 +785,18 @@ local function newPersonality(carIndex)
     targetZ = 0,
 
     targetSpeed = 0,
-
     slipSeverity = 0,
     stability = 1,
 
     lastCurve = 0,
+
+    routeDistance = 0,
+    routeOffsetActual = 0,
+    routeOffset = 0,
+    desiredRouteOffset = 0,
+    passTargetIndex = nil,
+    passRole = nil,
+    passSide = 0,
   }
 
   if car and #state.nodes >= 2 then
@@ -1038,7 +1053,6 @@ end
 local function planTargetSpeed(p, speed)
   local nodes = state.nodes
   local count = #nodes
-
   local segmentCount = state.loopRoute and count or count - 1
 
   local targetSpeed = p.cruiseSpeed
@@ -1182,6 +1196,9 @@ end
 
 local function calculateSteering(car, p, speed, fx, fz)
   local targetX, targetZ = getLookaheadTarget(car, p, speed)
+  local routeOffset = safeNumber(p.routeOffset, 0)
+  targetX = targetX + fz * routeOffset
+  targetZ = targetZ - fx * routeOffset
 
   p.targetX = targetX
   p.targetZ = targetZ
@@ -1258,10 +1275,194 @@ local function filterSteering(p, target, dt)
 end
 
 ------------------------------------------------------------
+-- ROUTE-RELATIVE OVERTAKING AND YIELDING
+------------------------------------------------------------
+
+local function routeDelta(fromDistance, toDistance, routeLength, loop)
+  local delta = toDistance - fromDistance
+  if loop and routeLength > 0 then
+    if delta > routeLength * 0.5 then
+      delta = delta - routeLength
+    elseif delta < -routeLength * 0.5 then
+      delta = delta + routeLength
+    end
+  end
+  return delta
+end
+
+local function getPassSide(fasterIndex, slowerIndex)
+  -- Both cars derive the same side from the same pair of car indices.
+  local key = fasterIndex * 17 + slowerIndex * 31
+  return key % 2 == 0 and 1 or -1
+end
+
+local function isRouteLaneFree(sim, metrics, ownIndex, ignoreIndex, ownDistance, laneOffset)
+  for i = 0, sim.carsCount - 1 do
+    if i ~= ownIndex and i ~= ignoreIndex then
+      local other = ac.getCar(i)
+      if other and other.isActive then
+        local otherDistance, lineError, otherOffset =
+          findRouteDistanceAtPosition(other.position, metrics)
+
+        if lineError < 8.0 then
+          local along = routeDelta(
+            ownDistance,
+            otherDistance,
+            metrics.length,
+            metrics.loop
+          )
+
+          if math.abs(along) < 28.0 and
+             math.abs(otherOffset - laneOffset) < CFG.OVERTAKE_CLEARANCE then
+            return false
+          end
+        end
+      end
+    end
+  end
+
+  return true
+end
+
+local function updateOvertakeState(carIndex, car, p, speed, dt)
+  local metrics = buildSpawnRouteMetrics()
+  if not metrics then
+    p.desiredRouteOffset = 0
+    p.routeOffset = lerp(p.routeOffset or 0, 0, clamp(dt * CFG.OVERTAKE_OFFSET_RATE, 0, 1))
+    p.passTargetIndex = nil
+    p.passRole = nil
+    return
+  end
+
+  local ownDistance, lineError, ownOffset =
+    findRouteDistanceAtPosition(car.position, metrics)
+
+  p.routeDistance = ownDistance
+  p.routeOffsetActual = ownOffset
+
+  local targetIndex = p.passTargetIndex
+  local targetRole = p.passRole
+  local targetSide = p.passSide or 0
+  local targetDelta = nil
+
+  if targetIndex ~= nil then
+    local targetCar = ac.getCar(targetIndex)
+    if targetCar and targetCar.isActive then
+      local targetDistance, targetError =
+        findRouteDistanceAtPosition(targetCar.position, metrics)
+
+      if targetError < 10.0 then
+        targetDelta = routeDelta(
+          ownDistance,
+          targetDistance,
+          metrics.length,
+          metrics.loop
+        )
+      end
+    end
+
+    local keep = targetDelta ~= nil
+    if targetRole == "pass" then
+      keep = keep and targetDelta > -CFG.OVERTAKE_RELEASE_DISTANCE
+        and targetDelta < CFG.OVERTAKE_DISTANCE
+    elseif targetRole == "yield" then
+      keep = keep and targetDelta < CFG.OVERTAKE_RELEASE_DISTANCE
+        and targetDelta > -CFG.OVERTAKE_REAR_DISTANCE
+    else
+      keep = false
+    end
+
+    if not keep then
+      targetIndex = nil
+      targetRole = nil
+      targetSide = 0
+      targetDelta = nil
+    end
+  end
+
+  if targetIndex == nil and lineError < 12.0 then
+    local bestAheadGap = math.huge
+    local bestAheadIndex = nil
+    local bestRearGap = math.huge
+    local bestRearIndex = nil
+
+    for i = 0, metrics and (ac.getSim().carsCount - 1) or -1 do
+      if i ~= carIndex then
+        local other = ac.getCar(i)
+        if other and other.isActive then
+          local otherDistance, otherError, otherOffset =
+            findRouteDistanceAtPosition(other.position, metrics)
+
+          if otherError < 8.0 and math.abs(otherOffset - ownOffset) < 4.5 then
+            local delta = routeDelta(
+              ownDistance,
+              otherDistance,
+              metrics.length,
+              metrics.loop
+            )
+            local otherSpeed = math.max(0, safeNumber(other.speedMs))
+
+            if delta > 3.0 and delta < CFG.OVERTAKE_DISTANCE and
+               speed > otherSpeed + CFG.OVERTAKE_MIN_ADVANTAGE and
+               delta < bestAheadGap then
+              bestAheadGap = delta
+              bestAheadIndex = i
+            elseif delta < -3.0 and delta > -CFG.OVERTAKE_REAR_DISTANCE and
+                   otherSpeed > speed + CFG.OVERTAKE_MIN_ADVANTAGE and
+                   -delta < bestRearGap then
+              bestRearGap = -delta
+              bestRearIndex = i
+            end
+          end
+        end
+      end
+    end
+
+    if bestAheadIndex ~= nil then
+      targetIndex = bestAheadIndex
+      targetRole = "pass"
+      targetSide = getPassSide(carIndex, targetIndex)
+      targetDelta = bestAheadGap
+    elseif bestRearIndex ~= nil then
+      targetIndex = bestRearIndex
+      targetRole = "yield"
+      targetSide = getPassSide(targetIndex, carIndex)
+      targetDelta = -bestRearGap
+    end
+  end
+
+  local desired = 0
+  if targetIndex ~= nil and targetRole ~= nil then
+    local laneSide = targetRole == "pass" and targetSide or -targetSide
+    local candidateOffset = laneSide * CFG.OVERTAKE_OFFSET
+
+    local sim = ac.getSim()
+    if sim and isRouteLaneFree(
+      sim,
+      metrics,
+      carIndex,
+      targetIndex,
+      ownDistance,
+      candidateOffset
+    ) then
+      desired = candidateOffset
+    end
+  end
+
+  p.passTargetIndex = targetIndex
+  p.passRole = targetRole
+  p.passSide = targetSide
+  p.desiredRouteOffset = desired
+
+  local alpha = clamp(dt * CFG.OVERTAKE_OFFSET_RATE, 0, 1)
+  p.routeOffset = lerp(p.routeOffset or 0, desired, alpha)
+end
+
+------------------------------------------------------------
 -- CAR FOLLOWING AND COLLISION PREDICTION
 ------------------------------------------------------------
 
-local function carAhead(carIndex, car)
+local function carAhead(carIndex, car, personality)
   local fx, fz = normalize2(car.look.x, car.look.z)
   local sim = ac.getSim()
 
@@ -1282,6 +1483,15 @@ local function carAhead(carIndex, car)
       local other = ac.getCar(i)
 
       if other and other.isActive then
+        local ignorePassingPair = false
+        if personality and personality.passTargetIndex == i then
+          local otherPersonality = state.p[i]
+          local otherOffset = otherPersonality and otherPersonality.routeOffsetActual or 0
+          local ownOffset = personality.routeOffsetActual or 0
+          ignorePassingPair = math.abs(ownOffset - otherOffset) >= CFG.OVERTAKE_CLEARANCE
+        end
+
+        if not ignorePassingPair then
         local dx = safeNumber(other.position.x) - safeNumber(car.position.x)
         local dz = safeNumber(other.position.z) - safeNumber(car.position.z)
 
@@ -1297,8 +1507,7 @@ local function carAhead(carIndex, car)
         if forward > 0 and forward < 90 and lateral < CFG.FOLLOW_LATERAL + 1.5 then
           if not bestGap or forward < bestGap then
             bestGap = forward
-            bestSpeed = otherSpeed
-          end
+            bestSpeed = otherSpeed          end
         end
 
         -- Immediate collision danger, including stationary vehicles.
@@ -1343,6 +1552,7 @@ local function carAhead(carIndex, car)
               riskTarget = math.min(riskTarget, safe)
             end
           end
+        end
         end
       end
     end
@@ -1557,8 +1767,7 @@ local function recoverAICar(carIndex, car, reason)
     p.offRouteTimer = 0
   end
 
-  state.status = string.format(
-    "Восстановление AI #%d: %s",
+  state.status = string.format(    "Восстановление AI #%d: %s",
     carIndex,
     reason
   )
@@ -1673,6 +1882,7 @@ local function updateLineCar(carIndex, car, dt)
     dt
   )
 
+  updateOvertakeState(carIndex, car, p, speed, dt)
   calculateStability(p)
 
   local steerTarget = calculateSteering(
@@ -1694,7 +1904,7 @@ local function updateLineCar(carIndex, car, dt)
 
   -- Check the car ahead and predict possible collisions.
   local gap, leaderSpeed, collisionTarget =
-    carAhead(carIndex, car)
+    carAhead(carIndex, car, p)
 
   if gap then
     local safeSpeed = math.sqrt(math.max(
@@ -1817,8 +2027,7 @@ local function recordSecondTelemetry(sim)
         "LINE_ERROR=%.2f " ..
         "AIR_TIMER=%.1f " ..
         "STUCK_TIMER=%.1f " ..
-        "COLLISION_RISK=%.2f " ..
-        "RECOVERIES=%d " ..
+        "COLLISION_RISK=%.2f " ..        "RECOVERIES=%d " ..
         "SEGMENT=%d " ..
         "VELOCITY=(%.2f,%.2f) " ..
         "LOOK=(%.2f,%.2f)",
@@ -2077,8 +2286,7 @@ function windowMain(dt)
 
   ui.sameLine()
 
-  if ui.button("Загрузить", vec2(96, 24)) then
-    loadLine()
+  if ui.button("Загрузить", vec2(96, 24)) then    loadLine()
   end
 
   ui.sameLine()
@@ -2132,11 +2340,3 @@ end
 ------------------------------------------------------------
 
 loadLine()
-
-writeLog(
-  "ROUTEPILOT INITIALIZED track=%s points=%d",
-  getTrackTag(),
-  #state.nodes
-)
-
-flushLog()
