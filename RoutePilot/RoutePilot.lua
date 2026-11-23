@@ -23,7 +23,6 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  -- steering / speed (arcade)
   LOOKAHEAD_BASE = 12.0,
   LOOKAHEAD_SPEED = 0.7,
   LOOKAHEAD_MIN = 12.0,
@@ -46,17 +45,14 @@ local CFG = {
   SLIP_DAMP_MIN_SPEED = 8.0,
   SLIP_DAMP_MIN_ANGLE = 4.0 * math.pi / 180,
 
-  -- bounds recording
-  BOUNDS_MIN_PASS = 4.0,     -- the untouched edge keeps at least this width
-  BOUNDS_DEFAULT_HALF = 10.0,-- fallback if no bounds file
+  BOUNDS_MIN_PASS = 4.0,
+  BOUNDS_DEFAULT_HALF = 10.0,
 
-  -- spawning / rescue
   SPAWN_GAP = 25.0,
   SPAWN_MIN_GAP = 14.0,
   SPAWN_STABLE_TIME = 0.35,
   SPAWN_WAIT_TIMEOUT = 8.0,
 
-  -- line smoothing
   SMOOTH_PASSES = 3,
   SMOOTH_WINDOW = 5,
 
@@ -64,22 +60,22 @@ local CFG = {
   MAX_ROUTE_POINTS = 50000,
   RECORD_DISTANCE = 3.0,
 
-  MAP_HEIGHT = 250.0,        -- fixed map height: part of the window layout
+  MAP_HEIGHT = 250.0,
 }
 
 local state = {
   enabled = true,
-  recLine = false,           -- recording the AI line (+bounds)
-  recBounds = false,         -- re-recording bounds only
+  recLine = false,
+  recBounds = false,
   loopRoute = true,
 
   speedMax = 170,
   followGap = 8.0,
-  boundsWidth = 6,           -- live slider, integer meters (half-width)
+  boundsWidth = 6,
 
-  boundsL = {},              -- per-node left bound offset, m (negative)
-  boundsR = {},              -- per-node right bound offset, m (positive)
-  recBoundsSeg = 0,          -- last segment updated during bounds recording
+  boundsL = {},
+  boundsR = {},
+  recBoundsSeg = 0,
 
   spawnDone = false,
   spawnPerformed = false,
@@ -319,7 +315,7 @@ local function loadLine()
 end
 
 ------------------------------------------------------------
--- LINE SMOOTHING (noise removal; bounds follow the line)
+-- LINE SMOOTHING
 ------------------------------------------------------------
 
 local function smoothLine()
@@ -422,7 +418,6 @@ local function getVertexCurvature(index)
   return angle / math.max(0.1, (l1 + l2) * 0.5)
 end
 
--- generic nearest segment for a world position
 local function findNearestSeg(pos, hintSeg)
   local nodes = state.nodes
   local segs = segmentCount()
@@ -469,7 +464,6 @@ local function findNearestSeg(pos, hintSeg)
   return bestSeg, bestT, math.sqrt(bestDist)
 end
 
--- signed lateral offset of a position from the line at segment seg
 local function lateralOf(pos, seg)
   local a = state.nodes[seg]
   local b = segEnd(seg)
@@ -477,7 +471,6 @@ local function lateralOf(pos, seg)
   return (pos.x - a.x) * -lz + (pos.z - a.z) * lx
 end
 
--- bounds at a node (clamped fallback)
 local function boundsAt(index)
   local n = #state.nodes
   if n < 1 then return -CFG.BOUNDS_DEFAULT_HALF, CFG.BOUNDS_DEFAULT_HALF end
@@ -493,7 +486,7 @@ local function boundsAt(index)
 end
 
 ------------------------------------------------------------
--- CARS AHEAD (lateral offsets relative to the line)
+-- CARS AHEAD
 ------------------------------------------------------------
 
 local function carAheadFull(carIndex, car, lateralWidth)
@@ -515,7 +508,7 @@ local function carAheadFull(carIndex, car, lateralWidth)
               bestGap = forward
               bestSpeed = math.max(0, safeNumber(other.speedMs))
               bestIndex = i
-              bestLat = lateralOf(other.position, findNearestSeg(other.position, 1))
+              bestLat = lateralOf(other.position, select(1, findNearestSeg(other.position, 1)))
             end
           end
         end
@@ -548,7 +541,7 @@ local function recordSecondTelemetry(sim)
 end
 
 ------------------------------------------------------------
--- SPAWN (teleport AI onto the line; dir inverted — verified)
+-- SPAWN
 ------------------------------------------------------------
 
 local function buildSpawnRouteMetrics()
@@ -718,7 +711,7 @@ local function updateStartupTeleport(sim, dt)
 end
 
 ------------------------------------------------------------
--- RESCUE: teleport a stuck / out-of-bounds car back onto the line
+-- RESCUE
 ------------------------------------------------------------
 
 local function teleportHome(carIndex, car)
@@ -727,7 +720,6 @@ local function teleportHome(carIndex, car)
   end
   local n = #state.nodes
   if n < 2 then return false end
-  -- nearest node to the car
   local bestI, bestD = 1, math.huge
   for i = 1, n do
     local d = flatDist(car.position, state.nodes[i])
@@ -737,9 +729,8 @@ local function teleportHome(carIndex, car)
     end
   end
   local node = state.nodes[bestI]
-  local nxt = state.nodes((bestI % n) + 1)
+  local nxt = state.nodes[(bestI % n) + 1]
   local dx, dz = normalize2(nxt.x - node.x, nxt.z - node.z)
-  -- teleport a bit BEFORE the node, facing along the line (dir inverted)
   local pos = vec3(node.x - dx * 4, node.y + 0.1, node.z - dz * 4)
   local ok = pcall(physics.setAICarPosition, carIndex, pos, vec3(-dx, 0, -dz))
   if ok then
@@ -751,7 +742,7 @@ local function teleportHome(carIndex, car)
 end
 
 ------------------------------------------------------------
--- RECORDING: AI LINE + BOUNDS
+-- RECORDING
 ------------------------------------------------------------
 
 local function addPoint(pos)
@@ -768,10 +759,6 @@ local function addPoint(pos)
   end
 end
 
--- re-record ONLY the bounds from the player's position:
---  * starts only if the player is INSIDE current bounds;
---  * the edge on the player's side is written at the player's actual distance;
---  * the other edge keeps at least BOUNDS_MIN_PASS of passable width.
 local function startBoundsRecording(player)
   if #state.nodes < 2 then
     state.status = "Сначала запишите линию ИИ"
@@ -801,8 +788,6 @@ local function updateBoundsRecording(player)
 
   local newL, newR = l, r
   if off >= 0 then
-    -- player drives along the RIGHT edge: right = actual distance,
-    -- left keeps passable width (never narrower than MIN_PASS)
     newR = math.max(off, 1.0)
     newL = math.min(l, newR - CFG.BOUNDS_MIN_PASS)
     if newL > -1 then newL = -1 end
@@ -821,7 +806,6 @@ local function updateBoundsRecording(player)
     state.boundsR[idx] = newR
   end
 
-  -- when the player crosses into a new segment, also stamp the passed one
   if state.recBoundsSeg and seg ~= state.recBoundsSeg then
     local prev = state.recBoundsSeg
     state.boundsL[prev] = newL
@@ -934,21 +918,16 @@ function script.update(dt)
 end
 
 ------------------------------------------------------------
--- UI: controls on top; the map is a fixed-height layout item
--- (part of the window layout — it cannot float or detach)
+-- UI
 ------------------------------------------------------------
-
-local mapBoundsCache = nil
 
 local function computeMapBounds()
   local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
   for i = 1, #state.nodes do
     local n = state.nodes[i]
     local l, r = boundsAt(i)
-    local a = state.nodes[i]
     local b = segEnd(i)
-    local lx, lz = normalize2(b.x - a.x, b.z - a.z)
-    -- include both bound edges in the extent
+    local lx, lz = normalize2(b.x - n.x, b.z - n.z)
     local pts = {
       { x = n.x - lz * l, z = n.z + lx * l },
       { x = n.x - lz * r, z = n.z + lx * r },
@@ -961,8 +940,7 @@ local function computeMapBounds()
     end
   end
   if minX == math.huge then return nil end
-  mapBoundsCache = { minX = minX, maxX = maxX, minZ = minZ, maxZ = maxZ }
-  return mapBoundsCache
+  return { minX = minX, maxX = maxX, minZ = minZ, maxZ = maxZ }
 end
 
 local function drawMapInRect(p0, p1)
@@ -994,7 +972,8 @@ local function drawMapInRect(p0, p1)
       local node = state.nodes[i]
       local nxt = state.nodes[(i % n) + 1]
       local lx, lz = normalize2(nxt.x - node.x, nxt.z - node.z)
-      local off = (pass == 1) and boundsAt(i) or select(2, boundsAt(i))
+      local l, r = boundsAt(i)
+      local off = (pass == 1) and l or r
       local px = node.x - lz * off
       local pz = node.z + lx * off
       local cur = toScreen(px, pz)
@@ -1018,7 +997,6 @@ local function drawMapInRect(p0, p1)
     end
   end
 
-  -- cars
   local sim = ac.getSim()
   if sim then
     for i = 0, sim.carsCount - 1 do
@@ -1046,7 +1024,6 @@ function windowMain(dt)
   local okDraw = pcall(function()
     ui.text(string.format("Точек: %d | %s", #state.nodes, state.status))
 
-    -- live bounds width slider (integer meters), used while recording
     local w, ch = ui.slider("Ширина границ, м", state.boundsWidth, 2, 30, "%.0f")
     if ch then
       state.boundsWidth = math.floor(clamp(w, 2, 30))
@@ -1097,8 +1074,6 @@ function windowMain(dt)
       state.loaded = false
     end
 
-    -- FIXED-HEIGHT map as a normal layout item: the window sizes itself
-    -- to the content, so the map can never end up outside the window.
     ui.separator()
     local width = ui.availableSpaceX()
     if width < 80 then width = 80 end
