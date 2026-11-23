@@ -24,7 +24,7 @@ local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
   widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
-  spawnDone=false, spawnStable=0, spawnLastRoster="",
+  spawnDone=false, spawnStable=0, spawnLastRoster="", routeDirectionChecked=false,
   nodes={}, p={}, laneAssignments={}, status="Готов", logAccum=0, loaded=false,
 }
 local logger=nil
@@ -179,6 +179,7 @@ local function loadLine()
   if loaded then
     state.nodes=loaded; state.p={}; state.loaded=true
     state.spawnDone=false; state.spawnStable=0; state.spawnLastRoster=""
+    state.routeDirectionChecked=false
     state.status=string.format("Загружено: %d точек",#loaded)
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
     loadBounds(); flushLog()
@@ -400,6 +401,43 @@ local function spotIsClear(pos, exceptIndex)
   end
   return true
 end
+-- Align the recorded point order with the player's actual forward direction.
+-- This also keeps the signed left/right lane axis consistent with travel.
+local function alignRouteDirectionToPlayer(metrics,player)
+  if state.routeDirectionChecked or not player or not player.look then
+    return metrics
+  end
+  local routeDistance,routeError=findRouteDistanceAtPosition(player.position,metrics)
+  local _,routeDirection=sampleSpawnRoute(metrics,routeDistance)
+  if not routeDirection then
+    writeLog("ROUTE_DIRECTION_CHECK_FAILED")
+    state.routeDirectionChecked=true
+    return metrics
+  end
+  local dot=player.look.x*routeDirection.x+player.look.z*routeDirection.z
+  if dot < -0.15 then
+    local oldL,oldR=state.boundsL,state.boundsR
+    local n=#state.nodes
+    local reversedNodes,reversedL,reversedR={},{},{}
+    for i=1,n do
+      local source=n-i+1
+      reversedNodes[i]=state.nodes[source]
+      -- Reversing travel direction also reverses the signed left/right axis.
+      reversedL[i]=-safeNumber(oldR[source],1.5)
+      reversedR[i]=-safeNumber(oldL[source],-1.5)
+    end
+    state.nodes=reversedNodes
+    state.boundsL,state.boundsR=reversedL,reversedR
+    state.p={}
+    metrics=buildSpawnRouteMetrics()
+    writeLog("ROUTE_DIRECTION_REVERSED dot=%.3f player_route_error=%.2f",dot,routeError)
+  else
+    writeLog("ROUTE_DIRECTION_OK dot=%.3f player_route_error=%.2f",dot,routeError)
+  end
+  state.routeDirectionChecked=true
+  return metrics
+end
+
 -- Spawn teleport runs when the roster is stable; it NEVER blocks driving.
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone then return end
@@ -427,12 +465,14 @@ local function trySpawnTeleport(sim,dt)
   end
   local metrics=buildSpawnRouteMetrics()
   if not metrics then state.spawnDone=true; return end
+  local player=ac.getCar(0)
+  if player then metrics=alignRouteDirectionToPlayer(metrics,player) end
+  if not metrics then state.spawnDone=true; return end
   local count=#aiCars
   local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
   if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
   local startDistance=0
   if metrics.loop then
-    local player=ac.getCar(0)
     if player then
       startDistance=findRouteDistanceAtPosition(player.position,metrics)+gap
     else startDistance=gap end
@@ -809,6 +849,7 @@ function windowMain(dt)
       if state.recLine then
         state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
         state.loaded=false; state.recBounds=false
+        state.routeDirectionChecked=false
         state.status="Запись линии и границ..."
       else
         state.status="Записано точек: "..#state.nodes
