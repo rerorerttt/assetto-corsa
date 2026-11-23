@@ -106,6 +106,10 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
 
   local ok, err = pcall(function()
     local count = #nodes
+    local closureGap=fullDistance(nodes[count],nodes[1])
+    if closureGap>30.0 then
+      error(string.format('route is not closed: start/end gap %.1f m (maximum 30 m)',closureGap))
+    end
     local distances = {}
     local speeds = {}
     local radii = {}
