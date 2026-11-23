@@ -43,7 +43,7 @@ local state = {
   speedMax=170, followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  nodes={}, p={}, laneAssignments={}, status="Готов", logAccum=0, loaded=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -314,7 +314,29 @@ local function laneOffsetForCar(carIndex,seg)
   -- Keep two fixed 3.5 m lanes inside the recorded 7 m corridor.
   local offset=math.min(1.75,right-0.65,-left-0.65)
   if offset<1.0 then return 0.0,false end
-  return (carIndex%2==1) and offset or -offset,true
+  local side=state.laneAssignments and state.laneAssignments[carIndex]
+  if side==nil then side=(carIndex%2==1) and 1 or -1 end
+  return (side>0) and offset or -offset,true
+end
+local function assignLaneRoster(sim)
+  local leftCount,rightCount=0,0
+  for i=1,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive and car.isAIControlled then
+      local side=state.laneAssignments[i]
+      if side==1 then leftCount=leftCount+1
+      elseif side==-1 then rightCount=rightCount+1 end
+    end
+  end
+  for i=1,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive and car.isAIControlled and not state.laneAssignments[i] then
+      local side=(leftCount<=rightCount) and 1 or -1
+      state.laneAssignments[i]=side
+      if side==1 then leftCount=leftCount+1 else rightCount=rightCount+1 end
+      writeLog("LANE_ASSIGN id=%d side=%s",i,side==1 and "LEFT_FAST" or "RIGHT_40")
+    end
+  end
 end
 local function recordSecondTelemetry(sim)
   local any=false
@@ -451,7 +473,7 @@ local function trySpawnTeleport(sim,dt)
       if ok and result~=false then
         moved=moved+1
         writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f",carIndex,
-          twoLane and (carIndex%2==1 and "LEFT_FAST" or "RIGHT_40") or "SINGLE_40",
+          twoLane and (laneOffset>0 and "LEFT_FAST" or "RIGHT_40") or "SINGLE_40",
           laneOffset)
         state.p[carIndex]=nil
       else failed=failed+1 end
@@ -585,6 +607,7 @@ function script.update(dt)
   local ok,err=pcall(function()
     local sim=ac.getSim()
     if not sim then return end
+    assignLaneRoster(sim)
     local player=ac.getCar(0)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
