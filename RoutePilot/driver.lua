@@ -231,6 +231,7 @@ end
 function Driver.setup(cfg, state, helpers)
   CFG, S, H = cfg, state, helpers
   S.trafficHints = S.trafficHints or {}
+  S.passOwner=nil
 end
 
 function Driver.beginFrame(sim, dt)
@@ -273,6 +274,10 @@ function Driver.beginFrame(sim, dt)
     end
   end
   if needsLanes then assignLanes(snapshots,metrics) end
+  if S.passOwner then
+    local owner=S.p[S.passOwner]
+    if not owner or not owner.passState then S.passOwner=nil end
+  end
 
   for i = 1, sim.carsCount - 1 do
     local p = S.p[i]
@@ -339,6 +344,7 @@ function Driver.beginFrame(sim, dt)
           local target, side = choosePassOffset(follower, bestLeader, snapshots, metrics)
           if target then
             p.passState, p.passLeader, p.passSide = 'OUT', bestLeader.index, side
+            S.passOwner=i
             p.passTimer, p.passLoggedTimeout, p.returnBlockedLogged, p.targetOffset = 0, false, false, target
             H.log('PASS_START car=%d leader=%d gap=%.1f side=%d target=%.2f speed=%.1f leaderSpeed=%.1f pace=%.3f leaderPace=%.3f',
               i, bestLeader.index, bestGap, side, target, follower.speed, bestLeader.speed, p.targetLevel, bestLeader.pace)
