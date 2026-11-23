@@ -955,6 +955,8 @@ local function getLookaheadTarget(car, p, speed)
 
   local targetX = b.x
   local targetZ = b.z
+  local targetDirX = 0
+  local targetDirZ = 1
 
   local steps = 0
   local segmentCount = state.loopRoute and count or count - 1
@@ -976,6 +978,9 @@ local function getLookaheadTarget(car, p, speed)
     if length < 0.0001 then
       break
     end
+
+    targetDirX = dx / length
+    targetDirZ = dz / length
 
     if length >= remaining then
       local ratio = remaining / length
@@ -1000,7 +1005,7 @@ local function getLookaheadTarget(car, p, speed)
     end
   end
 
-  return targetX, targetZ
+  return targetX, targetZ, targetDirX, targetDirZ
 end
 
 ------------------------------------------------------------
@@ -1199,10 +1204,10 @@ end
 ------------------------------------------------------------
 
 local function calculateSteering(car, p, speed, fx, fz)
-  local targetX, targetZ = getLookaheadTarget(car, p, speed)
+  local targetX, targetZ, routeFx, routeFz = getLookaheadTarget(car, p, speed)
   local routeOffset = safeNumber(p.routeOffset, 0)
-  targetX = targetX + fz * routeOffset
-  targetZ = targetZ - fx * routeOffset
+  targetX = targetX + routeFz * routeOffset
+  targetZ = targetZ - routeFx * routeOffset
 
   p.targetX = targetX
   p.targetZ = targetZ
@@ -2032,6 +2037,9 @@ local function recordSecondTelemetry(sim)
         "CURVATURE=%.5f " ..
         "TARGET_SPEED=%.2f " ..
         "LINE_ERROR=%.2f " ..
+        "ROUTE_OFFSET=%.2f " ..
+        "PASS_TARGET=%d " ..
+        "PASS_ROLE=%s " ..
         "AIR_TIMER=%.1f " ..
         "STUCK_TIMER=%.1f " ..
         "COLLISION_RISK=%.2f " ..
@@ -2064,6 +2072,9 @@ local function recordSecondTelemetry(sim)
         p.lastCurve,
         p.targetSpeed,
         p.lineDist,
+        p.routeOffset or 0,
+        p.passTargetIndex or -1,
+        p.passRole or "none",
 
         p.airTimer or 0,
         p.moveTimer or 0,
