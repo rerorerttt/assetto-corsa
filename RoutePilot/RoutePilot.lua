@@ -1,8 +1,17 @@
--- RoutePilot.lua — v0.11.0 (CSP 0.3.2-preview2)
--- v0.10 map/UI retained (window-local, thick lines, lane markers, forecast).
--- Width buttons now set state.widthPreset ONLY (the driver derives lane
--- geometry from the preset + the SAVED per-segment bounds, so rails follow
--- the real track width everywhere it narrows or widens).
+-- RoutePilot.lua — v0.12.0 (CSP 0.3.2-preview2)
+-- RACING TRAFFIC release. Rails = pure pursuit (proven in the last trace:
+-- STEER ~0 on rails, LINE_ERROR ~0.01). The fresh trace showed the real
+-- blockers of "no speed, no overtakes":
+--  * session ran with preset=1 -> a single rail: overtakes were DISABLED.
+--    Default is now 2 lanes (fast left, slow right) - overtaking available
+--    out of the box; the 1/2/3/4 buttons still override.
+--  * cars followed the leader at a fixed 6 m and braked to his speed ->
+--    the whole field crawled at the slowest pace. Now gap = 5+0.45*v and
+--    passers never slow (driver v0.12).
+--  * two cars spawned 6 m apart -> start pile-up flung CAR=4 570 m away.
+--    Spawn is staggered along the line with a clearance check; rescue
+--    teleports are disabled for the first 10 s of the session.
+--  * speedMax 210 km/h; cruise = 210 * pace (0.88..1.10) = 185..231.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -13,10 +22,9 @@ local CFG = {
   LOOKAHEAD_BASE=14.0, LOOKAHEAD_SPEED=0.8, LOOKAHEAD_MIN=14.0, LOOKAHEAD_MAX=50.0,
   STEER_GAIN=0.72, STEER_LIMIT=0.75, STEER_RATE=2.0, STEER_FILTER=0.18,
   MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0, MIN_APEX_SPEED=11.0,
-  CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
-  SLIP_START=0.09, SLIP_FULL=0.45, SLIP_DAMP_MIN_SPEED=8.0,
-  SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
-  SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
+  CURVE_MIN=0.0035, CURVE_WINDOW=6, GAS_GAIN=0.45, BRAKE_GAIN=0.60,
+  MAX_GAS=1.0, MAX_BRAKE=1.0,
+  SPAWN_GAP=28.0, SPAWN_MIN_GAP=18.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
@@ -26,10 +34,11 @@ local WIDTH_PRESETS = {3, 7, 11, 15}
 
 local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
-  speedMax=170, followGap=8.0, widthPreset=1,
+  speedMax=210, followGap=8.0, widthPreset=2,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  sessionTime=0,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -219,10 +228,12 @@ local function walkLine(startSeg,startT,distance)
   end
   return nil
 end
+-- curvature with a wider window: raw recorded lines have per-point noise
+-- that used to read as "corners" and cut the target speed on straights
 local function getVertexCurvature(index)
   local nodes=state.nodes; local count=#nodes
-  if count<5 then return 0 end
-  local W=4
+  if count<7 then return 0 end
+  local W=CFG.CURVE_WINDOW or 6
   local i0,i1,i2=index-W,index,index+W
   if state.loopRoute then
     i0=((i0-1)%count)+1; i1=((i1-1)%count)+1; i2=((i2-1)%count)+1
@@ -234,11 +245,11 @@ local function getVertexCurvature(index)
   local v2x,v2z=c.x-b.x,c.z-b.z
   local l1=math.sqrt(v1x*v1x+v1z*v1z)
   local l2=math.sqrt(v2x*v2x+v2z*v2z)
-  if l1<0.5 or l2<0.5 then return 0 end
+  if l1<1 or l2<1 then return 0 end
   local dot=clamp((v1x*v2x+v1z*v2z)/(l1*l2),-1,1)
   local ang=math.acos(dot)
   if ang<0.02 then return 0 end
-  return ang/math.max(0.1,(l1+l2)*0.5)
+  return ang/math.max(1.0,(l1+l2)*0.5)
 end
 local function findNearestSeg(pos,hintSeg)
   local nodes=state.nodes; local segs=segmentCount()
@@ -397,6 +408,9 @@ local function spotIsClear(pos, exceptIndex)
   end
   return true
 end
+-- staggered spawn: cars spread along the line, alternating rails, each
+-- spot checked clear (the v0.11 log: two cars nose-to-tail -> a pile-up
+-- flung CAR=4 570 m off the track)
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone then return end
   if not state.loaded or state.recLine or #state.nodes<2 then return end
@@ -406,13 +420,13 @@ local function trySpawnTeleport(sim,dt)
     local car=ac.getCar(i)
     if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
   end
-  local roster=table.concat(aiCars,",")
   if #aiCars==0 then
     if state.spawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
       state.spawnDone=true
     end
     return
   end
+  local roster=table.concat(aiCars,",")
   if roster~=state.spawnLastRoster then
     state.spawnLastRoster=roster
     state.spawnStable=0
@@ -438,18 +452,28 @@ local function trySpawnTeleport(sim,dt)
   local moved,failed=0,0
   for order=1,count do
     local carIndex=aiCars[order]
-    local position,direction=sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
-    if position and direction then
-      local ok,result=pcall(physics.setAICarPosition,carIndex,
-        position,vec3(-direction.x,-direction.y,-direction.z))
-      if ok and result~=false then
-        moved=moved+1
-        state.p[carIndex]=nil
-      else failed=failed+1 end
+    local latOffset=0
+    local half=WIDTH_PRESETS[state.widthPreset]/2
+    if state.widthPreset>=2 then
+      latOffset=(order%2==0) and half*0.3 or -half*0.3
+    end
+    local pos,dir=sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
+    if pos and dir then
+      local pos2=vec3(pos.x-dir.z*latOffset,pos.y,pos.z+dir.x*latOffset)
+      if spotIsClear(pos2,carIndex) then
+        local ok,result=pcall(physics.setAICarPosition,carIndex,
+          pos2,vec3(-dir.x,-dir.y,-dir.z))
+        if ok and result~=false then
+          moved=moved+1
+          state.p[carIndex]=nil
+        else failed=failed+1 end
+      else
+        failed=failed+1
+      end
     else failed=failed+1 end
   end
   state.spawnDone=true
-  writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
+  writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f staggered=1",moved,failed,gap)
   flushLog()
 end
 local function teleportHome(carIndex,car)
@@ -568,6 +592,7 @@ function script.update(dt)
   local ok,err=pcall(function()
     local sim=ac.getSim()
     if not sim then return end
+    state.sessionTime=state.sessionTime+dt
     local player=ac.getCar(0)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
@@ -601,8 +626,8 @@ function script.update(dt)
   end
 end
 
--- 3D WORLD LINES: recording = existing nodes + 30 m forecast ahead;
--- finished track = the whole route at long distance.
+-- 3D WORLD LINES: recording = existing nodes + 30 m forecast;
+-- finished track = the whole route.
 render.on('main.track.transparent', function()
   local n=#state.nodes
   if n<2 then return end
@@ -657,7 +682,7 @@ render.on('main.track.transparent', function()
           render.debugLine(vec3(px0,y+0.05,pz0),vec3(px1,y+0.05,pz1),CYAN)
           render.debugLine(vec3(px0-dz*half,y+0.05,pz0+dx*half),
             vec3(px1-dz*half,y+0.05,pz1+dx*half),RED)
-          render.debugLine(vec3(px0+dz*half,y+0.05,pz0-dx*half),
+          render.drawLine(vec3(px0+dz*half,y+0.05,pz0-dx*half),
             vec3(px1+dz*half,y+0.05,pz1-dx*half),RED)
           px0=px1
           pz0=pz1
@@ -669,7 +694,7 @@ render.on('main.track.transparent', function()
         local nx=state.nodes[(i%n)+1]
         local lx,lz=normalize2(nx.x-node.x,nx.z-node.z)
         local al,ar=boundsAt(i)
-        render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.nz or nx.z),YELLOW)
+        render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
         render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
           vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
         render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
@@ -887,5 +912,5 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.11.0 INITIALIZED track=%s points=%d preset=%d",getTrackTag(),#state.nodes,state.widthPreset)
+writeLog("ROUTEPILOT 0.12.0 INITIALIZED track=%s points=%d preset=%d speedMax=%d",getTrackTag(),#state.nodes,state.widthPreset,state.speedMax)
 flushLog()
