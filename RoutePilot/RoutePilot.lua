@@ -3006,6 +3006,7 @@ function windowMain(dt)
   -- It cannot become a second top-level/floating app window.
   local canvas = vec2(ui.availableSpaceX(), math.min(360, ui.availableSpaceY()))
   ui.childWindow("##route_map", canvas, function()
+    ui.invisibleButton("##route_map_canvas", vec2(ui.availableSpaceX(), ui.availableSpaceY()))
     local p0 = ui.getItemRectMin()
     local p1 = ui.getItemRectMax()
 
