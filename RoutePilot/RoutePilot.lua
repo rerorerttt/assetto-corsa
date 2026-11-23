@@ -524,7 +524,6 @@ local function saveLine()
 
   if wroteFile or wroteStorage then
     state.loaded = true
-    if not state.obstacleReady then beginObstacleScan() end
     state.status = string.format(
       "Сохранено: %d точек",
       #state.nodes
@@ -585,8 +584,9 @@ local function loadLine()
     state.nodes = loaded
     state.p = {}
     state.loaded = true
-    state.obstacleReady = parseObstacleCache(rawData, loaded)
-    if not state.obstacleReady then beginObstacleScan() end
+    state.obstacleMap = {}
+    state.obstacleReady = false
+    state.obstacleScanStarted = false
 
     if not state.spawnPerformed then
       state.spawnDone = false
@@ -1521,11 +1521,6 @@ end
 ------------------------------------------------------------
 
 local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
-  -- A pass is not authorized while the static corridor scan is incomplete.
-  if not state.obstacleReady then
-    return false, "map_not_ready"
-  end
-
   -- Check the complete reserved lane, not one point beside the car.
   -- Other cars are projected forward in time; static hits are checked at
   -- every sample so a wall or a post cannot be hidden between two samples.
@@ -1555,21 +1550,6 @@ local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
       end
     end
 
-    if state.obstacleReady then
-      for i = 1, #state.obstacleMap do
-        local obstacle = state.obstacleMap[i]
-        if math.abs(obstacle.y - candidateY) < 2.4 then
-          local dx = obstacle.x - candidateX
-          local dz = obstacle.z - candidateZ
-          local along = dx * info.hx + dz * info.hz
-          local lateral = math.abs(dx * info.hz - dz * info.hx)
-
-          if math.abs(along) < 3.5 and lateral < 1.9 then
-            return false, "static"
-          end
-        end
-      end
-    end
   end
 
   return true, "clear"
@@ -2476,6 +2456,9 @@ local function getTrackRayDistance(origin, direction, length)
 end
 
 local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
+  -- Static and raycast obstacle detection is intentionally disabled pending a validated scanner.
+  return steer, targetSpeed
+
   if type(physics) ~= "table" or type(physics.raycastTrack) ~= "function" then
     if not obstacleApiWarningWritten then
       obstacleApiWarningWritten = true
@@ -2691,8 +2674,7 @@ local function updateLineCar(carIndex, car, dt)
     )
   end
 
-  -- Live raycasts have final authority over route steering and speed.
-  steer, targetSpeed = applyLiveObstacleGuard(car, p, steer, targetSpeed)
+  -- Track collision sensing is disabled; traffic coordination remains active.
 
   -- At a predicted crossing, one car owns the gap and keeps pace; the
   -- designated yielding car sheds speed early instead of both cars panic-braking.
@@ -2904,8 +2886,7 @@ function script.update(dt)
     addPoint(player.position)
   end
 
-  -- Build/load the static collision map incrementally without blocking the game.
-  updateObstacleScan()
+  -- Static collision scanning is disabled until the map geometry is validated.
 
   -- Teleport the AI grid once, before route-following starts.
   local startupReady = true
@@ -2967,10 +2948,8 @@ function windowMain(dt)
   ))
 
   ui.text(string.format(
-    "Автопилот: %s | Коллизии: %s",
-    state.enabled and "ВКЛ" or "ВЫКЛ",
-    state.obstacleReady and tostring(#state.obstacleMap) or
-      (state.obstacleScanStarted and "сканирование" or "нет карты")
+    "Автопилот: %s | Обнаружение препятствий: ВЫКЛ",
+    state.enabled and "ВКЛ" or "ВЫКЛ"
   ))
 
   if ui.button(
@@ -3012,15 +2991,6 @@ function windowMain(dt)
     loadLine()
   end
 
-  ui.sameLine()
-
-  if ui.button("Скан коллизий", vec2(-1, 24)) then
-    if #state.nodes >= 2 then
-      beginObstacleScan()
-      state.status = "Повторное сканирование коллизий..."
-    end
-  end
-
   if ui.button("Очистить", vec2(-1, 24)) then
     state.nodes = {}
     state.p = {}
@@ -3028,9 +2998,8 @@ function windowMain(dt)
     state.loaded = false
   end
 
-  -- Draw directly into the main window's current ImGui context.
-  -- No separate child/root window is created for the radar.
-  local canvas = vec2(ui.availableSpaceX(), ui.availableSpaceY())
+  -- The route map is drawn inline in this single main window, below the controls.
+  local canvas = vec2(ui.availableSpaceX(), math.min(360, ui.availableSpaceY()))
 
   ui.invisibleButton("line_radar", canvas)
 
@@ -3084,39 +3053,6 @@ function windowMain(dt)
           rgbm(1.0, 0.85, 0.0, 0.9),
           2
         )
-      end
-    end
-
-    -- Green connectors show every cached static collision hit relative
-    -- to the yellow recorded AI line. A short connector means the hit is
-    -- close to the driving corridor.
-    if state.obstacleReady then
-      for i = 1, #state.obstacleMap do
-        local obstacle = state.obstacleMap[i]
-        local routeNode = state.nodes[clamp(obstacle.routeIndex or 1, 1, #state.nodes)]
-        if routeNode then
-          local ox = mx + (obstacle.x - cx) * scale
-          local oy = my + (obstacle.z - cz) * scale
-          local rx = mx + (routeNode.x - cx) * scale
-          local ry = my + (routeNode.z - cz) * scale
-          if ox >= p0.x and ox <= p1.x and
-             oy >= p0.y and oy <= p1.y and
-             rx >= p0.x and rx <= p1.x and
-             ry >= p0.y and ry <= p1.y then
-            ui.drawLine(
-              vec2(rx, ry),
-              vec2(ox, oy),
-              rgbm(0.05, 1.0, 0.18, 0.95),
-              1.5
-            )
-            ui.drawCircleFilled(
-              vec2(ox, oy),
-              2.2,
-              rgbm(0.05, 1.0, 0.18, 1.0),
-              8
-            )
-          end
-        end
       end
     end
 
