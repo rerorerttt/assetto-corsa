@@ -480,6 +480,10 @@ end
 -- Spawn only after every AI has accepted the generated native spline.
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone then return end
+  if sim.customAISplinesAllowed==false then
+    state.status="CSP запретил custom AI spline в этой сессии"
+    return
+  end
   if not state.loaded or not state.aiSplineBuilt or not state.aiSplinePath or
      state.recLine or #state.nodes<3 then return end
 
