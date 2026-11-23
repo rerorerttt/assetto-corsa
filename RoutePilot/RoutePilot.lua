@@ -874,7 +874,7 @@ render.on('main.track.transparent', function()
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
-    local partial=state.recLine
+    local partial=state.recLine or not state.loopRoute
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
 
@@ -943,8 +943,9 @@ local function computeMapBounds()
   local n=#state.nodes
   for i=1,n do
     local left,right=boundsAt(i)
-    local lp=boundaryPoint(i,left,state.recLine)
-    local rp=boundaryPoint(i,right,state.recLine)
+    local partial=state.recLine or not state.loopRoute
+    local lp=boundaryPoint(i,left,partial)
+    local rp=boundaryPoint(i,right,partial)
     local pts={lp,rp,state.nodes[i]}
     for _,q in ipairs(pts) do
       if q.x<minX then minX=q.x end
@@ -983,9 +984,9 @@ local function drawMapInRect(q0,q1)
     for i=1,n-1 do
       local left,right=boundsAt(i)
       local off=pass==1 and left or right
-      local a=toScreen(boundaryPoint(i,off,state.recLine))
+      local a=toScreen(boundaryPoint(i,off,state.recLine or not state.loopRoute))
       local nextOff=pass==1 and select(1,boundsAt(i+1)) or select(2,boundsAt(i+1))
-      local bp=toScreen(boundaryPoint(i+1,nextOff,state.recLine))
+      local bp=toScreen(boundaryPoint(i+1,nextOff,state.recLine or not state.loopRoute))
       if segVisible(a,bp) then ui.drawLine(a,bp,color,2) end
     end
     if state.loopRoute and not state.recLine and not state.recBounds then
