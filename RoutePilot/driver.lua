@@ -242,15 +242,27 @@ local function ensureCar(index, car, dt)
     -- CSP documents 0.95 as the value corresponding to 100% aggression.
     local okAgg, errAgg = pcall(physics.setAIAggression, index, 0.95)
     local okCaution, errCaution = true, nil
+    local okThrottle, errThrottle = true, nil
+    local okTopSpeed, errTopSpeed = true, nil
     if physics.setAICaution then
       okCaution, errCaution = pcall(physics.setAICaution, index, 0.5)
     end
-    p.settingsApplied = okLevel and okAgg and okCaution
-    H.log('AI_PROFILE id=%d level=%.3f aggression=0.95 caution=0.50 levelOK=%s aggressionOK=%s cautionOK=%s',
-      index, p.targetLevel, tostring(okLevel), tostring(okAgg), tostring(okCaution))
+    -- Remove artificial AI caps; physical car limits still apply.
+    if physics.setAIThrottleLimit then
+      okThrottle, errThrottle = pcall(physics.setAIThrottleLimit, index, 1.0)
+    end
+    if physics.setAITopSpeed then
+      okTopSpeed, errTopSpeed = pcall(physics.setAITopSpeed, index, 1e9)
+    end
+    p.settingsApplied = okLevel and okAgg and okCaution and okThrottle and okTopSpeed
+    H.log('AI_PROFILE id=%d level=%.3f aggression=0.95 caution=0.50 throttleLimit=1 topSpeed=unlimited levelOK=%s aggressionOK=%s cautionOK=%s throttleOK=%s topSpeedOK=%s',
+      index, p.targetLevel, tostring(okLevel), tostring(okAgg), tostring(okCaution),
+      tostring(okThrottle), tostring(okTopSpeed))
     if not okLevel then H.log('AI_PROFILE_ERROR id=%d kind=level err=%s', index, tostring(errLevel)) end
     if not okAgg then H.log('AI_PROFILE_ERROR id=%d kind=aggression err=%s', index, tostring(errAgg)) end
     if not okCaution then H.log('AI_PROFILE_ERROR id=%d kind=caution err=%s', index, tostring(errCaution)) end
+    if not okThrottle then H.log('AI_PROFILE_ERROR id=%d kind=throttle_limit err=%s', index, tostring(errThrottle)) end
+    if not okTopSpeed then H.log('AI_PROFILE_ERROR id=%d kind=top_speed err=%s', index, tostring(errTopSpeed)) end
   end
   return p
 end
