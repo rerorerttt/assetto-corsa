@@ -491,15 +491,17 @@ local function trySpawnTeleport(sim,dt)
       local laneOffset,twoLane=laneOffsetForCar(carIndex,laneSeg)
       local lanePosition=vec3(position.x-direction.z*laneOffset,position.y,
         position.z+direction.x*laneOffset)
-      -- The SDK direction is the car's forward vector: keep route order,
-      -- matching the original RoutePilot controller.
+      -- In the live CSP session, passing the route tangent directly made
+      -- cars face against travel and perform a 180-degree correction.
+      -- The spawn API's observed orientation is opposite to this route basis.
+      local spawnDirection=vec3(-direction.x,-direction.y,-direction.z)
       local ok,result=pcall(physics.setAICarPosition,carIndex,
-        lanePosition,direction)
+        lanePosition,spawnDirection)
       if ok and result~=false then
         moved=moved+1
-        writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f",carIndex,
+        writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f route_dir=(%.3f,%.3f) spawn_dir=(%.3f,%.3f)",carIndex,
           twoLane and (laneOffset>0 and "LEFT_FAST" or "RIGHT_40") or "SINGLE_40",
-          laneOffset)
+          laneOffset,direction.x,direction.z,spawnDirection.x,spawnDirection.z)
         state.p[carIndex]=nil
       else failed=failed+1 end
     else failed=failed+1 end
@@ -528,7 +530,7 @@ local function teleportHome(carIndex,car)
     local pos=vec3(node.x-dz*laneOffset-dx*4,node.y+0.1,
       node.z+dx*laneOffset-dz*4)
     if spotIsClear(pos,carIndex) then
-      local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(dx,0,dz))
+      local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
       if ok then
         state.p[carIndex]=nil
         writeLog("RESCUE id=%d node=%d offset=%d lane=%.2f",carIndex,i,k,laneOffset)
