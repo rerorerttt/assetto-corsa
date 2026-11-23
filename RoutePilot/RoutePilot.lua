@@ -21,8 +21,8 @@ local CFG = {
 
   STEER_GAIN = 0.72,
   STEER_LIMIT = 0.75,
-  STEER_RATE = 2.0,
-  STEER_FILTER = 0.18,
+  STEER_RATE = 8.0,
+  STEER_FILTER = 0.10,
 
   SLIP_START = 0.09,
   SLIP_FULL = 0.38,
@@ -68,8 +68,8 @@ local state = {
   recording = false,
   loopRoute = true,
 
-  speedMin = 150,
-  speedMax = 230,
+  speedMin = 180,
+  speedMax = 260,
 
   followGap = 8.0,
   passOwner = nil,
@@ -477,12 +477,13 @@ local function sampleSpawnRoute(metrics, distance)
         lerp(a.z, b.z, t)
       )
 
-      -- physics.setAICarPosition() uses the opposite direction convention:
-      -- pass the negative route tangent so car.look faces along the recorded line.
+      -- The trace records the actual result of setAICarPosition():
+      -- car.look followed the supplied negative vector, so that spawned
+      -- cars faced against the recorded route. Supply the forward tangent.
       local direction = vec3(
-        a.x - b.x,
-        a.y - b.y,
-        a.z - b.z
+        b.x - a.x,
+        0,
+        b.z - a.z
       )
 
       if direction:length() < 0.0001 then
@@ -785,6 +786,8 @@ local function newPersonality(carIndex)
 
   local car = ac.getCar(carIndex)
 
+  local headingDot = 0
+
   if car and #state.nodes >= 2 then
     local bestI = 1
     local bestD = math.huge
@@ -799,15 +802,22 @@ local function newPersonality(carIndex)
     end
 
     p.segIdx = bestI
+
+    local a = state.nodes[bestI]
+    local b = getSegmentEnd(bestI, #state.nodes)
+    local tx, tz = normalize2(b.x - a.x, b.z - a.z)
+    local fx, fz = normalize2(car.look.x, car.look.z)
+    headingDot = fx * tx + fz * tz
   end
 
   state.p[carIndex] = p
 
   writeLog(
-    "CAR_INIT id=%d cruise=%.1fkmh segment=%d",
+    "CAR_INIT id=%d cruise=%.1fkmh segment=%d heading_dot=%.3f",
     carIndex,
     kmh,
-    p.segIdx
+    p.segIdx,
+    headingDot
   )
 end
 
@@ -1053,8 +1063,14 @@ local function planTargetSpeed(p, speed)
   local distance = 0
   local current = p.segIdx
 
-  -- Look ahead through upcoming corners.
-  for offset = 0, 36 do
+  -- Scan by braking distance, not by a fixed number of route points.
+  -- At racing speed, 36 points can end before the braking zone begins.
+  local brakingHorizon = math.max(
+    220.0,
+    (speed * speed) / (2 * CFG.BRAKE_ACCEL) + 80.0
+  )
+
+  for offset = 0, segmentCount - 1 do
     local index = current + offset
 
     if state.loopRoute then
@@ -1085,6 +1101,9 @@ local function planTargetSpeed(p, speed)
     local b = getSegmentEnd(index, count)
 
     distance = distance + flatDist(a, b)
+    if distance >= brakingHorizon then
+      break
+    end
   end
 
   p.lastCurve = maxCurve
