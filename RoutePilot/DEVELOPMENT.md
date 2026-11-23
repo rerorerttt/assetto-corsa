@@ -1,3 +1,15 @@
+## Latest regression diagnosis and isolation — 2026-11-23
+
+Latest user-uploaded trace is from the five-AI Nevada run (about 35 seconds, 140 one-second AI samples). It proves the spawn heading was wrong in the tested build: for example, car 1 was spawned with `dir=(-0.029, 0, 1.000)`, while its first reported forward vector was `LOOK=(0.04, -1.00)`, i.e. opposite to the route tangent. The same trace shows steering saturation at `±0.750`, route error reaching about 8 m, cars nearly stationary while commanded throttle is high, and a pass attempt immediately aborted because another car occupied the left corridor. Later samples show multiple cars stopped near the route edge. This is direct evidence from the uploaded trace, not an in-game diagnosis of every collision.
+
+### Current corrective source revision
+
+- Commit `bd525a56429c123f155e5f8642722d930e9e638a` reverses the vector passed to `physics.setAICarPosition()`. The trace establishes that the previous positive tangent produced a backward-facing `car.look`; the negative tangent is now used so the resulting forward vector should align with the recorded route.
+- All lane-changing pass execution is temporarily disabled in `updateLineCar()`. Pass offsets and pass ownership are cleared each update. This removes the 3.8 m lateral pass target and speed boost while the basic route follower is revalidated. The pass-planning functions remain in source but are not called.
+- The high cruise defaults and curvature planner are intentionally unchanged in this isolation commit. Do not interpret this as proof that their requested speeds are physically achievable.
+- No steering, throttle, braking, UI, manifest, route format, or logger changes were made.
+- No Assetto Corsa runtime test or LuaJIT compile was performed here. The next trace must confirm that the first post-spawn `LOOK` follows the route tangent, steering no longer saturates continuously, line error stays bounded, and cars actually accelerate without striking barriers. Do not re-enable overtaking until that baseline is confirmed.
+
 ## Racing AI implementation — 2026-11-23
 
 Current implementation commit: `aa691e9dc78da919c1f3edaa13816d7cd62af50f`. This is a code change on top of the user's stable 0.3 baseline; no Assetto Corsa runtime test has been performed here.
