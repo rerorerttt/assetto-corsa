@@ -156,7 +156,9 @@ laneFits=function(seg, target, half, metrics)
     if remaining <= 0 then break end
     index = index % metrics.count + 1
   end
-  return remaining <= 0
+  -- If the entire closed route is shorter than the lookahead horizon,
+  -- every segment has already been checked; do not reject a valid lane.
+  return remaining <= 0 or metrics.total <= PASS_LOOKAHEAD
 end
 
 local function laneIsFree(follower, leader, target, snapshots, metrics)
