@@ -34,7 +34,7 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 2. The builder multiplied speed by 3.6 before writing the version-7 payload. The speed channel is represented in m/s; the new builder writes m/s and converts the UI's km/h limit only once.
 3. Surface snapping previously cast from 10 m above a route point for 20 m and did not check the raycast return value. On multi-level geometry this can hit the wrong deck or leave a bad height untouched. The new builder casts from 1.5 m above the recorded car position for 8 m, validates distance/normal/height delta, interpolates failed samples and aborts if more than 40% of samples fail.
 4. Route projection used X/Z only, which is ambiguous on bridges and underpasses. It now includes world height.
-5. Previous lane assignment placed the fastest group in the left lane and slower groups to the right. That blocks the intended passing model. All cars now cruise in the rightmost lane; only a faster follower can reserve the adjacent left lane, pass, and return after 15 m of clearance.
+5. Previous lane assignment placed the fastest group in the left lane and slower groups to the right. That blocks the intended passing model. Cars prefer the rightmost valid lane; if the player occupies that corridor, they choose the next safe lane to the left. If no lane fits clear of the player, they remain on the recorded centreline. Only a faster follower can reserve the adjacent left lane, pass, and return after 15 m of clearance. The player's actual position remains an obstacle during pass and return checks.
 
 ## Current code layout
 
@@ -52,7 +52,7 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 - Route samples are raycast locally from just above the recorded car position. Failed samples are interpolated in height only; X/Z are preserved. The route is rejected if too many surface samples fail.
 - Side-width magnitudes are mapped to the same forward-vector frame used by AISplineEditor, including asymmetric recorded boundaries.
 - Route matching includes world height so cars on overlapping track levels do not get projected onto the wrong deck.
-- Every car cruises in the rightmost valid lane. The adjacent lane to the left is the passing lane. Only a faster follower can move left; the leader is never commanded to yield or slow. A shared reservation allows one active pass at a time. The pass begins with a 120 m trigger horizon and the follower does not return until at least 15 m ahead and the home lane is clear.
+- Cars prefer the rightmost valid lane, but the player's actual occupied corridor takes priority; if it blocks the right lane, AI chooses the next safe lane left or stays on the centreline if no lane fits. Only a faster follower can move left; the leader is never commanded to yield or slow. A shared reservation allows one active pass at a time. The pass begins with a 120 m trigger horizon and the follower does not return until at least 15 m ahead and the home lane is clear.
 - The map, lane selector, route/boundary recording controls, clear button and 3D line preview are already in the main RoutePilot window. Collision-mesh discovery/recording is deliberately disabled; the saved corridor and native CSP awareness are the safety mechanisms.
 - Spawn and recovery use `physics.setAICarPosition(index, position, nil)`. Stuck recovery searches forward for a free route position before teleporting.
 
@@ -63,7 +63,7 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 - Corrected asymmetric side-width mapping to the AISplineEditor coordinate frame.
 - Made route projection height-aware for multi-level tracks.
 - Replaced pace-sorted default lanes with a right-lane cruise / left-lane passing policy.
-- Increased pass lookahead and occupancy horizon for high-speed traffic, increased post-pass clearance and kept a single pass reservation.
+- Increased pass lookahead and occupancy horizon for high-speed traffic, increased post-pass clearance and kept a single pass reservation and made initial lane assignment/player occupancy checks aware of the player's actual position.
 - Applied CSP's documented aggression value (0.95) and a reduced but nonzero AI caution (0.5).
 - Updated `README.md` and this file with the new model and validation caveat.
 
