@@ -136,6 +136,8 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local laneOffset, twoLane = H.laneOffset(carIndex, seg)
   p.laneOffset = laneOffset
   p.twoLane = twoLane
+  p.laneRole = not twoLane and "SINGLE_40" or
+    (carIndex % 2 == 1 and "LEFT_FAST" or "RIGHT_40")
 
   local lookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE, LOOKAHEAD_MAX)
