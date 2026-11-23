@@ -1574,8 +1574,44 @@ local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
   return true, "clear"
 end
 
+local function getRouteGap(from, to)
+  if not from or not to or
+     type(from.routeProgress) ~= "number" or
+     type(to.routeProgress) ~= "number" then
+    return nil
+  end
+
+  local fromDirection = from.directionSign or from.trafficDirectionSign
+  local toDirection = to.directionSign or to.trafficDirectionSign
+  if not fromDirection or not toDirection or fromDirection ~= toDirection then
+    return nil
+  end
+
+  local delta = (to.routeProgress - from.routeProgress) * fromDirection
+  local totalLength = from.routeTotalLength or to.routeTotalLength or 0
+
+  if state.loopRoute and totalLength > 0 then
+    delta = delta % totalLength
+    if delta > totalLength * 0.5 then
+      delta = delta - totalLength
+    end
+  end
+
+  return delta
+end
+
 local function updateTrafficCoordinator(sim, dt)
-  local infos = {}
+  local routeSegmentCount = state.loopRoute and #state.nodes or (#state.nodes - 1)
+  local routeStarts = {}
+  local routeTotalLength = 0
+
+  for segment = 1, routeSegmentCount do
+    routeStarts[segment] = routeTotalLength
+    routeTotalLength = routeTotalLength +
+      flatDist(state.nodes[segment], getSegmentEnd(segment, #state.nodes))
+  end
+
+  local infos = {
   local plans = {}
 
   -- Build one consistent snapshot of every active car, including the player.
@@ -1609,6 +1645,10 @@ local function updateTrafficCoordinator(sim, dt)
       local dx = car.position.x - (a.x + (b.x - a.x) * t)
       local dz = car.position.z - (a.z + (b.z - a.z) * t)
       local routeOffsetActual = (dx * tz - dz * tx) * directionSign
+      local routeProgress = (routeStarts[seg] or 0) + flatDist(a, b) * t
+
+      p.routeProgress = routeProgress
+      p.routeTotalLength = routeTotalLength
 
       infos[i] = {
         index = i,
@@ -1626,6 +1666,8 @@ local function updateTrafficCoordinator(sim, dt)
         directionSign = directionSign,
         lineError = lineError,
         routeOffsetActual = routeOffsetActual,
+        routeProgress = routeProgress,
+        routeTotalLength = routeTotalLength,
         isPlayer = i == 0,
         isAI = i ~= 0 and car.isAIControlled == true,
       }
@@ -1803,11 +1845,21 @@ local function updateTrafficCoordinator(sim, dt)
               local leaderStopped = leader.speed < 1.5 and
                 (leader.isPlayer and state.playerSlowTimer > 1.5 or
                  leader.p and (leader.p.slowTimer or 0) > 1.5)
+              local routeGap = getRouteGap(follower, leader)
+              local routeLateral = math.abs(
+                (follower.routeOffsetActual or 0) - (leader.routeOffsetActual or 0)
+              )
+              local routeAligned = routeGap and routeGap > 4.0 and
+                routeGap < CFG.OVERTAKE_DISTANCE and
+                math.abs(routeGap - gap) < 12.0 and routeLateral < 5.5
               -- Personality pace is not a physical reason to change lanes.
-      local canPass = closingSpeed > 2.5 or leaderStopped
+              -- Start the lane change early enough to finish it before reaching
+              -- the leader. At high closing speed, a seven-metre trigger is too late.
+              local setupDistance = math.max(7.0, math.abs(closingSpeed) * 0.65 + 4.0)
+              local canPass = (closingSpeed > 2.5 and gap > setupDistance) or leaderStopped
 
-              if gap > 7.0 and gap < CFG.OVERTAKE_DISTANCE and
-                 lateral < 2.8 and canPass then
+              if routeAligned and gap > 7.0 and gap < CFG.OVERTAKE_DISTANCE and
+                 lateral < 5.5 and canPass then
                 if follower.isAI and leader.isAI then
                   reservePair(
                     follower,
@@ -1978,7 +2030,9 @@ local function carAhead(carIndex, car, personality)
         local otherLookX, otherLookZ = normalize2(other.look.x, other.look.z)
         local sameDirection = fx * otherLookX + fz * otherLookZ > 0.55
 
-        local otherPersonality = state.p[i]
+        local otherPersonality = state.p[i] or state.trafficProjection[i]
+        local routeGap = getRouteGap(personality, otherPersonality)
+        local sameRouteDirection = routeGap ~= nil
         local coordinatedPair =
           personality and otherPersonality and
           personality.passTargetIndex == i and
@@ -1986,18 +2040,19 @@ local function carAhead(carIndex, car, personality)
           personality.passRole ~= "yield_player" and
           otherPersonality.passRole ~= "yield_player"
 
-        local reservedPassPair = coordinatedPair and sameDirection and
+        local reservedPassPair = coordinatedPair and sameRouteDirection and
           ((personality.passRole == "pass" and otherPersonality.passRole == "yield") or
            (personality.passRole == "yield" and otherPersonality.passRole == "pass"))
         local ownReservedOffset = personality and
           safeNumber(personality.desiredRouteOffset, personality.routeOffset or 0) or 0
         local otherReservedOffset = otherPersonality and
           safeNumber(otherPersonality.desiredRouteOffset, otherPersonality.routeOffset or 0) or 0
-        local reservedLateral = lateralSigned + otherReservedOffset - ownReservedOffset
+        local reservedLateral = otherReservedOffset - ownReservedOffset
         local relativeLongSpeed = math.abs((ownVx - ovx) * fx + (ownVz - ovz) * fz)
         local passSetupGap = math.max(3.2, relativeLongSpeed * 0.65 + 4.0)
         local reservedLaneSeparated = reservedPassPair and
-          math.abs(reservedLateral) >= 2.65 and math.abs(forward) > passSetupGap
+          math.abs(reservedLateral) >= 2.65 and routeGap and
+          math.abs(routeGap) > passSetupGap
 
         -- Immediate physical overlap is never waived, even for an agreed pass.
         if math.abs(forward) < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
@@ -2012,8 +2067,17 @@ local function carAhead(carIndex, car, personality)
         -- Once the coordinator has verified both swept corridors, the pair
         -- must not treat each other as a same-lane leader and brake to a stop.
         if not reservedLaneSeparated then
-          if sameDirection and forward > 0 and forward < 110 and
-             lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
+          local routeLateral = personality and otherPersonality and
+            math.abs((otherPersonality.routeOffsetActual or 0) -
+                     (personality.routeOffsetActual or 0)) or lateral
+          if routeGap and routeGap > 0 and routeGap < 110 and
+             routeLateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
+            if not bestGap or routeGap < bestGap then
+              bestGap = routeGap
+              bestSpeed = otherSpeed
+            end
+          elseif not routeGap and sameDirection and forward > 0 and forward < 110 and
+                 lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
             if not bestGap or forward < bestGap then
               bestGap = forward
               bestSpeed = otherSpeed
@@ -2072,6 +2136,7 @@ local function carAhead(carIndex, car, personality)
   end
 
   if personality then
+    personality.followGapActual = bestGap or -1
     personality.riskCar = riskCar
     personality.riskTTC = riskTTC
     personality.riskLong = riskLong
@@ -2677,6 +2742,7 @@ local function recordSecondTelemetry(sim)
         "AIR_TIMER=%.1f " ..
         "STUCK_TIMER=%.1f " ..
         "COLLISION_RISK=%.2f " ..
+        "FOLLOW_GAP=%.2f " ..
         "LIVE_OBSTACLE=%.2f " ..
         "LIVE_LEFT=%.2f " ..
         "LIVE_RIGHT=%.2f " ..
@@ -2722,6 +2788,7 @@ local function recordSecondTelemetry(sim)
         p.airTimer or 0,
         p.moveTimer or 0,
         p.collisionRisk or 0,
+        p.followGapActual or -1,
         p.liveObstacleDistance or -1,
         p.liveLeftClearance or -1,
         p.liveRightClearance or -1,
