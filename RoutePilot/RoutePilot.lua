@@ -2408,8 +2408,9 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
   end
 
   local center = distances[3]
-  local leftClear = math.min(distances[1], distances[2])
-  local rightClear = math.min(distances[4], distances[5])
+  -- Negative angles point to the car's right in CSP world coordinates.
+  local rightClear = math.min(distances[1], distances[2])
+  local leftClear = math.min(distances[4], distances[5])
 
   if center >= 5.0 and leftClear >= 3.0 and rightClear >= 3.0 then
     p.liveObstacleDistance = center
