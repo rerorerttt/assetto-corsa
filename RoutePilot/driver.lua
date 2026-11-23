@@ -194,7 +194,7 @@ local function ensureCar(index, car, dt)
       splinePath = nil, splineLoaded = false, splineAge = 0, splineRetry = 0, settingsApplied = false,
       currentOffset = 0, targetOffset = 0, passState = nil, passLeader = nil,
       passSide = 0, passTimer = 0, passLoggedTimeout = false,
-      retireTimer = 0, stuckTimer = 0, lineDist = 0, lateral = 0
+      retireTimer = 0, stuckTimer = 0, airTimer = 0, lineDist = 0, lateral = 0
     }
     S.p[index] = p
     H.log('CAR_INIT id=%d aiLevel=%.3f pace=%.3f targetLevel=%.3f',
@@ -374,16 +374,42 @@ function Driver.update(index, car, dt)
   end
 
   if S.spawnDone and S.sessionTime > 10 and not car.isInPitlane then
-    if number(car.speedMs, 0) < STUCK_SPEED then
-      p.stuckTimer = p.stuckTimer + dt
-      if p.stuckTimer >= STUCK_TIME then
-        p.stuckTimer = 0
-        local ok = H.teleportHome and H.teleportHome(index, car)
-        H.log('RECOVERY_ATTEMPT car=%d success=%s pos=(%.2f,%.2f,%.2f)',
-          index, tostring(ok), car.position.x, car.position.y, car.position.z)
-      end
+    local speed=number(car.speedMs,0)
+    if speed < STUCK_SPEED then
+      p.stuckTimer=p.stuckTimer+dt
     else
-      p.stuckTimer = 0
+      p.stuckTimer=0
+    end
+
+    -- No single airborne flag exists in the CSP car state. Four wheel loads
+    -- are available, so require all four wheels to remain unloaded for 10 s.
+    local loadedWheels=0
+    pcall(function()
+      if car.wheels then
+        for wheelIndex=0,3 do
+          local wheel=car.wheels[wheelIndex]
+          if wheel and number(wheel.load,0)>120 then loadedWheels=loadedWheels+1 end
+        end
+      end
+    end)
+    if loadedWheels==0 and speed>3.0 then
+      p.airTimer=p.airTimer+dt
+    else
+      p.airTimer=0
+    end
+
+    local reason=nil
+    if p.stuckTimer>=STUCK_TIME then
+      p.stuckTimer=0
+      reason='stuck'
+    elseif p.airTimer>=10.0 then
+      p.airTimer=0
+      reason='airborne'
+    end
+    if reason then
+      local ok=H.teleportHome and H.teleportHome(index,car)
+      H.log('RECOVERY_ATTEMPT car=%d reason=%s success=%s pos=(%.2f,%.2f,%.2f) loadedWheels=%d',
+        index,reason,tostring(ok),car.position.x,car.position.y,car.position.z,loadedWheels)
     end
   end
 end
@@ -399,7 +425,7 @@ function Driver.resetAfterTeleport(index)
   p.passState, p.passLeader, p.passSide = nil, nil, 0
   p.passTimer = 0
   p.targetOffset, p.currentOffset = p.homeOffset or 0, 0
-  p.offsetApplied, p.stuckTimer = false, 0
+  p.offsetApplied, p.stuckTimer, p.airTimer = false, 0, 0
   p.segIdx, p.lineDist, p.lateral = 1, 0, 0
   pcall(physics.setAISplineAbsoluteOffset, index, 0, false)
 end
