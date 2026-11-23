@@ -516,7 +516,16 @@ local function trySpawnTeleport(sim,dt)
   end
   for _,carIndex in ipairs(aiCars) do
     if not Driver.isSplineReady(carIndex) then
-      state.status="Загрузка native AI spline..."
+      if state.spawnWait>CFG.SPAWN_WAIT_TIMEOUT then
+        state.status="CSP не подтвердил загрузку AI spline; смотри лог"
+        if not state.splineTimeoutLogged then
+          state.splineTimeoutLogged=true
+          writeLog("SPAWN_WAIT_TIMEOUT car=%d path=%s",carIndex,tostring(state.aiSplinePath))
+          flushLog()
+        end
+      else
+        state.status="Загрузка native AI spline..."
+      end
       return
     end
   end
