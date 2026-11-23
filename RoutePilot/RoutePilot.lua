@@ -477,13 +477,13 @@ local function sampleSpawnRoute(metrics, distance)
         lerp(a.z, b.z, t)
       )
 
-      -- The trace records the actual result of setAICarPosition():
-      -- car.look followed the supplied negative vector, so that spawned
-      -- cars faced against the recorded route. Supply the forward tangent.
+      -- Runtime telemetry proves a positive route tangent produces
+      -- car.look opposite to the route (heading_dot ~= -1).
+      -- Pass the negative tangent so the vehicle faces along the route.
       local direction = vec3(
-        b.x - a.x,
+        a.x - b.x,
         0,
-        b.z - a.z
+        a.z - b.z
       )
 
       if direction:length() < 0.0001 then
@@ -772,6 +772,9 @@ local function newPersonality(carIndex)
     stuck = 0,
 
     lineDist = 0,
+    segT = 0,
+    headingDot = 0,
+    headingGuardLogged = false,
 
     targetX = 0,
     targetZ = 0,
@@ -853,6 +856,8 @@ local function findNearestSegment(car, p)
   local bestSeg = clamp(p.segIdx, 1, segmentCount)
   local bestT = 0
   local bestDist = math.huge
+  local bestScore = math.huge
+  local fx, fz = normalize2(car.look.x, car.look.z)
 
   local function checkSegment(index)
     local a = nodes[index]
@@ -880,8 +885,17 @@ local function findNearestSegment(car, p)
     local dz = pz - cz
 
     local dSq = dx * dx + dz * dz
+    local invLength = 1 / math.sqrt(lenSq)
+    local tangentX = vx * invLength
+    local tangentZ = vz * invLength
+    local headingDot = clamp(fx * tangentX + fz * tangentZ, -1, 1)
 
-    if dSq < bestDist then
+    -- At oval crossovers, geometric proximity alone can select the
+    -- opposite leg. Prefer segments aligned with the car's actual heading.
+    local score = dSq + (1 - headingDot) * 250.0
+
+    if score < bestScore then
+      bestScore = score
       bestDist = dSq
       bestSeg = index
       bestT = t
@@ -922,6 +936,7 @@ local function findNearestSegment(car, p)
   end
 
   p.segIdx = bestSeg
+  p.segT = bestT
 
   return bestSeg, bestT, math.sqrt(bestDist), segmentCount
 end
@@ -1070,6 +1085,14 @@ local function planTargetSpeed(p, speed)
 
   local distance = 0
   local current = p.segIdx
+  local currentA = nodes[current]
+  local currentB = getSegmentEnd(current, count)
+  local currentLength = flatDist(currentA, currentB)
+  local remainingCurrent = currentLength * (1 - clamp(p.segT or 0, 0, 1))
+
+  -- The curvature at nodes[current] is behind the car once it has
+  -- entered this segment. Start with the distance to the NEXT vertex.
+  distance = remainingCurrent
 
   -- Scan by braking distance, not by a fixed number of route points.
   -- At racing speed, 36 points can end before the braking zone begins.
@@ -1078,7 +1101,7 @@ local function planTargetSpeed(p, speed)
     (speed * speed) / (2 * CFG.BRAKE_ACCEL) + 80.0
   )
 
-  for offset = 0, segmentCount - 1 do
+  for offset = 1, segmentCount do
     local index = current + offset
 
     if state.loopRoute then
@@ -1526,6 +1549,40 @@ local function updateLineCar(carIndex, car, dt)
     p,
     dt
   )
+
+  -- Validate actual orientation before giving the AI any propulsion.
+  -- A reverse-facing spawn previously caused full-lock steering under gas.
+  local routeSeg = findNearestSegment(car, p)
+  local routeA = state.nodes[routeSeg]
+  local routeB = getSegmentEnd(routeSeg, #state.nodes)
+  local tangentX, tangentZ = normalize2(routeB.x - routeA.x, routeB.z - routeA.z)
+  local headingDot = fx * tangentX + fz * tangentZ
+  p.headingDot = headingDot
+  p.lineDist = select(3, findNearestSegment(car, p))
+
+  if headingDot < 0.35 then
+    p.gas = 0
+    p.brake = 1
+    p.steer = 0
+    p.steerFiltered = 0
+    p.lastSteerTarget = 0
+    if not p.headingGuardLogged then
+      writeLog("HEADING_GUARD id=%d dot=%.3f segment=%d line_error=%.2f",
+        carIndex, headingDot, routeSeg, p.lineDist)
+      p.headingGuardLogged = true
+      flushLog()
+    end
+    local ok, controls = pcall(ac.overrideCarControls, carIndex)
+    if ok and controls then
+      controls.combineAxis = false
+      controls.steer = 0
+      controls.gas = 0
+      controls.brake = 1
+      controls.handbrake = 0
+    end
+    return
+  end
+  p.headingGuardLogged = false
 
   -- 1. Detect vehicle instability.
   calculateStability(p)
