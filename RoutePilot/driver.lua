@@ -8,7 +8,7 @@ local CFG, state, H
 local LANE_CHANGE_TIME = 1.65
 local LANE_CHANGE_COOLDOWN = 2.0
 local LANE_TRIGGER_DISTANCE = 10.0
-local LANE_TRIGGER_TTC = 1.35
+local LANE_TRIGGER_TTC = 2.2
 local LANE_FRONT_CLEAR = 32.0
 local LANE_REAR_CLEAR = 15.0
 local LANE_SAFETY_GAP = 5.0
@@ -228,6 +228,7 @@ end
 local function scanTraffic(carIndex, car, p, speed, tx, tz)
   local sim = ac.getSim()
   if not sim then return nil end
+  local ownLateral = H.lateralOf(car.position, p.segIdx)
   local nearest, nearestGap = nil, math.huge
   for i = 0, sim.carsCount - 1 do
     if i ~= carIndex then
@@ -238,9 +239,9 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
         local longitudinal = dx * tx + dz * tz
         local lateral = dx * -tz + dz * tx
         local otherP = state.p[i]
-        local otherOffset = otherP and
-          (otherP.laneTargetOffset or otherP.laneOffset) or lateral
-        local sameLane = math.abs(lateral - p.laneOffset) <= LANE_HALF_WIDTH
+        local otherLaneCoordinate = otherP and otherP.laneOffset or
+          (ownLateral + lateral)
+        local sameLane = math.abs(otherLaneCoordinate - p.laneOffset) <= LANE_HALF_WIDTH
         if longitudinal > 0.5 and sameLane and longitudinal < nearestGap then
           nearestGap = longitudinal
           nearest = {
@@ -259,6 +260,7 @@ end
 local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
   local sim = ac.getSim()
   if not sim then return false end
+  local ownLateral = H.lateralOf(car.position, p.segIdx)
   for i = 0, sim.carsCount - 1 do
     if i ~= carIndex then
       local other = ac.getCar(i)
@@ -269,9 +271,11 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
         local lateral = dx * -tz + dz * tx
         local otherP = state.p[i]
         local otherSpeed = math.max(0, safeNumber(other.speedMs, 0))
+        local otherLaneCoordinate = otherP and otherP.laneOffset or
+          (ownLateral + lateral)
         local reservedOffset = otherP and
-          (otherP.laneTargetOffset or otherP.laneOffset) or lateral
-        local inTargetLane = math.abs(lateral - targetOffset) <= LANE_HALF_WIDTH
+          (otherP.laneTargetOffset or otherP.laneOffset) or otherLaneCoordinate
+        local inTargetLane = math.abs(otherLaneCoordinate - targetOffset) <= LANE_HALF_WIDTH
         local reservingTarget = otherP and
           math.abs(reservedOffset - targetOffset) <= LANE_HALF_WIDTH
         local frontClear = math.max(LANE_FRONT_CLEAR,
@@ -279,8 +283,8 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
         local rearClear = math.max(LANE_REAR_CLEAR,
           math.max(0, otherSpeed - safeNumber(car.speedMs, 0)) * 1.5 + 10.0)
         local inTransitionSweep = math.abs(longitudinal) < 10.0 and
-          lateral >= math.min(p.laneOffset, targetOffset) - LANE_HALF_WIDTH and
-          lateral <= math.max(p.laneOffset, targetOffset) + LANE_HALF_WIDTH
+          otherLaneCoordinate >= math.min(p.laneOffset, targetOffset) - LANE_HALF_WIDTH and
+          otherLaneCoordinate <= math.max(p.laneOffset, targetOffset) + LANE_HALF_WIDTH
         if (inTargetLane or reservingTarget) and
           longitudinal >= -rearClear and longitudinal <= frontClear then
           return false, i, longitudinal
