@@ -279,7 +279,7 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
       :dispose()
 
     return totalLength, {
-      surfaceHits = validCount,
+      surfaceHits = count - fallbackCount,
       surfaceFallbacks = fallbackCount,
       maxSpeedMs = maxSpeed
     }
