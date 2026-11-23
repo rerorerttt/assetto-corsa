@@ -14,15 +14,15 @@ end
 ------------------------------------------------------------
 
 local CFG = {
-  LOOKAHEAD_BASE = 10.0,
-  LOOKAHEAD_SPEED = 0.42,
-  LOOKAHEAD_MIN = 10.0,
-  LOOKAHEAD_MAX = 25.0,
+  LOOKAHEAD_BASE = 14.0,
+  LOOKAHEAD_SPEED = 0.82,
+  LOOKAHEAD_MIN = 14.0,
+  LOOKAHEAD_MAX = 52.0,
 
-  STEER_GAIN = 0.72,
+  STEER_GAIN = 0.48,
   STEER_LIMIT = 0.75,
-  STEER_RATE = 3.0,
-  STEER_FILTER = 0.14,
+  STEER_RATE = 2.4,
+  STEER_FILTER = 0.18,
 
   SLIP_START = 0.16,
   SLIP_FULL = 0.62,
@@ -36,9 +36,9 @@ local CFG = {
 
   SPEED_GAIN = 0.55,
   MIN_CORNER_SPEED = 9.0,
-  SCAN_RAY_LENGTH = 9.0,
-  SCAN_RAYS_PER_FRAME = 48,
-  SCAN_CACHE_VERSION = 1,
+  SCAN_RAY_LENGTH = 14.0,
+  SCAN_RAYS_PER_FRAME = 64,
+  SCAN_CACHE_VERSION = 2,
 
   FOLLOW_LATERAL = 3.0,
   FOLLOW_DISTANCE = 8.0,
@@ -54,9 +54,9 @@ local CFG = {
   RECOVERY_MIN_MOVE = 3.0,
   RECOVERY_AIR_HEIGHT = 6.0,
   RECOVERY_AIR_TIME = 10.0,
-  RECOVERY_OFF_ROUTE = 35.0,
-  RECOVERY_OFF_ROUTE_TIME = 2.0,
-  RECOVERY_COOLDOWN = 15.0,
+  RECOVERY_OFF_ROUTE = 12.0,
+  RECOVERY_OFF_ROUTE_TIME = 1.25,
+  RECOVERY_COOLDOWN = 6.0,
   RECOVERY_SAFE_GAP = 14.0,
   RECOVERY_SEARCH_STEP = 16.0,
   RECOVERY_SEARCH_COUNT = 12,
@@ -297,11 +297,14 @@ end
 ------------------------------------------------------------
 
 local OBSTACLE_SCAN_DIRECTIONS = {
-  { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
-  { 0.7071, 0.7071 }, { 0.7071, -0.7071 },
-  { -0.7071, 0.7071 }, { -0.7071, -0.7071 },
+  { 1.0000, 0.0000 }, { 0.9239, 0.3827 }, { 0.7071, 0.7071 },
+  { 0.3827, 0.9239 }, { 0.0000, 1.0000 }, { -0.3827, 0.9239 },
+  { -0.7071, 0.7071 }, { -0.9239, 0.3827 }, { -1.0000, 0.0000 },
+  { -0.9239, -0.3827 }, { -0.7071, -0.7071 }, { -0.3827, -0.9239 },
+  { 0.0000, -1.0000 }, { 0.3827, -0.9239 }, { 0.7071, -0.7071 },
+  { 0.9239, -0.3827 },
 }
-local OBSTACLE_SCAN_HEIGHTS = { 0.55, 1.10, 1.65 }
+local OBSTACLE_SCAN_HEIGHTS = { 0.35, 0.80, 1.25, 1.70, 2.15 }
 
 local function routeChecksum(nodes)
   local hash = 2166136261
@@ -1137,12 +1140,8 @@ local function findNearestSegment(car, p)
     end
   end
 
-  if bestDist > 20 * 20 then
-    for i = 1, segmentCount do
-      checkSegment(i)
-    end
-  end
-
+  -- Never snap an off-track car to an unrelated distant section of the
+  -- oval. Keep its local route segment so recovery can return it safely.
   p.segIdx = bestSeg
 
   local routeA = nodes[bestSeg]
@@ -1430,7 +1429,7 @@ end
 
 local function calculateSteering(car, p, speed, fx, fz)
   local targetX, targetZ, routeFx, routeFz = getLookaheadTarget(car, p, speed)
-  local routeOffset = safeNumber(p.routeOffset, 0)
+  local routeOffset = clamp(safeNumber(p.routeOffset, 0), -CFG.TRAFFIC_OFFSET, CFG.TRAFFIC_OFFSET)
   local travelSign = p.trafficDirectionSign or
     ((routeFx * fx + routeFz * fz) >= 0 and 1 or -1)
   targetX = targetX + routeFz * routeOffset * travelSign
@@ -1459,7 +1458,9 @@ local function calculateSteering(car, p, speed, fx, fz)
   )
 
   local routeSteer = angle * CFG.STEER_GAIN
-  local slipCompensation = p.slipAngle * 0.62
+  -- Keep the race line dominant; large slip compensation fed the steering
+  -- oscillation seen in telemetry at high speed.
+  local slipCompensation = p.slipAngle * 0.18
 
   local steer = routeSteer + slipCompensation
 
@@ -1985,7 +1986,8 @@ local function updateTrafficCoordinator(sim, dt)
       p.trafficCoordinated = plan ~= nil
       p.passCorridorClear = plan ~= nil
       local alpha = clamp(dt * CFG.TRAFFIC_OFFSET_RATE, 0, 1)
-      p.routeOffset = lerp(p.routeOffset or 0, desired, alpha)
+      p.routeOffset = clamp(lerp(safeNumber(p.routeOffset, 0), desired, alpha),
+        -CFG.TRAFFIC_OFFSET, CFG.TRAFFIC_OFFSET)
     end
   end
 end
@@ -2485,10 +2487,11 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
   local fx, fz = normalize2(car.look.x, car.look.z)
   -- Side and forward fan at two heights: low rays catch barriers and
   -- curbs; high rays catch posts and vertical wall faces.
-  local angles = { -1.15, -0.65, -0.25, 0, 0.25, 0.65, 1.15 }
-  local heights = { 0.45, 1.45 }
+  local angles = { -1.35, -1.05, -0.75, -0.45, -0.20, 0,
+                    0.20, 0.45, 0.75, 1.05, 1.35 }
+  local heights = { 0.35, 0.90, 1.50 }
   local distances = {}
-  local rayLength = 15.0
+  local rayLength = 18.0
 
   for i = 1, #angles do
     distances[i] = rayLength
@@ -2513,10 +2516,10 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
     end
   end
 
-  local center = distances[4]
-  local rightClear = math.min(distances[1], distances[2], distances[3])
-  local leftClear = math.min(distances[5], distances[6], distances[7])
-  local forwardClear = math.min(distances[3], center, distances[5])
+  local center = distances[6]
+  local rightClear = math.min(distances[1], distances[2], distances[3], distances[4], distances[5])
+  local leftClear = math.min(distances[7], distances[8], distances[9], distances[10], distances[11])
+  local forwardClear = math.min(distances[5], center, distances[7])
   local correction = 0
   local speed = math.max(0, safeNumber(car.speedMs))
 
@@ -2983,7 +2986,10 @@ function windowMain(dt)
     "%.0f км/ч"
   )
 
-  local canvas = vec2(ui.availableSpaceX(), 250)
+  -- The radar is a child region of the main app window, not a separate
+  -- floating window. It stays attached when the app is moved or resized.
+  ui.childWindow("##route_map", vec2(ui.availableSpaceX(), 250), function()
+  local canvas = vec2(ui.availableSpaceX(), ui.availableSpaceY())
 
   ui.invisibleButton("line_radar", canvas)
 
@@ -3080,6 +3086,7 @@ function windowMain(dt)
       12
     )
   end
+  end)
 
 end
 
