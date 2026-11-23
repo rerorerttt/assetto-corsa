@@ -467,10 +467,13 @@ local function sampleSpawnRoute(metrics, distance)
         lerp(a.z, b.z, t)
       )
 
+      -- physics.setAICarPosition() expects the direction vector opposite
+      -- to ac.CarState.look (the car's forward vector). Keep the spawned
+      -- vehicle facing along the recorded route, not against it.
       local direction = vec3(
-        b.x - a.x,
-        b.y - a.y,
-        b.z - a.z
+        a.x - b.x,
+        a.y - b.y,
+        a.z - b.z
       )
 
       if direction:length() < 0.0001 then
