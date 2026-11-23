@@ -811,10 +811,11 @@ render.on('main.track.transparent', function()
       local node,nx=state.nodes[i2],state.nodes[nextIndex]
       render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
       local left,right=boundsAt(i2)
+      local nextLeft,nextRight=boundsAt(nextIndex)
       local a1=boundaryPoint(i2,left,partial)
-      local a2=boundaryPoint(nextIndex,boundsAt(nextIndex),partial)
+      local a2=boundaryPoint(nextIndex,nextLeft,partial)
       local b1=boundaryPoint(i2,right,partial)
-      local b2=boundaryPoint(nextIndex,select(2,boundsAt(nextIndex)),partial)
+      local b2=boundaryPoint(nextIndex,nextRight,partial)
       render.debugLine(a1,a2,RED)
       render.debugLine(b1,b2,RED)
       if i2==toI then break end
