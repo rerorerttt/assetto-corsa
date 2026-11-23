@@ -448,8 +448,8 @@ local function calculateSpeedControls(p, speed, targetSpeed, dt)
   local drive = error * 0.18 + p.speedIntegral * 0.012
   if (drive > -1 and drive < 1) or (drive >= 1 and error < 0) or
       (drive <= -1 and error > 0) then
-    -- A larger integral range is needed to overcome each car's real drag
-    -- at 40 km/h; the old +/-18 clamp caused a permanent 35 km/h plateau.
+    -- The expanded integral range compensates for different drivetrain drag
+    -- while tracking temporary corner and traffic speed targets.
     p.speedIntegral = clamp(p.speedIntegral + error * dt, -60, 60)
     drive = error * 0.18 + p.speedIntegral * 0.012
   end
