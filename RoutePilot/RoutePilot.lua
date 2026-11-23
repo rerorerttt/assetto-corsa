@@ -903,7 +903,7 @@ render.on('main.track.transparent', function()
       if i2==toI then break end
       i2=nextIndex
     end
-    drawCornerArrows(seg,partial,partial and 35.0 or 120.0)
+    drawCornerArrows(seg,partial,isRec and 35.0 or 120.0)
   end)
   if not ok then
     writeLog("DRAW3D_ERROR err=%s",tostring(err))
