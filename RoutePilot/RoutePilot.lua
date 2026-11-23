@@ -679,6 +679,8 @@ local function updateBoundsRecording(player)
   if newL>off or newR<off then
     state.status="Запись границ остановлена: машина вышла за текущий коридор"
     state.recBounds=false
+    saveBounds()
+    buildAISpline()
     writeLog("BOUNDS_REC_STOP seg=%d off=%.2f old=[%.2f,%.2f] new=[%.2f,%.2f]",
       seg,off,l,r,newL,newR)
     flushLog()
