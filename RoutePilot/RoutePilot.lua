@@ -1520,42 +1520,53 @@ end
 ------------------------------------------------------------
 
 local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
-  local candidateX = info.x + info.rightX * offset
-  local candidateZ = info.z + info.rightZ * offset
+  -- Check the complete reserved lane, not one point beside the car.
+  -- Other cars are projected forward in time; static hits are checked at
+  -- every sample so a wall or a post cannot be hidden between two samples.
+  local sampleSpeed = math.max(10.0, info.speed or 0)
+  local candidateY = safeNumber(info.car.position.y)
 
-  for otherIndex, other in pairs(infos) do
-    if otherIndex ~= info.index and otherIndex ~= targetIndex then
-      local otherPlan = plans[otherIndex]
-      local otherOffset = otherPlan and otherPlan.offset or 0
-      local otherX = other.x + other.rightX * otherOffset
-      local otherZ = other.z + other.rightZ * otherOffset
+  for step = 0, 6 do
+    local distance = step * 5.0
+    local travelTime = distance / sampleSpeed
+    local candidateX = info.x + info.hx * distance + info.rightX * offset
+    local candidateZ = info.z + info.hz * distance + info.rightZ * offset
 
-      local dx = otherX - candidateX
-      local dz = otherZ - candidateZ
-      local along = dx * info.hx + dz * info.hz
-      local lateral = math.abs(dx * info.hz - dz * info.hx)
+    for otherIndex, other in pairs(infos) do
+      if otherIndex ~= info.index and otherIndex ~= targetIndex then
+        local otherPlan = plans[otherIndex]
+        local otherOffset = otherPlan and otherPlan.offset or 0
+        local otherX = other.x + other.vx * travelTime + other.rightX * otherOffset
+        local otherZ = other.z + other.vz * travelTime + other.rightZ * otherOffset
+        local dx = otherX - candidateX
+        local dz = otherZ - candidateZ
+        local along = dx * info.hx + dz * info.hz
+        local lateral = math.abs(dx * info.hz - dz * info.hx)
 
-      if math.abs(along) < 9.0 and lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
-        return false
+        if math.abs(along) < 5.0 and lateral < 2.55 then
+          return false, "traffic"
+        end
+      end
+    end
+
+    if state.obstacleReady then
+      for i = 1, #state.obstacleMap do
+        local obstacle = state.obstacleMap[i]
+        if math.abs(obstacle.y - candidateY) < 2.4 then
+          local dx = obstacle.x - candidateX
+          local dz = obstacle.z - candidateZ
+          local along = dx * info.hx + dz * info.hz
+          local lateral = math.abs(dx * info.hz - dz * info.hx)
+
+          if math.abs(along) < 3.5 and lateral < 1.9 then
+            return false, "static"
+          end
+        end
       end
     end
   end
 
-  -- Reject an overtake corridor that intersects a cached static track obstacle.
-  if state.obstacleReady then
-    local candidateY = safeNumber(info.car.position.y)
-    for i = 1, #state.obstacleMap do
-      local obstacle = state.obstacleMap[i]
-      local dx = obstacle.x - candidateX
-      local dz = obstacle.z - candidateZ
-      if math.abs(obstacle.y - candidateY) < 2.2 and
-         dx * dx + dz * dz < 2.0 * 2.0 then
-        return false
-      end
-    end
-  end
-
-  return true
+  return true, "clear"
 end
 
 local function updateTrafficCoordinator(sim, dt)
@@ -1863,16 +1874,21 @@ local function updateTrafficCoordinator(sim, dt)
   local rejected = {}
   for index, plan in pairs(plans) do
     local info = infos[index]
-    if info and not trafficLaneIsClear(
-      info,
-      infos,
-      plans,
-      plan.target,
-      plan.offset
-    ) then
-      rejected[index] = true
-      if plans[plan.target] and plans[plan.target].target == index then
-        rejected[plan.target] = true
+    if info then
+      local laneClear, rejectReason = trafficLaneIsClear(
+        info,
+        infos,
+        plans,
+        plan.target,
+        plan.offset
+      )
+      if not laneClear then
+        rejected[index] = true
+        writeLog("TRAFFIC_REJECT car=%d target=%d reason=%s offset=%.2f",
+          index, plan.target or -1, rejectReason or "unknown", plan.offset or 0)
+        if plans[plan.target] and plans[plan.target].target == index then
+          rejected[plan.target] = true
+        end
       end
     end
   end
@@ -1908,6 +1924,7 @@ local function updateTrafficCoordinator(sim, dt)
       p.routeOffsetActual = info.routeOffsetActual
       p.trafficDirectionSign = info.directionSign
       p.trafficCoordinated = plan ~= nil
+      p.passCorridorClear = plan ~= nil
 
       local alpha = clamp(dt * CFG.TRAFFIC_OFFSET_RATE, 0, 1)
       p.routeOffset = lerp(p.routeOffset or 0, desired, alpha)
@@ -1965,13 +1982,21 @@ local function carAhead(carIndex, car, personality)
           personality.passRole ~= "yield_player" and
           otherPersonality.passRole ~= "yield_player"
 
-        -- A reservation never overrides physical collision prediction.
-        local mayIgnoreReservedPair = false
+        local reservedPassPair = coordinatedPair and sameDirection and
+          ((personality.passRole == "pass" and otherPersonality.passRole == "yield") or
+           (personality.passRole == "yield" and otherPersonality.passRole == "pass"))
+        local ownReservedOffset = personality and
+          safeNumber(personality.desiredRouteOffset, personality.routeOffset or 0) or 0
+        local otherReservedOffset = otherPersonality and
+          safeNumber(otherPersonality.desiredRouteOffset, otherPersonality.routeOffset or 0) or 0
+        local reservedLateral = lateralSigned + otherReservedOffset - ownReservedOffset
+        local reservedLaneSeparated = reservedPassPair and
+          math.abs(reservedLateral) >= 2.65 and math.abs(forward) > 3.2
 
-        if not mayIgnoreReservedPair then
-          -- Following applies only to cars travelling in the same direction
-          -- and occupying the same narrow corridor, never to the other side
-          -- of an oval or an oncoming car.
+        -- Once the coordinator has verified both swept corridors, the pair
+        -- must not treat each other as a same-lane leader and brake to a stop.
+        -- The hard physical overlap test below remains active.
+        if not reservedLaneSeparated then
           if sameDirection and forward > 0 and forward < 110 and
              lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
             if not bestGap or forward < bestGap then
@@ -1991,9 +2016,9 @@ local function carAhead(carIndex, car, personality)
             riskLat = lateral
           end
 
-          -- Predict relative motion and test the predicted position in the
-          -- vehicle's longitudinal/lateral frame.
-          if distance < 130 then
+          -- Predict relative motion for every unrelated vehicle. A verified
+          -- pass reservation supplies a different lane trajectory for this pair.
+          if distance < 130 and not reservedLaneSeparated then
             local rvx = ownVx - ovx
             local rvz = ownVz - ovz
             local rv2 = rvx * rvx + rvz * rvz
@@ -2392,7 +2417,9 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
     safeNumber(car.position.y) + 0.85,
     safeNumber(car.position.z)
   )
-  local angles = { -0.52, -0.26, 0, 0.26, 0.52 }
+  -- Wider fan: the previous +/- 30-degree rays missed walls and posts
+  -- alongside a car, especially after it had already reached the edge.
+  local angles = { -1.15, -0.82, -0.48, -0.24, 0, 0.24, 0.48, 0.82, 1.15 }
   local distances = {}
   local rayLength = 15.0
 
@@ -2407,44 +2434,51 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
     distances[i] = getTrackRayDistance(origin, direction, rayLength) or rayLength
   end
 
-  local center = distances[3]
-  -- Negative angles point to the car's right in CSP world coordinates.
-  local rightClear = math.min(distances[1], distances[2])
-  local leftClear = math.min(distances[4], distances[5])
-
-  if center >= 5.0 and leftClear >= 3.0 and rightClear >= 3.0 then
-    p.liveObstacleDistance = center
-    p.liveLeftClearance = leftClear
-    p.liveRightClearance = rightClear
-    return steer, targetSpeed
-  end
-
+  local center = distances[5]
+  local rightClear = math.min(distances[1], distances[2], distances[3], distances[4])
+  local leftClear = math.min(distances[6], distances[7], distances[8], distances[9])
+  local forwardClear = math.min(distances[4], center, distances[6])
   local correction = 0
+  local speed = math.max(0, safeNumber(car.speedMs))
+
   if center < 9.0 then
-    if math.max(leftClear, rightClear) >= 4.0 then
-      -- signedAngle() is negative to the car's right and positive to its left.
-      correction = rightClear > leftClear and -0.34 or 0.34
-      targetSpeed = math.min(targetSpeed, math.max(7.0, center * 1.35))
+    if rightClear > leftClear + 0.35 then
+      correction = -0.34
+    elseif leftClear > rightClear + 0.35 then
+      correction = 0.34
     else
-      -- No verified escape corridor: brake rather than guess a direction.
-      targetSpeed = math.min(targetSpeed, 4.0)
+      -- No proven side corridor: keep a crawl, but do not issue a full stop
+      -- unless the nose and both escape sides are physically boxed in.
+      targetSpeed = math.min(targetSpeed, 6.0)
+    end
+    targetSpeed = math.min(targetSpeed, math.max(8.0, center * 1.45))
+  else
+    -- Side-only contacts are important: they are the usual signature of a
+    -- car scraping a wall or post while trying to steer back to the route.
+    if leftClear < 2.6 and rightClear > leftClear + 0.45 then
+      correction = -0.28
+      targetSpeed = math.min(targetSpeed, math.max(8.0, speed * 0.75))
+    elseif rightClear < 2.6 and leftClear > rightClear + 0.45 then
+      correction = 0.28
+      targetSpeed = math.min(targetSpeed, math.max(8.0, speed * 0.75))
     end
   end
 
-  if leftClear < 3.0 and steer > 0 then
-    steer = 0
-  elseif rightClear < 3.0 and steer < 0 then
-    steer = 0
-  end
+  if leftClear < 2.0 and steer > 0 then steer = 0 end
+  if rightClear < 2.0 and steer < 0 then steer = 0 end
 
   steer = clamp(steer + correction, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
-  if center < 3.0 and leftClear < 3.0 and rightClear < 3.0 then
+
+  if center < 2.0 and leftClear < 1.6 and rightClear < 1.6 and
+     forwardClear < 2.0 then
     targetSpeed = 0
   end
 
   p.liveObstacleDistance = center
   p.liveLeftClearance = leftClear
   p.liveRightClearance = rightClear
+  p.liveForwardClearance = forwardClear
+  p.liveObstacleRays = distances
   return steer, targetSpeed
 end
 
@@ -2627,6 +2661,9 @@ local function recordSecondTelemetry(sim)
         "STUCK_TIMER=%.1f " ..
         "COLLISION_RISK=%.2f " ..
         "LIVE_OBSTACLE=%.2f " ..
+        "LIVE_LEFT=%.2f " ..
+        "LIVE_RIGHT=%.2f " ..
+        "PASS_CLEAR=%d " ..
         "RISK_CAR=%d " ..
         "RISK_TTC=%.2f " ..
         "RISK_LONG=%.2f " ..
@@ -2669,6 +2706,9 @@ local function recordSecondTelemetry(sim)
         p.moveTimer or 0,
         p.collisionRisk or 0,
         p.liveObstacleDistance or -1,
+        p.liveLeftClearance or -1,
+        p.liveRightClearance or -1,
+        p.passCorridorClear and 1 or 0,
         p.riskCar or -1,
         p.riskTTC or -1,
         p.riskLong or 0,
@@ -2799,10 +2839,6 @@ function windowMain(dt)
       (state.obstacleScanStarted and "сканирование" or "нет карты")
   ))
 
-  if logger and logger.path then
-    ui.text("Лог: " .. tostring(logger.path))
-  end
-
   if ui.button(
     state.recording and "Стоп запись" or "Запись линии",
     vec2(150, 24)
@@ -2845,7 +2881,7 @@ function windowMain(dt)
     end
   end
 
-  local canvas = vec2(300, 125)
+  local canvas = vec2(math.max(300, ui.availableSpaceX()), 250)
 
   ui.invisibleButton("line_radar", canvas)
 
@@ -2899,6 +2935,37 @@ function windowMain(dt)
           rgbm(1.0, 0.85, 0.0, 0.9),
           2
         )
+      end
+    end
+
+    -- Green connectors show every cached static collision hit relative
+    -- to the yellow recorded AI line. A short connector means the hit is
+    -- close to the driving corridor.
+    if state.obstacleReady then
+      for i = 1, #state.obstacleMap do
+        local obstacle = state.obstacleMap[i]
+        local routeNode = state.nodes[clamp(obstacle.routeIndex or 1, 1, #state.nodes)]
+        if routeNode then
+          local ox = mx + (obstacle.x - cx) * scale
+          local oy = my + (obstacle.z - cz) * scale
+          local rx = mx + (routeNode.x - cx) * scale
+          local ry = my + (routeNode.z - cz) * scale
+          if ox >= p0.x - 8 and ox <= p1.x + 8 and
+             oy >= p0.y - 8 and oy <= p1.y + 8 then
+            ui.drawLine(
+              vec2(rx, ry),
+              vec2(ox, oy),
+              rgbm(0.05, 1.0, 0.18, 0.95),
+              1.5
+            )
+            ui.drawCircleFilled(
+              vec2(ox, oy),
+              2.2,
+              rgbm(0.05, 1.0, 0.18, 1.0),
+              8
+            )
+          end
+        end
       end
     end
 
