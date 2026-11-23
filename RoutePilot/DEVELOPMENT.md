@@ -24,6 +24,7 @@ This removes the source of conflicting Lua steering and throttle corrections rat
 Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 
 - `physics.setAISpline(carIndex, filename, aiHintsFilename)` loads a per-car spline in the background. Passing `nil` as filename resets the car to its default spline. The function returns a boolean; RoutePilot only considers the spline accepted when the result is `true`, retries failures once per second, and waits at least 1.5 seconds before spawning.
+- `ac.getSim().customAISplinesAllowed` is checked before assignment. When the current session disallows custom splines, RoutePilot reports the restriction and does not spawn cars onto an unconfirmed route.
 - `physics.setAISplineAbsoluteOffset(carIndex, offset, overrideAiAwareness)` uses meters; negative is left and positive is right. Actual offset is limited by track width. RoutePilot passes `false` so CSP awareness is not explicitly overridden.
 - `physics.setAICarPosition(carIndex, pos, nil)` aligns the car along its current AI spline. This replaces the earlier ambiguous manually constructed direction vector.
 - `physics.setAILevel` accepts 0–2. `physics.setAIAggression` accepts 0–1; the SDK notes that launcher aggression is multiplied by 0.95, so 1.0 is the maximum aggression value.
