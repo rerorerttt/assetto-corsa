@@ -1,6 +1,7 @@
 -- RoutePilot/driver.lua — deterministic two-lane traffic (CSP 0.3.2-preview2)
--- Cars are assigned once by car index: odd = left/fast, even = right/40 km/h.
--- No car-to-car sensing, following, yielding, overtaking or collision avoidance.
+-- Cars are assigned once by active roster order: first = left/fast,
+-- second = right/40 km/h, then alternating. No car-to-car sensing, following,
+-- yielding, overtaking or collision avoidance.
 -- Each car follows its own fixed lateral offset from the recorded route.
 
 local Driver = {}
