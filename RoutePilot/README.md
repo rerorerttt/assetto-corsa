@@ -36,6 +36,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Cars do not inspect, follow, yield to, brake for, or overtake one another. Passing happens naturally because the left lane is faster.
 - Steering uses a filtered, rate-limited look-ahead controller to hold each car on its assigned lateral offset.
 - Before spawning, the route point order is checked against the player's forward vector. If the saved route runs backwards, points and signed bounds are reversed together; inference is skipped if the player is more than 15 m from the route.
+- Spawn and recovery pass the negated route tangent to `physics.setAICarPosition()`, because the current live-session log showed the direct tangent placing cars facing against travel.
 - AI cars are initially placed at their assigned lane centres and retain that assignment during recovery.
 - Per-car factory traction control is forced on through CSP `physics.setAssists()`. A second throttle limiter monitors driven-wheel slip ratio and reduces throttle rapidly when wheelspin appears; throttle application is ramped to avoid abrupt launches.
 - Right-lane PI control has a wider integral range to avoid settling below the 40 km/h target.
