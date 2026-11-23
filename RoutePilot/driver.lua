@@ -191,7 +191,7 @@ local function ensureCar(index, car, dt)
     p = {
       segIdx = 1, baseLevel = baseLevel, baseAggression = baseAggression,
       pace = pace, targetLevel = clamp(baseLevel * pace, 0.70, 1.15),
-      splinePath = nil, splineLoaded = false, splineAge = 0, settingsApplied = false,
+      splinePath = nil, splineLoaded = false, splineAge = 0, splineRetry = 0, settingsApplied = false,
       currentOffset = 0, targetOffset = 0, passState = nil, passLeader = nil,
       passSide = 0, passTimer = 0, passLoggedTimeout = false,
       retireTimer = 0, stuckTimer = 0, lineDist = 0, lateral = 0
@@ -202,16 +202,17 @@ local function ensureCar(index, car, dt)
   end
 
   p.splineAge = p.splineAge + dt
-  if p.splinePath ~= S.aiSplinePath then
+  p.splineRetry = math.max(0,(p.splineRetry or 0)-dt)
+  if p.splinePath ~= S.aiSplinePath or (not p.splineLoaded and p.splineRetry<=0) then
     p.splinePath, p.splineLoaded, p.splineAge = S.aiSplinePath, false, 0
+    p.splineRetry=1.0
     local ok, result = pcall(physics.setAISpline, index, S.aiSplinePath, nil)
-    local exists = false
-    pcall(function() exists = io and io.fileExists and io.fileExists(S.aiSplinePath) or false end)
-    if ok and (result ~= false or exists) then
+    if ok and result == true then
       p.splineLoaded = true
-      H.log('AI_SPLINE_ASSIGNED id=%d file=%s result=%s', index, tostring(S.aiSplinePath), tostring(result))
+      H.log('AI_SPLINE_ASSIGNED id=%d file=%s result=true', index, tostring(S.aiSplinePath))
     else
-      H.log('AI_SPLINE_FAILED id=%d file=%s result=%s', index, tostring(S.aiSplinePath), tostring(result))
+      H.log('AI_SPLINE_FAILED id=%d file=%s result=%s error=%s',
+        index, tostring(S.aiSplinePath), tostring(result), tostring(ok and 'not accepted' or result))
     end
   end
 
