@@ -424,7 +424,7 @@ end
 
 function Driver.isSplineReady(index)
   local p = S.p[index]
-  return p ~= nil and p.splineLoaded and p.splineAge >= 0.8
+  return p ~= nil and p.splineLoaded and p.splineAge >= 1.5
 end
 
 function Driver.resetAfterTeleport(index)
