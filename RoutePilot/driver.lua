@@ -315,7 +315,8 @@ function Driver.beginFrame(sim, dt)
 
   for i = 1, sim.carsCount - 1 do
     local follower, p = snapshots[i], S.p[i]
-    if follower and p and p.splineLoaded and p.laneAssigned and not p.passState and follower.headingDot > 0.35 then
+    if (not S.passOwner or S.passOwner==i) and follower and p and p.splineLoaded and
+      p.laneAssigned and not p.passState and follower.headingDot > 0.35 then
       local laneCount,laneWidth=laneLayout()
       local bestLeader, bestGap = nil, PASS_TRIGGER_GAP
       for j, other in pairs(snapshots) do
@@ -385,6 +386,10 @@ function Driver.update(index, car, dt)
   if p.passState == 'RETURN' and math.abs(p.currentOffset-(p.homeOffset or 0)) < 0.05 then
     H.log('PASS_RELEASE car=%d leader=%s', index, tostring(p.passLeader))
     p.passState, p.passLeader, p.passSide = nil, nil, 0
+    if S.passOwner==index then
+      H.log('PASS_RESERVATION_RELEASE car=%d reason=returned_home',index)
+      S.passOwner=nil
+    end
     p.passTimer = 0
     p.targetOffset, p.currentOffset = p.homeOffset or 0, p.homeOffset or 0
     p.offsetApplied = math.abs(p.currentOffset)>0.02
@@ -444,6 +449,10 @@ function Driver.resetAfterTeleport(index)
   local p = S.p[index]
   if not p then return end
   p.passState, p.passLeader, p.passSide = nil, nil, 0
+  if S.passOwner==index then
+    H.log('PASS_RESERVATION_RELEASE car=%d reason=teleport',index)
+    S.passOwner=nil
+  end
   p.passTimer = 0
   p.targetOffset, p.currentOffset = p.homeOffset or 0, 0
   p.offsetApplied, p.stuckTimer, p.airTimer = false, 0, 0
@@ -453,6 +462,10 @@ end
 
 function Driver.release(index)
   local p = S.p[index]
+  if S.passOwner==index then
+    H.log('PASS_RESERVATION_RELEASE car=%d reason=car_release',index)
+    S.passOwner=nil
+  end
   if not p then return end
   pcall(physics.setAISplineAbsoluteOffset, index, 0, false)
   pcall(physics.setAISpline, index, nil, nil)
@@ -464,6 +477,7 @@ end
 function Driver.invalidateAll()
   for index in pairs(S.p) do Driver.release(index) end
   S.p, S.trafficHints, S.routeMetrics = {}, {}, nil
+  S.passOwner=nil
   S.lanesAssigned=false
 end
 
