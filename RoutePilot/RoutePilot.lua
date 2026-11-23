@@ -1467,24 +1467,23 @@ local function updateTrafficCoordinator(sim, dt)
             local rvz = b.vz - a.vz
             local rv2 = rvx * rvx + rvz * rvz
 
-            if rv2 > 0.25 then
-              local tClosest = clamp(
-                -(dx * rvx + dz * rvz) / rv2,
-                0,
-                CFG.TRAFFIC_ONCOMING_TIME
-              )
+            local tClosest = rv2 > 0.25 and clamp(
+              -(dx * rvx + dz * rvz) / rv2,
+              0,
+              CFG.TRAFFIC_ONCOMING_TIME
+            ) or 0
 
-              local cx = dx + rvx * tClosest
-              local cz = dz + rvz * tClosest
-              local closest = math.sqrt(cx * cx + cz * cz)
+            local cx = dx + rvx * tClosest
+            local cz = dz + rvz * tClosest
+            local closest = math.sqrt(cx * cx + cz * cz)
 
-              local dxAhead = dx * a.hx + dz * a.hz
-              local otherAhead = -dx * b.hx - dz * b.hz
-              local facingConflict = dxAhead > 0 and otherAhead > 0 and
-                math.sqrt(dx * dx + dz * dz) < 85.0
+            local dxAhead = dx * a.hx + dz * a.hz
+            local otherAhead = -dx * b.hx - dz * b.hz
+            local facingConflict = dxAhead > 0 and otherAhead > 0 and
+              math.sqrt(dx * dx + dz * dz) < 85.0
 
-              if ((tClosest > 0.15 and closest < CFG.TRAFFIC_ONCOMING_RANGE) or
-                  facingConflict) then
+            if ((rv2 > 0.25 and tClosest > 0.15 and
+                 closest < CFG.TRAFFIC_ONCOMING_RANGE) or facingConflict) then
                 if a.isPlayer and b.isAI then
                   plans[j] = {
                     target = i,
@@ -1621,10 +1620,6 @@ end
 -- CAR FOLLOWING AND COLLISION PREDICTION
 ------------------------------------------------------------
 
-------------------------------------------------------------
--- CAR FOLLOWING AND COLLISION PREDICTION
-------------------------------------------------------------
-
 local function carAhead(carIndex, car, personality)
   local fx, fz = normalize2(car.look.x, car.look.z)
   local sim = ac.getSim()
@@ -1636,6 +1631,10 @@ local function carAhead(carIndex, car, personality)
   local bestGap = nil
   local bestSpeed = nil
   local riskTarget = math.huge
+  local riskCar = -1
+  local riskTTC = -1
+  local riskLong = 0
+  local riskLat = 0
 
   local ownVx = safeNumber(car.velocity.x)
   local ownVz = safeNumber(car.velocity.z)
@@ -1688,6 +1687,10 @@ local function carAhead(carIndex, car, personality)
           if math.abs(forward) < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
              lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
             riskTarget = 0
+            riskCar = i
+            riskTTC = 0
+            riskLong = math.abs(forward)
+            riskLat = lateral
           end
 
           -- Predict relative motion and test the predicted position in the
@@ -1726,7 +1729,13 @@ local function carAhead(carIndex, car, personality)
                 )
                 local clearance = math.max(lateralMargin, longitudinalMargin)
                 local safe = ownSpeed * clearance
-                riskTarget = math.min(riskTarget, safe)
+                if safe < riskTarget then
+                  riskTarget = safe
+                  riskCar = i
+                  riskTTC = t
+                  riskLong = closestLong
+                  riskLat = closestLat
+                end
               end
             end
           end
@@ -1735,10 +1744,16 @@ local function carAhead(carIndex, car, personality)
     end
   end
 
+  if personality then
+    personality.riskCar = riskCar
+    personality.riskTTC = riskTTC
+    personality.riskLong = riskLong
+    personality.riskLat = riskLat
+  end
+
   return bestGap, bestSpeed, riskTarget
 end
 
-------------------------------------------------------------
 ------------------------------------------------------------
 -- THROTTLE AND BRAKE CONTROLLER
 ------------------------------------------------------------
@@ -2210,6 +2225,10 @@ local function recordSecondTelemetry(sim)
         "AIR_TIMER=%.1f " ..
         "STUCK_TIMER=%.1f " ..
         "COLLISION_RISK=%.2f " ..
+        "RISK_CAR=%d " ..
+        "RISK_TTC=%.2f " ..
+        "RISK_LONG=%.2f " ..
+        "RISK_LAT=%.2f " ..
         "RECOVERIES=%d " ..
         "SEGMENT=%d " ..
         "VELOCITY=(%.2f,%.2f) " ..
@@ -2247,6 +2266,10 @@ local function recordSecondTelemetry(sim)
         p.airTimer or 0,
         p.moveTimer or 0,
         p.collisionRisk or 0,
+        p.riskCar or -1,
+        p.riskTTC or -1,
+        p.riskLong or 0,
+        p.riskLat or 0,
         p.recoveryCount or 0,
 
         p.segIdx,
