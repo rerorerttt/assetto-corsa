@@ -16,7 +16,7 @@ local PASS_SEPARATION = 0.28
 local PASS_EDGE_MARGIN = 0.12
 local WIDTH_PRESETS = {3, 7, 11, 15}
 local PASS_LOOKAHEAD = 42.0
-local PASS_OCCUPANCY_RANGE = 23.0
+local PASS_OCCUPANCY_RANGE = 40.0
 local STUCK_SPEED = 0.8
 local STUCK_TIME = 10.0
 
@@ -148,7 +148,7 @@ local function laneIsFree(follower, leader, target, snapshots, metrics)
       local longitudinalClose = math.abs(gap) < PASS_OCCUPANCY_RANGE
       if other.headingDot < 0.25 then
         local dx, dz = other.x - follower.x, other.z - follower.z
-        longitudinalClose = dx * dx + dz * dz < 42 * 42
+        longitudinalClose = dx * dx + dz * dz < 50 * 50
       end
       if longitudinalClose then
         local occupiedLat = other.lateral
