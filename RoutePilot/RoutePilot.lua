@@ -469,21 +469,18 @@ local function trySpawnTeleport(sim,dt)
     local carIndex=aiCars[order]
     local position,direction=sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
     if position and direction then
+      local laneSeg=select(1,findNearestSeg(position,1))
+      local laneOffset,twoLane=laneOffsetForCar(carIndex,laneSeg)
+      local lanePosition=vec3(position.x-direction.z*laneOffset,position.y,
+        position.z+direction.x*laneOffset)
       local ok,result=pcall(physics.setAICarPosition,carIndex,
-        position,vec3(-direction.x,-direction.y,-direction.z))
+        lanePosition,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
         moved=moved+1
-        local laneSeg=select(1,findNearestSeg(position,1))
-        local laneOffset,twoLane=laneOffsetForCar(carIndex,laneSeg)
-        local lanePosition=vec3(position.x-direction.z*laneOffset,position.y,
-          position.z+direction.x*laneOffset)
-        -- Re-apply at the lane centre after the initial route placement.
-        pcall(physics.setAICarPosition,carIndex,lanePosition,
-          vec3(-direction.x,-direction.y,-direction.z))
         writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f",carIndex,
           twoLane and (carIndex%2==1 and "LEFT_FAST" or "RIGHT_40") or "SINGLE_40",
           laneOffset)
-        state.p[carIndex]=nil  -- reset personality for the new position
+        state.p[carIndex]=nil
       else failed=failed+1 end
     else failed=failed+1 end
   end
