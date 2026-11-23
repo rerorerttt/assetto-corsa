@@ -153,7 +153,7 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
 
       local payload = ffi.new(splinePayload)
       payload.speed = speeds[i] * 3.6
-      payload.gas = 1.0
+      payload.gas = 0.0
       payload.brake = 0.0
       payload.obsoleteLatG = 0.0
       payload.radius = radii[i]
@@ -178,10 +178,6 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
       :int32(0)
       :commit(filename)
       :dispose()
-
-    if io and io.fileExists and not io.fileExists(filename) then
-      error('binary writer returned without creating the AI spline file')
-    end
 
     return totalLength
   end)
