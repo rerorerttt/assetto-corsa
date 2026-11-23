@@ -42,4 +42,4 @@ The app writes `routepilot_trace.txt` in its app folder. Important events includ
 
 This is a source-level implementation based on the CSP SDK and the repository's `AISplineEditor` and `Verve` examples. It has **not** been run inside Assetto Corsa in this environment. A zero-accident guarantee is not physically possible: car dimensions, track mesh, AI behaviour, weather and mod-car physics vary. Start with a small number of AI cars and inspect the trace before increasing traffic density.
 
-The NFS Underground-style corner arrow wall is not implemented in this version. Track-boundary data must be recorded accurately; RoutePilot does not infer hidden walls or poles.
+The 3D overlay also draws a short upcoming wall of blue chevrons across sharper corners, following the route direction. During recording, arrows are limited to the short preview range. Track-boundary data must be recorded accurately; RoutePilot does not infer hidden walls or poles.
