@@ -14,6 +14,7 @@ local PASS_MAX_TIME = 18.0
 local PASS_OFFSET_RATE = 3.0
 local PASS_SEPARATION = 0.28
 local PASS_EDGE_MARGIN = 0.12
+local WIDTH_PRESETS = {3, 7, 11, 15}
 local PASS_LOOKAHEAD = 42.0
 local PASS_OCCUPANCY_RANGE = 23.0
 local STUCK_SPEED = 0.8
@@ -77,7 +78,8 @@ local function projectCar(index, car, p, metrics)
   return {
     index = index, car = car, p = p, seg = seg, progress = progress,
     lateral = lateral, headingDot = headingDot, half = halfWidth(car),
-    speed = math.max(0, number(car.speedMs, 0)), pace = p and p.targetLevel or number(car.aiLevel, 1.0),
+    speed = math.max(0, number(car.speedMs, 0)),
+    pace = p and p.targetLevel or (number(car.aiLevel,1.0)<0 and 1.0 or number(car.aiLevel,1.0)),
     x = car.position.x, z = car.position.z
   }
 end
@@ -87,6 +89,43 @@ local function signedGap(a, b, length)
   if d > length * 0.5 then d = d - length end
   if d < -length * 0.5 then d = d + length end
   return d
+end
+
+local function laneLayout()
+  local laneCount=clamp(math.floor(number(S.widthPreset,2)),1,4)
+  local width=WIDTH_PRESETS[laneCount]
+  local laneWidth=width/laneCount
+  local offsets={}
+  for lane=1,laneCount do offsets[lane]=-width*0.5+laneWidth*(lane-0.5) end
+  return laneCount,laneWidth,offsets
+end
+
+local function assignLanes(snapshots,metrics)
+  local cars={}
+  for _,snap in pairs(snapshots) do
+    if snap.p and snap.p.splineLoaded then cars[#cars+1]=snap end
+  end
+  if #cars==0 then return false end
+  table.sort(cars,function(a,b)
+    if a.p.targetLevel==b.p.targetLevel then return a.index<b.index end
+    return a.p.targetLevel>b.p.targetLevel
+  end)
+  local laneCount,laneWidth,offsets=laneLayout()
+  local groupSize=math.max(1,math.ceil(#cars/laneCount))
+  for rank,snap in ipairs(cars) do
+    local lane=math.min(laneCount,math.floor((rank-1)/groupSize)+1)
+    local home=offsets[lane]
+    if not laneFits(snap.seg,home,snap.half,metrics) then home=0; lane=0 end
+    snap.p.laneIndex=lane
+    snap.p.homeOffset=home
+    snap.p.targetOffset=home
+    snap.p.currentOffset=0
+    snap.p.laneAssigned=true
+    H.log('LANE_ASSIGN car=%d rank=%d lane=%d offset=%.2f pace=%.3f',
+      snap.index,rank,lane,home,snap.p.targetLevel)
+  end
+  S.lanesAssigned=true
+  return true
 end
 
 local function laneFits(seg, target, half, metrics)
@@ -121,15 +160,20 @@ local function laneIsFree(follower, leader, target, snapshots, metrics)
 end
 
 local function choosePassOffset(follower, leader, snapshots, metrics)
-  local separation = follower.half + leader.half + PASS_SEPARATION
-  local leftTarget, rightTarget = leader.lateral - separation, leader.lateral + separation
-  local leftFits = laneFits(follower.seg, leftTarget, follower.half, metrics)
-  local rightFits = laneFits(follower.seg, rightTarget, follower.half, metrics)
-  local leftFree = leftFits and laneIsFree(follower, leader, leftTarget, snapshots, metrics)
-  local rightFree = rightFits and laneIsFree(follower, leader, rightTarget, snapshots, metrics)
-  if leftFree then return leftTarget, -1 end
-  if rightFree then return rightTarget, 1 end
-  return nil, 0
+  local laneCount,_,offsets=laneLayout()
+  if laneCount<2 or not follower.p or not follower.p.laneIndex or follower.p.laneIndex<1 then return nil,0 end
+  local lane=follower.p.laneIndex
+  local candidates={}
+  if lane>1 then candidates[#candidates+1]=lane-1 end
+  if lane<laneCount then candidates[#candidates+1]=lane+1 end
+  for _,nextLane in ipairs(candidates) do
+    local target=offsets[nextLane]
+    if laneFits(follower.seg,target,follower.half,metrics) and
+      laneIsFree(follower,leader,target,snapshots,metrics) then
+      return target,target<follower.lateral and -1 or 1
+    end
+  end
+  return nil,0
 end
 
 local function ensureCar(index, car, dt)
@@ -206,6 +250,7 @@ function Driver.beginFrame(sim, dt)
   end
 
   if not S.enabled or not S.spawnDone or S.sessionTime < 2 then return end
+  if not S.lanesAssigned then assignLanes(snapshots,metrics) end
 
   for i = 1, sim.carsCount - 1 do
     local p = S.p[i]
@@ -213,12 +258,12 @@ function Driver.beginFrame(sim, dt)
       p.passTimer = p.passTimer + dt
       local follower, leader = snapshots[i], snapshots[p.passLeader]
       if not follower or not leader then
-        p.passState, p.targetOffset = 'RETURN', 0
+        p.passState, p.targetOffset = 'RETURN', p.homeOffset or 0
         H.log('PASS_ABORT car=%d leader=%s reason=car_unavailable', i, tostring(p.passLeader))
       else
         local gap = signedGap(follower, leader, metrics.total)
         if gap < -PASS_CLEAR_GAP then
-          p.passState, p.targetOffset = 'RETURN', 0
+          p.passState, p.targetOffset = 'RETURN', p.homeOffset or 0
           H.log('PASS_COMPLETE car=%d leader=%d gap=%.1f side=%d', i, p.passLeader, gap, p.passSide)
         elseif p.passTimer > PASS_MAX_TIME and not p.passLoggedTimeout then
           p.passLoggedTimeout = true
@@ -230,17 +275,24 @@ function Driver.beginFrame(sim, dt)
 
   for i = 1, sim.carsCount - 1 do
     local follower, p = snapshots[i], S.p[i]
-    if follower and p and p.splineLoaded and not p.passState and follower.headingDot > 0.35 then
+    if follower and p and p.splineLoaded and p.laneAssigned and not p.passState and follower.headingDot > 0.35 then
+      local laneCount,laneWidth=laneLayout()
       local bestLeader, bestGap = nil, PASS_TRIGGER_GAP
       for j, other in pairs(snapshots) do
         if j ~= i and other.headingDot > 0.35 then
           local gap = signedGap(follower, other, metrics.total)
-          if gap > PASS_MIN_GAP and gap < bestGap and math.abs(other.lateral - follower.lateral) < 5.5 then
+          local sameLane=false
+          if other.p and other.p.laneAssigned then
+            sameLane=other.p.laneIndex==p.laneIndex
+          else
+            sameLane=math.abs(other.lateral-(p.homeOffset or follower.lateral))<laneWidth*0.45
+          end
+          if gap > PASS_MIN_GAP and gap < bestGap and sameLane then
             bestLeader, bestGap = other, gap
           end
         end
       end
-      if bestLeader then
+      if bestLeader and laneCount>1 then
         local faster = p.targetLevel > bestLeader.pace + 0.015 or follower.speed > bestLeader.speed + 0.8
         if faster then
           local target, side = choosePassOffset(follower, bestLeader, snapshots, metrics)
@@ -275,13 +327,13 @@ function Driver.update(index, car, dt)
 
   local previous = p.currentOffset
   p.currentOffset = approach(p.currentOffset, p.targetOffset, PASS_OFFSET_RATE * math.max(0, math.min(dt, 0.05)))
-  if p.passState or math.abs(p.currentOffset) > 0.02 or p.offsetApplied then
+  if p.laneAssigned or p.passState or math.abs(p.currentOffset) > 0.02 or p.offsetApplied then
     local ok, err = pcall(physics.setAISplineAbsoluteOffset, index, p.currentOffset, false)
     if ok then
       p.offsetApplied = math.abs(p.currentOffset) > 0.02 or p.passState ~= nil
     else
       H.log('PASS_OFFSET_ERROR car=%d offset=%.2f err=%s', index, p.currentOffset, tostring(err))
-      p.passState, p.targetOffset = 'RETURN', 0
+      p.passState, p.targetOffset = 'RETURN', p.homeOffset or 0
     end
     if math.abs(previous - p.currentOffset) > 0.08 then
       H.log('PASS_OFFSET car=%d state=%s offset=%.2f target=%.2f',
@@ -289,11 +341,13 @@ function Driver.update(index, car, dt)
     end
   end
 
-  if p.passState == 'RETURN' and math.abs(p.currentOffset) < 0.05 then
+  if p.passState == 'RETURN' and math.abs(p.currentOffset-(p.homeOffset or 0)) < 0.05 then
     H.log('PASS_RELEASE car=%d leader=%s', index, tostring(p.passLeader))
     p.passState, p.passLeader, p.passSide = nil, nil, 0
-    p.passTimer, p.targetOffset, p.currentOffset = 0, 0, 0
-    p.offsetApplied, p.passLoggedTimeout = false, false
+    p.passTimer = 0
+    p.targetOffset, p.currentOffset = p.homeOffset or 0, p.homeOffset or 0
+    p.offsetApplied = math.abs(p.currentOffset)>0.02
+    p.passLoggedTimeout = false
   end
 
   if S.spawnDone and S.sessionTime > 10 and not car.isInPitlane then
@@ -320,7 +374,8 @@ function Driver.resetAfterTeleport(index)
   local p = S.p[index]
   if not p then return end
   p.passState, p.passLeader, p.passSide = nil, nil, 0
-  p.passTimer, p.targetOffset, p.currentOffset = 0, 0, 0
+  p.passTimer = 0
+  p.targetOffset, p.currentOffset = p.homeOffset or 0, 0
   p.offsetApplied, p.stuckTimer = false, 0
   p.segIdx, p.lineDist, p.lateral = 1, 0, 0
   pcall(physics.setAISplineAbsoluteOffset, index, 0, false)
@@ -339,6 +394,7 @@ end
 function Driver.invalidateAll()
   for index in pairs(S.p) do Driver.release(index) end
   S.p, S.trafficHints, S.routeMetrics = {}, {}, nil
+  S.lanesAssigned=false
 end
 
 function Driver.telemetryLine(index, car, p)
