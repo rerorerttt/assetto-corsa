@@ -136,10 +136,11 @@ local function laneCenterForRole(carIndex, seg, role)
   return role == "LEFT" and -magnitude or magnitude, true
 end
 
-local function newPersonality(carIndex)
-  local laneOffset, twoLane = H.laneOffset(carIndex, 1)
+local function newPersonality(carIndex, car)
+  local initialSeg = select(1, H.findNearestSeg(car.position, 1))
+  local laneOffset, twoLane = H.laneOffset(carIndex, initialSeg)
   local p = {
-    segIdx = 1,
+    segIdx = initialSeg,
     laneRole = laneRoleForOffset(laneOffset, twoLane),
     laneOffset = laneOffset,
     laneStartOffset = laneOffset,
@@ -240,9 +241,10 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
         local dx = other.position.x - car.position.x
         local dz = other.position.z - car.position.z
         local longitudinal = dx * tx + dz * tz
-        local otherSeg = select(1, H.findNearestSeg(other.position, p.segIdx))
-        local actualOffset = H.lateralOf(other.position, otherSeg)
         local otherP = state.p[i]
+        local otherSeg = otherP and otherP.segIdx or
+          select(1, H.findNearestSeg(other.position, p.segIdx))
+        local actualOffset = H.lateralOf(other.position, otherSeg)
         local sameLane = math.abs(actualOffset - p.laneOffset) <= LANE_HALF_WIDTH
         if otherP then
           sameLane = sameLane or
@@ -285,9 +287,10 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
         local dx = other.position.x - car.position.x
         local dz = other.position.z - car.position.z
         local longitudinal = dx * tx + dz * tz
-        local otherSeg = select(1, H.findNearestSeg(other.position, p.segIdx))
-        local actualOffset = H.lateralOf(other.position, otherSeg)
         local otherP = state.p[i]
+        local otherSeg = otherP and otherP.segIdx or
+          select(1, H.findNearestSeg(other.position, p.segIdx))
+        local actualOffset = H.lateralOf(other.position, otherSeg)
         local otherSpeed = math.max(0, safeNumber(other.speedMs, 0))
         local reservedOffset = otherP and otherP.laneTargetOffset or actualOffset
         local inTargetLane = math.abs(actualOffset - targetOffset) <= LANE_HALF_WIDTH
@@ -423,7 +426,7 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
 end
 
 local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
-  local seg, t, lineDistance = H.findNearestSeg(car.position, p.segIdx)
+  local seg, t, lineDistance = H.findNearestSeg(car.position, p.segIdx, false)
   p.segIdx = seg
   p.lineDist = lineDistance
   p.latOff = H.lateralOf(car.position, seg)
@@ -513,7 +516,7 @@ local function calculateSpeedControls(p, speed, targetSpeed, dt)
 end
 
 function Driver.update(carIndex, car, dt)
-  local p = state.p[carIndex] or newPersonality(carIndex)
+  local p = state.p[carIndex] or newPersonality(carIndex, car)
   ensureTractionAssist(carIndex,p)
 
   p.retireT = p.retireT + dt
@@ -536,7 +539,7 @@ function Driver.update(carIndex, car, dt)
     p.stuck = 0
   end
 
-  local seg = select(1, H.findNearestSeg(car.position, p.segIdx))
+  local seg = select(1, H.findNearestSeg(car.position, p.segIdx, false))
   p.segIdx = seg
   local a = state.nodes[seg]
   local b = H.segEnd(seg)
