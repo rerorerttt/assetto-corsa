@@ -15,7 +15,7 @@ Keep all five runtime files together: `manifest.ini`, `RoutePilot.lua`, `driver.
 ## First run
 
 1. Open RoutePilot on the track/layout you want to use.
-2. Select the road width: 1, 2, 3 or 4 cars. The default is 2 lanes so passing is available immediately. One lane intentionally disables passing.
+2. Select the road width: 1, 2, 3 or 4 cars. The default is 1 lane, as specified in the task list. Select 2 lanes (7 m) or more to enable adjacent-lane passing; one lane intentionally disables passing.
 3. Record a complete lap with **Запись линии**, then stop recording.
 4. If necessary, record the road limits separately with **Запись границ** from any point inside the existing corridor. Only the boundary on the player's side is rewritten; it cannot expand beyond the previously saved corridor. If the car leaves the old limits, recording stops.
 5. Press **Сохранить**. RoutePilot writes the text route, bounds and a generated native `.ai` spline for this track/layout. The first and last recorded points must be within 30 m so the AI line cannot close through a long artificial shortcut.
