@@ -1480,8 +1480,11 @@ local function updateTrafficCoordinator(sim, dt)
 
             local dxAhead = dx * a.hx + dz * a.hz
             local otherAhead = -dx * b.hx - dz * b.hz
+            local lateralA = math.abs(dx * a.hz - dz * a.hx)
+            local lateralB = math.abs(dx * b.hz - dz * b.hx)
             local facingConflict = dxAhead > 0 and otherAhead > 0 and
-              math.sqrt(dx * dx + dz * dz) < 85.0
+              math.sqrt(dx * dx + dz * dz) < 85.0 and
+              lateralA < 6.0 and lateralB < 6.0
 
             if ((rv2 > 0.25 and tClosest > 0.15 and
                  closest < CFG.TRAFFIC_ONCOMING_RANGE) or facingConflict) then
