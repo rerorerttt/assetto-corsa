@@ -16,7 +16,8 @@ end
 
 local function laneForCar(index)
   if (S.aiLaneCount or 1) < 2 then return 1, 0 end
-  local lane = (index % 2 == 1) and 1 or 2
+  -- First AI occupies the slow right lane; the next one starts behind it in the fast left lane.
+  local lane = (index % 2 == 1) and 2 or 1
   local half = number(S.aiLaneHalfWidth, 1.75)
   return lane, lane == 1 and -half or half
 end
