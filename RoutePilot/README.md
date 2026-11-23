@@ -18,6 +18,7 @@ Record a route by driving it, stop recording, keep loop mode enabled for a circu
 
 - Restored to the last version explicitly confirmed by the user as launching and working.
 - The original inline radar drawing and global `windowMain(dt)` callback are restored.
+- Overtake initiation now also considers a small deterministic pace advantage, rather than requiring more than 2.5 m/s of already-established closing speed. The lane-clearance and pair-reservation checks remain in force.
 - The previously committed arcade pace/overtake tuning is rolled back for now; it must be reapplied later as isolated, testable changes.
 - Static obstacle detection and live track raycast avoidance remain disabled. AI-to-AI traffic coordination and recovery logic are from the restored baseline.
 - Stuck, airborne and off-route recovery; periodic telemetry in `routepilot_trace.txt`.
