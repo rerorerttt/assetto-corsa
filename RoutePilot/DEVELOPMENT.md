@@ -57,7 +57,8 @@ Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 - AI cars receive a small deterministic pace spread around their existing AI level (0.94–1.06 multiplier, clamped to 0.0–1.15) and 1.0 aggression.
 - Cars are sorted by pace: the fastest group receives the leftmost lane; progressively slower groups receive lanes to the right.
 - The leader is not assigned a pass-specific offset, speed reduction, throttle reduction or brake command. If a faster follower catches a car in its own lane, it may move to an adjacent lane only when the recorded limits and traffic-occupancy check leave enough room.
-- A pass is complete when the follower is more than seven metres ahead; it then returns to its assigned home lane.
+- A single shared pass reservation serializes overtakes so two followers cannot claim the same adjacent corridor in the same frame. The reservation is held until the passing car has returned to its home lane.
+- A pass is complete when the follower is more than seven metres ahead; it then returns to its assigned home lane, but only when that home lane is clear.
 - The occupancy check includes cars ahead and behind, and treats a car facing against the recorded route direction as an oncoming obstruction.
 - The pass planner is intentionally conservative. If the recorded width does not fit the car's bounding boxes plus margin, the pass is refused.
 
