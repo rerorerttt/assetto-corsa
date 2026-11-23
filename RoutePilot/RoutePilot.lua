@@ -148,7 +148,9 @@ end
 
 local function signedAngle(ax, az, bx, bz)
   local dot = clamp(ax * bx + az * bz, -1, 1)
-  local cross = ax * bz - az * bx
+  -- Positive angles must point toward the vehicle's local right (+X) side.
+  -- car.look is forward (+Z), and readVehicleDynamics() defines right as (fz, -fx).
+  local cross = az * bx - ax * bz
 
   return math.atan2(cross, dot)
 end
@@ -987,10 +989,18 @@ local function getLookaheadTarget(car, p, speed)
     local length = math.sqrt(dx * dx + dz * dz)
 
     if length < 0.0001 then
-      break
-    end
-
-    if length >= remaining then
+      -- Projection can land exactly on the segment end (t = 1).
+      -- Skip that exhausted segment and continue into the next one;
+      -- otherwise the target collapses to the passed vertex and causes
+      -- an abrupt, near-zero-lookahead steering command.
+      if state.loopRoute then
+        currentSeg = currentSeg % segmentCount + 1
+      elseif currentSeg < segmentCount then
+        currentSeg = currentSeg + 1
+      else
+        break
+      end
+    elseif length >= remaining then
       local ratio = remaining / length
 
       targetX = sx + dx * ratio
