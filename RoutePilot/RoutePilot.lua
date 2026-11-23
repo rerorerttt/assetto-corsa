@@ -2872,6 +2872,40 @@ function windowMain(dt)
     state.p = {}
   end
 
+  if ui.button("Сохранить", vec2(96, 24)) then
+    saveLine()
+  end
+
+  ui.sameLine()
+
+  if ui.button("Загрузить", vec2(96, 24)) then
+    loadLine()
+  end
+
+  ui.sameLine()
+
+  if ui.button("Скан коллизий", vec2(-1, 24)) then
+    if #state.nodes >= 2 then
+      beginObstacleScan()
+      state.status = "Повторное сканирование коллизий..."
+    end
+  end
+
+  if ui.button("Очистить", vec2(-1, 24)) then
+    state.nodes = {}
+    state.p = {}
+    state.status = "Очищено"
+    state.loaded = false
+  end
+
+  state.speedMax = ui.slider(
+    "Макс. скорость",
+    state.speedMax,
+    100,
+    320,
+    "%.0f км/ч"
+  )
+
   local canvas = vec2(ui.availableSpaceX(), 250)
 
   ui.invisibleButton("line_radar", canvas)
@@ -2969,40 +3003,6 @@ function windowMain(dt)
       12
     )
   end
-
-  if ui.button("Сохранить", vec2(96, 24)) then
-    saveLine()
-  end
-
-  ui.sameLine()
-
-  if ui.button("Загрузить", vec2(96, 24)) then
-    loadLine()
-  end
-
-  ui.sameLine()
-
-  if ui.button("Скан коллизий", vec2(-1, 24)) then
-    if #state.nodes >= 2 then
-      beginObstacleScan()
-      state.status = "Повторное сканирование коллизий..."
-    end
-  end
-
-  if ui.button("Очистить", vec2(-1, 24)) then
-    state.nodes = {}
-    state.p = {}
-    state.status = "Очищено"
-    state.loaded = false
-  end
-
-  state.speedMax = ui.slider(
-    "Макс. скорость",
-    state.speedMax,
-    100,
-    320,
-    "%.0f км/ч"
-  )
 
 end
 
