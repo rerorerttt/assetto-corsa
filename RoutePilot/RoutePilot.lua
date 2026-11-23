@@ -831,7 +831,7 @@ local function drawMapInRect(q0,q1)
             ui.drawCircleFilled(s,5,rgbm(0.0,0.8,1.0,1.0),12)
           else
             local p=state.p[i]
-            if p and p.laneRole=="LEFT_FAST" then
+            if p and p.laneRole=="LEFT" or p.laneRole=="LEFT_FAST" then
               ui.drawCircleFilled(s,4,rgbm(0.2,1.0,0.4,1.0),10)
             else
               ui.drawCircleFilled(s,4,rgbm(1,1,1,0.95),10)
