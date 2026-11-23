@@ -22,6 +22,8 @@ local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
+local okBuilder, Builder = pcall(require, "spline_builder")
+if not okBuilder or type(Builder) ~= "table" or not Builder.build then Builder = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=14.0, LOOKAHEAD_SPEED=0.8, LOOKAHEAD_MIN=14.0, LOOKAHEAD_MAX=50.0,
@@ -34,16 +36,17 @@ local CFG = {
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
-  MAP_TOP=175.0, MAP_PAD=6.0, MAP_MIN_OFFSET=10.0,
+  MAP_TOP=175.0, MAP_PAD=6.0,
 }
 local WIDTH_PRESETS = {3, 7, 11, 15}
 
 local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
-  speedMax=170, followGap=8.0, widthPreset=1,
+  speedMax=300, followGap=8.0, widthPreset=2,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  aiSplineBuilt=false, aiSplinePath=nil, aiRevision=0, sessionTime=0, trafficHints={},
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -90,6 +93,51 @@ local function getLineFilePath()
 end
 local function getBoundsFilePath()
   return string.gsub(getLineFilePath(),"%.txt$","_bounds.txt")
+end
+local function buildAISpline()
+  if not Builder then
+    state.aiSplineBuilt=false
+    state.status="Не загружен модуль native AI spline"
+    writeLog("AI_SPLINE_BUILD_FAILED reason=builder_module_missing")
+    return false
+  end
+  if #state.nodes<3 then
+    state.aiSplineBuilt=false
+    state.status="Для AI-линии нужны минимум 3 точки"
+    return false
+  end
+  local stamp = (os and os.time and os.time()) or math.floor(os.clock()*1000)
+  state.aiRevision=state.aiRevision+1
+  local path=string.gsub(getLineFilePath(),"%.txt$",
+    "_native_"..tostring(stamp).."_"..tostring(state.aiRevision)..".ai")
+  local ok,info=Builder.build(state.nodes,state.boundsL,state.boundsR,path,state.speedMax,state.loopRoute)
+  if not ok then
+    state.aiSplineBuilt=false
+    state.aiSplinePath=nil
+    state.status="Ошибка построения native AI spline"
+    writeLog("AI_SPLINE_BUILD_FAILED path=%s error=%s",path,tostring(info))
+    flushLog()
+    return false
+  end
+  if driverReady and Driver and Driver.invalidateAll then
+    pcall(Driver.invalidateAll)
+  else
+    state.p={}
+    state.trafficHints={}
+  end
+  state.aiSplinePath=path
+  state.aiSplineBuilt=true
+  state.loaded=true
+  state.spawnDone=false
+  state.spawnPerformed=false
+  state.spawnWait=0
+  state.spawnStable=0
+  state.spawnLastRoster=""
+  state.status=string.format("Native AI готов: %d точек, %.0f м",#state.nodes,info or 0)
+  writeLog("AI_SPLINE_BUILD_OK path=%s points=%d length=%.2f speedMax=%.1f widthPreset=%d",
+    path,#state.nodes,info or 0,state.speedMax,state.widthPreset)
+  flushLog()
+  return true
 end
 local function serializeNodes(nodes)
   local out={}
@@ -170,10 +218,15 @@ local function saveLine()
   if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
   saveBounds()
   if wroteFile then
-    state.status=string.format("Сохранено: %d точек",#state.nodes)
+    state.loaded=true
     writeLog("SAVE_ROUTE points=%d",#state.nodes)
+    buildAISpline()
     flushLog()
-  else state.status="Ошибка сохранения" end
+  else
+    state.loaded=false
+    state.aiSplineBuilt=false
+    state.status="Ошибка сохранения"
+  end
 end
 local function loadLine()
   local loaded=nil
@@ -197,7 +250,9 @@ local function loadLine()
     end
     state.status=string.format("Загружено: %d точек",#loaded)
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
-    loadBounds(); flushLog()
+    loadBounds()
+    buildAISpline()
+    flushLog()
     return true
   end
   state.status="Линия не найдена"; state.loaded=false
