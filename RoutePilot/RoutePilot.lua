@@ -27,14 +27,18 @@ local CFG = {
   SLIP_START = 0.16,
   SLIP_FULL = 0.62,
 
-  MAX_LATERAL_ACCEL = 9.0,
-  LATERAL_ACCEL_LIMIT = 15.0,
+  MAX_LATERAL_ACCEL = 24.0,
+  LATERAL_ACCEL_LIMIT = 30.0,
 
-  BRAKE_ACCEL = 8.0,
+  BRAKE_ACCEL = 12.0,
   MAX_BRAKE = 0.75,
-  MAX_GAS = 0.90,
+  MAX_GAS = 1.0,
 
-  SPEED_GAIN = 0.38,
+  SPEED_GAIN = 0.55,
+  MIN_CORNER_SPEED = 26.0,
+  SCAN_RAY_LENGTH = 9.0,
+  SCAN_RAYS_PER_FRAME = 48,
+  SCAN_CACHE_VERSION = 1,
 
   FOLLOW_LATERAL = 3.0,
   FOLLOW_DISTANCE = 8.0,
@@ -63,15 +67,15 @@ local CFG = {
 
   OVERTAKE_DISTANCE = 42.0,
   OVERTAKE_REAR_DISTANCE = 30.0,
-  OVERTAKE_MIN_ADVANTAGE = 1.5,
+  OVERTAKE_MIN_ADVANTAGE = 0.5,
   OVERTAKE_OFFSET = 1.45,
   OVERTAKE_CLEARANCE = 2.55,
   OVERTAKE_RELEASE_DISTANCE = 14.0,
-  OVERTAKE_OFFSET_RATE = 1.8,
+  OVERTAKE_OFFSET_RATE = 5.0,
   OVERTAKE_STUCK_TIME = 1.5,
-  TRAFFIC_OFFSET = 2.65,
-  TRAFFIC_LATERAL_CLEARANCE = 2.30,
-  TRAFFIC_LONGITUDINAL_CLEARANCE = 4.5,
+  TRAFFIC_OFFSET = 3.25,
+  TRAFFIC_LATERAL_CLEARANCE = 2.15,
+  TRAFFIC_LONGITUDINAL_CLEARANCE = 3.2,
   TRAFFIC_LOOKAHEAD = 125.0,
   TRAFFIC_ONCOMING_TIME = 8.0,
   TRAFFIC_ONCOMING_RANGE = 9.0,
@@ -90,9 +94,9 @@ local state = {
   recording = false,
   loopRoute = true,
 
-  speedMax = 180,
+  speedMax = 240,
 
-  followGap = 8.0,
+  followGap = 5.0,
   playerSlowTimer = 0,
   trafficProjection = {},
 
@@ -109,6 +113,14 @@ local state = {
   logAccum = 0,
 
   loaded = false,
+
+  obstacleMap = {},
+  obstacleReady = false,
+  obstacleScanCursor = 1,
+  obstacleScanBest = {},
+  obstacleScanRays = 0,
+  obstacleScanHits = 0,
+  obstacleScanStarted = false,
 }
 
 local logger = nil
@@ -764,8 +776,8 @@ local function newPersonality(carIndex)
   local p = {
     segIdx = 1,
 
-    cruiseSpeed = kmh / 3.6 * (carIndex % 2 == 1 and 1.08 or 0.96),
-    paceMultiplier = carIndex % 2 == 1 and 1.08 or 0.96,
+    cruiseSpeed = kmh / 3.6 * (0.94 + ((carIndex * 7) % 7) * 0.045),
+    paceMultiplier = 0.94 + ((carIndex * 7) % 7) * 0.045,
 
     steer = 0,
     steerFiltered = 0,
@@ -1098,8 +1110,9 @@ local function planTargetSpeed(p, speed)
     maxCurve = math.max(maxCurve, curvature)
 
     if curvature > 0.001 then
-      local cornerSpeed = math.sqrt(
-        CFG.MAX_LATERAL_ACCEL / curvature
+      local cornerSpeed = math.max(
+        CFG.MIN_CORNER_SPEED,
+        math.sqrt(CFG.MAX_LATERAL_ACCEL / curvature)
       ) * (p.paceMultiplier or 1.0)
 
       -- Braking distance is calculated from the current position
@@ -1323,7 +1336,7 @@ local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
       local along = dx * info.hx + dz * info.hz
       local lateral = math.abs(dx * info.hz - dz * info.hx)
 
-      if math.abs(along) < 18.0 and lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
+      if math.abs(along) < 9.0 and lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
         return false
       end
     end
@@ -1550,7 +1563,9 @@ local function updateTrafficCoordinator(sim, dt)
               local leaderStopped = leader.speed < 1.5 and
                 (leader.isPlayer and state.playerSlowTimer > 1.5 or
                  leader.p and (leader.p.slowTimer or 0) > 1.5)
-              local canPass = closingSpeed > 1.2 or leaderStopped
+              local followerPace = follower.p and follower.p.paceMultiplier or 1.0
+      local leaderPace = leader.p and leader.p.paceMultiplier or 1.0
+      local canPass = closingSpeed > 0.25 or followerPace > leaderPace + 0.015 or leaderStopped
 
               if gap > 5.0 and canPass then
                 if follower.isAI and leader.isAI then
@@ -1608,8 +1623,20 @@ local function updateTrafficCoordinator(sim, dt)
       local plan = plans[index]
       local desired = plan and plan.offset or 0
 
-      p.passTargetIndex = plan and plan.target or nil
-      p.passRole = plan and plan.role or nil
+      local nextTarget = plan and plan.target or nil
+      local nextRole = plan and plan.role or nil
+      if p.lastTrafficTarget ~= nextTarget or p.lastTrafficRole ~= nextRole then
+        if nextRole then
+          writeLog("TRAFFIC_PLAN car=%d target=%d role=%s offset=%.2f pace=%.2f",
+            index, nextTarget, nextRole, desired, p.paceMultiplier or 1.0)
+        elseif p.lastTrafficRole == "pass" then
+          writeLog("PASS_RELEASE car=%d target=%d", index, p.lastTrafficTarget or -1)
+        end
+        p.lastTrafficTarget = nextTarget
+        p.lastTrafficRole = nextRole
+      end
+      p.passTargetIndex = nextTarget
+      p.passRole = nextRole
       p.passSide = 0
       p.desiredRouteOffset = desired
       p.routeOffsetActual = info.routeOffsetActual
@@ -1674,7 +1701,7 @@ local function carAhead(carIndex, car, personality)
 
         -- A reserved AI-to-AI pair is allowed to execute its agreed lateral
         -- manoeuvre. Once they are very close, geometric collision checks apply.
-        local mayIgnoreReservedPair = coordinatedPair and distance > 4.5
+        local mayIgnoreReservedPair = coordinatedPair and distance > 2.5
 
         if not mayIgnoreReservedPair then
           -- Following applies only to cars travelling in the same direction
@@ -1691,7 +1718,7 @@ local function carAhead(carIndex, car, personality)
           -- Immediate collision: use a rectangular vehicle envelope instead
           -- of treating every small Euclidean distance as a head-on impact.
           if math.abs(forward) < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
-             lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
+             lateral < 1.55 then
             riskTarget = 0
             riskCar = i
             riskTTC = 0
@@ -1720,7 +1747,7 @@ local function carAhead(carIndex, car, personality)
               local closestLat = math.abs(cx * fz - cz * fx)
 
               if closestLong < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
-                 closestLat < CFG.TRAFFIC_LATERAL_CLEARANCE then
+                 closestLat < 1.65 then
                 local lateralMargin = clamp(
                   (closestLat - 1.15) /
                   (CFG.TRAFFIC_LATERAL_CLEARANCE - 1.15),
@@ -1779,17 +1806,10 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
     CFG.MAX_BRAKE
   )
 
-  local throttleFactor = lerp(
-    1.0,
-    0.05,
-    p.slipSeverity
-  )
-
+  -- Keep power on during a drift. The old 5% throttle floor made
+  -- every high-slip corner collapse into a crawl instead of an arcade slide.
+  local throttleFactor = lerp(1.0, 0.72, p.slipSeverity)
   gas = gas * throttleFactor
-
-  if p.slipSeverity > 0.80 then
-    gas = math.min(gas, 0.08)
-  end
 
   if error >= 0 then
     brake = 0
@@ -2529,8 +2549,8 @@ function windowMain(dt)
   state.speedMax = ui.slider(
     "Макс. скорость",
     state.speedMax,
-    60,
-    260,
+    100,
+    320,
     "%.0f км/ч"
   )
 
