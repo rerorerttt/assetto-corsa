@@ -21,20 +21,20 @@ local CFG = {
 
   STEER_GAIN = 0.72,
   STEER_LIMIT = 0.75,
-  STEER_RATE = 2.0,
-  STEER_FILTER = 0.18,
+  STEER_RATE = 3.0,
+  STEER_FILTER = 0.14,
 
-  SLIP_START = 0.09,
-  SLIP_FULL = 0.38,
+  SLIP_START = 0.16,
+  SLIP_FULL = 0.62,
 
-  MAX_LATERAL_ACCEL = 5.5,
-  LATERAL_ACCEL_LIMIT = 11.0,
+  MAX_LATERAL_ACCEL = 9.0,
+  LATERAL_ACCEL_LIMIT = 15.0,
 
-  BRAKE_ACCEL = 5.0,
+  BRAKE_ACCEL = 8.0,
   MAX_BRAKE = 0.75,
   MAX_GAS = 0.90,
 
-  SPEED_GAIN = 0.28,
+  SPEED_GAIN = 0.38,
 
   FOLLOW_LATERAL = 3.0,
   FOLLOW_DISTANCE = 8.0,
@@ -69,7 +69,7 @@ local CFG = {
   OVERTAKE_RELEASE_DISTANCE = 14.0,
   OVERTAKE_OFFSET_RATE = 1.8,
   OVERTAKE_STUCK_TIME = 1.5,
-  TRAFFIC_OFFSET = 1.35,
+  TRAFFIC_OFFSET = 2.65,
   TRAFFIC_LATERAL_CLEARANCE = 2.30,
   TRAFFIC_LONGITUDINAL_CLEARANCE = 4.5,
   TRAFFIC_LOOKAHEAD = 125.0,
@@ -90,7 +90,7 @@ local state = {
   recording = false,
   loopRoute = true,
 
-  speedMax = 140,
+  speedMax = 180,
 
   followGap = 8.0,
   playerSlowTimer = 0,
@@ -764,7 +764,8 @@ local function newPersonality(carIndex)
   local p = {
     segIdx = 1,
 
-    cruiseSpeed = kmh / 3.6,
+    cruiseSpeed = kmh / 3.6 * (carIndex % 2 == 1 and 1.08 or 0.96),
+    paceMultiplier = carIndex % 2 == 1 and 1.08 or 0.96,
 
     steer = 0,
     steerFiltered = 0,
@@ -832,9 +833,10 @@ local function newPersonality(carIndex)
   state.p[carIndex] = p
 
   writeLog(
-    "CAR_INIT id=%d cruise=%.1fkmh segment=%d",
+    "CAR_INIT id=%d cruise=%.1fkmh pace=%.2f segment=%d",
     carIndex,
-    kmh,
+    p.cruiseSpeed * 3.6,
+    p.paceMultiplier,
     p.segIdx
   )
 end
@@ -1098,7 +1100,7 @@ local function planTargetSpeed(p, speed)
     if curvature > 0.001 then
       local cornerSpeed = math.sqrt(
         CFG.MAX_LATERAL_ACCEL / curvature
-      )
+      ) * (p.paceMultiplier or 1.0)
 
       -- Braking distance is calculated from the current position
       -- to the upcoming corner.
@@ -1321,7 +1323,7 @@ local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
       local along = dx * info.hx + dz * info.hz
       local lateral = math.abs(dx * info.hz - dz * info.hx)
 
-      if math.abs(along) < 28.0 and lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
+      if math.abs(along) < 18.0 and lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
         return false
       end
     end
@@ -2073,6 +2075,8 @@ local function updateLineCar(carIndex, car, dt)
     newPersonality(carIndex)
     p = state.p[carIndex]
   end
+
+  p.cruiseSpeed = state.speedMax / 3.6 * (p.paceMultiplier or 1.0)
 
   local speed, fx, fz = readVehicleDynamics(
     car,
