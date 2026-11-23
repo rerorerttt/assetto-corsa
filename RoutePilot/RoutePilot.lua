@@ -1411,6 +1411,46 @@ local function updateTrafficCoordinator(sim, dt)
     }
   end
 
+  -- Preserve an already agreed pass until the faster car is safely clear.
+  for i = 1, sim.carsCount - 1 do
+    local a = infos[i]
+    local old = a and a.p
+    if a and old and old.passTargetIndex ~= nil and old.passRole == "pass" then
+      local b = infos[old.passTargetIndex]
+      local bp = b and b.p
+
+      if b and bp and bp.passTargetIndex == i and bp.passRole == "yield" then
+        local headingDot = a.hx * b.hx + a.hz * b.hz
+        local dx = b.x - a.x
+        local dz = b.z - a.z
+        local forward = dx * a.hx + dz * a.hz
+
+        if headingDot > 0.55 and forward > -14.0 and forward < 90.0 then
+          reservePair(a, b, "pass", "yield", -CFG.TRAFFIC_OFFSET, CFG.TRAFFIC_OFFSET)
+        end
+      end
+    elseif a and old and old.passTargetIndex ~= nil and old.passRole == "meet_right" then
+      local b = infos[old.passTargetIndex]
+      local bp = b and b.p
+
+      if b and bp and bp.passTargetIndex == i and bp.passRole == "meet_right" then
+        local dx = b.x - a.x
+        local dz = b.z - a.z
+        local rvx = b.vx - a.vx
+        local rvz = b.vz - a.vz
+        local rv2 = rvx * rvx + rvz * rvz
+        local tClosest = rv2 > 0.25 and
+          -(dx * rvx + dz * rvz) / rv2 or 0
+        local distance = math.sqrt(dx * dx + dz * dz)
+
+        if distance < 75.0 and tClosest > -0.5 then
+          reservePair(a, b, "meet_right", "meet_right",
+            CFG.TRAFFIC_OFFSET, CFG.TRAFFIC_OFFSET)
+        end
+      end
+    end
+  end
+
   -- First priority: oncoming conflicts. Both AI cars keep to their own right.
   for i = 0, sim.carsCount - 1 do
     local a = infos[i]
@@ -1438,7 +1478,13 @@ local function updateTrafficCoordinator(sim, dt)
               local cz = dz + rvz * tClosest
               local closest = math.sqrt(cx * cx + cz * cz)
 
-              if tClosest > 0.15 and closest < CFG.TRAFFIC_ONCOMING_RANGE then
+              local dxAhead = dx * a.hx + dz * a.hz
+              local otherAhead = -dx * b.hx - dz * b.hz
+              local facingConflict = dxAhead > 0 and otherAhead > 0 and
+                math.sqrt(dx * dx + dz * dz) < 85.0
+
+              if ((tClosest > 0.15 and closest < CFG.TRAFFIC_ONCOMING_RANGE) or
+                  facingConflict) then
                 if a.isPlayer and b.isAI then
                   plans[j] = {
                     target = i,
@@ -1497,8 +1543,12 @@ local function updateTrafficCoordinator(sim, dt)
               end
 
               local closingSpeed = follower.speed - leader.speed
+              local leaderStopped = leader.speed < 1.5 and
+                (leader.isPlayer and state.playerSlowTimer > 1.5 or
+                 leader.p and (leader.p.slowTimer or 0) > 1.5)
+              local canPass = closingSpeed > 1.2 or leaderStopped
 
-              if gap > 5.0 and closingSpeed > 1.2 then
+              if gap > 5.0 and canPass then
                 if follower.isAI and leader.isAI then
                   reservePair(
                     follower,
