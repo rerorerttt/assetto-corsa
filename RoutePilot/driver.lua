@@ -152,7 +152,10 @@ local function laneIsFree(follower, leader, target, snapshots, metrics)
       end
       if longitudinalClose then
         local occupiedLat = other.lateral
-        if other.p and other.p.passState and other.p.passState ~= 'RETURN' then occupiedLat = other.p.targetOffset end
+        if other.p and other.p.laneAssigned then
+          occupiedLat = other.p.passState and other.p.passState ~= 'RETURN' and
+            other.p.targetOffset or (other.p.homeOffset or other.lateral)
+        end
         if math.abs(occupiedLat - target) < follower.half + other.half + PASS_SEPARATION then return false end
       end
     end
@@ -251,7 +254,13 @@ function Driver.beginFrame(sim, dt)
   end
 
   if not S.enabled or not S.spawnDone or S.sessionTime < 2 then return end
-  if not S.lanesAssigned then assignLanes(snapshots,metrics) end
+  local needsLanes=not S.lanesAssigned
+  if not needsLanes then
+    for _,snap in pairs(snapshots) do
+      if snap.p and snap.p.splineLoaded and not snap.p.laneAssigned then needsLanes=true break end
+    end
+  end
+  if needsLanes then assignLanes(snapshots,metrics) end
 
   for i = 1, sim.carsCount - 1 do
     local p = S.p[i]
