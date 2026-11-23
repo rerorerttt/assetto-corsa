@@ -22,6 +22,7 @@ Last updated: 2026-11-24
 - Steering uses a filtered, rate-limited look-ahead target on the assigned lane offset.
 - Startup placement and stuck recovery both place cars at their lane offset.
 - Before the initial spawn, route point order is checked against the player's forward vector. If the player is on the recorded route and the dot product is negative, route points are reversed and signed bounds are mirrored (`newLeft = -oldRight`, `newRight = -oldLeft`), so the lane axis follows actual travel direction.
+- Spawn and recovery now pass the negated route tangent to `physics.setAICarPosition()`. This is an empirical correction for the observed session where passing the recorded tangent directly made cars face against the route and rotate after spawning. `SPAWN_LANE` logs both vectors so the next run can confirm the heading.
 
 ## SDK and heading
 
