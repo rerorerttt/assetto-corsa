@@ -161,7 +161,11 @@ local function sideWidths(boundsL, boundsR, index)
   local right = tonumber(boundsR and boundsR[index]) or DEFAULT_SIDE
   if left > 0 then left = -left end
   if right < 0 then right = -right end
-  return math.max(0.1, -left), math.max(0.1, right)
+
+  -- RoutePilot stores signed lateral bounds (left < 0, right > 0).
+  -- AISplineEditor stores positive magnitudes on its forward × up frame,
+  -- which matches RoutePilot's positive lateral direction.
+  return math.max(0.1, right), math.max(0.1, -left)
 end
 
 function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute)
