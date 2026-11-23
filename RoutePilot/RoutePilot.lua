@@ -69,6 +69,13 @@ local CFG = {
   OVERTAKE_RELEASE_DISTANCE = 14.0,
   OVERTAKE_OFFSET_RATE = 1.8,
   OVERTAKE_STUCK_TIME = 1.5,
+  TRAFFIC_OFFSET = 1.35,
+  TRAFFIC_LATERAL_CLEARANCE = 2.30,
+  TRAFFIC_LONGITUDINAL_CLEARANCE = 4.5,
+  TRAFFIC_LOOKAHEAD = 125.0,
+  TRAFFIC_ONCOMING_TIME = 8.0,
+  TRAFFIC_ONCOMING_RANGE = 9.0,
+  TRAFFIC_OFFSET_RATE = 3.0,
 
   LOG_INTERVAL = 1.0,
   MAX_ROUTE_POINTS = 50000,
@@ -87,6 +94,7 @@ local state = {
 
   followGap = 8.0,
   playerSlowTimer = 0,
+  trafficProjection = {},
 
   spawnDone = false,
   spawnPerformed = false,
@@ -1209,8 +1217,9 @@ end
 local function calculateSteering(car, p, speed, fx, fz)
   local targetX, targetZ, routeFx, routeFz = getLookaheadTarget(car, p, speed)
   local routeOffset = safeNumber(p.routeOffset, 0)
-  targetX = targetX + routeFz * routeOffset
-  targetZ = targetZ - routeFx * routeOffset
+  local travelSign = (routeFx * fx + routeFz * fz) >= 0 and 1 or -1
+  targetX = targetX + routeFz * routeOffset * travelSign
+  targetZ = targetZ - routeFx * routeOffset * travelSign
 
   p.targetX = targetX
   p.targetZ = targetZ
@@ -1290,45 +1299,29 @@ end
 -- ROUTE-RELATIVE OVERTAKING AND YIELDING
 ------------------------------------------------------------
 
-local function routeDelta(fromDistance, toDistance, routeLength, loop)
-  local delta = toDistance - fromDistance
-  if loop and routeLength > 0 then
-    if delta > routeLength * 0.5 then
-      delta = delta - routeLength
-    elseif delta < -routeLength * 0.5 then
-      delta = delta + routeLength
-    end
-  end
-  return delta
-end
+------------------------------------------------------------
+-- CENTRAL TRAFFIC COORDINATOR
+-- All AI decisions are calculated together before any car is controlled.
+------------------------------------------------------------
 
-local function getPassSide(fasterIndex, slowerIndex)
-  -- Both cars derive the same side from the same pair of car indices.
-  local key = fasterIndex * 17 + slowerIndex * 31
-  return key % 2 == 0 and 1 or -1
-end
+local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
+  local candidateX = info.x + info.rightX * offset
+  local candidateZ = info.z + info.rightZ * offset
 
-local function isRouteLaneFree(sim, metrics, ownIndex, ignoreIndex, ownDistance, laneOffset)
-  for i = 0, sim.carsCount - 1 do
-    if i ~= ownIndex and i ~= ignoreIndex then
-      local other = ac.getCar(i)
-      if other and other.isActive then
-        local otherDistance, lineError, otherOffset =
-          findRouteDistanceAtPosition(other.position, metrics)
+  for otherIndex, other in pairs(infos) do
+    if otherIndex ~= info.index and otherIndex ~= targetIndex then
+      local otherPlan = plans[otherIndex]
+      local otherOffset = otherPlan and otherPlan.offset or 0
+      local otherX = other.x + other.rightX * otherOffset
+      local otherZ = other.z + other.rightZ * otherOffset
 
-        if lineError < 8.0 then
-          local along = routeDelta(
-            ownDistance,
-            otherDistance,
-            metrics.length,
-            metrics.loop
-          )
+      local dx = otherX - candidateX
+      local dz = otherZ - candidateZ
+      local along = dx * info.hx + dz * info.hz
+      local lateral = math.abs(dx * info.hz - dz * info.hx)
 
-          if math.abs(along) < 28.0 and
-             math.abs(otherOffset - laneOffset) < CFG.OVERTAKE_CLEARANCE then
-            return false
-          end
-        end
+      if math.abs(along) < 28.0 and lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
+        return false
       end
     end
   end
@@ -1336,158 +1329,247 @@ local function isRouteLaneFree(sim, metrics, ownIndex, ignoreIndex, ownDistance,
   return true
 end
 
-local function updateOvertakeState(carIndex, car, p, speed, dt)
-  if speed < 2.0 then
-    p.slowTimer = (p.slowTimer or 0) + dt
-  else
-    p.slowTimer = 0
-  end
+local function updateTrafficCoordinator(sim, dt)
+  local infos = {}
+  local plans = {}
 
-  local metrics = buildSpawnRouteMetrics()
-  if not metrics then
-    p.desiredRouteOffset = 0
-    p.routeOffset = lerp(p.routeOffset or 0, 0, clamp(dt * CFG.OVERTAKE_OFFSET_RATE, 0, 1))
-    p.passTargetIndex = nil
-    p.passRole = nil
-    return
-  end
+  -- Build one consistent snapshot of every active car, including the player.
+  for i = 0, sim.carsCount - 1 do
+    local car = ac.getCar(i)
 
-  local ownDistance, lineError, ownOffset =
-    findRouteDistanceAtPosition(car.position, metrics)
+    if car and car.isActive then
+      local p = nil
 
-  p.routeDistance = ownDistance
-  p.routeOffsetActual = ownOffset
+      if i ~= 0 and car.isAIControlled then
+        p = state.p[i]
+        if not p then
+          newPersonality(i)
+          p = state.p[i]
+        end
+      else
+        p = state.trafficProjection[i]
+        if not p then
+          p = { segIdx = 1 }
+          state.trafficProjection[i] = p
+        end
+      end
 
-  local targetIndex = p.passTargetIndex
-  local targetRole = p.passRole
-  local targetSide = p.passSide or 0
-  local targetDelta = nil
+      local seg, t, lineError = findNearestSegment(car, p)
+      local a = state.nodes[seg]
+      local b = getSegmentEnd(seg, #state.nodes)
 
-  if targetIndex ~= nil then
-    local targetCar = ac.getCar(targetIndex)
-    if targetCar and targetCar.isActive then
-      local targetDistance, targetError =
-        findRouteDistanceAtPosition(targetCar.position, metrics)
+      local tx, tz = normalize2(b.x - a.x, b.z - a.z)
+      local hx, hz = normalize2(car.look.x, car.look.z)
+      local directionSign = (hx * tx + hz * tz) >= 0 and 1 or -1
+      local dx = car.position.x - (a.x + (b.x - a.x) * t)
+      local dz = car.position.z - (a.z + (b.z - a.z) * t)
+      local routeOffsetActual = (dx * tz - dz * tx) * directionSign
 
-      if targetError < 10.0 then
-        targetDelta = routeDelta(
-          ownDistance,
-          targetDistance,
-          metrics.length,
-          metrics.loop
-        )
+      infos[i] = {
+        index = i,
+        car = car,
+        p = p,
+        x = safeNumber(car.position.x),
+        z = safeNumber(car.position.z),
+        vx = safeNumber(car.velocity.x),
+        vz = safeNumber(car.velocity.z),
+        speed = math.max(0, safeNumber(car.speedMs)),
+        hx = hx,
+        hz = hz,
+        rightX = hz,
+        rightZ = -hx,
+        directionSign = directionSign,
+        lineError = lineError,
+        routeOffsetActual = routeOffsetActual,
+        isPlayer = i == 0,
+        isAI = i ~= 0 and car.isAIControlled == true,
+      }
+
+      if i ~= 0 and p then
+        if infos[i].speed < 2.0 then
+          p.slowTimer = (p.slowTimer or 0) + dt
+        else
+          p.slowTimer = 0
+        end
       end
     end
-
-    local keep = targetDelta ~= nil
-    if targetRole == "pass" then
-      keep = keep and targetDelta > -CFG.OVERTAKE_RELEASE_DISTANCE
-        and targetDelta < CFG.OVERTAKE_DISTANCE
-    elseif targetRole == "yield" then
-      keep = keep and targetDelta < CFG.OVERTAKE_RELEASE_DISTANCE
-        and targetDelta > -CFG.OVERTAKE_REAR_DISTANCE
-    else
-      keep = false
-    end
-
-    if not keep then
-      targetIndex = nil
-      targetRole = nil
-      targetSide = 0
-      targetDelta = nil
-    end
   end
 
-  if targetIndex == nil and lineError < 12.0 then
-    local bestAheadGap = math.huge
-    local bestAheadIndex = nil
-    local bestRearGap = math.huge
-    local bestRearIndex = nil
-    local sim = ac.getSim()
+  local function reservePair(a, b, roleA, roleB, offsetA, offsetB)
+    if not a or not b then return end
+    if plans[a.index] or plans[b.index] then return end
 
-    if sim then
-      for i = 0, sim.carsCount - 1 do
-        if i ~= carIndex then
-          local other = ac.getCar(i)
-          if other and other.isActive then
-            local otherDistance, otherError, otherOffset =
-              findRouteDistanceAtPosition(other.position, metrics)
+    plans[a.index] = {
+      target = b.index,
+      role = roleA,
+      offset = offsetA,
+    }
+    plans[b.index] = {
+      target = a.index,
+      role = roleB,
+      offset = offsetB,
+    }
+  end
 
-            if otherError < 8.0 and math.abs(otherOffset - ownOffset) < 4.5 then
-              local delta = routeDelta(
-                ownDistance,
-                otherDistance,
-                metrics.length,
-                metrics.loop
+  -- First priority: oncoming conflicts. Both AI cars keep to their own right.
+  for i = 0, sim.carsCount - 1 do
+    local a = infos[i]
+    if a then
+      for j = i + 1, sim.carsCount - 1 do
+        local b = infos[j]
+        if b and not plans[i] and not plans[j] then
+          local headingDot = a.hx * b.hx + a.hz * b.hz
+
+          if headingDot < -0.55 then
+            local dx = b.x - a.x
+            local dz = b.z - a.z
+            local rvx = b.vx - a.vx
+            local rvz = b.vz - a.vz
+            local rv2 = rvx * rvx + rvz * rvz
+
+            if rv2 > 0.25 then
+              local tClosest = clamp(
+                -(dx * rvx + dz * rvz) / rv2,
+                0,
+                CFG.TRAFFIC_ONCOMING_TIME
               )
-              local otherSpeed = math.max(0, safeNumber(other.speedMs))
-              local otherPersonality = state.p[i]
-              local otherSlowTimer = otherPersonality and
-                (otherPersonality.slowTimer or 0) or
-                (i == 0 and state.playerSlowTimer or 0)
 
-              local otherIsStopped = otherSpeed < 2.0 and
-                otherSlowTimer >= CFG.OVERTAKE_STUCK_TIME
-              local ownIsStopped = speed < 2.0 and
-                (p.slowTimer or 0) >= CFG.OVERTAKE_STUCK_TIME
+              local cx = dx + rvx * tClosest
+              local cz = dz + rvz * tClosest
+              local closest = math.sqrt(cx * cx + cz * cz)
 
-              local canPass = speed > otherSpeed + CFG.OVERTAKE_MIN_ADVANTAGE
-                or (speed < 2.0 and otherIsStopped)
-              local shouldYield = otherSpeed > speed + CFG.OVERTAKE_MIN_ADVANTAGE
-                or ownIsStopped
-
-              if delta > 3.0 and delta < CFG.OVERTAKE_DISTANCE and
-                 canPass and delta < bestAheadGap then
-                bestAheadGap = delta
-                bestAheadIndex = i
-              elseif delta < -3.0 and delta > -CFG.OVERTAKE_REAR_DISTANCE and
-                     shouldYield and -delta < bestRearGap then
-                bestRearGap = -delta
-                bestRearIndex = i
+              if tClosest > 0.15 and closest < CFG.TRAFFIC_ONCOMING_RANGE then
+                if a.isPlayer and b.isAI then
+                  plans[j] = {
+                    target = i,
+                    role = "yield_player",
+                    offset = CFG.TRAFFIC_OFFSET,
+                  }
+                elseif b.isPlayer and a.isAI then
+                  plans[i] = {
+                    target = j,
+                    role = "yield_player",
+                    offset = CFG.TRAFFIC_OFFSET,
+                  }
+                elseif a.isAI and b.isAI then
+                  reservePair(
+                    a,
+                    b,
+                    "meet_right",
+                    "meet_right",
+                    CFG.TRAFFIC_OFFSET,
+                    CFG.TRAFFIC_OFFSET
+                  )
+                end
               end
             end
           end
         end
       end
     end
+  end
 
-    if bestAheadIndex ~= nil then
-      targetIndex = bestAheadIndex
-      targetRole = "pass"
-      targetSide = getPassSide(carIndex, targetIndex)
-    elseif bestRearIndex ~= nil then
-      targetIndex = bestRearIndex
-      targetRole = "yield"
-      targetSide = getPassSide(targetIndex, carIndex)
+  -- Second priority: same-direction traffic. Faster follower passes on the left;
+  -- slower leader yields to the right. The player is never asked to move.
+  for i = 0, sim.carsCount - 1 do
+    local a = infos[i]
+    if a then
+      for j = i + 1, sim.carsCount - 1 do
+        local b = infos[j]
+        if b and not plans[i] and not plans[j] then
+          local headingDot = a.hx * b.hx + a.hz * b.hz
+
+          if headingDot > 0.72 then
+            local dx = b.x - a.x
+            local dz = b.z - a.z
+            local forward = dx * a.hx + dz * a.hz
+            local lateral = math.abs(dx * a.hz - dz * a.hx)
+
+            if math.abs(forward) > 4.0 and
+               math.abs(forward) < CFG.TRAFFIC_LOOKAHEAD and
+               lateral < 5.5 then
+
+              local follower, leader, gap
+              if forward > 0 then
+                follower, leader, gap = a, b, forward
+              else
+                follower, leader, gap = b, a, -forward
+              end
+
+              local closingSpeed = follower.speed - leader.speed
+
+              if gap > 5.0 and closingSpeed > 1.2 then
+                if follower.isAI and leader.isAI then
+                  reservePair(
+                    follower,
+                    leader,
+                    "pass",
+                    "yield",
+                    -CFG.TRAFFIC_OFFSET,
+                    CFG.TRAFFIC_OFFSET
+                  )
+                elseif follower.isPlayer and leader.isAI then
+                  plans[leader.index] = {
+                    target = follower.index,
+                    role = "yield_player",
+                    offset = CFG.TRAFFIC_OFFSET,
+                  }
+                end
+              end
+            end
+          end
+        end
+      end
     end
   end
 
-  local desired = 0
-  if targetIndex ~= nil and targetRole ~= nil then
-    local laneSide = targetRole == "pass" and targetSide or -targetSide
-    local candidateOffset = laneSide * CFG.OVERTAKE_OFFSET
-
-    local sim = ac.getSim()
-    if sim and isRouteLaneFree(
-      sim,
-      metrics,
-      carIndex,
-      targetIndex,
-      ownDistance,
-      candidateOffset
+  -- Reject a coordinated manoeuvre if either reserved path is occupied by a
+  -- third car. Never let two independent plans claim the same strip of road.
+  local rejected = {}
+  for index, plan in pairs(plans) do
+    local info = infos[index]
+    if info and not trafficLaneIsClear(
+      info,
+      infos,
+      plans,
+      plan.target,
+      plan.offset
     ) then
-      desired = candidateOffset
+      rejected[index] = true
+      if plans[plan.target] and plans[plan.target].target == index then
+        rejected[plan.target] = true
+      end
     end
   end
 
-  p.passTargetIndex = targetIndex
-  p.passRole = targetRole
-  p.passSide = targetSide
-  p.desiredRouteOffset = desired
+  for index in pairs(rejected) do
+    plans[index] = nil
+  end
 
-  local alpha = clamp(dt * CFG.OVERTAKE_OFFSET_RATE, 0, 1)
-  p.routeOffset = lerp(p.routeOffset or 0, desired, alpha)
+  -- Publish all decisions together. The individual controllers only execute
+  -- the coordinator's reservation; they no longer negotiate independently.
+  for index, info in pairs(infos) do
+    if info.isAI then
+      local p = info.p
+      local plan = plans[index]
+      local desired = plan and plan.offset or 0
+
+      p.passTargetIndex = plan and plan.target or nil
+      p.passRole = plan and plan.role or nil
+      p.passSide = 0
+      p.desiredRouteOffset = desired
+      p.routeOffsetActual = info.routeOffsetActual
+      p.trafficCoordinated = plan ~= nil
+
+      local alpha = clamp(dt * CFG.TRAFFIC_OFFSET_RATE, 0, 1)
+      p.routeOffset = lerp(p.routeOffset or 0, desired, alpha)
+    end
+  end
 end
+
+------------------------------------------------------------
+-- CAR FOLLOWING AND COLLISION PREDICTION
+------------------------------------------------------------
 
 ------------------------------------------------------------
 -- CAR FOLLOWING AND COLLISION PREDICTION
@@ -1514,77 +1596,90 @@ local function carAhead(carIndex, car, personality)
       local other = ac.getCar(i)
 
       if other and other.isActive then
-        local ignorePassingPair = false
-        if personality and personality.passTargetIndex == i then
-          local otherPersonality = state.p[i]
-          local otherOffset = otherPersonality and otherPersonality.routeOffsetActual or 0
-          local ownOffset = personality.routeOffsetActual or 0
-          ignorePassingPair = math.abs(ownOffset - otherOffset) >= CFG.OVERTAKE_CLEARANCE
-        end
-
-        if not ignorePassingPair then
         local dx = safeNumber(other.position.x) - safeNumber(car.position.x)
         local dz = safeNumber(other.position.z) - safeNumber(car.position.z)
-
         local distance = math.sqrt(dx * dx + dz * dz)
         local forward = dx * fx + dz * fz
-        local lateral = math.abs(dx * fz - dz * fx)
+        local lateralSigned = dx * fz - dz * fx
+        local lateral = math.abs(lateralSigned)
 
         local otherSpeed = math.max(0, safeNumber(other.speedMs))
         local ovx = safeNumber(other.velocity.x)
         local ovz = safeNumber(other.velocity.z)
+        local otherLookX, otherLookZ = normalize2(other.look.x, other.look.z)
+        local sameDirection = fx * otherLookX + fz * otherLookZ > 0.55
 
-        -- Standard following-distance check.
-        if forward > 0 and forward < 90 and lateral < CFG.FOLLOW_LATERAL + 1.5 then
-          if not bestGap or forward < bestGap then
-            bestGap = forward
-            bestSpeed = otherSpeed
+        local otherPersonality = state.p[i]
+        local coordinatedPair =
+          personality and otherPersonality and
+          personality.passTargetIndex == i and
+          otherPersonality.passTargetIndex == carIndex and
+          personality.passRole ~= "yield_player" and
+          otherPersonality.passRole ~= "yield_player"
+
+        -- A reserved AI-to-AI pair is allowed to execute its agreed lateral
+        -- manoeuvre. Once they are very close, geometric collision checks apply.
+        local mayIgnoreReservedPair = coordinatedPair and distance > 4.5
+
+        if not mayIgnoreReservedPair then
+          -- Following applies only to cars travelling in the same direction
+          -- and occupying the same narrow corridor, never to the other side
+          -- of an oval or an oncoming car.
+          if sameDirection and forward > 0 and forward < 110 and
+             lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
+            if not bestGap or forward < bestGap then
+              bestGap = forward
+              bestSpeed = otherSpeed
+            end
           end
-        end
 
-        -- Immediate collision danger, including stationary vehicles.
-        if distance <= 2.5 then
-          riskTarget = 0
-        end
+          -- Immediate collision: use a rectangular vehicle envelope instead
+          -- of treating every small Euclidean distance as a head-on impact.
+          if math.abs(forward) < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
+             lateral < CFG.TRAFFIC_LATERAL_CLEARANCE then
+            riskTarget = 0
+          end
 
-        -- Relative-motion prediction for side-by-side and crossing cars.
-        if distance < 100 then
-          local rvx = ownVx - ovx
-          local rvz = ownVz - ovz
+          -- Predict relative motion and test the predicted position in the
+          -- vehicle's longitudinal/lateral frame.
+          if distance < 130 then
+            local rvx = ownVx - ovx
+            local rvz = ownVz - ovz
+            local rv2 = rvx * rvx + rvz * rvz
+            local closing = dx * rvx + dz * rvz
 
-          local rv2 = rvx * rvx + rvz * rvz
-          local closing = dx * rvx + dz * rvz
+            if rv2 > 0.04 and closing > 0 then
+              local t = clamp(
+                closing / rv2,
+                0,
+                CFG.COLLISION_HORIZON
+              )
 
-          if rv2 > 0.04 and closing > 0 then
-            local t = clamp(
-              closing / rv2,
-              0,
-              CFG.COLLISION_HORIZON
-            )
+              local cx = dx - rvx * t
+              local cz = dz - rvz * t
+              local closestLong = math.abs(cx * fx + cz * fz)
+              local closestLat = math.abs(cx * fz - cz * fx)
 
-            local cx = dx - rvx * t
-            local cz = dz - rvz * t
-
-            local closest = math.sqrt(cx * cx + cz * cz)
-
-            if closest < CFG.COLLISION_RADIUS then
-              local safe = 0
-
-              if closest > CFG.COLLISION_EMERGENCY_RADIUS then
-                local factor = clamp(
-                  (closest - CFG.COLLISION_EMERGENCY_RADIUS) /
-                  (CFG.COLLISION_RADIUS - CFG.COLLISION_EMERGENCY_RADIUS),
+              if closestLong < CFG.TRAFFIC_LONGITUDINAL_CLEARANCE and
+                 closestLat < CFG.TRAFFIC_LATERAL_CLEARANCE then
+                local lateralMargin = clamp(
+                  (closestLat - 1.15) /
+                  (CFG.TRAFFIC_LATERAL_CLEARANCE - 1.15),
                   0,
                   1
                 )
-
-                safe = ownSpeed * factor
+                local longitudinalMargin = clamp(
+                  (closestLong - 2.0) /
+                  (CFG.TRAFFIC_LONGITUDINAL_CLEARANCE - 2.0),
+                  0,
+                  1
+                )
+                local clearance = math.max(lateralMargin, longitudinalMargin)
+                local safe = ownSpeed * clearance
+                riskTarget = math.min(riskTarget, safe)
               end
-
-              riskTarget = math.min(riskTarget, safe)
             end
           end
-        end
         end
       end
     end
@@ -1593,6 +1688,7 @@ local function carAhead(carIndex, car, personality)
   return bestGap, bestSpeed, riskTarget
 end
 
+------------------------------------------------------------
 ------------------------------------------------------------
 -- THROTTLE AND BRAKE CONTROLLER
 ------------------------------------------------------------
@@ -1915,7 +2011,6 @@ local function updateLineCar(carIndex, car, dt)
     dt
   )
 
-  updateOvertakeState(carIndex, car, p, speed, dt)
   calculateStability(p)
 
   local steerTarget = calculateSteering(
@@ -2061,6 +2156,7 @@ local function recordSecondTelemetry(sim)
         "ROUTE_OFFSET=%.2f " ..
         "PASS_TARGET=%d " ..
         "PASS_ROLE=%s " ..
+        "PASS_OFFSET=%.2f " ..
         "AIR_TIMER=%.1f " ..
         "STUCK_TIMER=%.1f " ..
         "COLLISION_RISK=%.2f " ..
@@ -2096,6 +2192,7 @@ local function recordSecondTelemetry(sim)
         p.routeOffset or 0,
         p.passTargetIndex or -1,
         p.passRole or "none",
+        p.routeOffset or 0,
 
         p.airTimer or 0,
         p.moveTimer or 0,
@@ -2171,6 +2268,8 @@ function script.update(dt)
     end
 
   elseif startupReady then
+    updateTrafficCoordinator(sim, dt)
+
     for i = 0, sim.carsCount - 1 do
       local car = ac.getCar(i)
 
