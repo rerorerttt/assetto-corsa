@@ -1,11 +1,16 @@
--- RoutePilot.lua — v0.5.2 (CSP 0.3.2-preview2)
--- MAP FIX: v0.5.1 drew the map inside ui.beginChild(0, 250) — a zero-width
--- child renders EMPTY in this CSP build (user saw a blank window). Reverted
--- to the PROVEN RoutePilot_Back canvas: plain invisibleButton + getItemRect
--- with manual per-segment clipping (Back used this and the map worked).
--- Driver: Back-proven controller core (driver.lua v0.5.2). Bounds width is
--- TOTAL (2 m = one car). Rescue teleports only when stuck.
--- 3D lines need [RENDER_CALLBACKS] TRANSPARENT = Draw3D in manifest.ini.
+-- RoutePilot.lua — v0.6.0 (CSP 0.3.2-preview2)
+-- LESSONS FROM OTHER DEVS' APPS (AISplineEditor, Verve, comfy_map, all on main):
+--  * comfy_map/Verve keep ALL content inside the window (window sizes match
+--    content); the old 340x340 window was the reason the map was BLANK:
+--    buttons+slider+text took ~250 px and the 250 px map was fully below the
+--    window edge. Manifest now 400x560 and the UI is compact (buttons in
+--    pairs), the map takes the remaining height.
+--  * AISplineEditor draws world lines with render.on('main.track.transparent'),
+--    NOT with manifest [RENDER_CALLBACKS] — that's how the official spline
+--    editor does it and it works on this CSP build. Same approach here, with
+--    render.setDepthMode(render.DepthMode.Off) and camera-distance culling.
+--  * RoutePilot_Back.lua is the proven driving core — driver.lua v0.5.2 is
+--    built on it (slip-compensated steering 0.62, Back steering constants).
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -21,7 +26,7 @@ local CFG = {
   SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180, BOUNDS_MIN_PASS=2.4,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
   SMOOTH_PASSES=3, SMOOTH_WINDOW=5, LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000,
-  RECORD_DISTANCE=3.0, MAP_HEIGHT=250.0, LINE_DRAW_STEP=3,
+  RECORD_DISTANCE=3.0, LINE_DRAW_STEP=3, DRAW_RANGE=600.0,
 }
 local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
@@ -613,13 +618,19 @@ function script.update(dt)
     if logger then writeLog("UPDATE_ERROR err=%s",tostring(err)); flushLog() end
   end
 end
-function script.Draw3D(dt)
+
+-- 3D world lines: the AISplineEditor way — render.on('main.track.transparent').
+-- No manifest section needed; works on this CSP build (that is how the
+-- official AI Spline Editor draws its splines in the world).
+render.on('main.track.transparent', function()
   if not state.showWorldLines then return end
   local n=#state.nodes
   if n<2 then return end
   local ok=pcall(function()
-    local player=ac.getCar(0)
-    local camPos=player and player.position or vec3(0,0,0)
+    local sim=ac.getSim()
+    if not sim then return end
+    local cam=sim.cameraPosition
+    render.setDepthMode(render.DepthMode.Off)
     local step=CFG.LINE_DRAW_STEP
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
@@ -627,8 +638,8 @@ function script.Draw3D(dt)
       local j=((i+step-1)%n)+1
       local a=state.nodes[i]; local b=state.nodes[j]
       local midx,midz=(a.x+b.x)*0.5,(a.z+b.z)*0.5
-      local ddx,ddz=midx-camPos.x,midz-camPos.z
-      if ddx*ddx+ddz*ddz<300*300 then
+      local ddx,ddz=midx-cam.x,midz-cam.z
+      if ddx*ddx+ddz*ddz<CFG.DRAW_RANGE*CFG.DRAW_RANGE then
         local la=state.nodes[((i-1)%n)+1]
         local lx,lz=normalize2(b.x-la.x,b.z-la.z)
         local al,ar=boundsAt(i)
@@ -644,7 +655,10 @@ function script.Draw3D(dt)
     state.showWorldLines=false
     writeLog("DRAW3D_ERROR disabled"); flushLog()
   end
-end
+end)
+
+-- MAP: content fits the window (400x560, compact two-column buttons),
+-- canvas = invisibleButton + itemRect (Back-proven), height fills the rest.
 local function computeMapBounds()
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
   for i=1,#state.nodes do
@@ -679,8 +693,9 @@ local function drawMapInRect(q0,q1)
   local cz=(b.minZ+b.maxZ)*0.5
   local mx=(q0.x+q1.x)*0.5
   local my=(q0.y+q1.y)*0.5
-  local function toScreen(x,z)
-    return vec2(mx+(x-cx)*scale,my+(z-cz)*scale)
+  local function segVisible(x1,y1,x2,y2)
+    return not (x1<q0.x and x2<q0.x) and not (x1>q1.x and x2>q1.x)
+      and not (y1<q0.y and y2<q0.y) and not (y1>q1.y and y2>q1.y)
   end
   local n=#state.nodes
   local minOff=4
@@ -698,26 +713,27 @@ local function drawMapInRect(q0,q1)
       local px,pz=node.x-lz*off,node.z+lx*off
       local sx=mx+(px-cx)*scale
       local sy=my+(pz-cz)*scale
-      if prev and not (prev.x<q0.x and sx<q0.x) and not (prev.x>q1.x and sx>q1.x)
-        and not (prev.y<q0.y and sy<q0.y) and not (prev.y>q1.y and sy>q1.y) then
+      if prev and segVisible(prev.x,prev.y,sx,sy) then
         ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),1.5)
       end
       prev=vec2(sx,sy)
     end
   end
   do
-    local prev=toScreen(state.nodes[1].x,state.nodes[1].z)
+    local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
     for i=2,n do
-      local cur=toScreen(state.nodes[i].x,state.nodes[i].z)
-      local inside=not (prev.x<q0.x and cur.x<q0.x) and not (prev.x>q1.x and cur.x>q1.x)
-        and not (prev.y<q0.y and cur.y<q0.y) and not (prev.y>q1.y and cur.y>q1.y)
-      if inside then
-        ui.drawLine(prev,cur,rgbm(1.0,0.85,0.0,0.95),2)
+      local sx=mx+(state.nodes[i].x-cx)*scale
+      local sy=my+(state.nodes[i].z-cz)*scale
+      if segVisible(prev.x,prev.y,sx,sy) then
+        ui.drawLine(prev,vec2(sx,sy),rgbm(1.0,0.85,0.0,0.95),2)
       end
-      prev=cur
+      prev=vec2(sx,sy)
     end
     if state.loopRoute then
-      ui.drawLine(prev,toScreen(state.nodes[1].x,state.nodes[1].z),rgbm(1.0,0.85,0.0,0.95),2)
+      local first=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
+      if segVisible(prev.x,prev.y,first.x,first.y) then
+        ui.drawLine(prev,first,rgbm(1.0,0.85,0.0,0.95),2)
+      end
     end
   end
   local sim=ac.getSim()
@@ -725,7 +741,7 @@ local function drawMapInRect(q0,q1)
     for i=0,sim.carsCount-1 do
       local car=ac.getCar(i)
       if car and car.isActive then
-        local s=toScreen(car.position.x,car.position.z)
+        local s=vec2(mx+(car.position.x-cx)*scale,my+(car.position.z-cz)*scale)
         if s.x>q0.x and s.x<q1.x and s.y>q0.y and s.y<q1.y then
           if i==0 then
             ui.drawCircleFilled(s,4.5,rgbm(0.0,0.8,1.0,1.0),12)
@@ -744,13 +760,16 @@ local function drawMapInRect(q0,q1)
 end
 local function drawMap()
   if #state.nodes<2 then
-    ui.text(" ")
+    ui.textWrapped("Нет линии. Нажмите «Запись линии» и проедьте круг.")
     return
   end
   local ok=pcall(function()
     local width=ui.availableSpaceX()
     if width<80 then width=80 end
-    ui.invisibleButton("line_map",vec2(width,CFG.MAP_HEIGHT))
+    local height=ui.availableSpaceY and ui.availableSpaceY() or 0
+    if type(height)~="number" or height<160 then height=160 end
+    if height>600 then height=600 end
+    ui.invisibleButton("line_map",vec2(width,height))
     local q0=ui.getItemRectMin()
     local q1=ui.getItemRectMax()
     drawMapInRect(q0,q1)
@@ -762,7 +781,7 @@ function windowMain(dt)
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
     local w,ch=ui.slider("Ширина трассы, м (общая)",state.boundsWidth,2,30,"%.0f")
     if ch then state.boundsWidth=math.floor(clamp(w,2,30)) end
-    if ui.button(state.recLine and "Стоп запись линии" or "Запись линии",vec2(-1,26)) then
+    if ui.button(state.recLine and "СТОП запись" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
         state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
@@ -773,7 +792,8 @@ function windowMain(dt)
         state.status="Записано точек: "..#state.nodes
       end
     end
-    if ui.button(state.recBounds and "Стоп запись границ" or "Запись границ (с места машины)",vec2(-1,26)) then
+    ui.sameLine(0,4)
+    if ui.button(state.recBounds and "СТОП границы" or "Запись границ",vec2(-0.5,24)) then
       if state.recBounds then
         state.recBounds=false; state.status="Границы записаны"
       else
@@ -784,17 +804,20 @@ function windowMain(dt)
         end
       end
     end
-    if ui.button(state.showWorldLines and "Скрыть линии на трассе" or "Показать линии",vec2(-1,26)) then
+    if ui.button(state.showWorldLines and "Скрыть линии" or "Показать линии",vec2(-0.5,24)) then
       state.showWorldLines=not state.showWorldLines
       writeLog("WORLD_LINES %s",state.showWorldLines and "ON" or "OFF")
     end
-    if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ",vec2(-1,24)) then
+    ui.sameLine(0,4)
+    if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ",vec2(-0.5,24)) then
       state.loopRoute=not state.loopRoute
       state.p={}
     end
-    if ui.button("Сохранить",vec2(-1,24)) then saveLine() end
-    if ui.button("Загрузить",vec2(-1,24)) then loadLine() end
-    if ui.button("Очистить",vec2(-1,24)) then
+    if ui.button("Сохранить",vec2(-0.34,22)) then saveLine() end
+    ui.sameLine(0,4)
+    if ui.button("Загрузить",vec2(-0.34,22)) then loadLine() end
+    ui.sameLine(0,4)
+    if ui.button("Очистить",vec2(-0.34,22)) then
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
     end
@@ -814,5 +837,5 @@ end
 loadLine()
 smoothLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.5.2 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.6.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
