@@ -32,3 +32,8 @@ Old `#RP_OBSTACLE_V1` and `#RP_OBS` rows in route files are ignored. The scan bu
 The current branch is a diagnostic revision: unverified track obstacle sensing is disabled while AI-to-AI traffic coordination remains active. The latest supplied trace averaged 37.1 km/h across five AI cars against a 83.8 km/h target and still showed substantial low-speed operation. This revision has not yet been tested in-game; a fresh user-run trace is required.
 
 Read `DEVELOPMENT.md` before changing the coordinator or obstacle cache. It contains the current implementation, SDK references, telemetry findings and required test cases.
+
+
+## Startup compatibility
+
+The main window callback is registered as `script.windowMain(dt)` in accordance with the CSP Lua Apps SDK. The per-frame controller remains registered as `script.update(dt)`.
