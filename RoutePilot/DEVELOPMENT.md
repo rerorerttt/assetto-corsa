@@ -86,3 +86,22 @@ At the start of every new chat about RoutePilot, read this file first, then fetc
 ## Development rules
 
 Before editing, fetch the current branch head and re-read the current Lua source, manifest, logger, route file and latest trace. Work on `routepilot-traffic-coordinator` unless explicitly told otherwise. Preserve the UI, route recording/loading, recovery and logger. Verify APIs against the checked-in SDK docs. Update this handoff whenever implementation, file format, known issues or validation status changes. Never call a change in-game tested until the user has run it and supplied a fresh trace.
+
+
+## Latest user test and collision-system shutdown — 2026-11-23
+
+The user uploaded a newer trace. Current reviewed trace SHA: `f4c9a2a573f40f6026391ea5f7d950a0ef651a2a`, 2,953 lines, 505 telemetry samples across five AI cars. Aggregate sample mean speed is 10.31 m/s (37.1 km/h) versus mean target speed 23.27 m/s (83.8 km/h). There are 64 samples with brake >0.05, 181 samples with target speed <=5 m/s, 82 forward-obstacle readings below 4 m, 98 left-clearance readings below 4 m, and 91 right-clearance readings below 4 m. The log contains 2,315 `TRAFFIC_REJECT`, 76 `TRAFFIC_PLAN`, 12 `PASS_RELEASE`, and 14 `RECOVERY_SUCCESS` events. Role assignment or a release event still does not prove a completed overtake.
+
+The map/live-guard data is not trustworthy enough to keep in control authority. In particular, the live sensor can report a clear forward ray (for example `LIVE_OBSTACLE=18`) while a side ray reports very small clearance; the old guard could reduce speed or steer based on these side-only contacts. Static map hits were also used globally in the pass corridor without validating route-local association. The user explicitly requested disabling collision detection until a correct method is established.
+
+Latest code commit: `6f747712392299b51c65fcc465d23efd3e8e4aa3` (disable unverified obstacle sensing and inline route map). In this revision:
+- `applyLiveObstacleGuard()` returns its input steering and target speed unchanged; it no longer calls `physics.raycastTrack()`.
+- Static obstacle hits no longer gate pass reservations in `trafficLaneIsClear()`; the incomplete-map veto was removed as well.
+- Runtime obstacle scanning is no longer called from the update loop; loading/saving routes no longer starts a scan or imports the old cache into active state.
+- The scan button, collision-map status and green cached-hit markers were removed from the UI. Old `#RP_OBS` comment rows remain harmlessly parse-compatible in route files but are ignored by the controller.
+- AI-to-AI route conflict checks, pass/yield reservations and head-on/crossing coordination remain enabled. This is not a global disable of vehicle-to-vehicle coordination or collision prediction.
+- The route radar is drawn inline by the only manifest window callback, with a bounded canvas height. There is one `[WINDOW_...]` entry in `manifest.ini`, no `ui.childWindow()`, and no separate map window in the Lua source. Verify in-game that the map is visually inside the same app panel; CSP host window docking cannot be proven from source alone.
+
+Do not re-enable track obstacle scanning or live raycast avoidance until the scanner is redesigned and its hits are visually validated against the track. A future implementation should classify ray hits by direction and height, validate hit points against route-local geometry and the vehicle's swept envelope, and record the exact ray/hit point responsible for every control intervention. Do not use a raw minimum distance from side rays as a forward hazard. Continue to preserve the current AI-to-AI coordination while debugging route tracking and speed control.
+
+The newest trace also shows the overall controller remains unstable and slow; disabling obstacle sensing is a diagnostic isolation step, not a claim that speed, line tracking or passing are fixed. The user must run the new build and upload a fresh trace/screenshot before further conclusions.
