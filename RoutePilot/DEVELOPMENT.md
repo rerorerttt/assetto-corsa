@@ -17,7 +17,7 @@ The latest trace is about 55 seconds and contains 275 AI samples (55 per car, fi
 
 The supplied `line_nevadadrift.txt` has 277 plain XYZ rows and no obstacle metadata. This confirms that no collision map had previously been generated or stored with that route.
 
-## Current implementation changes
+## Earlier arcade/traffic revision (historical; superseded by latest tuning below)
 
 The current source contains the following first major arcade/traffic revision:
 
@@ -31,9 +31,9 @@ The current source contains the following first major arcade/traffic revision:
 
 These are code changes, not proof of successful racing. A completed pass must be established from position/progress over time, not by counting `PASS_ROLE=pass` samples.
 
-## Static collision-map scanner
+## Legacy static collision-map scanner (disabled in the current source)
 
-The scanner is now implemented in `RoutePilot.lua` using the SDK-documented `physics.raycastTrack(pos, dir, length, point, normal, includeNoise, backfaceCulling)` API.
+A scanner was previously implemented in `RoutePilot.lua` using the SDK-documented `physics.raycastTrack(pos, dir, length, point, normal, includeNoise, backfaceCulling)` API. Its implementation remains in the file but is not called by the current update loop; cache loading and live raycast control are disabled.
 
 - On route load, a missing or checksum-mismatched cache starts an incremental scan. It samples each route point in eight horizontal directions at three heights (0.55, 1.10 and 1.65 m), with 9 m rays and a 48-ray-per-frame budget.
 - The nearest hit per route-point/direction is stored with its hit point, normal, height and distance.
