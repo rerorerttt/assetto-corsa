@@ -1,362 +1,353 @@
--- RoutePilot/driver.lua — v0.9.0 (CSP 0.3.2-preview2)
--- FUNDAMENTAL RETHINK:
---  * The user trace showed ZERO CAR_INIT lines: the main script never adopted
---    the cars (spawn gate blocked driving forever), so the cars drove on the
---    STOCK game AI — that is where the zigzags, burnouts, wall-hunting and
---    ignoring the player came from. The main script now adopts every AI car
---    instantly; this driver only does the driving.
---  * STEERING DEADBAND: on a straight the angle error is tiny — steering 0
---    instead of micro-correcting left/right every frame (zigzag source).
---  * DECISIVE OVERTAKES: side is picked ONCE from the free room and LOCKED
---    for the whole pass; no flapping between sides mid-manoeuvre.
---  * SOFT START: gas capped at low speed (no burnout launch).
---  * Route planned tens of meters ahead (lookahead 14 + 0.8*speed, max 50).
+-- RoutePilot/driver.lua — native CSP AI traffic controller.
+-- Native AC AI follows the generated version-7 spline. This module does not
+-- override steering, throttle, brake, clutch or gearbox.
+-- Passing changes only the faster follower's spline offset; the leader is
+-- never commanded to move aside or reduce speed.
 
 local Driver = {}
-local CFG, state, H
+local CFG, S, H
 
-local BOUND_MARGIN = 0.4
-local REQ_SEP      = 2.8    -- center-to-center gap needed to pass, m
-local TRIGGER_TIME = 0.5
-local FORCE_TIME   = 2.0
-local PASS_TIMEOUT = 8.0
-local RESCUE_SPEED = 1.5
-local RESCUE_TIME  = 3.5
-local STEER_DEAD   = 0.015  -- rad: below this, hold the wheel still
+local PASS_TRIGGER_GAP = 48.0
+local PASS_MIN_GAP = 6.0
+local PASS_CLEAR_GAP = 7.0
+local PASS_MAX_TIME = 18.0
+local PASS_OFFSET_RATE = 3.0
+local PASS_SEPARATION = 0.38
+local PASS_EDGE_MARGIN = 0.22
+local PASS_LOOKAHEAD = 42.0
+local PASS_OCCUPANCY_RANGE = 23.0
+local STUCK_SPEED = 0.8
+local STUCK_TIME = 10.0
 
-local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
-local function lerp(a, b, t) return a + (b - a) * t end
-local function normalize2(x, z)
-  local l = math.sqrt(x * x + z * z)
-  if l < 0.00001 then return 0, 1 end
-  return x / l, z / l
+local function clamp(x, a, b) return math.max(a, math.min(b, x)) end
+local function number(x, fallback)
+  if type(x) ~= 'number' or x ~= x or x == math.huge or x == -math.huge then return fallback or 0 end
+  return x
 end
-local function signedAngle(ax, az, bx, bz)
-  local dot = clamp(ax * bx + az * bz, -1, 1)
-  return math.atan2(ax * bz - az * bx, dot)
+local function deterministic(i)
+  local x = math.sin(i * 127.1 + 311.7) * 43758.5453
+  return x - math.floor(x)
 end
-local function safeNumber(v, fb)
-  if type(v) ~= "number" then return fb or 0 end
-  if v ~= v or v == math.huge or v == -math.huge then return fb or 0 end
-  return v
+local function approach(value, target, step)
+  if target > value + step then return value + step end
+  if target < value - step then return value - step end
+  return target
 end
-local function carRand(i, s)
-  local n = math.sin(i * 127.1 + s * 311.7) * 43758.5453
-  return n - math.floor(n)
+local function flatDistance(a, b)
+  local dx, dz = b.x - a.x, b.z - a.z
+  return math.sqrt(dx * dx + dz * dz)
 end
-
-function Driver.setup(cfg, st, helpers)
-  CFG = cfg
-  state = st
-  H = helpers
-end
-
-local function newPersonality(carIndex)
-  local pace = 0.86 + carRand(carIndex, 1) * 0.28
-  local kmh = clamp(safeNumber(state.speedMax, 170) * pace, 80, 240)
-  local p = {
-    segIdx = 1, pace = pace, cruiseSpeed = kmh / 3.6,
-    steer = 0, steerFiltered = 0, gas = 0, brake = 0,
-    slipAngle = 0, lateralAccel = 0, yawRate = 0,
-    previousFx = nil, previousFz = nil,
-    stuck = 0, blockedT = 0, passT = 0,
-    lineDist = 0, latOff = 0, targetSpeed = 0,
-    slipSeverity = 0, stability = 1,
-    overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
-    retireT = 2.0,
-  }
-  state.p[carIndex] = p
-  H.log("CAR_INIT id=%d cruise=%.1fkmh pace=%.2f", carIndex, kmh, pace)
+local function halfWidth(car)
+  local width = 2.0
+  pcall(function() if car.aabbSize and car.aabbSize.x > 0.5 then width = car.aabbSize.x end end)
+  return clamp(width * 0.5, 0.75, 1.35)
 end
 
-local function readVehicleDynamics(car, p, dt)
-  local v = car.velocity
+local function buildMetrics()
+  local count = H.segmentCount()
+  if count < 3 then return nil end
+  local starts, lengths, total = {}, {}, 0
+  for i = 1, count do
+    local d = flatDistance(S.nodes[i], H.segEnd(i))
+    if d < 0.05 then return nil end
+    starts[i], lengths[i] = total, d
+    total = total + d
+  end
+  if total < 50 then return nil end
+  return {starts = starts, lengths = lengths, total = total, count = count}
+end
+
+local function projectCar(index, car, p, metrics)
+  local hint = (p and p.segIdx) or S.trafficHints[index] or 1
+  local seg, t, lineError = H.findNearestSeg(car.position, hint)
+  if p then p.segIdx = seg end
+  S.trafficHints[index] = seg
+  local a, b = S.nodes[seg], H.segEnd(seg)
+  local dx, dz = b.x - a.x, b.z - a.z
+  local len = math.sqrt(dx * dx + dz * dz)
+  if len < 0.001 then return nil end
+  local tx, tz = dx / len, dz / len
   local look = car.look
-  local fx, fz = normalize2(look.x, look.z)
-  local rx, rz = fz, -fx
-  local vx, vz = safeNumber(v.x), safeNumber(v.z)
-  local longVel = vx * fx + vz * fz
-  local latVel = vx * rx + vz * rz
-  p.slipAngle = math.atan2(latVel, math.max(0.5, longVel))
-  p.yawRate = 0
-  if p.previousFx and dt > 0.0001 then
-    p.yawRate = signedAngle(p.previousFx, p.previousFz, fx, fz) / dt
+  local headingDot = look and (look.x * tx + look.z * tz) or 0
+  local progress = metrics.starts[seg] + metrics.lengths[seg] * t
+  local lateral = H.lateralOf(car.position, seg)
+  if p then
+    p.lineDist, p.lateral, p.headingDot = lineError, lateral, headingDot
   end
-  local speed = math.max(0, safeNumber(car.speedMs, longVel))
-  p.previousFx, p.previousFz = fx, fz
-  p.lateralAccel = math.abs(p.yawRate * speed)
-  return speed, fx, fz
+  return {
+    index = index, car = car, p = p, seg = seg, progress = progress,
+    lateral = lateral, headingDot = headingDot, half = halfWidth(car),
+    speed = math.max(0, number(car.speedMs, 0)), pace = p and p.targetLevel or number(car.aiLevel, 1.0),
+    x = car.position.x, z = car.position.z
+  }
 end
 
-local function calculateStability(p, speed)
-  local slip = math.abs(p.slipAngle)
-  local severity = 0
-  if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
-    local ss = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
-    local as = clamp((p.lateralAccel - CFG.MAX_LATERAL_ACCEL) / (CFG.MAX_LATERAL_ACCEL * 0.7), 0, 1)
-    severity = math.max(ss, as)
-  end
-  p.slipSeverity = severity
-  p.stability = 1 - severity
+local function signedGap(a, b, length)
+  local d = b.progress - a.progress
+  if d > length * 0.5 then d = d - length end
+  if d < -length * 0.5 then d = d + length end
+  return d
 end
 
-local function planTargetSpeed(p)
-  local nodes = state.nodes
-  local segs = H.segmentCount()
-  local target = p.cruiseSpeed
-  local distance = 0
-  local current = p.segIdx
-  local steps = 0
-  while distance <= CFG.PLAN_HORIZON and steps < 200 do
-    steps = steps + 1
-    local curvature = H.getVertexCurvature(current)
-    if curvature > CFG.CURVE_MIN then
-      local cs = math.max(CFG.MIN_APEX_SPEED, math.sqrt(CFG.MAX_LATERAL_ACCEL / curvature))
-      local ss = math.sqrt(cs * cs + 2 * CFG.BRAKE_ACCEL * distance)
-      if ss < target then target = ss end
-    end
-    local a = nodes[current]
-    local b = H.segEnd(current)
-    distance = distance + math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
-    if state.loopRoute then
-      current = (current % segs) + 1
-    elseif current < segs then
-      current = current + 1
-    else
-      break
+local function laneFits(seg, target, half, metrics)
+  local remaining, index = PASS_LOOKAHEAD, seg
+  for _ = 1, metrics.count do
+    local left, right = H.boundsAt(index)
+    if target - half < left + PASS_EDGE_MARGIN or target + half > right - PASS_EDGE_MARGIN then return false end
+    remaining = remaining - metrics.lengths[index]
+    if remaining <= 0 then break end
+    index = index % metrics.count + 1
+  end
+  return remaining <= 0
+end
+
+local function laneIsFree(follower, leader, target, snapshots, metrics)
+  for index, other in pairs(snapshots) do
+    if index ~= follower.index and index ~= leader.index then
+      local gap = signedGap(follower, other, metrics.total)
+      local longitudinalClose = math.abs(gap) < PASS_OCCUPANCY_RANGE
+      if other.headingDot < 0.25 then
+        local dx, dz = other.x - follower.x, other.z - follower.z
+        longitudinalClose = dx * dx + dz * dz < 42 * 42
+      end
+      if longitudinalClose then
+        local occupiedLat = other.lateral
+        if other.p and other.p.passState and other.p.passState ~= 'RETURN' then occupiedLat = other.p.targetOffset end
+        if math.abs(occupiedLat - target) < follower.half + other.half + PASS_SEPARATION then return false end
+      end
     end
   end
-  return math.max(0, target)
-end
-
-local function clampLat(seg, lat)
-  local bl, br = H.boundsAt(seg)
-  return clamp(lat, bl + BOUND_MARGIN, br - BOUND_MARGIN)
-end
-
-local function linePointAtLateral(seg, t, ahead, lat)
-  local pt = H.walkLine(seg, t, ahead)
-  if not pt then
-    pt = H.segEnd(seg)
-  end
-  local a = state.nodes[seg]
-  local b = H.segEnd(seg)
-  local lx, lz = normalize2(b.x - a.x, b.z - a.z)
-  return pt.x - lz * lat, pt.z + lx * lat
-end
-
-local function calculateSteering(car, p, speed, fx, fz)
-  local seg, t, lineDist = H.findNearestSeg(car.position, p.segIdx)
-  p.segIdx = seg
-  p.lineDist = lineDist
-  p.latOff = H.lateralOf(car.position, seg)
-
-  local ahead = clamp(
-    CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
-    CFG.LOOKAHEAD_MIN, CFG.LOOKAHEAD_MAX)
-
-  local wantLat = 0
-  if p.overtakeSide ~= 0 then
-    wantLat = p.passLat
-  end
-  wantLat = clampLat(seg, wantLat)
-
-  local tx, tz = linePointAtLateral(seg, t, ahead, wantLat)
-
-  local dx = tx - car.position.x
-  local dz = tz - car.position.z
-  local dist = math.sqrt(dx * dx + dz * dz)
-  if dist < 0.001 then return p.steer end
-
-  local angle = signedAngle(fx, fz, dx / dist, dz / dist)
-
-  -- DEADBAND: a straight needs no steering. Micro-corrections every frame
-  -- were the zigzag; below the deadband the wheel simply holds still.
-  if math.abs(angle) < STEER_DEAD then
-    return 0
-  end
-
-  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.62
-  return clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
-end
-
-local function filterSteering(p, target, dt)
-  local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
-  p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  local maxChange = CFG.STEER_RATE * dt
-  p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
-    -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
-  return p.steer
-end
-
--- free room from a lateral offset to each bound, at a segment
-local function roomAt(seg, off)
-  local bl, br = H.boundsAt(seg)
-  return off - bl, br - off
-end
-
--- DECISIVE pass: pick the roomier side ONCE and lock it for the whole pass
-local function beginOvertake(carIndex, p, gap)
-  p.followTimer = 0
-  p.blockedT = 0
-  p.passT = 0
-  local seg = p.segIdx
-  local roomL, roomR = roomAt(seg, p.blockerOff)
-  local side
-  if roomR >= REQ_SEP and roomL >= REQ_SEP then
-    side = (roomR >= roomL) and 1 or -1
-  elseif roomR >= REQ_SEP then
-    side = 1
-  elseif roomL >= REQ_SEP then
-    side = -1
-  else
-    return false   -- genuinely no room: single file, keep rolling
-  end
-  p.overtakeSide = side
-  p.passLat = clampLat(seg, p.blockerOff + side * REQ_SEP)
-  H.log("CAR=%d OVERTAKE_BEGIN side=%d lane=%.1f gap=%.1f roomL=%.1f roomR=%.1f",
-    carIndex, side, p.passLat, gap or -1, roomL, roomR)
   return true
 end
 
-local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  local gap, leaderSpeed, leaderIndex = H.carAheadFull(carIndex, car, 5.0)
-
-  if leaderIndex then
-    local other = ac.getCar(leaderIndex)
-    if other then
-      local bseg = select(1, H.findNearestSeg(other.position, p.segIdx))
-      p.blockerOff = H.lateralOf(other.position, bseg)
-    end
-  end
-
-  if p.overtakeSide ~= 0 then
-    p.passT = p.passT + dt
-    if not gap then
-      p.overtakeSide = 0
-      H.log("CAR=%d OVERTAKE_END clear", carIndex)
-      return targetSpeed
-    end
-    local laneNow = clampLat(p.segIdx, p.blockerOff + p.overtakeSide * REQ_SEP)
-    local fits = (laneNow - p.blockerOff) * p.overtakeSide >= REQ_SEP - 0.3
-    if p.passT > PASS_TIMEOUT or not fits then
-      p.overtakeSide = 0
-      H.log("CAR=%d OVERTAKE_END %s", carIndex, fits and "timeout" or "closed")
-      return targetSpeed
-    end
-    p.passLat = laneNow
-    local safe = math.sqrt(math.max(0,
-      (leaderSpeed or 0) * (leaderSpeed or 0) +
-      2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - 5)))
-    return math.min(math.max(targetSpeed, (leaderSpeed or 0) + 4), math.max(safe, 6))
-  end
-
-  if not gap then
-    p.followTimer = 0
-    p.blockedT = 0
-    return targetSpeed
-  end
-
-  -- ANY slower car ahead (including a STANDING PLAYER) is a blocker
-  if (leaderSpeed or 0) < math.min(p.cruiseSpeed, targetSpeed + 3) - 2 then
-    p.followTimer = p.followTimer + dt
-    local safe = math.sqrt(math.max(0,
-      (leaderSpeed or 0) * (leaderSpeed or 0) +
-      2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
-    if p.followTimer > TRIGGER_TIME then
-      if beginOvertake(carIndex, p, gap) then
-        return math.max(targetSpeed, (leaderSpeed or 0) + 4)
-      end
-    end
-    if speed < 3 then
-      p.blockedT = p.blockedT + dt
-      if p.blockedT > FORCE_TIME and beginOvertake(carIndex, p, gap) then
-        return math.max(targetSpeed, 6)
-      end
-    end
-    return math.min(targetSpeed, safe)
-  end
-
-  p.followTimer = 0
-  p.blockedT = 0
-  local safe = math.sqrt(math.max(0,
-    (leaderSpeed or 0) * (leaderSpeed or 0) +
-    2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
-  if (gap or 0) < safeNumber(state.followGap, 8) * 0.5 then
-    return 0
-  end
-  return math.min(targetSpeed, safe)
+local function choosePassOffset(follower, leader, snapshots, metrics)
+  local separation = follower.half + leader.half + PASS_SEPARATION
+  local leftTarget, rightTarget = leader.lateral - separation, leader.lateral + separation
+  local leftFits = laneFits(follower.seg, leftTarget, follower.half, metrics)
+  local rightFits = laneFits(follower.seg, rightTarget, follower.half, metrics)
+  local leftFree = leftFits and laneIsFree(follower, leader, leftTarget, snapshots, metrics)
+  local rightFree = rightFits and laneIsFree(follower, leader, rightTarget, snapshots, metrics)
+  if leftFree then return leftTarget, -1 end
+  if rightFree then return rightTarget, 1 end
+  return nil, 0
 end
 
-local function calculateThrottle(p, speed, targetSpeed)
-  local error = targetSpeed - speed
-  local gas = clamp(error * CFG.GAS_GAIN, 0, CFG.MAX_GAS)
-  local brake = clamp(-error * CFG.BRAKE_GAIN, 0, CFG.MAX_BRAKE)
-  gas = gas * lerp(1.0, 0.15, p.slipSeverity)
-  -- SOFT START: no burnout launches from a standstill
-  if speed < 5 then
-    gas = math.min(gas, 0.6)
-  end
-  if error >= 0 then brake = 0 end
-  p.gas = clamp(gas, 0, CFG.MAX_GAS)
-  p.brake = clamp(brake, 0, CFG.MAX_BRAKE)
-end
-
-function Driver.update(carIndex, car, dt)
-  local p = state.p[carIndex]
+local function ensureCar(index, car, dt)
+  local p = S.p[index]
   if not p then
-    newPersonality(carIndex)
-    p = state.p[carIndex]
+    local baseLevel = number(car.aiLevel, 1.0)
+    if baseLevel <= 0 then baseLevel = 1.0 end
+    local baseAggression = number(car.aiAggression, 0.95)
+    local pace = 0.94 + deterministic(index) * 0.12
+    p = {
+      segIdx = 1, baseLevel = baseLevel, baseAggression = baseAggression,
+      pace = pace, targetLevel = clamp(baseLevel * pace, 0.70, 1.15),
+      splinePath = nil, splineLoaded = false, splineAge = 0, settingsApplied = false,
+      currentOffset = 0, targetOffset = 0, passState = nil, passLeader = nil,
+      passSide = 0, passTimer = 0, passLoggedTimeout = false,
+      retireTimer = 0, stuckTimer = 0, lineDist = 0, lateral = 0
+    }
+    S.p[index] = p
+    H.log('CAR_INIT id=%d aiLevel=%.3f pace=%.3f targetLevel=%.3f',
+      index, baseLevel, pace, p.targetLevel)
   end
 
-  p.retireT = p.retireT + dt
-  if p.retireT >= 2.0 then
-    p.retireT = 0
-    if physics and physics.preventAIFromRetiring then
-      pcall(physics.preventAIFromRetiring, carIndex)
+  p.splineAge = p.splineAge + dt
+  if p.splinePath ~= S.aiSplinePath then
+    p.splinePath, p.splineLoaded, p.splineAge = S.aiSplinePath, false, 0
+    local ok, result = pcall(physics.setAISpline, index, S.aiSplinePath, nil)
+    local exists = false
+    pcall(function() exists = io and io.fileExists and io.fileExists(S.aiSplinePath) or false end)
+    if ok and (result ~= false or exists) then
+      p.splineLoaded = true
+      H.log('AI_SPLINE_ASSIGNED id=%d file=%s result=%s', index, tostring(S.aiSplinePath), tostring(result))
+    else
+      H.log('AI_SPLINE_FAILED id=%d file=%s result=%s', index, tostring(S.aiSplinePath), tostring(result))
     end
   end
 
-  local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  calculateStability(p, speed)
+  if not p.settingsApplied then
+    local okLevel, errLevel = pcall(physics.setAILevel, index, p.targetLevel)
+    local okAgg, errAgg = pcall(physics.setAIAggression, index, 0.95)
+    p.settingsApplied = okLevel and okAgg
+    H.log('AI_PROFILE id=%d level=%.3f aggression=0.95 levelOK=%s aggressionOK=%s',
+      index, p.targetLevel, tostring(okLevel), tostring(okAgg))
+    if not okLevel then H.log('AI_PROFILE_ERROR id=%d kind=level err=%s', index, tostring(errLevel)) end
+    if not okAgg then H.log('AI_PROFILE_ERROR id=%d kind=aggression err=%s', index, tostring(errAgg)) end
+  end
+  return p
+end
 
-  if speed < RESCUE_SPEED then
-    p.stuck = p.stuck + dt
-    if p.stuck > RESCUE_TIME then
-      p.stuck = 0
-      if H.teleportHome then H.teleportHome(carIndex, car) end
-      return
+function Driver.setup(cfg, state, helpers)
+  CFG, S, H = cfg, state, helpers
+  S.trafficHints = S.trafficHints or {}
+end
+
+function Driver.beginFrame(sim, dt)
+  if not S.aiSplineBuilt or not S.aiSplinePath then return end
+  local metrics = buildMetrics()
+  if not metrics then
+    S.aiSplineBuilt = false
+    S.status = 'Ошибка геометрии AI-линии'
+    H.log('TRAFFIC_ABORT reason=invalid_route_metrics')
+    return
+  end
+  S.routeMetrics = metrics
+  local snapshots = {}
+
+  for i = 0, sim.carsCount - 1 do
+    local car = ac.getCar(i)
+    if car and car.isActive and not car.isInPitlane and not car.isInPit and (i == 0 or car.isAIControlled) then
+      local p = i > 0 and car.isAIControlled and ensureCar(i, car, dt) or nil
+      local snap = projectCar(i, car, p, metrics)
+      if snap then snapshots[i] = snap end
     end
-  else
-    p.stuck = 0
   end
 
-  local targetSpeed = planTargetSpeed(p)
-  targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  p.targetSpeed = targetSpeed
+  if not S.enabled or not S.spawnDone or S.sessionTime < 2 then return end
 
-  local steerTarget = calculateSteering(car, p, speed, fx, fz)
-  local steer = filterSteering(p, steerTarget, dt)
+  for i = 1, sim.carsCount - 1 do
+    local p = S.p[i]
+    if p and p.passState and p.passState ~= 'RETURN' then
+      p.passTimer = p.passTimer + dt
+      local follower, leader = snapshots[i], snapshots[p.passLeader]
+      if not follower or not leader then
+        p.passState, p.targetOffset = 'RETURN', 0
+        H.log('PASS_ABORT car=%d leader=%s reason=car_unavailable', i, tostring(p.passLeader))
+      else
+        local gap = signedGap(follower, leader, metrics.total)
+        if gap < -PASS_CLEAR_GAP then
+          p.passState, p.targetOffset = 'RETURN', 0
+          H.log('PASS_COMPLETE car=%d leader=%d gap=%.1f side=%d', i, p.passLeader, gap, p.passSide)
+        elseif p.passTimer > PASS_MAX_TIME and not p.passLoggedTimeout then
+          p.passLoggedTimeout = true
+          H.log('PASS_LONG car=%d leader=%d gap=%.1f offset=%.2f', i, p.passLeader, gap, p.currentOffset)
+        end
+      end
+    end
+  end
 
-  calculateThrottle(p, speed, targetSpeed)
-
-  local ok, controls = pcall(ac.overrideCarControls, carIndex)
-  if ok and controls then
-    controls.combineAxis = false
-    controls.steer = steer
-    controls.gas = p.gas
-    controls.brake = p.brake
-    controls.handbrake = 0
+  for i = 1, sim.carsCount - 1 do
+    local follower, p = snapshots[i], S.p[i]
+    if follower and p and p.splineLoaded and not p.passState and follower.headingDot > 0.35 then
+      local bestLeader, bestGap = nil, PASS_TRIGGER_GAP
+      for j, other in pairs(snapshots) do
+        if j ~= i and other.headingDot > 0.35 then
+          local gap = signedGap(follower, other, metrics.total)
+          if gap > PASS_MIN_GAP and gap < bestGap and math.abs(other.lateral - follower.lateral) < 5.5 then
+            bestLeader, bestGap = other, gap
+          end
+        end
+      end
+      if bestLeader then
+        local faster = p.targetLevel > bestLeader.pace + 0.015 or follower.speed > bestLeader.speed + 0.8
+        if faster then
+          local target, side = choosePassOffset(follower, bestLeader, snapshots, metrics)
+          if target then
+            p.passState, p.passLeader, p.passSide = 'OUT', bestLeader.index, side
+            p.passTimer, p.passLoggedTimeout, p.targetOffset = 0, false, target
+            H.log('PASS_START car=%d leader=%d gap=%.1f side=%d target=%.2f speed=%.1f leaderSpeed=%.1f pace=%.3f leaderPace=%.3f',
+              i, bestLeader.index, bestGap, side, target, follower.speed, bestLeader.speed, p.targetLevel, bestLeader.pace)
+          else
+            p.lastPassBlocked = (p.lastPassBlocked or 0) + dt
+            if p.lastPassBlocked >= 2.0 then
+              p.lastPassBlocked = 0
+              H.log('PASS_BLOCKED car=%d leader=%d gap=%.1f reason=no_free_corridor', i, bestLeader.index, bestGap)
+            end
+          end
+        end
+      end
+    end
   end
 end
 
-function Driver.telemetryLine(i, car, p)
-  local bl, br = H.boundsAt(p.segIdx)
+function Driver.update(index, car, dt)
+  local p = S.p[index]
+  if not p then p = ensureCar(index, car, dt) end
+  if not p.splineLoaded then return end
+
+  p.retireTimer = p.retireTimer + dt
+  if p.retireTimer >= 2.0 then
+    p.retireTimer = 0
+    if physics.preventAIFromRetiring then pcall(physics.preventAIFromRetiring, index) end
+  end
+
+  local previous = p.currentOffset
+  p.currentOffset = approach(p.currentOffset, p.targetOffset, PASS_OFFSET_RATE * math.max(0, math.min(dt, 0.05)))
+  if p.passState or math.abs(p.currentOffset) > 0.02 or p.offsetApplied then
+    local ok, err = pcall(physics.setAISplineAbsoluteOffset, index, p.currentOffset, false)
+    if ok then
+      p.offsetApplied = math.abs(p.currentOffset) > 0.02 or p.passState ~= nil
+    else
+      H.log('PASS_OFFSET_ERROR car=%d offset=%.2f err=%s', index, p.currentOffset, tostring(err))
+      p.passState, p.targetOffset = 'RETURN', 0
+    end
+    if math.abs(previous - p.currentOffset) > 0.08 then
+      H.log('PASS_OFFSET car=%d state=%s offset=%.2f target=%.2f',
+        index, tostring(p.passState), p.currentOffset, p.targetOffset)
+    end
+  end
+
+  if p.passState == 'RETURN' and math.abs(p.currentOffset) < 0.05 then
+    H.log('PASS_RELEASE car=%d leader=%s', index, tostring(p.passLeader))
+    p.passState, p.passLeader, p.passSide = nil, nil, 0
+    p.passTimer, p.targetOffset, p.currentOffset = 0, 0, 0
+    p.offsetApplied, p.passLoggedTimeout = false, false
+  end
+
+  if S.spawnDone and S.sessionTime > 10 and not car.isInPitlane then
+    if number(car.speedMs, 0) < STUCK_SPEED then
+      p.stuckTimer = p.stuckTimer + dt
+      if p.stuckTimer >= STUCK_TIME then
+        p.stuckTimer = 0
+        local ok = H.teleportHome and H.teleportHome(index, car)
+        H.log('RECOVERY_ATTEMPT car=%d success=%s pos=(%.2f,%.2f,%.2f)',
+          index, tostring(ok), car.position.x, car.position.y, car.position.z)
+      end
+    else
+      p.stuckTimer = 0
+    end
+  end
+end
+
+function Driver.isSplineReady(index)
+  local p = S.p[index]
+  return p ~= nil and p.splineLoaded and p.splineAge >= 0.8
+end
+
+function Driver.resetAfterTeleport(index)
+  local p = S.p[index]
+  if not p then return end
+  p.passState, p.passLeader, p.passSide = nil, nil, 0
+  p.passTimer, p.targetOffset, p.currentOffset = 0, 0, 0
+  p.offsetApplied, p.stuckTimer = false, 0
+  p.segIdx, p.lineDist, p.lateral = 1, 0, 0
+  pcall(physics.setAISplineAbsoluteOffset, index, 0, false)
+end
+
+function Driver.release(index)
+  local p = S.p[index]
+  if not p then return end
+  pcall(physics.setAISplineAbsoluteOffset, index, 0, false)
+  pcall(physics.setAISpline, index, nil, nil)
+  if p.baseLevel then pcall(physics.setAILevel, index, p.baseLevel) end
+  if p.baseAggression then pcall(physics.setAIAggression, index, p.baseAggression) end
+  S.p[index], S.trafficHints[index] = nil, nil
+end
+
+function Driver.invalidateAll()
+  for index in pairs(S.p) do Driver.release(index) end
+  S.p, S.trafficHints, S.routeMetrics = {}, {}, nil
+end
+
+function Driver.telemetryLine(index, car, p)
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d",
-    i, car.position.x, car.position.y, car.position.z,
-    safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
-    p.lineDist, p.segIdx, p.pace, bl, br, p.latOff, p.overtakeSide)
+    'CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f AI_LEVEL=%.3f PACE=%.3f SPLINE=%s LINE_ERROR=%.2f SEG=%d LAT=%.2f PASS=%s LEADER=%s OFFSET=%.2f TARGET_OFFSET=%.2f',
+    index, car.position.x, car.position.y, car.position.z, number(car.speedMs, 0),
+    p.targetLevel or -1, p.pace or -1, tostring(p.splineLoaded), number(p.lineDist, -1),
+    p.segIdx or -1, number(p.lateral, 0), tostring(p.passState or 'NONE'),
+    tostring(p.passLeader or '-'), number(p.currentOffset, 0), number(p.targetOffset, 0)
+  )
 end
 
 return Driver
