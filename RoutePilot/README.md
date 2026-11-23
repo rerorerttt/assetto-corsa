@@ -31,7 +31,7 @@ Routes and bounds are stored per track/layout. The map is drawn directly inside 
 - **Lanes:** cars are ranked by pace. Faster groups are assigned to the leftmost lane; slower groups use the lanes to the right. Lane centres are calculated from the selected 3/7/11/15 m road width and are accepted only when the saved boundaries leave enough room.
 - **Overtaking:** a faster follower can move to an adjacent free lane, pass, then return to its assigned lane. The leader is never given a pass-specific steering, throttle, brake, speed or lateral-offset command. CSP AI awareness remains enabled because the offset API is called with `overrideAiAwareness=false`.
 - **Boundaries:** the generated spline stores left/right widths from the user's boundary recording. Lane assignment and passing are refused if the requested corridor does not fit those limits.
-- **Spawn and recovery:** `physics.setAICarPosition(index, position, nil)` lets CSP align the car with its assigned AI spline. A car moving below 0.8 m/s for 10 seconds after startup is considered stuck; recovery searches forward for a free route position before teleporting.
+- **Spawn and recovery:** `physics.setAICarPosition(index, position, nil)` lets CSP align the car with its assigned AI spline. A car moving below 0.8 m/s for 10 seconds after startup is considered stuck. A car with all four wheel loads below 120 N while moving is treated as airborne after 10 seconds. Recovery searches forward for a free route position before teleporting.
 - **No obstacle scan:** RoutePilot does not scan, record or infer wall/column collision meshes. Native CSP/AC AI awareness remains responsible for its built-in traffic response.
 
 ## Logs
@@ -42,4 +42,4 @@ The app writes `routepilot_trace.txt` in its app folder. Important events includ
 
 This is a source-level implementation based on the CSP SDK and the repository's `AISplineEditor` and `Verve` examples. It has **not** been run inside Assetto Corsa in this environment. A zero-accident guarantee is not physically possible: car dimensions, track mesh, AI behaviour, weather and mod-car physics vary. Start with a small number of AI cars and inspect the trace before increasing traffic density.
 
-The NFS Underground-style corner arrow wall and airborne recovery are not implemented in this version. Track-boundary data must be recorded accurately; RoutePilot does not infer hidden walls or poles.
+The NFS Underground-style corner arrow wall is not implemented in this version. Track-boundary data must be recorded accurately; RoutePilot does not infer hidden walls or poles.
