@@ -1,23 +1,20 @@
 -- RoutePilot/driver.lua
--- Per-car racing traffic controller for RoutePilot 0.4.
+-- Per-car racing traffic controller for RoutePilot 0.4.1.
 --
--- The main script sets up context (CFG, state, helpers) via Driver.setup()
--- and then calls Driver.update(carIndex, car, dt) every frame for each AI car.
---
--- Key behaviors (v0.4):
---  * RACING TEMPO: plans speed by scanning the line ahead for corners and
---    braking exactly as late as the arcade braking power allows; per-car
---    pace (0.85..1.15) makes fast cars overtake slow ones naturally.
---  * LOW-SPEED FIX: slip-based throttle damping engages only above 8 m/s
---    and above 4 degrees of real slip (the old version saw "slip" in the
---    noise at walking speed and crawled).
---  * HEADING FIX after teleport: if the car faces backwards along the
---    line, it does a steady full-lock turn instead of oscillating.
---  * OVERTAKING: instead of queuing behind a slower car, the car shifts
---    laterally off the line and passes, then returns to the line.
---  * COLLISION SAFETY: hard braking only when the space ahead is really
---    occupied (checks every car including the player); the slow car keeps
---    its line and does not brake for the passer.
+-- v0.4.1 changes:
+--  * STRAIGHT-LINE SPEED: the old planner saw "curvature" in the noise of the
+--    recorded line everywhere and capped cars at ~80 km/h even on straights.
+--    Now curvature comes from the smoothed line with a wide window and an
+--    ignore threshold (helpers in the main script), so straights are driven
+--    at full racing pace (per-car 0.85..1.15 of the top speed).
+--  * WALL CORRIDOR: the main script builds a corridor map (raycasts left/right
+--    along the line, saved once to a text file). Steering targets are clamped
+--    inside the corridor, overtakes only happen where there is room, and a
+--    forward raycast brakes the car before hitting a wall or a pillar.
+--  * NO MORE VANISHING CARS: CSP retires AI cars after mistakes — that is why
+--    they disappeared. physics.preventAIFromRetiring is called every 2 s.
+--  * STEADIER STEERING: longer lookahead, lower gain, yaw-rate damping,
+--    slower steer rate — no more unprovoked zigzags.
 
 local Driver = {}
 
@@ -49,7 +46,6 @@ local function safeNumber(v, fallback)
   return v
 end
 
--- deterministic per-car random
 local function carRand(carIndex, salt)
   local n = math.sin(carIndex * 127.1 + salt * 311.7) * 43758.5453
   return n - math.floor(n)
@@ -62,24 +58,12 @@ function Driver.setup(cfg, st, helpers)
 end
 
 ------------------------------------------------------------
--- line geometry helpers (provided by the main script through H)
--- H.segEnd(index)           -> node at segment end
--- H.segmentCount()          -> number of segments
--- H.walkLine(seg, t, dist)   -> point ahead on the line
--- H.flatDist(a, b)           -> flat distance
--- H.getVertexCurvature(i)    -> curvature of vertex i
--- H.findNearestSegment(car, p) -> seg, t, distToLine, segs
--- H.carAhead(carIndex, car, lateralWidth) -> gap, leaderSpeed
-------------------------------------------------------------
-
-------------------------------------------------------------
 -- personality
 ------------------------------------------------------------
 
 local function newPersonality(carIndex)
-  local span = math.max(0, state.speedMax - state.speedMin)
   local pace = 0.85 + carRand(carIndex, 1) * 0.30
-  local kmh = clamp(state.speedMin + span * 0.5, 40, 260) * pace
+  local kmh = clamp(state.speedMax * pace * 0.92, 60, 260)
   local p = {
     segIdx = 1,
     pace = pace,
@@ -102,10 +86,11 @@ local function newPersonality(carIndex)
     slipSeverity = 0,
     stability = 1,
     lastCurve = 0,
-    correctTimer = 6.0,          -- heading auto-correction window
+    correctTimer = 6.0,
     overtakeSide = 0,
     overtakeTarget = nil,
     followTimer = 0,
+    retireT = 2.0,      -- fire preventAIFromRetiring soon after adoption
   }
   state.p[carIndex] = p
   H.log("CAR_INIT id=%d cruise=%.1fkmh pace=%.2f", carIndex, kmh, pace)
@@ -141,7 +126,6 @@ end
 local function calculateStability(p, speed)
   local slip = math.abs(p.slipAngle)
   local severity = 0
-  -- FIX: only real slip at real speeds damps the throttle
   if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
     local slipSeverity = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
     local accelSeverity = clamp((p.lateralAccel - CFG.MAX_LATERAL_ACCEL) / (CFG.MAX_LATERAL_ACCEL * 0.6), 0, 1)
@@ -167,12 +151,21 @@ local function planTargetSpeed(p)
   while distance <= CFG.PLAN_HORIZON and steps < 200 do
     steps = steps + 1
     local curvature = H.getVertexCurvature(current)
-    if curvature > 0.0008 then
+    if curvature > CFG.CURVE_MIN then
       maxCurve = math.max(maxCurve, curvature)
       local cornerSpeed = math.max(CFG.MIN_APEX_SPEED, math.sqrt(CFG.MAX_LATERAL_ACCEL / curvature))
       local safeSpeed = math.sqrt(cornerSpeed * cornerSpeed + 2 * CFG.BRAKE_ACCEL * distance)
       if safeSpeed < target then
         target = safeSpeed
+      end
+    end
+    -- narrow corridor ahead: slow down proportionally
+    local half = H.corridorAt(current)
+    if half < 9 then
+      local cap = math.max(CFG.MIN_APEX_SPEED, half * 1.3)
+      local safeCap = math.sqrt(cap * cap + 2 * CFG.BRAKE_ACCEL * distance)
+      if safeCap < target then
+        target = safeCap
       end
     end
     local a = nodes[current]
@@ -201,6 +194,21 @@ local function headingMatchesLine(fx, fz, seg)
   return (fx * dx + fz * dz) > -0.1
 end
 
+-- clamp a target point laterally inside the corridor
+local function clampToCorridor(seg, tx, tz)
+  local a = state.nodes[seg]
+  local b = H.segEnd(seg)
+  local lx, lz = normalize2(b.x - a.x, b.z - a.z)
+  local relX, relZ = tx - a.x, tz - a.z
+  local along = relX * lx + relZ * lz
+  local lat = relX * -lz + relZ * lx
+  local half = math.max(2, H.corridorAt(seg) - 2)
+  if lat > half then lat = half end
+  if lat < -half then lat = -half end
+  return a.x + lx * along + (-lz) * lat,
+         a.z + lz * along + lx * lat
+end
+
 local function calculateSteering(car, p, speed, fx, fz, dt)
   local seg, t, lineDist = H.findNearestSegment(car, p)
   p.segIdx = seg
@@ -226,15 +234,27 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     local b = H.segEnd(seg)
     targetX, targetZ = b.x, b.z
   end
+
+  -- lateral shift while overtaking (only where the corridor allows it)
+  local corridorHalf = H.corridorAt(seg)
+  if p.overtakeSide ~= 0 then
+    if corridorHalf < 6 then
+      -- too narrow to pass here: give up, tuck back in
+      p.overtakeSide = 0
+      p.overtakeTarget = nil
+    else
+      local shift = math.min(CFG.OVERTAKE_LATERAL, corridorHalf - 2)
+      local nx, nz = normalize2(-(targetZ - car.position.z), targetX - car.position.x)
+      targetX = targetX + nx * p.overtakeSide * shift
+      targetZ = targetZ + nz * p.overtakeSide * shift
+    end
+  end
+
+  -- never aim outside the corridor
+  targetX, targetZ = clampToCorridor(seg, targetX, targetZ)
+
   p.targetX = targetX
   p.targetZ = targetZ
-
-  -- lateral shift while overtaking
-  if p.overtakeSide ~= 0 then
-    local nx, nz = normalize2(-(targetZ - car.position.z), targetX - car.position.x)
-    targetX = targetX + nx * p.overtakeSide * CFG.OVERTAKE_LATERAL
-    targetZ = targetZ + nz * p.overtakeSide * CFG.OVERTAKE_LATERAL
-  end
 
   local dx = targetX - car.position.x
   local dz = targetZ - car.position.z
@@ -243,18 +263,19 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     return p.steer
   end
   local angle = signedAngle(fx, fz, dx / distance, dz / distance)
-  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.62
+  local steer = angle * CFG.STEER_GAIN
+    + p.slipAngle * 0.62
+    - p.yawRate * 0.05
 
-  -- keep the car from straying far from the line (except when overtaking)
-  if p.overtakeSide == 0 and lineDist > CFG.LINE_HARD_PULL then
+  -- hard pull back if the car left the corridor (and is not overtaking)
+  if p.overtakeSide == 0 and lineDist > math.max(10, corridorHalf) then
     local a = state.nodes[seg]
-    local b = H.segEnd(seg)
-    local lx, lz = normalize2(b.x - a.x, b.z - a.z)
+    local lx, lz = normalize2(targetX - a.x, targetZ - a.z)
     local side = (car.position.x - a.x) * -lz + (car.position.z - a.z) * lx
     if side > 0 then
-      steer = steer - 0.4
+      steer = steer - 0.5
     else
-      steer = steer + 0.4
+      steer = steer + 0.5
     end
   end
 
@@ -275,11 +296,10 @@ end
 -- overtaking decision
 ------------------------------------------------------------
 
-local function updateOvertake(carIndex, car, p, speed, targetSpeed)
+local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   local gap, leaderSpeed = H.carAhead(carIndex, car, CFG.FOLLOW_LATERAL)
 
   if p.overtakeSide ~= 0 then
-    -- passing in progress: end it when well clear of the target
     if p.overtakeTarget then
       local other = ac.getCar(p.overtakeTarget)
       if other and other.isActive then
@@ -306,16 +326,16 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed)
     return targetSpeed
   end
 
-  -- a slower car ahead within following distance
+  -- a slower car ahead: keep the pace and go around (do not brake behind it)
   if leaderSpeed + 3 < speed and gap < 60 then
-    p.followTimer = p.followTimer + 1 / 60
-    if p.followTimer > CFG.OVERTAKE_TRIGGER_TIME then
+    p.followTimer = p.followTimer + dt
+    if p.followTimer > CFG.OVERTAKE_TRIGGER_TIME
+       and H.corridorAt(p.segIdx) >= 6 then
       p.followTimer = 0
       p.overtakeTarget = H.carAheadIndex and H.carAheadIndex(carIndex, car, CFG.FOLLOW_LATERAL * 2)
       p.overtakeSide = (carRand(carIndex, 2) > 0.5) and 1 or -1
-      H.log("CAR=%d OVERTAKE_BEGIN side=%d gap=%.1f", carIndex, p.overtakeSide, gap or -1)
+      H.log("CAR=%d OVERTAKE_BEGIN side=%d gap=%.1f", carIndex, p.overtakeSide, gap)
     end
-    -- do NOT brake behind a slower car — keep the pace and go around
     return math.max(targetSpeed, leaderSpeed + 5)
   end
 
@@ -337,7 +357,6 @@ local function calculateThrottle(p, speed, targetSpeed)
   local error = targetSpeed - speed
   local gas = clamp(error * CFG.GAS_GAIN, 0, CFG.MAX_GAS)
   local brake = clamp(-error * CFG.BRAKE_GAIN, 0, CFG.MAX_BRAKE)
-  -- progressive power cut only on real slides
   gas = gas * lerp(1.0, 0.05, p.slipSeverity)
   if error >= 0 then
     brake = 0
@@ -358,11 +377,32 @@ function Driver.update(carIndex, car, dt)
     p = state.p[carIndex]
   end
 
+  -- keep CSP from retiring (despawning) this AI car
+  p.retireT = p.retireT + dt
+  if p.retireT >= 2.0 then
+    p.retireT = 0
+    if physics and physics.preventAIFromRetiring then
+      pcall(physics.preventAIFromRetiring, carIndex)
+    end
+  end
+
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   calculateStability(p, speed)
 
   local targetSpeed = planTargetSpeed(p)
-  targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed)
+
+  -- wall ahead: brake before hitting it
+  if H.wallAhead then
+    local wallDist = H.wallAhead(car)
+    if wallDist and wallDist < 70 then
+      local vStop = math.sqrt(math.max(0, 2 * CFG.BRAKE_ACCEL * (wallDist - 2)))
+      if vStop < targetSpeed then
+        targetSpeed = vStop
+      end
+    end
+  end
+
+  targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.targetSpeed = targetSpeed
 
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
@@ -382,11 +422,13 @@ end
 
 function Driver.telemetryLine(i, car, p)
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f SLIP=%.4f STABILITY=%.3f CURVATURE=%.5f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f OT_SIDE=%d",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f SLIP=%.4f STABILITY=%.3f CURVATURE=%.5f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f CORR=%.1f OT_SIDE=%d",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake,
     p.slipAngle, p.stability, p.lastCurve, p.targetSpeed,
-    p.lineDist, p.segIdx, p.pace, p.overtakeSide)
+    p.lineDist, p.segIdx, p.pace,
+    H.corridorAt and H.corridorAt(p.segIdx) or -1,
+    p.overtakeSide)
 end
 
 return Driver
