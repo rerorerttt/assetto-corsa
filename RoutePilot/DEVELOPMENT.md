@@ -1,3 +1,37 @@
+## Current verified baseline — 2026-11-23 (supersedes older status below)
+
+Active branch HEAD before this review: `9f95428f5fe88d3c7184f7c5a3c40cb9482b5b68`, user-uploaded stable RoutePilot 0.3. This snapshot is materially different from the older 0.5/traffic-coordinator implementation described in much of the historical text below. Do not treat historical features, tuning or collision-map code as present in the current runtime source.
+
+### Current source reality
+
+- `RoutePilot.lua` is a 0.3 pure-pursuit route follower. It records/loads plain XYZ route points, places active AI cars along the route once, and overrides steering, throttle and brake.
+- Current defaults: cruise midpoint 100 km/h (`speedMin=60`, `speedMax=140`), UI speed maximum 260 km/h, throttle cap 0.90, steering limit 0.75, lookahead 10–25 m, lateral-acceleration planning constant 5.5 m/s², brake-acceleration estimate 5.0 m/s².
+- `carAhead()` only finds the nearest car in a forward 80 m / 3 m lateral corridor and reduces target speed. There is no pass planner, lane/corridor reservation, yield negotiation, oncoming-traffic coordinator, collision prediction, obstacle scanner or recovery system in this source.
+- `planTargetSpeed()` examines at most 12 route vertices, uses angle divided by average adjacent segment length as curvature, and assumes a fixed lateral-acceleration limit. This is not yet a robust high-speed braking planner.
+- The UI is the original global `windowMain(dt)` with inline radar; do not change its callback, manifest window or layout while developing driving logic.
+
+### Latest trace analysis for the 0.3 baseline
+
+The committed `routepilot_trace.txt` has 420 one-second AI samples (84 per car, five cars). Mean actual speed is 13.84 m/s (49.8 km/h) versus mean requested target speed 20.28 m/s (73.0 km/h). There are 42 samples with brake above 0.05, 96 samples with route error above 5 m, and 12 above 50 m. Car 1 averages only 3.93 m/s and reaches a recorded route error of 1,895.46 m, indicating it loses the route badly. These measurements are from the committed trace, not a new in-game test.
+
+At startup, the route sampler generated a tangent vector from point A to B and passed it to `physics.setAICarPosition()`. The first telemetry sample shows `car.look` almost exactly opposite that vector for the AI cars. The SDK defines `ac.CarState.look` as the normalized forward-facing vector. This is a strong indication that the spawn direction argument was reversed. A one-purpose correction was committed as `7461f57d58bc65b4fe535a38ad437d2ff59fb529`: the spawn direction is now the negative route tangent. This is not yet validated in Assetto Corsa; compare the first post-spawn `LOOK` against `SPAWN_CAR dir` in the next trace before making further tuning changes.
+
+### SDK facts checked in the repository snapshot
+
+- `ac.CarState.look` is documented as “Vector facing forward (normalized)”; `velocity` is world-space velocity.
+- `ac.overrideCarControls(carIndex)` returns `ac.CarControlsInput?`; `combineAxis=false` replaces original pedal/handbrake values. The app currently overrides only steering, gas, brake and handbrake.
+- `physics.setAICarPosition(carIndex, pos, dir)` changes AI position; passing `nil` for `dir` aligns the car to the stock AI spline (SDK note since CSP 0.3.0-preview124).
+- The SDK documents `physics.setAIAggression(carIndex, aggression)`, `physics.setAITopSpeed(carIndex, limit)`, `physics.setAISplineAbsoluteOffset(carIndex, offset, overrideAiAwareness)`, `physics.setAIStopCounter(carIndex, time)`, and `physics.preventAIFromRetiring(carIndex)`. Their existence is verified, but they have not been integrated into RoutePilot yet.
+- The current route has 277 XYZ points and is approximately 931.9 m long according to startup telemetry. It contains no obstacle metadata.
+
+### Development direction
+
+Build a proper racing layer above the stable route follower rather than turning up throttle blindly: (1) verify and stabilize spawn heading and route projection; (2) replace the coarse curvature speed planner with distance-based preview and braking envelopes; (3) add a traffic coordinator that assigns deterministic pass/yield intents and reserves a passing corridor before cars move laterally; (4) detect head-on and crossing conflicts using route progress plus world-space predicted paths; (5) measure actual pass completion and log maneuver IDs, decisions, rejection reasons and progress. Static collision detection remains disabled until a reliable route-local method is validated. Preserve the existing UI, route format, recording/loading and logger.
+
+Validation rule: no in-game runtime test has been performed in this environment. The user must run the new commit and provide the resulting trace before this heading correction or any future racing behaviour is described as working.
+
+---
+
 # RoutePilot — persistent development handoff
 
 Last reviewed: 2026-11-23
