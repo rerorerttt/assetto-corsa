@@ -508,6 +508,15 @@ local function sampleSpawnRoute(metrics,distance,laneOffset)
         position.x=position.x+(direction.z/horizontal)*offset
         position.z=position.z-(direction.x/horizontal)*offset
       end
+      -- Lane offsets can move the spawn point onto a different part of a
+      -- banked/uneven surface. Re-snap the actual teleport position there.
+      if physics and physics.raycastTrack then
+        local snapped=vec3(position.x,position.y,position.z)
+        local normal=vec3(0,1,0)
+        local ok=pcall(physics.raycastTrack,
+          vec3(position.x,position.y+10.0,position.z),vec3(0,-1,0),20.0,snapped,normal)
+        if ok then position.y=snapped.y+0.3 end
+      end
       return position,direction
     end
   end
