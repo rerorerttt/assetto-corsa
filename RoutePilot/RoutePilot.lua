@@ -804,8 +804,16 @@ local function newPersonality(carIndex)
     p.segIdx = bestI
 
     local a = state.nodes[bestI]
-    local b = getSegmentEnd(bestI, #state.nodes)
-    local tx, tz = normalize2(b.x - a.x, b.z - a.z)
+    local nextIndex = bestI < #state.nodes and bestI + 1 or
+      (state.loopRoute and 1 or math.max(1, bestI - 1))
+    local b = state.nodes[nextIndex]
+    local tx, tz
+
+    if nextIndex == bestI - 1 then
+      tx, tz = normalize2(a.x - b.x, a.z - b.z)
+    else
+      tx, tz = normalize2(b.x - a.x, b.z - a.z)
+    end
     local fx, fz = normalize2(car.look.x, car.look.z)
     headingDot = fx * tx + fz * tz
   end
