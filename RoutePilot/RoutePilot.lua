@@ -1,8 +1,7 @@
 -- RoutePilot.lua — v0.9.1 (CSP 0.3.2-preview2)
--- Existing route recording, boundary recording, save/load, map and world-line UI
--- are retained. AI traffic uses two independent virtual lanes:
--- first active AI: left/fast; second: right/40 km/h; then alternates.
--- No car-following, yielding, overtaking decisions or inter-car speed control.
+-- Existing route recording, boundaries, save/load, map and world-line UI are retained.
+-- AI traffic uses two race lanes: initial assignments alternate left/right;
+-- both lanes are unrestricted on straights and support safe lane changes.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -289,14 +288,16 @@ end
 local function laneOffsetForCar(carIndex,seg)
   local left,right=boundsAt(seg)
   local width=right-left
-  -- A 3 m boundary is a single lane: no passing and all cars hold 40 km/h.
+  -- A narrow recorded corridor remains single-file, but has no 40 km/h cap.
   if width<6.0 then return 0.0,false end
-  -- Keep two fixed 3.5 m lanes inside the recorded 7 m corridor.
+  -- Two lane centers stay 0.65 m inside the recorded boundaries.
   local offset=math.min(1.75,right-0.65,-left-0.65)
   if offset<1.0 then return 0.0,false end
   local side=state.laneAssignments and state.laneAssignments[carIndex]
   if side==nil then side=(carIndex%2==1) and 1 or -1 end
-  return (side>0) and offset or -offset,true
+  -- The recorded route basis is opposite to the physical car-left/right
+  -- basis in the current CSP spawn setup: negative offset is physical LEFT.
+  return (side>0) and -offset or offset,true
 end
 local function assignLaneRoster(sim)
   local leftCount,rightCount=0,0
@@ -314,7 +315,7 @@ local function assignLaneRoster(sim)
       local side=(leftCount<=rightCount) and 1 or -1
       state.laneAssignments[i]=side
       if side==1 then leftCount=leftCount+1 else rightCount=rightCount+1 end
-      writeLog("LANE_ASSIGN id=%d side=%s",i,side==1 and "LEFT_FAST" or "RIGHT_40")
+      writeLog("LANE_ASSIGN id=%d side=%s",i,side==1 and "LEFT" or "RIGHT")
     end
   end
 end
@@ -500,7 +501,7 @@ local function trySpawnTeleport(sim,dt)
       if ok and result~=false then
         moved=moved+1
         writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f route_dir=(%.3f,%.3f) spawn_dir=(%.3f,%.3f)",carIndex,
-          twoLane and (laneOffset>0 and "LEFT_FAST" or "RIGHT_40") or "SINGLE_40",
+          twoLane and (laneOffset<0 and "LEFT" or "RIGHT") or "SINGLE",
           laneOffset,direction.x,direction.z,spawnDirection.x,spawnDirection.z)
         state.p[carIndex]=nil
       else failed=failed+1 end
