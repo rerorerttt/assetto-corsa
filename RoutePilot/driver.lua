@@ -13,7 +13,6 @@ local LANE_FRONT_CLEAR = 32.0
 local LANE_REAR_CLEAR = 15.0
 local LANE_SAFETY_GAP = 5.0
 local LANE_HALF_WIDTH = 1.45
-local LANE_CHANGE_RATE = 2.1
 -- Conservative, rate-limited steering prevents large snap corrections.
 local STEER_LIMIT = 0.68
 local STEER_GAIN = 0.78
@@ -221,10 +220,6 @@ end
 local function laneOffsetAtPosition(car, ownTangentX, ownTangentZ)
   local dx = car.position.x
   local dz = car.position.z
-  local lateral = dx * -ownTangentZ + dz * ownTangentX
-  return lateral
-end
-
 local function scanTraffic(carIndex, car, p, speed, tx, tz)
   local sim = ac.getSim()
   if not sim then return nil end
@@ -389,6 +384,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     end
     p.laneRole = laneRoleForOffset(p.laneTargetOffset, true)
   end
+  local laneOffset = p.laneOffset
 
   local lookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE, LOOKAHEAD_MAX)
@@ -427,9 +423,8 @@ end
 local function calculateSpeedControls(p, speed, targetSpeed, dt)
   local error = targetSpeed - speed
 
-  -- PI speed hold: stable 40 km/h in the right lane and predictable
-  -- acceleration/braking for the fast lane. Anti-windup prevents delayed
-  -- braking after long full-throttle sections.
+  -- PI speed control tracks temporary corner and traffic targets.
+  -- Anti-windup prevents delayed braking after long full-throttle sections.
   local drive = error * 0.18 + p.speedIntegral * 0.012
   if (drive > -1 and drive < 1) or (drive >= 1 and error < 0) or
       (drive <= -1 and error > 0) then
