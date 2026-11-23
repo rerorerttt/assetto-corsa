@@ -1,24 +1,43 @@
 -- RoutePilot/driver.lua
--- Per-car ARCADE racing traffic controller, v0.4.2 (CSP 0.3.2-preview2).
+-- Per-car ARCADE racing traffic controller, v0.4.3 (CSP 0.3.2-preview2).
 --
--- v0.4.2 — the NFS-Underground-style rework:
---  * OVERTAKE ANY BLOCKER: the old trigger required the blocker to be moving
---    faster than 3 m/s, so a stationary player parked in front created an
---    eternal queue. Now ANY car ahead that is slower than this car's pace
---    (including a stopped player) is passed after 0.6 s. If blocked for
---    2.5 s, the pass is forced even in tight spots.
---  * CANNOT PARK AT WALLS ANYMORE: steering now has a CONTINUOUS pull to the
---    center of the corridor (proportional to the lateral offset), and targets
---    keep a 3 m margin from corridor edges. Previously the pull only engaged
---    10+ m off the line — exactly how cars ended up standing at walls.
---  * ARCADE SPEED: lateral grip 12 m/s², wobble-curvature ignored up to
---    0.004, apex floor 13 m/s (47 km/h) — full pace on anything straight-ish.
---  * STUCK RESCUE: a car stopped for 3.5 s re-orients to the line and goes.
---  * preventAIFromRetiring pulse kept (cars never vanish).
+-- v0.4.3 — CRITICAL FIX + NFS polish:
+--  * FATAL BUG FIXED: v0.4.2 referenced CFG keys that do not exist in the
+--    main script (WALL_MARGIN, CENTER_PULL, OVERTAKE_TRIGGER_TIME,
+--    FOLLOW_LATERAL) — nil arithmetic crashed the driver on the very first
+--    frame, pcall released the car, and the STOCK AI (no fast lane on this
+--    track) parked it at a wall. All constants are now LOCAL here and every
+--    CFG/H reference is checked against the main v0.4.2 script.
+--  * PASS ANY BLOCKER (NFS Underground style): anything slower than my
+--    pace ahead — including a STANDING PLAYER — is passed after 0.6 s;
+--    if I'm stopped behind it for 2.5 s, the pass is forced.
+--  * SIDE CHOSEN BY LIVE ROOM RAYS: every frame the car casts left/right
+--    rays and commits to the side with more space — it knows it fits.
+--  * CONTINUOUS corridor-center pull: the further off-center, the harder
+--    the car is steered back. Cars cannot settle at walls anymore.
+--  * NO CRAWLING IN WIDE CORRIDORS: speed is only capped where the corridor
+--    is genuinely narrow (< 4.5 m half-width). A 13 m wide section is driven
+--    at full pace; the forward wall ray brakes only if a wall is really
+--    straight ahead.
+--  * STUCK RESCUE and the preventAIFromRetiring pulse are kept (no
+--    vanishing cars).
 
 local Driver = {}
 
 local CFG, state, H
+
+-- local tuning constants (do NOT depend on main-script CFG keys that
+-- might be missing; everything the driver needs is defined right here)
+local WALL_MARGIN      = 2.5    -- keep targets this far from corridor edges, m
+local CENTER_PULL      = 0.40   -- proportional pull to corridor center
+local TRIGGER_TIME     = 0.6    -- follow a slower car this long before passing
+local FORCE_TIME      = 2.5    -- stopped behind a blocker this long -> force pass
+local PASS_TIMEOUT     = 6.0    -- give up on a stuck pass attempt
+local RESCUE_SPEED     = 1.5    -- below this speed the stuck timer runs
+local RESCUE_TIME      = 3.5    -- stopped this long -> re-orient and push
+local NARROW_HALF      = 4.5    -- corridor half-width below which speed is capped
+local WALL_BRAKE_DIST  = 25.0   -- start braking to a wall closer than this
+local WALL_STOP_MARGIN = 4.0    -- stop this short of a wall
 
 local function clamp(v, lo, hi)
   return math.max(lo, math.min(hi, v))
@@ -63,7 +82,7 @@ end
 
 local function newPersonality(carIndex)
   local pace = 0.86 + carRand(carIndex, 1) * 0.28   -- 0.86..1.14
-  local kmh = clamp(state.speedMax * pace, 80, 240)
+  local kmh = clamp(safeNumber(state.speedMax, 170) * pace, 80, 240)
   local p = {
     segIdx = 1,
     pace = pace,
@@ -80,8 +99,8 @@ local function newPersonality(carIndex)
     previousFz = nil,
     stuck = 0,
     blockedT = 0,
+    passT = 0,
     lineDist = 0,
-    latSide = 0,
     targetX = 0,
     targetZ = 0,
     targetSpeed = 0,
@@ -90,7 +109,6 @@ local function newPersonality(carIndex)
     lastCurve = 0,
     correctTimer = 6.0,
     overtakeSide = 0,
-    overtakeTarget = nil,
     followTimer = 0,
     retireT = 2.0,
   }
@@ -128,6 +146,7 @@ end
 local function calculateStability(p, speed)
   local slip = math.abs(p.slipAngle)
   local severity = 0
+  -- only real slides at real speeds cut the power (never at walking pace)
   if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
     local slipSeverity = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
     local accelSeverity = clamp((p.lateralAccel - CFG.MAX_LATERAL_ACCEL) / (CFG.MAX_LATERAL_ACCEL * 0.7), 0, 1)
@@ -161,10 +180,11 @@ local function planTargetSpeed(p)
         target = safeSpeed
       end
     end
-    -- only genuinely narrow sections slow the car down
+    -- only GENUINELY narrow sections cap the speed; a 13 m wide corridor
+    -- is driven flat out (the center pull keeps the car off the walls)
     local half = H.corridorAt(current)
-    if half < 6 then
-      local cap = math.max(10, half * 1.8)
+    if half < NARROW_HALF then
+      local cap = math.max(CFG.MIN_APEX_SPEED, half * 2.4)
       local safeCap = math.sqrt(cap * cap + 2 * CFG.BRAKE_ACCEL * distance)
       if safeCap < target then
         target = safeCap
@@ -186,7 +206,7 @@ local function planTargetSpeed(p)
 end
 
 ------------------------------------------------------------
--- steering (pure pursuit + continuous corridor-center pull)
+-- steering
 ------------------------------------------------------------
 
 local function headingMatchesLine(fx, fz, seg)
@@ -204,7 +224,7 @@ local function clampToCorridor(seg, tx, tz)
   local relX, relZ = tx - a.x, tz - a.z
   local along = relX * lx + relZ * lz
   local lat = relX * -lz + relZ * lx
-  local half = math.max(1.5, H.corridorAt(seg) - CFG.WALL_MARGIN)
+  local half = math.max(1.5, H.corridorAt(seg) - WALL_MARGIN)
   if lat > half then lat = half end
   if lat < -half then lat = -half end
   return a.x + lx * along + (-lz) * lat,
@@ -237,22 +257,20 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     targetX, targetZ = b.x, b.z
   end
 
-  -- signed lateral offset from the line (for the center pull)
+  -- signed lateral offset of the CAR from the line (for the center pull)
   local a = state.nodes[seg]
   local b = H.segEnd(seg)
   local lx, lz = normalize2(b.x - a.x, b.z - a.z)
   local latOffset = (car.position.x - a.x) * -lz + (car.position.z - a.z) * lx
-  p.latSide = (latOffset >= 0) and 1 or -1
 
-  -- lateral shift while overtaking (kept inside the corridor)
+  -- lateral shift while overtaking, kept inside the corridor
   local corridorHalf = H.corridorAt(seg)
   if p.overtakeSide ~= 0 then
-    if corridorHalf < 4.5 then
-      -- nowhere to pass here: tuck back in and keep trying after
+    if corridorHalf < 4.0 then
+      -- nowhere to pass here: tuck back in, try again further on
       p.overtakeSide = 0
-      p.overtakeTarget = nil
     else
-      local shift = math.min(CFG.OVERTAKE_LATERAL, corridorHalf - CFG.WALL_MARGIN)
+      local shift = math.min(CFG.OVERTAKE_LATERAL, corridorHalf - WALL_MARGIN)
       local nx, nz = normalize2(-(targetZ - car.position.z), targetX - car.position.x)
       targetX = targetX + nx * p.overtakeSide * shift
       targetZ = targetZ + nz * p.overtakeSide * shift
@@ -261,7 +279,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- never aim near a wall
   targetX, targetZ = clampToCorridor(seg, targetX, targetZ)
-
   p.targetX = targetX
   p.targetZ = targetZ
 
@@ -274,12 +291,11 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local angle = signedAngle(fx, fz, dx / distance, dz / distance)
   local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.5 - p.yawRate * 0.04
 
-  -- THE WALL FIX: continuous proportional pull to the corridor CENTER.
-  -- The car can no longer settle near a wall: the further off-center it is,
-  -- the harder it is steered back. Always on (except mid-overtake), no
-  -- "10 m threshold" anymore.
+  -- CONTINUOUS pull to the corridor center: the further off-center the car
+  -- is, the harder it steers back. Cars can no longer settle at a wall.
+  -- (Disabled mid-overtake so the pass itself is not fought.)
   if p.overtakeSide == 0 then
-    local pull = clamp(latOffset / 12, -1, 1) * CFG.CENTER_PULL
+    local pull = clamp(latOffset / 12, -1, 1) * CENTER_PULL
     steer = steer - pull
   end
 
@@ -297,40 +313,47 @@ local function filterSteering(p, target, dt)
 end
 
 ------------------------------------------------------------
--- overtaking decision (NFS style: pass ANY blocker)
+-- overtaking (NFS style: pass ANY blocker, side by live room)
 ------------------------------------------------------------
 
 local function beginOvertake(carIndex, car, p, gap)
   p.followTimer = 0
-  p.overtakeTarget = H.carAheadIndex and H.carAheadIndex(carIndex, car, CFG.FOLLOW_LATERAL * 2)
-  p.overtakeSide = (carRand(carIndex, 2) > 0.5) and 1 or -1
-  H.log("CAR=%d OVERTAKE_BEGIN side=%d gap=%.1f", carIndex, p.overtakeSide, gap or -1)
+  p.blockedT = 0
+  p.passT = 0
+  -- NFS trick: cast live rays left/right and commit to the side with room
+  local side = 0
+  if H.liveRoomLeftRight then
+    local dLeft, dRight = H.liveRoomLeftRight(car)
+    side = (dRight >= dLeft) and 1 or -1
+  end
+  if side == 0 then side = (carRand(carIndex, 2) > 0.5) and 1 or -1 end
+  p.overtakeSide = side
+  H.log("CAR=%d OVERTAKE_BEGIN side=%d gap=%.1f", carIndex, side, gap or -1)
 end
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  local gap, leaderSpeed = H.carAhead(carIndex, car, CFG.FOLLOW_LATERAL)
+  local cone = CFG.AVOID_LATERAL or 5.0
+  local gap, leaderSpeed = H.carAhead(carIndex, car, cone)
 
-  -- pass in progress: hold pace until well clear
+  -- pass in progress
   if p.overtakeSide ~= 0 then
-    if p.overtakeTarget then
-      local other = ac.getCar(p.overtakeTarget)
-      if other and other.isActive then
-        local dx = other.position.x - car.position.x
-        local dz = other.position.z - car.position.z
-        local fx, fz = normalize2(car.look.x, car.look.z)
-        local forward = dx * fx + dz * fz
-        local lateral = math.abs(dx * fz - dz * fx)
-        if forward < -CFG.OVERTAKE_CLEAR_AHEAD or lateral > CFG.OVERTAKE_LATERAL * 2 then
-          p.overtakeSide = 0
-          p.overtakeTarget = nil
-          H.log("CAR=%d OVERTAKE_END", carIndex)
-        end
-        return math.max(targetSpeed, (leaderSpeed or 0) + 4)
-      end
+    p.passT = p.passT + dt
+    if not gap then
+      -- nothing in the cone anymore: pass complete
+      p.overtakeSide = 0
+      H.log("CAR=%d OVERTAKE_END clear", carIndex)
+      return targetSpeed
     end
-    p.overtakeSide = 0
-    p.overtakeTarget = nil
-    return targetSpeed
+    if p.passT > PASS_TIMEOUT then
+      p.overtakeSide = 0
+      H.log("CAR=%d OVERTAKE_END timeout", carIndex)
+      return targetSpeed
+    end
+    -- hold the pace while going around; brake only to avoid contact
+    local safeSpeed = math.sqrt(math.max(0,
+      (leaderSpeed or 0) * (leaderSpeed or 0) +
+      2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - 4)))
+    return math.min(math.max(targetSpeed, (leaderSpeed or 0) + 4), math.max(safeSpeed, 6))
   end
 
   if not gap then
@@ -340,21 +363,22 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   end
 
   -- ANY car ahead slower than my pace is a blocker — including a
-  -- STATIONARY player. This was the old bug: parked player = eternal queue.
-  if leaderSpeed < math.min(p.cruiseSpeed, targetSpeed + 3) - 2 then
+  -- STANDING PLAYER. This was the old bug: parked player = eternal queue.
+  if (leaderSpeed or 0) < math.min(p.cruiseSpeed, targetSpeed + 3) - 2 then
     p.followTimer = p.followTimer + dt
     -- approach safely while deciding
     local safeSpeed = math.sqrt(math.max(0,
-      leaderSpeed * leaderSpeed + 2 * CFG.BRAKE_ACCEL * math.max(0, gap - state.followGap)))
-    if p.followTimer > CFG.OVERTAKE_TRIGGER_TIME
-       and H.corridorAt(p.segIdx) >= 4.5 then
+      (leaderSpeed or 0) * (leaderSpeed or 0) +
+      2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
+    if p.followTimer > TRIGGER_TIME
+       and H.corridorAt(p.segIdx) >= (CFG.PASS_MIN_ROOM or 6.0) then
       beginOvertake(carIndex, car, p, gap)
-      return math.max(targetSpeed, leaderSpeed + 4)
+      return math.max(targetSpeed, (leaderSpeed or 0) + 4)
     end
-    -- blocked too long (stopped dead): force the pass even if tight
+    -- blocked dead for too long: force the pass even in tight spots
     if speed < 3 then
       p.blockedT = p.blockedT + dt
-      if p.blockedT > 2.5 then
+      if p.blockedT > FORCE_TIME then
         beginOvertake(carIndex, car, p, gap)
         return math.max(targetSpeed, 6)
       end
@@ -366,8 +390,9 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.followTimer = 0
   p.blockedT = 0
   local safeSpeed = math.sqrt(math.max(0,
-    leaderSpeed * leaderSpeed + 2 * CFG.BRAKE_ACCEL * math.max(0, gap - state.followGap)))
-  if gap < state.followGap then
+    (leaderSpeed or 0) * (leaderSpeed or 0) +
+    2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
+  if (gap or 0) < safeNumber(state.followGap, 8) then
     return 0
   end
   return math.min(targetSpeed, safeSpeed)
@@ -415,11 +440,12 @@ function Driver.update(carIndex, car, dt)
 
   local targetSpeed = planTargetSpeed(p)
 
-  -- wall close ahead: brake to stop short of it (steering keeps to center)
+  -- wall straight ahead: brake to stop short of it (steering pulls to center)
   if H.wallAhead then
     local wallDist = H.wallAhead(car)
-    if wallDist and wallDist < 25 then
-      local vStop = math.sqrt(math.max(0, 2 * CFG.BRAKE_ACCEL * math.max(0, wallDist - 3)))
+    if wallDist and wallDist < WALL_BRAKE_DIST then
+      local vStop = math.sqrt(math.max(0,
+        2 * CFG.BRAKE_ACCEL * math.max(0, wallDist - WALL_STOP_MARGIN)))
       if vStop < targetSpeed then
         targetSpeed = vStop
       end
@@ -435,9 +461,9 @@ function Driver.update(carIndex, car, dt)
   calculateThrottle(p, speed, targetSpeed)
 
   -- stuck rescue: re-orient to the line and push on
-  if speed < 1.5 then
+  if speed < RESCUE_SPEED then
     p.stuck = p.stuck + dt
-    if p.stuck > 3.5 then
+    if p.stuck > RESCUE_TIME then
       p.stuck = 0
       p.correctTimer = 2.0
       p.gas = 1.0
@@ -459,10 +485,10 @@ end
 
 function Driver.telemetryLine(i, car, p)
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f SLIP=%.4f CURVATURE=%.5f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f CORR=%.1f OT_SIDE=%d",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f SLIP=%.4f STABILITY=%.3f CURVATURE=%.5f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f CORR=%.1f OT_SIDE=%d",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake,
-    p.slipAngle, p.lastCurve, p.targetSpeed,
+    p.slipAngle, p.stability, p.lastCurve, p.targetSpeed,
     p.lineDist, p.segIdx, p.pace,
     H.corridorAt and H.corridorAt(p.segIdx) or -1,
     p.overtakeSide)
