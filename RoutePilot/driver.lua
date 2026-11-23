@@ -284,13 +284,26 @@ function Driver.beginFrame(sim, dt)
         H.log('PASS_ABORT car=%d leader=%s reason=car_unavailable', i, tostring(p.passLeader))
       else
         local gap = signedGap(follower, leader, metrics.total)
+        local home=p.homeOffset or 0
         if gap < -PASS_CLEAR_GAP then
-          p.passState, p.targetOffset = 'RETURN', p.homeOffset or 0
-          H.log('PASS_COMPLETE car=%d leader=%d gap=%.1f side=%d', i, p.passLeader, gap, p.passSide)
+          if laneIsFree(follower,leader,home,snapshots,metrics) then
+            p.passState, p.targetOffset = 'RETURN', home
+            H.log('PASS_COMPLETE car=%d leader=%d gap=%.1f side=%d', i, p.passLeader, gap, p.passSide)
+          elseif not p.returnBlockedLogged then
+            p.returnBlockedLogged=true
+            H.log('PASS_RETURN_BLOCKED car=%d leader=%d gap=%.1f home=%.2f',
+              i,p.passLeader,gap,home)
+          end
         elseif p.passTimer > PASS_MAX_TIME and gap > 12.0 then
-          p.passState, p.targetOffset = 'RETURN', p.homeOffset or 0
-          H.log('PASS_ABORT car=%d leader=%d reason=timeout_no_progress gap=%.1f',
-            i,p.passLeader,gap)
+          if laneIsFree(follower,leader,home,snapshots,metrics) then
+            p.passState, p.targetOffset = 'RETURN', home
+            H.log('PASS_ABORT car=%d leader=%d reason=timeout_no_progress gap=%.1f',
+              i,p.passLeader,gap)
+          elseif not p.passLoggedTimeout then
+            p.passLoggedTimeout=true
+            H.log('PASS_LONG car=%d leader=%d gap=%.1f offset=%.2f home_lane_blocked=true',
+              i,p.passLeader,gap,p.currentOffset)
+          end
         elseif p.passTimer > PASS_MAX_TIME and not p.passLoggedTimeout then
           p.passLoggedTimeout = true
           H.log('PASS_LONG car=%d leader=%d gap=%.1f offset=%.2f',
@@ -325,7 +338,7 @@ function Driver.beginFrame(sim, dt)
           local target, side = choosePassOffset(follower, bestLeader, snapshots, metrics)
           if target then
             p.passState, p.passLeader, p.passSide = 'OUT', bestLeader.index, side
-            p.passTimer, p.passLoggedTimeout, p.targetOffset = 0, false, target
+            p.passTimer, p.passLoggedTimeout, p.returnBlockedLogged, p.targetOffset = 0, false, false, target
             H.log('PASS_START car=%d leader=%d gap=%.1f side=%d target=%.2f speed=%.1f leaderSpeed=%.1f pace=%.3f leaderPace=%.3f',
               i, bestLeader.index, bestGap, side, target, follower.speed, bestLeader.speed, p.targetLevel, bestLeader.pace)
           else
@@ -375,7 +388,7 @@ function Driver.update(index, car, dt)
     p.passTimer = 0
     p.targetOffset, p.currentOffset = p.homeOffset or 0, p.homeOffset or 0
     p.offsetApplied = math.abs(p.currentOffset)>0.02
-    p.passLoggedTimeout = false
+    p.passLoggedTimeout, p.returnBlockedLogged = false, false
   end
 
   if S.spawnDone and S.sessionTime > 10 and not car.isInPitlane then
