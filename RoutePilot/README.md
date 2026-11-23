@@ -19,7 +19,7 @@ Keep all five runtime files together: `manifest.ini`, `RoutePilot.lua`, `driver.
 3. Record a complete lap with **Запись линии**, then stop recording.
 4. If necessary, record the road limits separately with **Запись границ** from any point inside the existing corridor. Only the boundary on the player's side is rewritten; it cannot expand beyond the previously saved corridor. If the car leaves the old limits, recording stops.
 5. Press **Сохранить**. RoutePilot writes the text route, bounds and a generated native `.ai` spline for this track/layout. The first and last recorded points must be within 30 m so the AI line cannot close through a long artificial shortcut.
-6. Add AI cars to the session. RoutePilot assigns the generated spline, waits for CSP to accept it, then spaces the AI cars along the recorded route. No separate start-autopilot button is required.
+6. Add AI cars to the session. RoutePilot assigns the generated spline, waits for CSP to accept it and allows 1.5 seconds for background loading, then spaces the AI cars along the recorded route. No separate start-autopilot button is required.
 
 Routes and bounds are stored per track/layout. The map is drawn directly inside the main RoutePilot window and uses the same boundary geometry as the 3D track overlay.
 
