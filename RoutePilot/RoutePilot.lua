@@ -408,6 +408,11 @@ local function alignRouteDirectionToPlayer(metrics,player)
     return metrics
   end
   local routeDistance,routeError=findRouteDistanceAtPosition(player.position,metrics)
+  if routeError>15.0 then
+    writeLog("ROUTE_DIRECTION_AMBIGUOUS route_error=%.2f",routeError)
+    state.routeDirectionChecked=true
+    return metrics
+  end
   local _,routeDirection=sampleSpawnRoute(metrics,routeDistance)
   if not routeDirection then
     writeLog("ROUTE_DIRECTION_CHECK_FAILED")
