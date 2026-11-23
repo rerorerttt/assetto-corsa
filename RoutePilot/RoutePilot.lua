@@ -27,15 +27,15 @@ local CFG = {
   SLIP_START = 0.16,
   SLIP_FULL = 0.62,
 
-  MAX_LATERAL_ACCEL = 24.0,
-  LATERAL_ACCEL_LIMIT = 30.0,
+  MAX_LATERAL_ACCEL = 11.5,
+  LATERAL_ACCEL_LIMIT = 17.0,
 
   BRAKE_ACCEL = 12.0,
   MAX_BRAKE = 0.75,
   MAX_GAS = 1.0,
 
   SPEED_GAIN = 0.55,
-  MIN_CORNER_SPEED = 26.0,
+  MIN_CORNER_SPEED = 9.0,
   SCAN_RAY_LENGTH = 9.0,
   SCAN_RAYS_PER_FRAME = 48,
   SCAN_CACHE_VERSION = 1,
@@ -73,8 +73,8 @@ local CFG = {
   OVERTAKE_RELEASE_DISTANCE = 14.0,
   OVERTAKE_OFFSET_RATE = 5.0,
   OVERTAKE_STUCK_TIME = 1.5,
-  TRAFFIC_OFFSET = 3.25,
-  TRAFFIC_LATERAL_CLEARANCE = 2.15,
+  TRAFFIC_OFFSET = 1.65,
+  TRAFFIC_LATERAL_CLEARANCE = 2.35,
   TRAFFIC_LONGITUDINAL_CLEARANCE = 3.2,
   TRAFFIC_LOOKAHEAD = 125.0,
   TRAFFIC_ONCOMING_TIME = 8.0,
@@ -1109,10 +1109,12 @@ local function findNearestSegment(car, p)
     end
   end
 
-  local back = math.min(3, segmentCount - 1)
+  local back = math.min(2, segmentCount - 1)
+  -- Keep projection local: a broad search can snap to a nearby parallel
+  -- or opposite section of an oval and command a dangerous cross-track turn.
   local ahead = math.min(
     segmentCount - 1,
-    math.max(15, math.floor(segmentCount * 0.20))
+    math.max(8, math.floor(segmentCount * 0.06))
   )
 
   for offset = -back, ahead do
@@ -1698,7 +1700,7 @@ local function updateTrafficCoordinator(sim, dt)
         if b and not plans[i] and not plans[j] then
           local headingDot = a.hx * b.hx + a.hz * b.hz
 
-          if headingDot < -0.55 then
+          if false and headingDot < -0.55 then
             local dx = b.x - a.x
             local dz = b.z - a.z
             local rvx = b.vx - a.vx
@@ -1785,11 +1787,11 @@ local function updateTrafficCoordinator(sim, dt)
               local leaderStopped = leader.speed < 1.5 and
                 (leader.isPlayer and state.playerSlowTimer > 1.5 or
                  leader.p and (leader.p.slowTimer or 0) > 1.5)
-              local followerPace = follower.p and follower.p.paceMultiplier or 1.0
-      local leaderPace = leader.p and leader.p.paceMultiplier or 1.0
-      local canPass = closingSpeed > 0.25 or followerPace > leaderPace + 0.015 or leaderStopped
+              -- Personality pace is not a physical reason to change lanes.
+      local canPass = closingSpeed > 2.5 or leaderStopped
 
-              if gap > 5.0 and canPass then
+              if gap > 7.0 and gap < CFG.OVERTAKE_DISTANCE and
+                 lateral < 2.8 and canPass then
                 if follower.isAI and leader.isAI then
                   reservePair(
                     follower,
@@ -1823,7 +1825,7 @@ local function updateTrafficCoordinator(sim, dt)
         local b = infos[j]
         if b and b.isAI and not plans[j] then
           local headingDot = a.hx * b.hx + a.hz * b.hz
-          if headingDot >= -0.55 and headingDot <= 0.72 then
+          if false and headingDot >= -0.55 and headingDot <= 0.72 then
             local dx = b.x - a.x
             local dz = b.z - a.z
             local rvx = b.vx - a.vx
@@ -1963,9 +1965,8 @@ local function carAhead(carIndex, car, personality)
           personality.passRole ~= "yield_player" and
           otherPersonality.passRole ~= "yield_player"
 
-        -- A reserved AI-to-AI pair is allowed to execute its agreed lateral
-        -- manoeuvre. Once they are very close, geometric collision checks apply.
-        local mayIgnoreReservedPair = coordinatedPair and distance > 2.5
+        -- A reservation never overrides physical collision prediction.
+        local mayIgnoreReservedPair = false
 
         if not mayIgnoreReservedPair then
           -- Following applies only to cars travelling in the same direction
@@ -2349,6 +2350,104 @@ local function updateRecoveryState(carIndex, car, p, dt, collisionHold)
 end
 
 ------------------------------------------------------------
+-- LIVE TRACK-EDGE / OBSTACLE GUARD
+-- Rechecks the moving car's forward corridor every update. The cached
+-- route obstacle map is useful for planning, but is never trusted alone.
+------------------------------------------------------------
+
+local obstacleApiWarningWritten = false
+
+local function getTrackRayDistance(origin, direction, length)
+  if type(physics) ~= "table" or type(physics.raycastTrack) ~= "function" then
+    return nil
+  end
+
+  local hitPoint = vec3(0, 0, 0)
+  local hitNormal = vec3(0, 0, 0)
+  local ok, distance = pcall(
+    physics.raycastTrack,
+    origin, direction, length,
+    hitPoint, hitNormal, false, false
+  )
+
+  if not ok or type(distance) ~= "number" or distance < 0 then
+    return length
+  end
+
+  return clamp(distance, 0, length)
+end
+
+local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
+  if type(physics) ~= "table" or type(physics.raycastTrack) ~= "function" then
+    if not obstacleApiWarningWritten then
+      obstacleApiWarningWritten = true
+      writeLog("LIVE_GUARD_UNAVAILABLE reason=raycastTrack")
+    end
+    return steer, targetSpeed
+  end
+
+  local fx, fz = normalize2(car.look.x, car.look.z)
+  local origin = vec3(
+    safeNumber(car.position.x),
+    safeNumber(car.position.y) + 0.85,
+    safeNumber(car.position.z)
+  )
+  local angles = { -0.52, -0.26, 0, 0.26, 0.52 }
+  local distances = {}
+  local rayLength = 15.0
+
+  for i = 1, #angles do
+    local angle = angles[i]
+    local c, sn = math.cos(angle), math.sin(angle)
+    local direction = vec3(
+      fx * c - fz * sn,
+      0,
+      fx * sn + fz * c
+    )
+    distances[i] = getTrackRayDistance(origin, direction, rayLength) or rayLength
+  end
+
+  local center = distances[3]
+  local leftClear = math.min(distances[1], distances[2])
+  local rightClear = math.min(distances[4], distances[5])
+
+  if center >= 5.0 and leftClear >= 3.0 and rightClear >= 3.0 then
+    p.liveObstacleDistance = center
+    p.liveLeftClearance = leftClear
+    p.liveRightClearance = rightClear
+    return steer, targetSpeed
+  end
+
+  local correction = 0
+  if center < 9.0 then
+    if math.max(leftClear, rightClear) >= 4.0 then
+      -- signedAngle() is negative to the car's right and positive to its left.
+      correction = rightClear > leftClear and -0.34 or 0.34
+      targetSpeed = math.min(targetSpeed, math.max(7.0, center * 1.35))
+    else
+      -- No verified escape corridor: brake rather than guess a direction.
+      targetSpeed = math.min(targetSpeed, 4.0)
+    end
+  end
+
+  if leftClear < 3.0 and steer > 0 then
+    steer = 0
+  elseif rightClear < 3.0 and steer < 0 then
+    steer = 0
+  end
+
+  steer = clamp(steer + correction, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
+  if center < 3.0 and leftClear < 3.0 and rightClear < 3.0 then
+    targetSpeed = 0
+  end
+
+  p.liveObstacleDistance = center
+  p.liveLeftClearance = leftClear
+  p.liveRightClearance = rightClear
+  return steer, targetSpeed
+end
+
+------------------------------------------------------------
 -- MAIN AI CONTROL
 ------------------------------------------------------------
 
@@ -2424,6 +2523,9 @@ local function updateLineCar(carIndex, car, dt)
       collisionTarget
     )
   end
+
+  -- Live raycasts have final authority over route steering and speed.
+  steer, targetSpeed = applyLiveObstacleGuard(car, p, steer, targetSpeed)
 
   -- At a predicted crossing, one car owns the gap and keeps pace; the
   -- designated yielding car sheds speed early instead of both cars panic-braking.
@@ -2523,6 +2625,7 @@ local function recordSecondTelemetry(sim)
         "AIR_TIMER=%.1f " ..
         "STUCK_TIMER=%.1f " ..
         "COLLISION_RISK=%.2f " ..
+        "LIVE_OBSTACLE=%.2f " ..
         "RISK_CAR=%d " ..
         "RISK_TTC=%.2f " ..
         "RISK_LONG=%.2f " ..
@@ -2564,6 +2667,7 @@ local function recordSecondTelemetry(sim)
         p.airTimer or 0,
         p.moveTimer or 0,
         p.collisionRisk or 0,
+        p.liveObstacleDistance or -1,
         p.riskCar or -1,
         p.riskTTC or -1,
         p.riskLong or 0,
