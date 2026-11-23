@@ -1,45 +1,32 @@
-# RoutePilot 1.0 — Native CSP Racing AI
+# RoutePilot — two independent AI traffic lanes
 
-RoutePilot records a player-driven racing line and its left/right road limits, then converts them into a native Assetto Corsa/CSP version-7 AI spline. The game AI, not a Lua steering loop, controls steering, throttle, braking and gearbox.
+RoutePilot records a player-driven route and its road limits, then builds native CSP version-7 AI splines. Each AI car receives one lane-specific spline. The native game AI handles steering, throttle, braking and gearbox; RoutePilot does not run a traffic negotiation or overtaking planner.
 
 ## Installation
 
-Copy the complete `RoutePilot` directory into:
+Copy the complete `RoutePilot` directory into `assettocorsa/apps/lua/RoutePilot/`. Keep `manifest.ini`, `RoutePilot.lua`, `driver.lua`, `spline_builder.lua` and `logger.lua` together. Enable **RoutePilot** in Content Manager's Lua Apps list. Target CSP version: 0.3.2-preview2.
 
-```
-assettocorsa/apps/lua/RoutePilot/
-```
+## Setup
 
-Keep all five runtime files together: `manifest.ini`, `RoutePilot.lua`, `driver.lua`, `spline_builder.lua` and `logger.lua`. Enable **Arcade AI** in Content Manager's Lua Apps list. The app targets CSP 0.3.2-preview2 and uses its native `physics.setAISpline` and `physics.setAISplineAbsoluteOffset` APIs.
+Record a complete closed lap with **Запись линии**, stop recording and press **Сохранить**. The road-width selector controls the corridor width: 3 m creates one centered lane with no passing; 7 m or wider creates two independent lanes. With two lanes, odd-numbered AI car indices are assigned to the left fast lane and even-numbered indices to the right slow lane. Cars are placed directly on their assigned lane at startup.
 
-## First run
+## Traffic behavior
 
-1. Open RoutePilot on the track/layout you want to use.
-2. Select the road width: 1, 2, 3 or 4 cars. The default is 1 lane, as specified in the task list. Select 2 lanes (7 m) or more to enable adjacent-lane passing; one lane intentionally disables passing.
-3. Record a complete lap with **Запись линии**, then stop recording.
-4. If necessary, record the road limits separately with **Запись границ** from any point inside the existing corridor. Only the boundary on the player's side is rewritten; it cannot expand beyond the previously saved corridor. If the car leaves the old limits, recording stops.
-5. Press **Сохранить**. RoutePilot writes the text route, bounds and a generated native `.ai` spline for this track/layout. The first and last recorded points must be within 30 m so the AI line cannot close through a long artificial shortcut.
-6. Add AI cars to the session. RoutePilot assigns the generated spline, waits for CSP to accept it and allows 1.5 seconds for background loading, then spaces the AI cars along the recorded route. No separate start-autopilot button is required.
+- **Left lane:** its own offset spline, with curvature-derived speed hints and no artificial top-speed cap. The car's natural engine and physics limits remain.
+- **Right lane:** its own offset spline with a 40 km/h speed target and a hard 40 km/h top-speed cap via `physics.setAITopSpeed`.
+- **No traffic planner:** cars are never ranked by pace, asked to pass, told to yield, or dynamically moved between lanes. There are no follower brake commands, shared pass reservations or traffic occupancy checks.
+- **Lane geometry:** the lane centre lines are generated from the recorded route using a horizontal tangent offset. The two lane splines are built separately, and each spline's side limits are restricted to its own half of the recorded corridor.
+- **Native steering:** CSP's native AI follows the lane-specific spline. RoutePilot does not inject per-frame steering corrections, which avoids the old oscillating pursuit controller.
+- **Spawn and recovery:** `physics.setAICarPosition(index, position, nil)` aligns each car to its own assigned spline. The spawn position uses the same lateral offset as that spline. Stuck/airborne recovery keeps the car in its original lane.
 
-Routes and bounds are stored per track/layout. The map is drawn directly inside the main RoutePilot window and uses the same boundary geometry as the 3D track overlay.
+The 40 km/h value is both the native spline speed target and the CSP top-speed ceiling. Real vehicle speed can still fall below 40 km/h when grip, a corner, damage or the physics model prevents maintaining the target; the top-speed API is a ceiling, not a cruise-control actuator.
 
-## Driving model
+## SDK basis
 
-- **Native AI spline:** RoutePilot writes the version-7 binary structure used by `AISplineEditor`. The native game AI follows that spline and retains its normal vehicle physics and gearbox logic.
-- **Speed profile:** the spline receives curvature-derived speed hints, an 8–300 km/h speed range, a 10.5 m/s² lateral-acceleration target and a 12 m/s² braking envelope. Actual speed still depends on the car, tyres, setup and track.
-- **Pace variation:** each AI receives a small deterministic variation around its configured AI level (94–106%, clamped to 0.0–1.15) and maximum CSP AI aggression (1.0). This creates faster and slower traffic without overriding the throttle.
-- **Lanes:** cars are ranked by pace. Faster groups are assigned to the leftmost lane; slower groups use the lanes to the right. Lane centres are calculated from the selected 3/7/11/15 m road width and are accepted only when the saved boundaries leave enough room.
-- **Overtaking:** a faster follower can move to an adjacent free lane, pass, then return to its assigned lane. A shared reservation allows only one active pass at a time, preventing two followers from claiming the same corridor. The leader is never given a pass-specific steering, throttle, brake, speed or lateral-offset command. CSP AI awareness remains enabled because the offset API is called with `overrideAiAwareness=false`.
-- **Boundaries:** the generated spline stores left/right widths from the user's boundary recording. Lane assignment and passing are refused if the requested corridor does not fit those limits.
-- **Spawn and recovery:** `physics.setAICarPosition(index, position, nil)` lets CSP align the car with its assigned AI spline. A car moving below 0.8 m/s for 10 seconds after startup is considered stuck. A car with all four wheel loads below 120 N while moving is treated as airborne after 10 seconds. Recovery searches forward for a free route position before teleporting.
-- **No obstacle scan:** RoutePilot does not scan, record or infer wall/column collision meshes. Native CSP/AC AI awareness remains responsible for its built-in traffic response.
+The implementation follows `lua-sdk/ac_apps/lib.lua` and the version-7 structures in `AISplineEditor/AISpline.lua`. It uses `physics.setAISpline`, `physics.setAITopSpeed`, `physics.setAILevel`, `physics.setAIAggression`, `physics.setAICarPosition` and `physics.preventAIFromRetiring`.
 
-## Logs
+## Logs and validation
 
-The app writes `routepilot_trace.txt` in its app folder. Important events include `AI_SPLINE_BUILD_OK`, `AI_SPLINE_ASSIGNED`, `SPAWN_CAR`, `LANE_ASSIGN`, `PASS_START`, `PASS_COMPLETE`, `PASS_BLOCKED`, `PASS_RELEASE` and `RECOVERY_ATTEMPT`. Each periodic car line contains world position, speed, AI level, route projection error, lane, lateral offset and pass state.
+The app writes `routepilot_trace.txt` in its app folder. Relevant events: `AI_LANES_BUILD_OK`, `AI_SPLINE_ASSIGNED`, `LANE_ASSIGN`, `SPAWN_BEGIN`, `SPAWN_FINISH` and `RECOVERY_ATTEMPT`.
 
-## Validation status and limits
-
-This is a source-level implementation based on the CSP SDK and the repository's `AISplineEditor` and `Verve` examples. It has **not** been run inside Assetto Corsa in this environment. A zero-accident guarantee is not physically possible: car dimensions, track mesh, AI behaviour, weather and mod-car physics vary. Start with a small number of AI cars and inspect the trace before increasing traffic density.
-
-The 3D overlay also draws a short upcoming wall of blue chevrons across sharper corners, following the route direction. During recording, arrows are limited to the short preview range. Track-boundary data must be recorded accurately; RoutePilot does not infer hidden walls or poles.
+This branch has been inspected against the SDK and source code, but cannot be launched in the Assetto Corsa runtime from this environment. It has not yet passed an in-game test. Do not treat a successful GitHub commit or source inspection as proof of race stability.

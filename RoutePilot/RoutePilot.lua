@@ -120,16 +120,36 @@ local function buildAISpline()
     state.status="Для AI-линии нужны минимум 3 точки"
     return false
   end
-  local stamp = (os and os.time and os.time()) or math.floor(os.clock()*1000)
+  local stamp=(os and os.time and os.time()) or math.floor(os.clock()*1000)
   state.aiRevision=state.aiRevision+1
-  local path=string.gsub(getLineFilePath(),"%.txt$",
-    "_native_"..tostring(stamp).."_"..tostring(state.aiRevision)..".ai")
-  local ok,info=Builder.build(state.nodes,state.boundsL,state.boundsR,path,state.speedMax,state.loopRoute)
+  local base=string.gsub(getLineFilePath(),"%.txt$",
+    "_lanes_"..tostring(stamp).."_"..tostring(state.aiRevision))
+  local width=WIDTH_PRESETS[clamp(math.floor(state.widthPreset or 1),1,#WIDTH_PRESETS)]
+  local laneCount=width>=7 and 2 or 1
+  local halfLane=laneCount==2 and width/4 or width/2
+  local paths={}
+  local ok,info
+  if laneCount==1 then
+    paths[1]=base.."_single.ai"
+    ok,info=Builder.build(state.nodes,state.boundsL,state.boundsR,paths[1],
+      1000,state.loopRoute,0,halfLane,nil)
+  else
+    paths[1]=base.."_left_fast.ai"
+    paths[2]=base.."_right_40.ai"
+    ok,info=Builder.build(state.nodes,state.boundsL,state.boundsR,paths[1],
+      1000,state.loopRoute,-halfLane,halfLane,nil)
+    if ok then
+      local okRight,infoRight=Builder.build(state.nodes,state.boundsL,state.boundsR,paths[2],
+        1000,state.loopRoute,halfLane,halfLane,40)
+      if not okRight then ok,info=false,infoRight end
+    end
+  end
   if not ok then
     state.aiSplineBuilt=false
     state.aiSplinePath=nil
-    state.status="Ошибка построения native AI spline"
-    writeLog("AI_SPLINE_BUILD_FAILED path=%s error=%s",path,tostring(info))
+    state.aiSplinePaths=nil
+    state.status="Ошибка построения двухполосной AI-линии"
+    writeLog("AI_LANES_BUILD_FAILED base=%s error=%s",base,tostring(info))
     flushLog()
     return false
   end
@@ -139,7 +159,10 @@ local function buildAISpline()
     state.p={}
     state.trafficHints={}
   end
-  state.aiSplinePath=path
+  state.aiSplinePaths=paths
+  state.aiSplinePath=paths[1]
+  state.aiLaneCount=laneCount
+  state.aiLaneHalfWidth=halfLane
   state.aiSplineBuilt=true
   state.lanesAssigned=false
   state.loaded=true
@@ -148,12 +171,13 @@ local function buildAISpline()
   state.spawnWait=0
   state.spawnStable=0
   state.spawnLastRoster=""
-  state.status=string.format("Native AI готов: %d точек, %.0f м",#state.nodes,info or 0)
-  writeLog("AI_SPLINE_BUILD_OK path=%s points=%d length=%.2f speedMax=%.1f widthPreset=%d",
-    path,#state.nodes,info or 0,state.speedMax,state.widthPreset)
+  state.status=laneCount==2 and "Две независимые полосы: левая быстрая, правая 40 км/ч" or "Одна полоса: без обгона"
+  writeLog("AI_LANES_BUILD_OK lanes=%d width=%.1f halfLane=%.2f left=%s right=%s rightSpeed=40",
+    laneCount,width,halfLane,tostring(paths[1]),tostring(paths[2]))
   flushLog()
   return true
 end
+
 local function serializeNodes(nodes)
   local out={}
   for i=1,#nodes do
@@ -460,7 +484,13 @@ local function findRouteDistanceAtPosition(position,metrics)
   end
   return bestRoute,math.sqrt(bestDistSq)
 end
-local function sampleSpawnRoute(metrics,distance)
+local function laneOffsetForCar(carIndex)
+  if (state.aiLaneCount or 1)<2 then return 0 end
+  local half=state.aiLaneHalfWidth or 1.75
+  return (carIndex%2==1) and -half or half
+end
+
+local function sampleSpawnRoute(metrics,distance,laneOffset)
   if metrics.loop then distance=distance%metrics.length
   else distance=clamp(distance,0,metrics.length) end
   for i=1,#metrics.segments do
@@ -472,11 +502,18 @@ local function sampleSpawnRoute(metrics,distance)
       local direction=vec3(b.x-a.x,b.y-a.y,b.z-a.z)
       if direction:length()<0.0001 then return nil,nil end
       direction:normalize()
+      local offset=tonumber(laneOffset) or 0
+      local horizontal=math.sqrt(direction.x*direction.x+direction.z*direction.z)
+      if horizontal>0.0001 then
+        position.x=position.x+(direction.z/horizontal)*offset
+        position.z=position.z-(direction.x/horizontal)*offset
+      end
       return position,direction
     end
   end
   return nil,nil
 end
+
 local function spotIsClear(pos, exceptIndex, ignored)
   local sim=ac.getSim()
   if not sim then return true end
@@ -590,7 +627,7 @@ local function trySpawnTeleport(sim,dt)
   for order=1,count do
     local carIndex=aiCars[order]
     local routeDistance=startDistance+(order-1)*gap
-    local position=sampleSpawnRoute(metrics,routeDistance)
+    local position=sampleSpawnRoute(metrics,routeDistance,laneOffsetForCar(carIndex))
     local plannedClear=true
     if position then
       for j=1,#planned do
@@ -634,7 +671,7 @@ local function teleportHome(carIndex,car)
   -- Never return a stuck car to its current node: search forward for a
   -- genuinely empty section of the recorded route, then align to the AI spline.
   for offset=18,metrics.length,12 do
-    local pos=sampleSpawnRoute(metrics,startDistance+offset)
+    local pos=sampleSpawnRoute(metrics,startDistance+offset,laneOffsetForCar(carIndex))
     if pos and spotIsClear(pos,carIndex) then
       local ok,result=pcall(physics.setAICarPosition,carIndex,pos,nil)
       if ok and result~=false then
@@ -1038,9 +1075,9 @@ function windowMain(dt)
   local okDraw,errDraw=pcall(function()
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
     for idx=1,4 do
-      local label=string.format("%s%d %s",idx==state.widthPreset and "● " or "",idx,idx==1 and "машина" or "машины")
+      local label=string.format("%s%d м / %s",idx==state.widthPreset and "● " or "",WIDTH_PRESETS[idx],idx==1 and "1 полоса" or "2 полосы")
       if idx>1 then ui.sameLine(0,4) end
-      if ui.button(label,vec2(92,22)) then
+      if ui.button(label,vec2(120,22)) then
         applyWidthPreset(idx)
       end
     end
