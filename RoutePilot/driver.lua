@@ -7,7 +7,6 @@
 local Driver = {}
 local CFG, state, H
 
-local FAST_MAX_SPEED = 300 / 3.6
 local RIGHT_SPEED = 40 / 3.6
 local STEER_LIMIT = 0.78
 local STEER_GAIN = 0.92
@@ -98,7 +97,7 @@ local function planFastLaneSpeed(p)
   local segments = H.segmentCount()
   if segments < 1 then return FAST_MAX_SPEED end
 
-  local target = FAST_MAX_SPEED
+  local target = math.huge
   local distance = 0
   local current = p.segIdx
   local steps = 0
@@ -127,7 +126,9 @@ local function planFastLaneSpeed(p)
     end
   end
 
-  return clamp(target, 8.0, FAST_MAX_SPEED)
+  -- No corner in the planning horizon means unrestricted full throttle.
+  if target == math.huge then return nil end
+  return math.max(8.0, target)
 end
 
 local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
@@ -222,15 +223,23 @@ function Driver.update(carIndex, car, dt)
   local steer = calculateSteering(carIndex, car, p, speed, fx, fz, dt)
 
   local targetSpeed
-  if not p.twoLane then
+  if not p.twoLane or p.laneOffset < 0 then
     targetSpeed = RIGHT_SPEED
-  elseif p.laneOffset < 0 then
-    targetSpeed = RIGHT_SPEED
+    p.targetSpeed = targetSpeed
+    calculateSpeedControls(p, speed, targetSpeed, dt)
   else
     targetSpeed = planFastLaneSpeed(p)
+    if targetSpeed then
+      p.targetSpeed = targetSpeed
+      calculateSpeedControls(p, speed, targetSpeed, dt)
+    else
+      -- No upcoming corner requires braking: the fast lane has no speed cap.
+      p.targetSpeed = math.huge
+      p.speedIntegral = 0
+      p.gas = 1
+      p.brake = 0
+    end
   end
-  p.targetSpeed = targetSpeed
-  calculateSpeedControls(p, speed, targetSpeed, dt)
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
