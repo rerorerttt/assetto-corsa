@@ -952,7 +952,7 @@ local function drawMapInRect(q0,q1)
       local bp=toScreen(boundaryPoint(i+1,nextOff,state.recLine))
       if segVisible(a,bp) then ui.drawLine(a,bp,color,3) end
     end
-    if state.loopRoute and not state.recLine then
+    if state.loopRoute and not state.recLine and not state.recBounds then
       local left,right=boundsAt(n)
       local off=pass==1 and left or right
       local a=toScreen(boundaryPoint(n,off,false))
