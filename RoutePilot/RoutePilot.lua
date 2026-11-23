@@ -446,8 +446,10 @@ local function trySpawnTeleport(sim,dt)
       local laneOffset,twoLane=laneOffsetForCar(carIndex,laneSeg)
       local lanePosition=vec3(position.x-direction.z*laneOffset,position.y,
         position.z+direction.x*laneOffset)
+      -- The SDK direction is the car's forward vector: keep route order,
+      -- matching the original RoutePilot controller.
       local ok,result=pcall(physics.setAICarPosition,carIndex,
-        lanePosition,vec3(-direction.x,-direction.y,-direction.z))
+        lanePosition,direction)
       if ok and result~=false then
         moved=moved+1
         writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f",carIndex,
@@ -481,7 +483,7 @@ local function teleportHome(carIndex,car)
     local pos=vec3(node.x-dz*laneOffset-dx*4,node.y+0.1,
       node.z+dx*laneOffset-dz*4)
     if spotIsClear(pos,carIndex) then
-      local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
+      local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(dx,0,dz))
       if ok then
         state.p[carIndex]=nil
         writeLog("RESCUE id=%d node=%d offset=%d lane=%.2f",carIndex,i,k,laneOffset)
