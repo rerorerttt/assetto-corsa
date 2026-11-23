@@ -290,6 +290,196 @@ local function parseNodes(raw)
   return nil
 end
 
+
+------------------------------------------------------------
+-- STATIC TRACK COLLISION SCAN
+-- Cache records are comments in the route file; the XYZ parser ignores them.
+------------------------------------------------------------
+
+local OBSTACLE_SCAN_DIRECTIONS = {
+  { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+  { 0.7071, 0.7071 }, { 0.7071, -0.7071 },
+  { -0.7071, 0.7071 }, { -0.7071, -0.7071 },
+}
+local OBSTACLE_SCAN_HEIGHTS = { 0.55, 1.10, 1.65 }
+
+local function routeChecksum(nodes)
+  local hash = 2166136261
+  for i = 1, #nodes do
+    local n = nodes[i]
+    local x = math.floor(math.abs(n.x) * 1000)
+    local y = math.floor(math.abs(n.y) * 1000)
+    local z = math.floor(math.abs(n.z) * 1000)
+    hash = (hash * 31 + x + y * 3 + z * 7 + i) % 2147483647
+  end
+  return math.floor(hash)
+end
+
+local function parseObstacleCache(raw, nodes)
+  if type(raw) ~= "string" or type(nodes) ~= "table" then return false end
+  local version, checksum, expectedCount = string.match(
+    raw, "#RP_OBSTACLE_V1%s+(%d+)%s+(%d+)%s+(%d+)"
+  )
+  if tonumber(version) ~= CFG.SCAN_CACHE_VERSION or
+     tonumber(checksum) ~= routeChecksum(nodes) then
+    return false
+  end
+
+  local found = {}
+  for line in string.gmatch(raw, "[^\r\n]+") do
+    local idx, dir, height, distance, x, y, z, nx, ny, nz =
+      string.match(line,
+        "^#RP_OBS%s+(%d+)%s+(%d+)%s+([%-0-9%.]+)%s+([%-0-9%.]+)%s+([%-0-9%.]+)%s+([%-0-9%.]+)%s+([%-0-9%.]+)%s+([%-0-9%.]+)%s+([%-0-9%.]+)%s+([%-0-9%.]+)%s*$")
+    if idx then
+      found[#found + 1] = {
+        routeIndex = tonumber(idx), direction = tonumber(dir),
+        height = tonumber(height), distance = tonumber(distance),
+        x = tonumber(x), y = tonumber(y), z = tonumber(z),
+        nx = tonumber(nx), ny = tonumber(ny), nz = tonumber(nz),
+      }
+    end
+  end
+
+  if #found ~= tonumber(expectedCount) then return false end
+  state.obstacleMap = found
+  state.obstacleReady = true
+  state.obstacleScanStarted = true
+  return true
+end
+
+local function serializeRouteFile()
+  local data = serializeNodes(state.nodes)
+  if not state.obstacleReady then return data .. "\n" end
+
+  local lines = { data }
+  lines[#lines + 1] = string.format(
+    "#RP_OBSTACLE_V1 %d %d %d",
+    CFG.SCAN_CACHE_VERSION,
+    routeChecksum(state.nodes),
+    #state.obstacleMap
+  )
+  for i = 1, #state.obstacleMap do
+    local o = state.obstacleMap[i]
+    lines[#lines + 1] = string.format(
+      "#RP_OBS %d %d %.2f %.3f %.3f %.3f %.3f %.3f %.3f %.3f",
+      o.routeIndex, o.direction, o.height, o.distance,
+      o.x, o.y, o.z, o.nx, o.ny, o.nz
+    )
+  end
+  return table.concat(lines, "\n") .. "\n"
+end
+
+local function beginObstacleScan()
+  state.obstacleMap = {}
+  state.obstacleReady = false
+  state.obstacleScanCursor = 1
+  state.obstacleScanBest = {}
+  state.obstacleScanRays = 0
+  state.obstacleScanHits = 0
+  state.obstacleScanStarted = true
+  writeLog("OBSTACLE_SCAN_BEGIN points=%d rays=%d length=%.1f",
+    #state.nodes,
+    #state.nodes * #OBSTACLE_SCAN_DIRECTIONS * #OBSTACLE_SCAN_HEIGHTS,
+    CFG.SCAN_RAY_LENGTH)
+end
+
+local function saveObstacleCache()
+  local path = getLineFilePath()
+  if not io or not io.open then
+    writeLog("OBSTACLE_SCAN_SAVE_FAILED reason=io_unavailable")
+    return false
+  end
+  local ok, file = pcall(io.open, path, "w")
+  if not ok or not file then
+    writeLog("OBSTACLE_SCAN_SAVE_FAILED reason=open path=%s", tostring(path))
+    return false
+  end
+  local success = pcall(function()
+    file:write(serializeRouteFile())
+    file:close()
+  end)
+  if success then
+    writeLog("OBSTACLE_SCAN_SAVED path=%s obstacles=%d", path, #state.obstacleMap)
+  else
+    writeLog("OBSTACLE_SCAN_SAVE_FAILED reason=write")
+  end
+  flushLog()
+  return success
+end
+
+local function updateObstacleScan()
+  if not state.loaded or state.recording or state.obstacleReady or
+     not state.obstacleScanStarted then return end
+  if type(physics) ~= "table" or type(physics.raycastTrack) ~= "function" then
+    state.obstacleScanStarted = false
+    writeLog("OBSTACLE_SCAN_ABORT reason=raycastTrack_unavailable")
+    return
+  end
+
+  local heightsCount = #OBSTACLE_SCAN_HEIGHTS
+  local dirsCount = #OBSTACLE_SCAN_DIRECTIONS
+  local tasksPerPoint = heightsCount * dirsCount
+  local totalTasks = #state.nodes * tasksPerPoint
+  local budget = CFG.SCAN_RAYS_PER_FRAME
+
+  while budget > 0 and state.obstacleScanCursor <= totalTasks do
+    local task = state.obstacleScanCursor - 1
+    local pointIndex = math.floor(task / tasksPerPoint) + 1
+    local localTask = task % tasksPerPoint
+    local directionIndex = math.floor(localTask / heightsCount) + 1
+    local heightIndex = (localTask % heightsCount) + 1
+    local node = state.nodes[pointIndex]
+    local direction = OBSTACLE_SCAN_DIRECTIONS[directionIndex]
+    local height = OBSTACLE_SCAN_HEIGHTS[heightIndex]
+
+    local origin = vec3(node.x, node.y + height, node.z)
+    local ray = vec3(direction[1], 0, direction[2])
+    local hitPoint = vec3(0, 0, 0)
+    local hitNormal = vec3(0, 0, 0)
+    local ok, distance = pcall(
+      physics.raycastTrack,
+      origin, ray, CFG.SCAN_RAY_LENGTH,
+      hitPoint, hitNormal, false, false
+    )
+    state.obstacleScanRays = state.obstacleScanRays + 1
+
+    if ok and type(distance) == "number" and distance > 0.25 and
+       distance <= CFG.SCAN_RAY_LENGTH then
+      state.obstacleScanHits = state.obstacleScanHits + 1
+      local key = tostring(pointIndex) .. ":" .. tostring(directionIndex)
+      local previous = state.obstacleScanBest[key]
+      if not previous or distance < previous.distance then
+        state.obstacleScanBest[key] = {
+          routeIndex = pointIndex,
+          direction = directionIndex,
+          height = height,
+          distance = distance,
+          x = hitPoint.x, y = hitPoint.y, z = hitPoint.z,
+          nx = hitNormal.x, ny = hitNormal.y, nz = hitNormal.z,
+        }
+      end
+    end
+
+    if heightIndex == heightsCount then
+      local key = tostring(pointIndex) .. ":" .. tostring(directionIndex)
+      local hit = state.obstacleScanBest[key]
+      if hit then state.obstacleMap[#state.obstacleMap + 1] = hit end
+      state.obstacleScanBest[key] = nil
+    end
+
+    state.obstacleScanCursor = state.obstacleScanCursor + 1
+    budget = budget - 1
+  end
+
+  if state.obstacleScanCursor > totalTasks then
+    state.obstacleReady = true
+    state.status = string.format("Карта коллизий: %d объектов", #state.obstacleMap)
+    writeLog("OBSTACLE_SCAN_FINISH rays=%d hits=%d objects=%d",
+      state.obstacleScanRays, state.obstacleScanHits, #state.obstacleMap)
+    saveObstacleCache()
+  end
+end
+
 ------------------------------------------------------------
 -- SAVE ROUTE
 ------------------------------------------------------------
@@ -300,7 +490,7 @@ local function saveLine()
     return
   end
 
-  local data = serializeNodes(state.nodes)
+  local data = serializeRouteFile()
   local wroteFile = false
   local wroteStorage = false
 
@@ -330,6 +520,8 @@ local function saveLine()
   end
 
   if wroteFile or wroteStorage then
+    state.loaded = true
+    if not state.obstacleReady then beginObstacleScan() end
     state.status = string.format(
       "Сохранено: %d точек",
       #state.nodes
@@ -354,6 +546,7 @@ end
 
 local function loadLine()
   local loaded = nil
+  local rawData = nil
   local path = getLineFilePath()
 
   if io and io.open then
@@ -367,6 +560,7 @@ local function loadLine()
       end)
 
       if success then
+        rawData = raw
         loaded = parseNodes(raw)
       end
     end
@@ -379,6 +573,7 @@ local function loadLine()
     )
 
     if ok and raw then
+      rawData = raw
       loaded = parseNodes(raw)
     end
   end
@@ -387,6 +582,8 @@ local function loadLine()
     state.nodes = loaded
     state.p = {}
     state.loaded = true
+    state.obstacleReady = parseObstacleCache(rawData, loaded)
+    if not state.obstacleReady then beginObstacleScan() end
 
     if not state.spawnPerformed then
       state.spawnDone = false
@@ -776,8 +973,8 @@ local function newPersonality(carIndex)
   local p = {
     segIdx = 1,
 
-    cruiseSpeed = kmh / 3.6 * (0.94 + ((carIndex * 7) % 7) * 0.045),
-    paceMultiplier = 0.94 + ((carIndex * 7) % 7) * 0.045,
+    cruiseSpeed = kmh / 3.6 * (0.94 + ((carIndex * 3) % 7) * 0.045),
+    paceMultiplier = 0.94 + ((carIndex * 3) % 7) * 0.045,
 
     steer = 0,
     steerFiltered = 0,
@@ -2355,6 +2552,9 @@ function script.update(dt)
     addPoint(player.position)
   end
 
+  -- Build/load the static collision map incrementally without blocking the game.
+  updateObstacleScan()
+
   -- Teleport the AI grid once, before route-following starts.
   local startupReady = true
 
@@ -2415,8 +2615,10 @@ function windowMain(dt)
   ))
 
   ui.text(string.format(
-    "Автопилот: %s",
-    state.enabled and "ВКЛ" or "ВЫКЛ"
+    "Автопилот: %s | Коллизии: %s",
+    state.enabled and "ВКЛ" or "ВЫКЛ",
+    state.obstacleReady and tostring(#state.obstacleMap) or
+      (state.obstacleScanStarted and "сканирование" or "нет карты")
   ))
 
   if logger and logger.path then
@@ -2433,6 +2635,9 @@ function windowMain(dt)
       state.nodes = {}
       state.p = {}
       state.loaded = false
+      state.obstacleMap = {}
+      state.obstacleReady = false
+      state.obstacleScanStarted = false
       state.status = "Запись линии..."
     else
       state.status = "Записано точек: " .. #state.nodes
