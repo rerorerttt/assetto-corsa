@@ -26,6 +26,8 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 - `physics.setAIAggression` accepts 0–1; the SDK says 0.95 corresponds to 100% aggression after the launcher's multiplier.
 - `physics.setAICaution` accepts 0–16, with 1 as the default.
 - `physics.raycastTrack` returns a hit distance or -1 and can write the hit point and normal into supplied vectors.
+- `physics.setAIStopCounter(carIndex, 0)` clears CSP's post-incident AI brake wait; `physics.setAINoInput(carIndex, false, false)` restores normal AI input after a teleport.
+- `physics.setAIThrottleLimit(carIndex, 1.0)` removes a throttle cap; `physics.setAITopSpeed(carIndex, 1e9)` removes an artificial top-speed cap.
 - No permanent `fast_lane.ai`, `ac_start` or `ac_time` files are required for this runtime custom-spline path. RoutePilot writes a version-7 spline and passes its filename to `setAISpline`.
 
 ## Root causes found in the latest main-branch test
@@ -54,7 +56,7 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 - Route matching includes world height so cars on overlapping track levels do not get projected onto the wrong deck.
 - Cars prefer the rightmost valid lane, but the player's actual occupied corridor takes priority; if it blocks the right lane, AI chooses the next safe lane left or stays on the centreline if no lane fits. Only a faster follower can move left; the leader is never commanded to yield or slow. A shared reservation allows one active pass at a time. The pass begins with a 120 m trigger horizon and the follower does not return until at least 15 m ahead and the home lane is clear.
 - The map, lane selector, route/boundary recording controls, clear button and 3D line preview are already in the main RoutePilot window. Collision-mesh discovery/recording is deliberately disabled; the saved corridor and native CSP awareness are the safety mechanisms.
-- Spawn and recovery use `physics.setAICarPosition(index, position, nil)`. Stuck recovery searches forward for a free route position before teleporting.
+- Spawn and recovery use `physics.setAICarPosition(index, position, nil)`, then clear the AI stop counter and parked-input state. Stuck recovery searches forward for a free route position before teleporting.
 
 ## Current changes on this branch
 
@@ -64,7 +66,7 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 - Made route projection height-aware for multi-level tracks.
 - Replaced pace-sorted default lanes with a right-lane cruise / left-lane passing policy.
 - Increased pass lookahead and occupancy horizon for high-speed traffic, increased post-pass clearance and kept a single pass reservation and made initial lane assignment/player occupancy checks aware of the player's actual position.
-- Applied CSP's documented aggression value (0.95) and a reduced but nonzero AI caution (0.5).
+- Applied CSP's documented aggression value (0.95) and a reduced but nonzero AI caution (0.5); removed artificial throttle/top-speed caps and reset CSP's post-teleport stop/parked-input state.
 - Updated `README.md` and this file with the new model and validation caveat.
 
 ## Required in-game validation
