@@ -32,7 +32,7 @@ local CFG = {
   CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
   SLIP_START=0.09, SLIP_FULL=0.45, SLIP_DAMP_MIN_SPEED=8.0,
   SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
-  SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
+  SPAWN_GAP=25.0, SPAWN_MIN_GAP=18.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
@@ -449,38 +449,42 @@ local function sampleSpawnRoute(metrics,distance)
   end
   return nil,nil
 end
-local function spotIsClear(pos, exceptIndex)
+local function spotIsClear(pos, exceptIndex, ignored)
   local sim=ac.getSim()
   if not sim then return true end
+  local clearSq=CFG.SAFE_RESPAWN_CLEAR*CFG.SAFE_RESPAWN_CLEAR
   for i=0,sim.carsCount-1 do
-    if i~=exceptIndex then
+    if i~=exceptIndex and not (ignored and ignored[i]) then
       local other=ac.getCar(i)
       if other and other.isActive then
         local dx=other.position.x-pos.x
         local dz=other.position.z-pos.z
-        if dx*dx+dz*dz < CFG.SAFE_RESPAWN_CLEAR*CFG.SAFE_RESPAWN_CLEAR then
-          return false
-        end
+        if dx*dx+dz*dz < clearSq then return false end
       end
     end
   end
   return true
 end
--- Spawn teleport runs when the roster is stable; it NEVER blocks driving.
+
+-- Spawn only after every AI has accepted the generated native spline.
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone then return end
-  if not state.loaded or state.recLine or #state.nodes<2 then return end
+  if not state.loaded or not state.aiSplineBuilt or not state.aiSplinePath or
+     state.recLine or #state.nodes<3 then return end
+
   state.spawnWait=state.spawnWait+dt
   local aiCars={}
+  local ignored={}
   for i=1,sim.carsCount-1 do
     local car=ac.getCar(i)
-    if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
+    if car and car.isActive and car.isAIControlled then
+      aiCars[#aiCars+1]=i
+      ignored[i]=true
+    end
   end
   local roster=table.concat(aiCars,",")
   if #aiCars==0 then
-    if state.spawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
-      state.spawnDone=true
-    end
+    if state.spawnWait>=CFG.SPAWN_WAIT_TIMEOUT then state.spawnDone=true end
     return
   end
   if roster~=state.spawnLastRoster then
@@ -490,66 +494,117 @@ local function trySpawnTeleport(sim,dt)
   end
   state.spawnStable=state.spawnStable+dt
   if state.spawnStable<CFG.SPAWN_STABLE_TIME then return end
-  -- teleport (in parallel with driving; adopted cars keep their personality)
-  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
-    state.spawnDone=true; return
+
+  if not Driver or not Driver.isSplineReady then
+    state.status="Native AI driver недоступен"
+    return
   end
-  local metrics=buildSpawnRouteMetrics()
-  if not metrics then state.spawnDone=true; return end
-  local count=#aiCars
-  local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
-  if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
-  local startDistance=0
-  if metrics.loop then
-    local player=ac.getCar(0)
-    if player then
-      startDistance=findRouteDistanceAtPosition(player.position,metrics)+gap
-    else startDistance=gap end
-  end
-  local moved,failed=0,0
-  for order=1,count do
-    local carIndex=aiCars[order]
-    local position,direction=sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
-    if position and direction then
-      local ok,result=pcall(physics.setAICarPosition,carIndex,
-        position,vec3(-direction.x,-direction.y,-direction.z))
-      if ok and result~=false then
-        moved=moved+1
-        state.p[carIndex]=nil  -- reset personality for the new position
-      else failed=failed+1 end
-    else failed=failed+1 end
-  end
-  state.spawnDone=true
-  writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
-  flushLog()
-end
-local function teleportHome(carIndex,car)
-  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
-    return false
-  end
-  local n=#state.nodes
-  if n<2 then return false end
-  local bestI,bestD=1,math.huge
-  for i=1,n do
-    local d=flatDist(car.position,state.nodes[i])
-    if d<bestD then bestD,bestI=d,i end
-  end
-  for k=0,n-1 do
-    local i=((bestI-1+k)%n)+1
-    local node=state.nodes[i]
-    if spotIsClear(node,carIndex) then
-      local nxt=state.nodes[(i%n)+1]
-      local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
-      local pos=vec3(node.x-dx*4,node.y+0.1,node.z-dz*4)
-      local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
-      if ok then
-        state.p[carIndex]=nil
-        writeLog("RESCUE id=%d node=%d offset=%d",carIndex,i,k)
-        flushLog()
-      end
-      return ok
+  for _,carIndex in ipairs(aiCars) do
+    if not Driver.isSplineReady(carIndex) then
+      state.status="Загрузка native AI spline..."
+      return
     end
   end
+  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
+    state.status="CSP: physics.setAICarPosition недоступна"
+    state.spawnDone=true
+    writeLog("SPAWN_ABORT reason=setAICarPosition_unavailable")
+    flushLog()
+    return
+  end
+
+  local metrics=buildSpawnRouteMetrics()
+  if not metrics then
+    state.status="Ошибка: линия слишком короткая"
+    state.spawnDone=true
+    writeLog("SPAWN_ABORT reason=invalid_route")
+    flushLog()
+    return
+  end
+  local count=#aiCars
+  local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
+  if gap<CFG.SPAWN_MIN_GAP then
+    state.status="Недостаточно длины линии для безопасной расстановки"
+    state.spawnDone=true
+    writeLog("SPAWN_ABORT reason=route_too_short cars=%d route=%.1f gap=%.1f",count,metrics.length,gap)
+    flushLog()
+    return
+  end
+
+  local startDistance=gap
+  local player=ac.getCar(0)
+  if metrics.loop and player then
+    local playerDistance,lineError=findRouteDistanceAtPosition(player.position,metrics)
+    startDistance=playerDistance+gap
+    writeLog("SPAWN_ANCHOR player_line_error=%.2f route_distance=%.2f",lineError,playerDistance)
+  end
+
+  local moved,failed=0,0
+  local planned={}
+  writeLog("SPAWN_BEGIN cars=%d route=%.1f gap=%.1f start=%.1f nativeSpline=%s",
+    count,metrics.length,gap,startDistance,tostring(state.aiSplinePath))
+
+  for order=1,count do
+    local carIndex=aiCars[order]
+    local routeDistance=startDistance+(order-1)*gap
+    local position=sampleSpawnRoute(metrics,routeDistance)
+    local plannedClear=true
+    if position then
+      for j=1,#planned do
+        if flatDist(position,planned[j])<CFG.SAFE_RESPAWN_CLEAR*2 then
+          plannedClear=false
+          break
+        end
+      end
+    end
+    if position and plannedClear and spotIsClear(position,carIndex,ignored) then
+      local ok,result=pcall(physics.setAICarPosition,carIndex,position,nil)
+      if ok and result~=false then
+        moved=moved+1
+        planned[#planned+1]=position
+        if Driver.resetAfterTeleport then Driver.resetAfterTeleport(carIndex) end
+        writeLog("SPAWN_CAR id=%d order=%d routeDistance=%.1f pos=(%.2f,%.2f,%.2f) direction=AI_SPLINE",
+          carIndex,order,routeDistance,position.x,position.y,position.z)
+      else
+        failed=failed+1
+        writeLog("SPAWN_CAR_FAILED id=%d order=%d error=%s",carIndex,order,tostring(result))
+      end
+    else
+      failed=failed+1
+      writeLog("SPAWN_CAR_FAILED id=%d order=%d reason=%s",
+        carIndex,order,position and (plannedClear and "occupied" or "planned_overlap") or "invalid_sample")
+    end
+  end
+
+  state.spawnDone=true
+  state.spawnPerformed=true
+  state.status=string.format("Native AI: расставлено %d/%d, интервал %.0f м",moved,count,gap)
+  writeLog("SPAWN_FINISH moved=%d failed=%d total=%d gap=%.2f",moved,failed,count,gap)
+  flushLog()
+end
+
+local function teleportHome(carIndex,car)
+  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then return false end
+  local metrics=buildSpawnRouteMetrics()
+  if not metrics then return false end
+  local startDistance=findRouteDistanceAtPosition(car.position,metrics)
+  -- Never return a stuck car to its current node: search forward for a
+  -- genuinely empty section of the recorded route, then align to the AI spline.
+  for offset=18,metrics.length,12 do
+    local pos=sampleSpawnRoute(metrics,startDistance+offset)
+    if pos and spotIsClear(pos,carIndex) then
+      local ok,result=pcall(physics.setAICarPosition,carIndex,pos,nil)
+      if ok and result~=false then
+        if Driver and Driver.resetAfterTeleport then Driver.resetAfterTeleport(carIndex) end
+        writeLog("RESCUE id=%d offset=%.1f pos=(%.2f,%.2f,%.2f) direction=AI_SPLINE",
+          carIndex,offset,pos.x,pos.y,pos.z)
+        flushLog()
+        return true
+      end
+    end
+  end
+  writeLog("RESCUE_FAILED id=%d reason=no_clear_route_position",carIndex)
+  flushLog()
   return false
 end
 local function addPoint(pos)
