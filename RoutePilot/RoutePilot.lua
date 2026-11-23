@@ -1,21 +1,24 @@
--- RoutePilot.lua — v0.7.0 (CSP 0.3.2-preview2)
--- ROOT CAUSES FIXED:
---  * LINES IN WALLS: smoothLine() ran 3 passes EVERY load; each session the
---    closed loop shrank more until it drifted into the walls. Smoothing
---    removed entirely: the file keeps RAW points exactly as the player drove.
---  * FLOATING MAP: custom drawing in CSP windows uses window-local
---    coordinates; comfy_map draws in a fixed-size window. Now the map is a
---    FIXED rect reserved with ui.dummy and drawn in window-local coords —
---    part of the window layout, cannot detach when the window is dragged.
---  * Recording preview: while recording, the render shows existing nodes up
---    to 30 m AHEAD of the car (the driver sees where the line goes); data is
---    still written only under the car. The loop segment also renders only
---    within 30 m of the car.
---  * Width presets: buttons 1/2/3/4 cars (3/7/11/15 m corridor); default 1.
---  * Запись границ (bounds re-record from the player's spot, denied outside
---    current bounds, far edge keeps a passable minimum) — restored.
---  * Safe respawn: rescue scans forward along the line for a spot clear of
---    all cars by 8 m before teleporting.
+-- RoutePilot.lua — v0.8.0 (CSP 0.3.2-preview2)
+-- SDK REVISION RESULT:
+--  * "UI error" of v0.7.0: ui.getCursorPos()/ui.dummy() DO NOT EXIST in this
+--    SDK build (verified by search) — the window function threw every frame.
+--  * THE FLOATING MAP, ALL ALONG: comfy_map draws in WINDOW-LOCAL coordinates
+--    (ui.pushClipRect(0, ui.windowSize()), drawImage at window-local rect).
+--    ui.draw* inside an app window takes window-local coords; earlier
+--    versions used ui.getItemRectMin() (screen coords) — mismatch made the map
+--    float away from the window. Now: fixed map rect in window-local coords
+--    (0, MAP_TOP)..(windowSize), exactly the comfy_map pattern.
+--  * Only SDK-verified calls: ui.windowSize, ui.pushClipRect/popClipRect,
+--    ui.text, ui.button, ui.sameLine, ui.separator, ui.drawLine/drawRect/
+--    drawRectFilled/drawCircleFilled (all used by comfy_map/working builds).
+--  * World lines: the v0.6.0-proven render.on('main.track.transparent'), but
+--    always limited to a 30 m window around the player's car (first-lap view
+--    is no longer blocked by the loop; data is still written only under the
+--    car; while recording the view extends 30 m AHEAD of the car).
+--  * All planned UI present: width presets 1/2/3/4 cars (3/7/11/15 m, default
+--    1), Запись линии, Запись границ (from the player's spot, denied outside
+--    current bounds, far edge keeps >=3 m, smooth joints), Показать линии,
+--    Круг, Очистить, Сохранить, Загрузить.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -31,10 +34,9 @@ local CFG = {
   SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
-  MAP_W=400.0, MAP_H=380.0,
-  LINE_DRAW_STEP=3, DRAW_RANGE=600.0,
-  PREVIEW_AHEAD=30.0,
+  LINE_DRAW_STEP=3, PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
+  MAP_TOP=165.0,
 }
 local WIDTH_PRESETS = {3, 7, 11, 15}
 
@@ -203,6 +205,7 @@ local function loadLine()
   state.status="Линия не найдена"; state.loaded=false
   return false
 end
+-- GEOMETRY: raw points, NO smoothing (it cumulatively shrank the loop into walls)
 local function segmentCount()
   if state.loopRoute then return #state.nodes end
   return math.max(0,#state.nodes-1)
@@ -645,55 +648,56 @@ function script.update(dt)
   end
 end
 
--- 3D WORLD LINES. Recording preview: only existing nodes, up to 30 m AHEAD
--- of the car (data is written only under the car). Loop renders within 30 m.
+-- 3D WORLD LINES (v0.6.0-proven render.on path). Always limited to a window
+-- around the player's car: 8 m back .. 30 m ahead — the loop no longer
+-- blocks the view on the first lap; while recording you see 30 m ahead.
 render.on('main.track.transparent', function()
+  if not (state.showWorldLines or state.recLine or state.recBounds) then return end
   local n=#state.nodes
   if n<2 then return end
-  if not (state.showWorldLines or state.recLine or state.recBounds) then return end
   local ok=pcall(function()
-    local sim=ac.getSim()
-    if not sim then return end
     local player=ac.getCar(0)
     if not player then return end
-    local cam=sim.cameraPosition
     render.setDepthMode(render.DepthMode.Off)
-    local step=CFG.LINE_DRAW_STEP
+    local seg=select(1,findNearestSeg(player.position,1))
+    -- window: PREVIEW_BACK meters behind .. PREVIEW_AHEAD meters ahead
+    local fromI,toI=seg,seg
+    local dist=0
+    local i=seg
+    while dist<CFG.PREVIEW_AHEAD and (i%n)+1~=seg do
+      local a=state.nodes[i]
+      local b=state.nodes[(i%n)+1]
+      dist=dist+flatDist(a,b)
+      i=(i%n)+1
+      toI=i
+    end
+    local j0=seg
+    local back=0
+    while back<CFG.PREVIEW_BACK do
+      local prev=(j0-2)%n+1
+      back=back+flatDist(state.nodes[prev],state.nodes[j0])
+      j0=prev
+      fromI=prev
+    end
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
-    local fromI,toI=1,n
-    if state.recLine or state.recBounds then
-      local seg=select(1,findNearestSeg(player.position,1))
-      fromI=seg
-      local dist=0
-      local i=seg
-      toI=seg
-      while dist<CFG.PREVIEW_AHEAD do
-        local a=state.nodes[i]
-        local b=state.nodes[(i%n)+1]
-        dist=dist+flatDist(a,b)
-        i=(i%n)+1
-        toI=i
-        if i==seg then break end
-      end
-    end
-    for i=1,n,step do
-      if i>=fromI and i<=toI then
-        local j=((i+step-1)%n)+1
-        local a=state.nodes[i]; local b=state.nodes[j]
-        local midx,midz=(a.x+b.x)*0.5,(a.z+b.z)*0.5
-        local ddx,ddz=midx-cam.x,midz-cam.z
-        if ddx*ddx+ddz*ddz<CFG.DRAW_RANGE*CFG.DRAW_RANGE then
-          local la=state.nodes[((i-1)%n)+1]
-          local lx,lz=normalize2(b.x-la.x,b.z-la.z)
-          local al,ar=boundsAt(i)
-          render.debugLine(vec3(a.x,a.y+0.05,a.z),vec3(b.x,b.y+0.05,b.z),YELLOW)
-          render.debugLine(vec3(a.x-lz*al,a.y+0.05,a.z+lx*al),
-            vec3(b.x-lz*al,b.y+0.05,b.z+lx*al),RED)
-          render.debugLine(vec3(a.x-lz*ar,a.y+0.05,a.z+lx*ar),
-            vec3(b.x-lz*ar,b.y+0.05,b.z+lx*ar),RED)
-        end
-      end
+    -- iterate the window from fromI to toI (loop-aware)
+    local i2=fromI
+    local count=0
+    local maxSteps=n
+    while count<=maxSteps do
+      count=count+1
+      local nx=state.nodes[(i2%n)+1]
+      local node=state.nodes[i2]
+      local lx,lz=normalize2(nx.x-node.x,nx.z-node.z)
+      local al,ar=boundsAt(i2)
+      render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
+      render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
+        vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
+      render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
+        vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+      if i2==toI then break end
+      i2=(i2%n)+1
     end
   end)
   if not ok then
@@ -701,8 +705,8 @@ render.on('main.track.transparent', function()
   end
 end)
 
--- MAP: fixed rect reserved with ui.dummy, drawn in WINDOW-LOCAL coordinates
--- (comfy_map style). Part of the window layout — cannot detach on drag.
+-- MAP: comfy_map pattern — WINDOW-LOCAL coordinates, clip to the window.
+-- Fixed rect: (0, MAP_TOP)..(windowSize). No getItemRectMin/getCursorPos.
 local function computeMapBounds()
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
   for i=1,#state.nodes do
@@ -725,7 +729,6 @@ local function computeMapBounds()
   return {minX=minX,maxX=maxX,minZ=minZ,maxZ=maxZ}
 end
 local function drawMapInRect(q0,q1)
-  if #state.nodes<2 then return end
   local b=computeMapBounds()
   if not b then return end
   ui.drawRectFilled(q0,q1,rgbm(0.08,0.08,0.10,1),4)
@@ -852,12 +855,25 @@ function windowMain(dt)
     ui.sameLine(0,4)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
     ui.separator()
-    local q0=ui.getCursorPos()
-    ui.dummy(vec2(CFG.MAP_W,CFG.MAP_H))
-    local q1=vec2(q0.x+CFG.MAP_W,q0.y+CFG.MAP_H)
-    drawMapInRect(q0,q1)
+    -- MAP: window-local coordinates (comfy_map pattern), fixed rect below the controls
+    if #state.nodes>=2 then
+      local ws=ui.windowSize()
+      if ws.y>CFG.MAP_TOP+60 then
+        if ui.pushClipRect and ui.popClipRect then
+          ui.pushClipRect(vec2(0,0),ws)
+        end
+        drawMapInRect(vec2(0,CFG.MAP_TOP),vec2(ws.x,ws.y))
+        if ui.pushClipRect and ui.popClipRect then
+          ui.popClipRect()
+        end
+      end
+    else
+      ui.text("Нет линии — нажмите «Запись линии»")
+    end
   end)
-  if not okDraw then pcall(ui.text,"UI error") end
+  if not okDraw then
+    pcall(ui.text,"UI error")
+  end
 end
 if ac.onRelease then
   ac.onRelease(function()
@@ -869,5 +885,5 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.7.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.8.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
