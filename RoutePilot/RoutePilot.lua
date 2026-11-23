@@ -780,6 +780,53 @@ local function boundaryPoint(index, offset, partial)
   return vec3(cur.x-tz*offset,cur.y+0.06,cur.z+tx*offset)
 end
 
+-- NFS-style corner guidance: a short wall of chevrons spans the road and
+-- follows the local route tangent. Only the upcoming section is rendered.
+local function drawCornerArrows(startSeg,partial,maxDistance)
+  local n=#state.nodes
+  local count=segmentCount()
+  if n<3 or count<3 then return end
+  local seg=startSeg
+  local travelled,nextArrow=0,0
+  for _=1,count do
+    if partial and seg>=n then break end
+    local prevIndex=(seg-2)%n+1
+    local nextIndex=seg%n+1
+    local prev,cur,nxt=state.nodes[prevIndex],state.nodes[seg],state.nodes[nextIndex]
+    local ax,az=cur.x-prev.x,cur.z-prev.z
+    local bx,bz=nxt.x-cur.x,nxt.z-cur.z
+    local la,lb=math.sqrt(ax*ax+az*az),math.sqrt(bx*bx+bz*bz)
+    local turn=0
+    if la>0.05 and lb>0.05 then
+      local dot=clamp((ax*bx+az*bz)/(la*lb),-1,1)
+      turn=math.acos(dot)
+    end
+    if turn>0.06 and travelled>=nextArrow then
+      local tx,tz=normalize2(bx,bz)
+      local rx,rz=-tz,tx
+      local left,right=boundsAt(seg)
+      local offset=left+0.8
+      while offset<=right-0.8 do
+        local center=vec3(cur.x+rx*offset,cur.y+1.25,cur.z+rz*offset)
+        local tip=vec3(center.x+tx*1.25,center.y,center.z+tz*1.25)
+        local back=vec3(center.x-tx*0.75,center.y,center.z-tz*0.75)
+        local wingL=vec3(tip.x-tx*0.75+rx*0.65,tip.y,tip.z-tz*0.75+rz*0.65)
+        local wingR=vec3(tip.x-tx*0.75-rx*0.65,tip.y,tip.z-tz*0.75-rz*0.65)
+        local color=rgbm(0.05,0.65,1.0,0.95)
+        render.debugLine(back,tip,color)
+        render.debugLine(tip,wingL,color)
+        render.debugLine(tip,wingR,color)
+        offset=offset+2.4
+      end
+      nextArrow=travelled+6.0
+    end
+    local d=flatDist(cur,nxt)
+    travelled=travelled+d
+    if travelled>=maxDistance then break end
+    seg=nextIndex
+  end
+end
+
 render.on('main.track.transparent', function()
   local n=#state.nodes
   if n<2 then return end
@@ -844,6 +891,7 @@ render.on('main.track.transparent', function()
       if i2==toI then break end
       i2=nextIndex
     end
+    drawCornerArrows(seg,partial,partial and 35.0 or 120.0)
   end)
   if not ok then
     writeLog("DRAW3D_ERROR err=%s",tostring(err))
