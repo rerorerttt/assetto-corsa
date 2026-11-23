@@ -21,8 +21,8 @@ Last updated: 2026-11-24
 ## Lane changes and traffic safety
 
 - Cars inspect all active cars, including the player, using their position relative to the current route tangent.
-- A closing car requests a lane change at approximately 10 m or earlier when time-to-collision falls below the configured threshold.
-- A lane change is permitted only when the adjacent lane's forward and rear clearance windows and the swept transition corridor are clear. Other AI cars' target offsets count as lane reservations to reduce simultaneous conflicting merges.
+- A closing car requests a lane change at approximately 10 m or earlier when time-to-collision falls below 3 seconds.
+- A lane change is permitted only when the adjacent lane's forward and rear clearance windows and the swept transition corridor are clear. Other AI cars' target offsets count as lane reservations to reduce simultaneous conflicting merges. The destination is rechecked during the 2.3-second transition; if it becomes occupied, the car aborts back toward its original lane.
 - Lane changes interpolate smoothly between the existing lane centres. Cars continue following the recorded route and stay in the new lane until another obstacle requires a change.
 - If the adjacent lane is occupied, the car remains in its current lane and reduces speed using the leader's speed, available gap and configured braking deceleration. It retries on later updates instead of forcing a merge.
 - Traction control remains enabled where CSP exposes the per-car API; driven-wheel slip telemetry and throttle limiting remain active. Throttle is cut while braking.
@@ -38,8 +38,8 @@ Last updated: 2026-11-24
 ## Validation status
 
 - Source changes are committed to the working branch only; `main` remains untouched.
-- Static source review is still required after the lane-change implementation. No claim of in-game validation is made.
-- Assetto Corsa with CSP 0.3.2-preview2 has not been run in this editing session.
+- Static Lua block and delimiter checks pass for `RoutePilot.lua` and `driver.lua`; obsolete 40 km/h targets and the previous fixed-speed lane branch are absent. No claim of in-game validation is made.
+- Assetto Corsa with CSP 0.3.2-preview2 has not been run in this editing session; runtime behavior remains unverified.
 
 ## Next runtime checks
 
