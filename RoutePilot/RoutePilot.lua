@@ -148,9 +148,9 @@ end
 
 local function signedAngle(ax, az, bx, bz)
   local dot = clamp(ax * bx + az * bz, -1, 1)
-  -- AC's normalized steering input is positive for a left turn.
-  -- With forward along +Z, the conventional X/Z cross product gives
-  -- positive angles for targets to the vehicle's left (-X).
+  -- In this trace, positive normalized override input rotates the car
+  -- toward -X when its forward vector is +Z. Keep the target-angle sign
+  -- aligned with that observed steering convention.
   local cross = ax * bz - az * bx
 
   return math.atan2(cross, dot)
