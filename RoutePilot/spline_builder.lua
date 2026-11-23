@@ -69,20 +69,19 @@ local function curvatureAt(nodes, index)
   return curvature, 1 / curvature
 end
 
-local function surfaceNormal(pos)
-  local hit = vec3()
-  local normal = vec3(0, 1, 0)
+local function snapSurface(pos)
+  local snapped=vec3(pos.x,pos.y,pos.z)
+  local normal=vec3(0,1,0)
   if physics and physics.raycastTrack then
-    local ok, distance = pcall(
+    pcall(
       physics.raycastTrack,
-      vec3(pos.x, pos.y + 8.0, pos.z),
-      DOWN, 20.0, hit, normal
+      vec3(pos.x,pos.y+10.0,pos.z),
+      DOWN,20.0,snapped,normal
     )
-    if not ok or type(distance) ~= 'number' or distance < 0 then
-      normal:set(UP)
-    end
   end
-  return normal
+  -- Match AISplineEditor: snap to the track surface and lift 0.3 m.
+  snapped.y=snapped.y+0.3
+  return snapped,normal
 end
 
 local function sideWidths(boundsL, boundsR, index)
@@ -113,17 +112,22 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
     local distances = {}
     local speeds = {}
     local radii = {}
+    local aiNodes, normals = {}, {}
+    for i=1,count do
+      aiNodes[i],normals[i]=snapSurface(nodes[i])
+      nodes[i].y=aiNodes[i].y
+    end
     local maxSpeed = math.max(MIN_SPEED_KMH, tonumber(maxSpeedKmh) or 300.0) / 3.6
 
     for i = 1, count do
       local nextIndex = i % count + 1
-      local d = fullDistance(nodes[i], nodes[nextIndex])
+      local d = fullDistance(aiNodes[i], aiNodes[nextIndex])
       if d < 0.05 then
         error(string.format('duplicate or collapsed route segment at point %d', i))
       end
       distances[i] = d
 
-      local curvature, radius = curvatureAt(nodes, i)
+      local curvature, radius = curvatureAt(aiNodes, i)
       radii[i] = radius
       local v = curvature > 0 and math.sqrt(MAX_LATERAL_ACCEL / curvature) or maxSpeed
       speeds[i] = math.max(MIN_SPEED_KMH / 3.6, math.min(maxSpeed, v))
@@ -151,7 +155,7 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
       local distance = distances[i]
 
       local point = ffi.new(splinePoint)
-      point.pos:set(cur)
+      point.pos:set(aiNodes[i])
       point.length = totalLength
       point.payloadIndex = i - 1
 
@@ -164,9 +168,9 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
       payload.sideLeft, payload.sideRight = sideWidths(boundsL, boundsR, i)
       payload.camber = 0.0
       payload.direction = 0.0
-      payload.normal:set(surfaceNormal(cur))
+      payload.normal:set(normals[i])
       payload.length = distance
-      payload.forwardVector:set(nxt):sub(cur):scale(1 / distance)
+      payload.forwardVector:set(aiNodes[nextIndex]):sub(aiNodes[i]):scale(1 / distance)
       payload.tag = 0.0
       payload.grade = 0.0
 
