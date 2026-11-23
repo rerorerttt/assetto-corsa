@@ -73,7 +73,7 @@ Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 - The map uses the same averaged-tangent boundary vertices as the 3D overlay. No artificial pixel separation is added to the red lines.
 - During route recording, 3D lines preview the existing route a short distance ahead and behind the car without drawing the unfinished end-to-start closure. A completed route can be displayed at full distance.
 - The map's 1/2/3/4-lane selector shows the active preset. The speed and following-distance sliders and the AI-disable button are absent.
-- NFS Underground-style large corner-arrow walls are not implemented yet.
+- The 3D overlay draws short upcoming walls of blue chevrons across corners, aligned with the local route tangent. During recording, arrow rendering is limited to the preview range to avoid drawing the unfinished closure.
 
 ## Files changed in RoutePilot 1.0
 
