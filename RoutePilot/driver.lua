@@ -411,7 +411,7 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
     end
   end
 
-  if front and p.trafficBlocked then
+  if front and (p.trafficBlocked or p.laneChangeAborting) then
     local available = math.max(0, front.gap - LANE_SAFETY_GAP)
     local safeSpeed = math.sqrt(front.speed * front.speed +
       2 * CFG.BRAKE_ACCEL * available)
