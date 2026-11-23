@@ -9,7 +9,7 @@ Implementation: two independent native CSP AI lane splines
 1. The player records one closed centre route and its left/right corridor limits.
 2. `spline_builder.lua` writes native version-7 CSP AI spline files using the exact structure from `AISplineEditor/AISpline.lua`.
 3. For the 3 m preset, one centered spline is generated. For 7/11/15 m presets, two distinct lane-centre splines are generated at offsets `-width/4` and `+width/4`.
-4. Odd AI car indices use the left/fast spline; even indices use the right/slow spline. The assignment is stable for the life of the car and is not reconsidered based on traffic.
+4. Odd AI car indices use the right/slow spline; even indices use the left/fast spline. This places the first AI on the slow lane and the second AI behind it on the fast lane, so the first natural pass is from left. The assignment is stable for the life of the car and is not reconsidered based on traffic.
 5. The right spline contains a 40 km/h speed target and `physics.setAITopSpeed(index, 40)` supplies a hard top-speed ceiling. The left spline uses curvature-derived speed hints with a 1000 km/h hint ceiling and `physics.setAITopSpeed(index, 1e9)` to remove the top-speed restriction.
 6. CSP native AI owns steering, throttle, braking, clutch and gearbox. RoutePilot no longer calculates pass gaps, checks lane occupancy, reserves passing corridors, changes spline offsets or issues traffic-related braking.
 
