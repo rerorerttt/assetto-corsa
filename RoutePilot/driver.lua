@@ -51,12 +51,14 @@ function Driver.setup(cfg, st, helpers)
 end
 
 local function newPersonality(carIndex)
-  local isLeftFast = carIndex % 2 == 1
+  local laneOffset, twoLane = H.laneOffset(carIndex, 1)
+  local laneRole = not twoLane and "SINGLE_40" or
+    (laneOffset > 0 and "LEFT_FAST" or "RIGHT_40")
   local p = {
     segIdx = 1,
-    laneRole = isLeftFast and "LEFT_FAST" or "RIGHT_40",
-    laneOffset = 0,
-    twoLane = false,
+    laneRole = laneRole,
+    laneOffset = laneOffset,
+    twoLane = twoLane,
     steer = 0,
     steerFiltered = 0,
     gas = 0,
@@ -137,7 +139,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.laneOffset = laneOffset
   p.twoLane = twoLane
   p.laneRole = not twoLane and "SINGLE_40" or
-    (carIndex % 2 == 1 and "LEFT_FAST" or "RIGHT_40")
+    (laneOffset > 0 and "LEFT_FAST" or "RIGHT_40")
 
   local lookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE, LOOKAHEAD_MAX)
@@ -221,7 +223,7 @@ function Driver.update(carIndex, car, dt)
   local targetSpeed
   if not p.twoLane then
     targetSpeed = RIGHT_SPEED
-  elseif carIndex % 2 == 0 then
+  elseif p.laneOffset < 0 then
     targetSpeed = RIGHT_SPEED
   else
     targetSpeed = planFastLaneSpeed(p)
