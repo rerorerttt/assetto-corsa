@@ -8,50 +8,41 @@ Last updated: 2026-11-24
 - Base: `main` at `fcf5b04bb767638b90a7fc1ed3a069a54089aeac`
 - Pull request: [#4 — deterministic independent two-lane AI traffic](https://github.com/rerorerttt/assetto-corsa/pull/4)
 - `main` has not been modified.
-- The existing RoutePilot interface, route recording, boundary recording, route/bounds save and load, map, world-line drawing and logger are retained.
+- Existing route recording, boundary recording, route/bounds save and load, map, world-line drawing and logger are retained.
 
-## Traffic rules
+## Traffic and speed model
 
-- Active AI cars are assigned in roster order: first, third, fifth, etc. to the left/fast lane; second, fourth, sixth, etc. to the right/40 km/h lane.
-- Assignments are stored by car index and remain stable while cars are temporarily inactive. Newly appearing cars are assigned to the less populated active lane.
-- A recorded corridor narrower than 6 m is treated as one lane: offset 0 m and target speed 40 km/h for all AI cars.
-- A corridor at least 6 m wide uses fixed lane offsets of +1.75 m (left/fast) and -1.75 m (right/40 km/h), clamped to the recorded boundaries.
-- Right lane target: 40 km/h using PI speed control.
-- Left lane: no fixed speed ceiling. It uses full throttle when no corner requires braking; the route-curvature planner supplies a temporary target speed only when a corner is ahead.
-- Cars do not sense or react to other cars during normal driving. No following, yielding, overtaking decisions or inter-car braking. The faster left lane passes the slower right lane naturally.
-- Steering uses a filtered, rate-limited look-ahead target on the assigned lane offset.
-- Startup placement and stuck recovery both place cars at their lane offset.
-- Before the initial spawn, route point order is checked against the player's forward vector. If the player is on the recorded route and the dot product is negative, route points are reversed and signed bounds are mirrored (`newLeft = -oldRight`, `newRight = -oldLeft`), so the lane axis follows actual travel direction.
-- Spawn and recovery now pass the negated route tangent to `physics.setAICarPosition()`. This is an empirical correction for the observed session where passing the recorded tangent directly made cars face against the route and rotate after spawning. `SPAWN_LANE` logs both vectors so the next run can confirm the heading.
+- AI cars are initially distributed alternately between physical LEFT and RIGHT lanes. In the current CSP spawn coordinate basis, negative route-relative lateral offset is physical LEFT; spawn labels, driver roles and map indicators use that same convention.
+- Corridors at least 6 m wide use two lane centres, normally 1.75 m from the route centreline. Narrower corridors remain single-file.
+- Neither lane has a fixed speed limit. With no corner or traffic constraint, the controller requests full throttle. Actual maximum speed is left to the car's powertrain, gearing, drag and grip.
+- Both lanes use the same curvature-based corner-speed planner. The planning horizon expands with speed and estimated stopping distance; braking is based on the corner's curvature and distance.
+- The speed controller no longer assigns a 40 km/h target to either lane.
+
+## Lane changes and traffic safety
+
+- Cars inspect all active cars, including the player, using their position relative to the current route tangent.
+- A closing car requests a lane change at approximately 10 m or earlier when time-to-collision falls below the configured threshold.
+- A lane change is permitted only when the adjacent lane's forward and rear clearance windows and the swept transition corridor are clear. Other AI cars' target offsets count as lane reservations to reduce simultaneous conflicting merges.
+- Lane changes interpolate smoothly between the existing lane centres. Cars continue following the recorded route and stay in the new lane until another obstacle requires a change.
+- If the adjacent lane is occupied, the car remains in its current lane and reduces speed using the leader's speed, available gap and configured braking deceleration. It retries on later updates instead of forcing a merge.
+- Traction control remains enabled where CSP exposes the per-car API; driven-wheel slip telemetry and throttle limiting remain active. Throttle is cut while braking.
 
 ## SDK and heading
 
-Checked the SDK in `lua-sdk/ac_apps/README.md`:
 - `ac.overrideCarControls(carIndex)` returns `ac.CarControlsInput`.
 - `physics.setAICarPosition(carIndex, pos, dir)` accepts a direction vector; `nil` aligns to the AI spline.
 - `physics.preventAIFromRetiring(carIndex)` keeps active AI cars from retiring when called periodically.
-
-- `physics.setAssists({tractionControl='on'}, carIndex)` is documented for per-car assists. The driver applies it once per AI car, then reads driven-wheel `slipRatio` from `car.wheels` and limits throttle if wheelspin rises.
-- Steering lookahead and rate limits are more conservative; throttle rise is ramped, wheelspin throttle cut is faster, and the right-lane PI integral range is expanded after the previous log showed a 35.5 km/h plateau.
-
-## Repository track data
-
-`RoutePilot/line_nevadadrift_bounds.txt` on `main` contains 230 entries, each with bounds `-3.50 3.50` (7.00 m total), matching the two-lane layout.
+- `physics.setAssists({tractionControl='on'}, carIndex)` is used for per-car traction control.
+- Spawn and recovery continue to pass the empirically corrected negated route tangent. The next runtime log must confirm positive `HEADING_DOT` and that the physical LEFT/RIGHT labels match the displayed positions.
 
 ## Validation status
 
-- Static block and delimiter-balance checks passed for `RoutePilot.lua` and `driver.lua`.
-- Confirmed the new driver contains no car-following, leader sensing or overtaking logic.
-- Confirmed existing UI, route recording, bounds recording, map and world-line hooks remain present.
-- Static review only after the latest controller changes; not yet run inside Assetto Corsa with CSP 0.3.2-preview2. Do not claim in-game validation. Confirm the `ROUTE_DIRECTION_OK/REVERSED` event, `HEADING_DOT` near +1, left-fast/right-40 physical placement, `WHEEL_SLIP` and `TC_FACTOR` response, stable 40 km/h speed hold, and smooth steering in a live session.
+- Source changes are committed to the working branch only; `main` remains untouched.
+- Static source review is still required after the lane-change implementation. No claim of in-game validation is made.
+- Assetto Corsa with CSP 0.3.2-preview2 has not been run in this editing session.
 
 ## Next runtime checks
 
-1. Start a session with the saved 7 m Nevada Drift bounds and at least four AI cars.
-2. Confirm the log reports `ROUTE_DIRECTION_OK` or `ROUTE_DIRECTION_REVERSED` appropriately, then confirm cars appear at +1.75 m (left/fast) and -1.75 m (right/40 km/h) with `HEADING_DOT` positive and near +1.
-3. Confirm right-lane cars settle at 40 km/h and remain there; inspect `WHEEL_SLIP` and `TC_FACTOR` during launches.
-4. Confirm left-lane cars accelerate beyond 40 km/h, brake only for route curvature and pass right-lane cars without changing lane.
-5. Repeat with the 3 m width preset: all AI cars should stay on the centreline at 40 km/h.
-6. Inspect `routepilot_trace.txt` for `LANE_ASSIGN`, `SPAWN_LANE`, `CAR_INIT`, `CAR=` telemetry and any `DRIVER_ERROR` entries.
+Use the saved 7 m corridor with at least four AI cars. Confirm the physical LEFT/RIGHT spawn positions, then observe cars accelerating without a fixed straight-line speed target, braking before corners, initiating a lane change when closing on a leader, rejecting a merge when the adjacent lane is occupied, and braking safely while waiting. Inspect `LANE_CHANGE_START`, `LANE_CHANGE_DONE`, `TRAFFIC_GAP`, `TRAFFIC_BLOCKED`, `TARGET`, `GAS`, `BRAKE`, `WHEEL_SLIP`, `TC_FACTOR`, `HEADING_DOT` and any `DRIVER_ERROR` entries. Repeat on a narrow single-file corridor to confirm that cars remain on the centreline and still have no artificial 40 km/h cap.
 
 Do not merge PR #4 until these runtime checks pass.
