@@ -36,4 +36,4 @@ Read `DEVELOPMENT.md` before changing the coordinator or obstacle cache. It cont
 
 ## Startup compatibility
 
-The main window callback is registered as `script.windowMain(dt)` in accordance with the CSP Lua Apps SDK. The per-frame controller remains registered as `script.update(dt)`.
+The main-window callback is restored to the pre-regression global `windowMain(dt)` declaration. Do not change its registration form again without a verified in-game reproduction and confirmation against the exact CSP runtime version.
