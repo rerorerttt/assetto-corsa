@@ -1611,7 +1611,7 @@ local function updateTrafficCoordinator(sim, dt)
       flatDist(state.nodes[segment], getSegmentEnd(segment, #state.nodes))
   end
 
-  local infos = {
+  local infos = {}
   local plans = {}
 
   -- Build one consistent snapshot of every active car, including the player.
@@ -2481,11 +2481,6 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
   end
 
   local fx, fz = normalize2(car.look.x, car.look.z)
-  local origin = vec3(
-    safeNumber(car.position.x),
-    safeNumber(car.position.y) + 0.85,
-    safeNumber(car.position.z)
-  )
   -- Side and forward fan at two heights: low rays catch barriers and
   -- curbs; high rays catch posts and vertical wall faces.
   local angles = { -1.15, -0.65, -0.25, 0, 0.25, 0.65, 1.15 }
