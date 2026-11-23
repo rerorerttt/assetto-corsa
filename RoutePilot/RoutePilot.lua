@@ -2421,27 +2421,40 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
     safeNumber(car.position.y) + 0.85,
     safeNumber(car.position.z)
   )
-  -- Wider fan: the previous +/- 30-degree rays missed walls and posts
-  -- alongside a car, especially after it had already reached the edge.
-  local angles = { -1.15, -0.82, -0.48, -0.24, 0, 0.24, 0.48, 0.82, 1.15 }
+  -- Side and forward fan at two heights: low rays catch barriers and
+  -- curbs; high rays catch posts and vertical wall faces.
+  local angles = { -1.15, -0.65, -0.25, 0, 0.25, 0.65, 1.15 }
+  local heights = { 0.45, 1.45 }
   local distances = {}
   local rayLength = 15.0
 
   for i = 1, #angles do
-    local angle = angles[i]
-    local c, sn = math.cos(angle), math.sin(angle)
-    local direction = vec3(
-      fx * c - fz * sn,
-      0,
-      fx * sn + fz * c
-    )
-    distances[i] = getTrackRayDistance(origin, direction, rayLength) or rayLength
+    distances[i] = rayLength
   end
 
-  local center = distances[5]
-  local rightClear = math.min(distances[1], distances[2], distances[3], distances[4])
-  local leftClear = math.min(distances[6], distances[7], distances[8], distances[9])
-  local forwardClear = math.min(distances[4], center, distances[6])
+  for h = 1, #heights do
+    local rayOrigin = vec3(
+      safeNumber(car.position.x),
+      safeNumber(car.position.y) + heights[h],
+      safeNumber(car.position.z)
+    )
+    for i = 1, #angles do
+      local angle = angles[i]
+      local c, sn = math.cos(angle), math.sin(angle)
+      local direction = vec3(
+        fx * c - fz * sn,
+        0,
+        fx * sn + fz * c
+      )
+      local hitDistance = getTrackRayDistance(rayOrigin, direction, rayLength) or rayLength
+      distances[i] = math.min(distances[i], hitDistance)
+    end
+  end
+
+  local center = distances[4]
+  local rightClear = math.min(distances[1], distances[2], distances[3])
+  local leftClear = math.min(distances[5], distances[6], distances[7])
+  local forwardClear = math.min(distances[3], center, distances[5])
   local correction = 0
   local speed = math.max(0, safeNumber(car.speedMs))
 
