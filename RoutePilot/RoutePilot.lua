@@ -27,10 +27,10 @@ local CFG = {
   SLIP_START = 0.09,
   SLIP_FULL = 0.38,
 
-  MAX_LATERAL_ACCEL = 10.5,
-  LATERAL_ACCEL_LIMIT = 16.0,
+  MAX_LATERAL_ACCEL = 12.5,
+  LATERAL_ACCEL_LIMIT = 18.0,
 
-  BRAKE_ACCEL = 8.5,
+  BRAKE_ACCEL = 10.0,
   MAX_BRAKE = 0.90,
   MAX_GAS = 1.0,
 
@@ -1372,6 +1372,10 @@ local function updatePassingPlan(carIndex, car, p, targetSpeed, dt)
         p.passState = "returning"
         writeLog("PASS_ABORT car=%d leader=%s reason=%s",
           carIndex, tostring(p.passLeader), forward == nil and "leader_lost" or "timeout")
+      elseif safeNumber(car.wheelsOutside, 0) > 0 then
+        p.passState = "returning"
+        writeLog("PASS_ABORT car=%d leader=%d reason=track_limits",
+          carIndex, p.passLeader)
       elseif not laneClear then
         p.passState = "returning"
         writeLog("PASS_ABORT car=%d leader=%d blocker=%d reason=left_lane_occupied",
@@ -1385,7 +1389,7 @@ local function updatePassingPlan(carIndex, car, p, targetSpeed, dt)
 
     if p.passState == "passing" then
       p.passOffset = lerp(p.passOffset, CFG.PASS_LEFT_OFFSET,
-        clamp(dt * 1.8, 0, 1))
+        clamp(dt * 4.0, 0, 1))
       local boost = math.min(p.cruiseSpeed + CFG.PASS_BOOST,
         state.speedMax / 3.6 + CFG.PASS_BOOST)
       targetSpeed = math.max(targetSpeed, boost)
