@@ -1675,6 +1675,17 @@ local function updateTrafficCoordinator(sim, dt)
             CFG.TRAFFIC_OFFSET, CFG.TRAFFIC_OFFSET)
         end
       end
+    elseif a and old and old.passTargetIndex ~= nil and old.passRole == "cross_go" then
+      local b = infos[old.passTargetIndex]
+      local bp = b and b.p
+      if b and bp and bp.passTargetIndex == i and bp.passRole == "cross_yield" then
+        local dx = b.x - a.x
+        local dz = b.z - a.z
+        local distance = math.sqrt(dx * dx + dz * dz)
+        if distance < 24.0 then
+          reservePair(a, b, "cross_go", "cross_yield", 0, CFG.TRAFFIC_OFFSET)
+        end
+      end
     end
   end
 
