@@ -1539,6 +1539,20 @@ local function trafficLaneIsClear(info, infos, plans, targetIndex, offset)
     end
   end
 
+  -- Reject an overtake corridor that intersects a cached static track obstacle.
+  if state.obstacleReady then
+    local candidateY = safeNumber(info.car.position.y)
+    for i = 1, #state.obstacleMap do
+      local obstacle = state.obstacleMap[i]
+      local dx = obstacle.x - candidateX
+      local dz = obstacle.z - candidateZ
+      if math.abs(obstacle.y - candidateY) < 2.2 and
+         dx * dx + dz * dz < 2.0 * 2.0 then
+        return false
+      end
+    end
+  end
+
   return true
 end
 
@@ -1780,6 +1794,48 @@ local function updateTrafficCoordinator(sim, dt)
                     role = "yield_player",
                     offset = CFG.TRAFFIC_OFFSET,
                   }
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- Crossing-path conflicts (including 90-degree route intersections) are
+  -- assigned a deterministic right-of-way before the cars reach the crossing.
+  for i = 1, sim.carsCount - 1 do
+    local a = infos[i]
+    if a and a.isAI and not plans[i] then
+      for j = i + 1, sim.carsCount - 1 do
+        local b = infos[j]
+        if b and b.isAI and not plans[j] then
+          local headingDot = a.hx * b.hx + a.hz * b.hz
+          if headingDot >= -0.55 and headingDot <= 0.72 then
+            local dx = b.x - a.x
+            local dz = b.z - a.z
+            local rvx = b.vx - a.vx
+            local rvz = b.vz - a.vz
+            local rv2 = rvx * rvx + rvz * rvz
+            if rv2 > 1.0 then
+              local tClosest = -(dx * rvx + dz * rvz) / rv2
+              if tClosest > 0.35 and tClosest < 5.0 then
+                local cx = dx + rvx * tClosest
+                local cz = dz + rvz * tClosest
+                local closest = math.sqrt(cx * cx + cz * cz)
+                if closest < 7.0 then
+                  local paceA = a.p and a.p.paceMultiplier or 1.0
+                  local paceB = b.p and b.p.paceMultiplier or 1.0
+                  local priority, yielding
+                  if paceA > paceB or (paceA == paceB and a.index < b.index) then
+                    priority, yielding = a, b
+                  else
+                    priority, yielding = b, a
+                  end
+                  reservePair(priority, yielding,
+                    "cross_go", "cross_yield",
+                    0, CFG.TRAFFIC_OFFSET)
                 end
               end
             end
@@ -2358,6 +2414,12 @@ local function updateLineCar(carIndex, car, dt)
     )
   end
 
+  -- At a predicted crossing, one car owns the gap and keeps pace; the
+  -- designated yielding car sheds speed early instead of both cars panic-braking.
+  if p.passRole == "cross_yield" then
+    targetSpeed = math.min(targetSpeed, math.max(12.0, targetSpeed * 0.58))
+  end
+
   p.collisionRisk = collisionTarget and collisionTarget < math.huge
     and math.max(0, speed - collisionTarget) or 0
 
@@ -2743,6 +2805,13 @@ function windowMain(dt)
   end
 
   ui.sameLine()
+
+  if ui.button("Скан коллизий", vec2(-1, 24)) then
+    if #state.nodes >= 2 then
+      beginObstacleScan()
+      state.status = "Повторное сканирование коллизий..."
+    end
+  end
 
   if ui.button("Очистить", vec2(-1, 24)) then
     state.nodes = {}
