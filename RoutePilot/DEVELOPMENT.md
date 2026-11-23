@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-11-23
 Active development branch: `routepilot-traffic-coordinator`
-Reviewed HEAD: `62fc5f5901c91f1408ea1335b4e13b12e2d1ab38`
+Reviewed HEAD: `246e74176deb4002dd8bc0cc2cb6b4ed7e4f18b7`
 Main implementation: `RoutePilot/RoutePilot.lua`
 Latest reviewed telemetry: `RoutePilot/routepilot_trace.txt`
 CSP SDK snapshot in this repository: `lua-sdk/` (especially `lua-sdk/ac_apps/README.md`).
@@ -66,7 +66,7 @@ Recommended implementation:
 
 ## Latest code change and validation status
 
-Commit `62fc5f5901c91f1408ea1335b4e13b12e2d1ab38` applies the first arcade-pace/overtake tuning pass described above. The source was re-fetched after the write and the intended constants and code paths were confirmed present. No Lua interpreter/static parser or Assetto Corsa runtime validation has been performed in this environment; the changes must be tested in-game. Do not describe them as proven fixes until a new trace confirms higher sustained speed, actual completed passes, no repeated braking, and safe oncoming meetings.
+Code commit `62fc5f5901c91f1408ea1335b4e13b12e2d1ab38` applies the first arcade-pace/overtake tuning pass described above. Documentation was refreshed in `3cbebb3` and `246e741`. The source was re-fetched after the write and the intended constants and code paths were confirmed present. No Lua interpreter/static parser or Assetto Corsa runtime validation has been performed in this environment; the changes must be tested in-game. Do not describe them as proven fixes until a new trace confirms higher sustained speed, actual completed passes, no repeated braking, and safe oncoming meetings.
 
 ## Development rules
 
