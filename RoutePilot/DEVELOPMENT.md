@@ -1,93 +1,82 @@
-# RoutePilot development notes
+# RoutePilot development state
 
-Updated: 2026-11-23
-Branch: `main`
-Implementation: RoutePilot 1.0 native CSP AI spline
+Updated: 2026-11-24  
+Working branch: `routepilot/native-ai-fix-2026-11-24`  
+Target CSP: `0.3.2-preview2`
 
-## Current architectural decision
+## Primary requirement
 
-The previous RoutePilot versions attempted to steer every AI car from Lua by repeatedly overriding steering, throttle and brake. The recorded traces showed unstable tracking, large route-projection errors, cars stopping and repeated render errors. The older `RoutePilot_Back.lua` on `feature/arcade-traffic` is retained as historical reference, not as the active controller.
+A fast racing field that follows the recorded route, stays inside the saved corridor, overtakes cleanly, does not weave without a reason, avoids contact with other cars and the player, and recovers only when genuinely stuck. Faster cars may pass slower cars; the slower car must not be instructed to brake, move aside, yield or reduce speed for a pass.
 
-The new implementation uses the native AC/CSP AI controller:
+## Repository material reviewed
 
-1. The player records a closed racing line and left/right limits.
-2. `spline_builder.lua` serializes those samples into the version-7 binary AI spline format used by `AISplineEditor/AISpline.lua`.
-3. Each AI car receives that file through `physics.setAISpline(carIndex, filename, nil)`.
-4. The native game AI owns steering, throttle, braking, clutch and gearbox.
-5. RoutePilot assigns pace-ranked lanes and changes only a faster follower's spline offset when an adjacent lane is clear.
-6. CSP's own AI awareness remains enabled: calls to `physics.setAISplineAbsoluteOffset` pass `false` for `overrideAiAwareness`.
+- `lua-sdk/ac_apps/README.md`: CSP physics API contracts for custom AI splines, car placement, offsets, caution, aggression and track raycasts.
+- `AISplineEditor/AISpline.lua` and `AISplineEditor/AISplineEditor.lua`: version-7 spline binary layout, payload indexing, surface snapping and the forward-vector coordinate frame used by side limits.
+- `Verve/Verve.lua`, `Verve/lib/racecraft.lua`, `Verve/lib/recovery.lua`: native AI racecraft patterns, spline-offset usage, AI-awareness preservation, recovery limitations and CSP API usage.
+- `comfy_map/comfy_map.lua`: map rendering and UI composition patterns. RoutePilot's map is drawn directly inside `windowMain`; it is not a separate floating map window.
+- `RoutePilot/RoutePilot_Back.lua` on `feature/arcade-traffic`: previous manual-control implementation using `ac.overrideCarControls`. It is retained as a historical reference, not loaded by the native-AI app.
+- `RoutePilot/Задачи грок.txt`: numbered requirements and subsequent corrections.
+- Current `RoutePilot/routepilot_trace.txt` and `line_nevadadrift.txt`: post-change stationary-car trace and route-height anomalies. The 290-point line has 46 adjacent vertical jumps greater than 1 m; its Y range is 0.30–11.33 m with a 0.30 m median.
 
-This removes the source of conflicting Lua steering and throttle corrections rather than trying to tune another version of the same controller.
+## Confirmed SDK contracts
 
-## SDK audit
+- `physics.setAISpline(carIndex, filename, aiHintsFilename)` loads a custom spline in the background and returns a boolean.
+- `physics.setAICarPosition(carIndex, position, nil)` aligns the car along its assigned AI spline.
+- `physics.setAISplineAbsoluteOffset(carIndex, offset, overrideAiAwareness)` uses a lateral offset in metres; negative is left and positive is right. Keep `overrideAiAwareness=false`.
+- `physics.setAIAggression` accepts 0–1; the SDK says 0.95 corresponds to 100% aggression after the launcher's multiplier.
+- `physics.setAICaution` accepts 0–16, with 1 as the default.
+- `physics.raycastTrack` returns a hit distance or -1 and can write the hit point and normal into supplied vectors.
+- `physics.setAIStopCounter(carIndex, 0)` clears CSP's post-incident AI brake wait; `physics.setAINoInput(carIndex, false, false)` restores normal AI input after a teleport.
+- `physics.setAIThrottleLimit(carIndex, 1.0)` removes a throttle cap; `physics.setAITopSpeed(carIndex, 1e9)` removes an artificial top-speed cap.
+- No permanent `fast_lane.ai`, `ac_start` or `ac_time` files are required for this runtime custom-spline path. RoutePilot writes a version-7 spline and passes its filename to `setAISpline`.
 
-Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
+## Root causes found in the latest main-branch test
 
-- `physics.setAISpline(carIndex, filename, aiHintsFilename)` loads a per-car spline in the background. Passing `nil` as filename resets the car to its default spline. The function returns a boolean; RoutePilot only considers the spline accepted when the result is `true`, retries failures once per second, and waits at least 1.5 seconds before spawning.
-- `ac.getSim().customAISplinesAllowed` is checked before assignment. When the current session disallows custom splines, RoutePilot reports the restriction and does not spawn cars onto an unconfirmed route.
-- `physics.setAISplineAbsoluteOffset(carIndex, offset, overrideAiAwareness)` uses meters; negative is left and positive is right. Actual offset is limited by track width. RoutePilot passes `false` so CSP awareness is not explicitly overridden.
-- `physics.setAICarPosition(carIndex, pos, nil)` aligns the car along its current AI spline. This replaces the earlier ambiguous manually constructed direction vector.
-- `physics.setAILevel` accepts 0–2. `physics.setAIAggression` accepts 0–1; the SDK notes that launcher aggression is multiplied by 0.95, so 1.0 is the maximum aggression value.
-- `physics.preventAIFromRetiring` must be called repeatedly to keep an AI from retiring while stationary; RoutePilot calls it every two seconds.
-- `physics.raycastTrack` is used only when building a spline to obtain a road-surface normal. There is no wall/column collision scan, collision map or obstacle raycast system.
-- `ac.CarState.aabbSize` provides the car's bounding-box size and is used to estimate the half-width needed for side-by-side lane clearance.
+1. `spline_builder.lua` wrote `payload.gas = 0.0` and `payload.brake = 0.0` for every point. The trace shows cars moving before spawn and remaining at 0 m/s after placement on the custom spline. The new builder derives throttle/brake hints from the curvature-limited speed profile.
+2. The builder multiplied speed by 3.6 before writing the version-7 payload. The speed channel is represented in m/s; the new builder writes m/s and converts the UI's km/h limit only once.
+3. Surface snapping previously cast from 10 m above a route point for 20 m and did not check the raycast return value. On multi-level geometry this can hit the wrong deck or leave a bad height untouched. The new builder casts from 1.5 m above the recorded car position for 8 m, validates distance/normal/height delta, interpolates failed samples and aborts if more than 40% of samples fail.
+4. Route projection used X/Z only, which is ambiguous on bridges and underpasses. It now includes world height.
+5. Previous lane assignment placed the fastest group in the left lane and slower groups to the right. That blocks the intended passing model. Cars prefer the rightmost valid lane; if the player occupies that corridor, they choose the next safe lane to the left. If no lane fits clear of the player, they remain on the recorded centreline. Only a faster follower can reserve the adjacent left lane, pass, and return after 15 m of clearance. The player's actual position remains an obstacle during pass and return checks.
 
-## Reference applications
+## Current code layout
 
-- [AISplineEditor/AISpline.lua](../AISplineEditor/AISpline.lua) defines the version-7 point and payload structures and writes the header, point array and payload array with `shared/utils/binary`. `spline_builder.lua` mirrors that layout: version 7, point count, 64-bit header value, 20-byte points, 72-byte payloads and the trailing integer.
-- [Verve/lib/racecraft.lua](../Verve/lib/racecraft.lua) demonstrates CSP-native spline-offset racecraft and deliberately keeps `overrideAiAwareness=false`. RoutePilot uses the absolute-offset API so the offsets can be checked against the recorded meter-based boundaries.
-- [comfy_map/comfy_map.lua](../comfy_map/comfy_map.lua) uses app-window UI patterns. RoutePilot does not create a second map window: it draws the map directly in `windowMain`, so moving/resizing the app moves the map with it.
-- The task list is [Задачи грок.txt](./Задачи%20грок.txt). The previous feature-branch trace contained large line errors for one AI car and repeated `DRAW3D_ERROR` events; the main-branch trace supplied with the task had no AI cars in the sampled session (`ai=0`), so it could not validate AI driving.
+- `RoutePilot.lua`: UI, recording, persistence, route projection, map and 3D rendering, spawn/recovery orchestration.
+- `spline_builder.lua`: version-7 binary spline writer, surface validation, speed profile and pedal hints.
+- `driver.lua`: native AI assignment, right-lane cruise, left-side passing reservation, telemetry and stuck recovery.
+- `logger.lua`: trace file management.
+- `RoutePilot_Back.lua`: legacy reference only; do not load alongside the new app.
 
-## Current behavior
+## Current implementation
 
-### Native spline generation
+- The version-7 binary structure matches `AISplineEditor/AISpline.lua`; the point and payload arrays retain the same structure and ordering.
+- Speed hints are generated from route curvature. The UI speed limit is in km/h, internal speed is m/s, lateral-acceleration target is 10.5 m/s², and the braking envelope uses 12 m/s².
+- Throttle/brake hints are derived from the change in squared target speed between adjacent samples: full throttle on acceleration/constant-speed sections and proportional brake hints where the planned speed falls.
+- Route samples are raycast locally from just above the recorded car position. Failed samples are interpolated in height only; X/Z are preserved. The route is rejected if too many surface samples fail.
+- Side-width magnitudes are mapped to the same forward-vector frame used by AISplineEditor, including asymmetric recorded boundaries.
+- Route matching includes world height so cars on overlapping track levels do not get projected onto the wrong deck.
+- Cars prefer the rightmost valid lane, but the player's actual occupied corridor takes priority; if it blocks the right lane, AI chooses the next safe lane left or stays on the centreline if no lane fits. Only a faster follower can move left; the leader is never commanded to yield or slow. A shared reservation allows one active pass at a time. The pass begins with a 120 m trigger horizon and the follower does not return until at least 15 m ahead and the home lane is clear.
+- The map, lane selector, route/boundary recording controls, clear button and 3D line preview are already in the main RoutePilot window. Collision-mesh discovery/recording is deliberately disabled; the saved corridor and native CSP awareness are the safety mechanisms.
+- Spawn and recovery use `physics.setAICarPosition(index, position, nil)`, then clear the AI stop counter and parked-input state. Stuck recovery searches forward for a free route position before teleporting. Spawn clearance is checked in 3D so a car on a different track deck does not falsely occupy the same X/Z location.
 
-- RoutePilot stores the editable route and bounds as text files per track/layout.
-- The native spline is generated alongside those files. The filename includes a timestamp/revision so CSP is asked to load a new spline after edits. The builder rejects a start/end gap greater than 30 m to prevent a long diagonal closure segment.
-- Payload speed hints are derived from horizontal curvature. The hint range is 8–300 km/h so hairpins can request genuinely low speeds; straight sections can use the full 300 km/h cap. The curve target uses 10.5 m/s² lateral acceleration, and a two-pass cyclic braking envelope uses 12 m/s² deceleration.
-- Throttle and brake hints are left neutral. The game AI remains responsible for actual inputs.
-- Left and right side widths come from the user's signed boundary arrays. The spline builder stores their positive magnitudes in the native payload.
-- Each route point is snapped to the track surface and lifted 0.3 m, matching AISplineEditor. The same downward ray supplies the payload surface normal; these rays do not search for obstacles.
+## Current changes on this branch
 
-### Lanes and overtaking
+- Fixed spline speed units and replaced the all-zero pedal profile with curvature-derived throttle/brake hints.
+- Added local track-surface snapping, hit validation and height interpolation.
+- Corrected asymmetric side-width mapping to the AISplineEditor coordinate frame.
+- Made route projection height-aware for multi-level tracks.
+- Replaced pace-sorted default lanes with a right-lane cruise / left-lane passing policy.
+- Increased pass lookahead and occupancy horizon for high-speed traffic, increased post-pass clearance and kept a single pass reservation and made initial lane assignment/player occupancy checks aware of the player's actual position.
+- Applied CSP's documented aggression value (0.95) and the default AI caution (1.0) for safe following distance; removed artificial throttle/top-speed caps and reset CSP's post-teleport stop/parked-input state.
+- Updated `README.md` and this file with the new model and validation caveat.
 
-- Width presets are 3, 7, 11 and 15 metres, representing one through four lanes.
-- Default is preset 1 (3 m), preserving the requested initial selection. Select preset 2 (7 m) or wider to enable adjacent-lane passing; one lane intentionally disables passing.
-- AI cars receive a small deterministic pace spread around their existing AI level (0.94–1.06 multiplier, clamped to 0.0–1.15) and 1.0 aggression.
-- Cars are sorted by pace: the fastest group receives the leftmost lane; progressively slower groups receive lanes to the right.
-- The leader is not assigned a pass-specific offset, speed reduction, throttle reduction or brake command. If a faster follower catches a car in its own lane, it may move to an adjacent lane only when the recorded limits and traffic-occupancy check leave enough room.
-- A single shared pass reservation serializes overtakes so two followers cannot claim the same adjacent corridor in the same frame. The reservation is held until the passing car has returned to its home lane.
-- A pass is complete when the follower is more than seven metres ahead; it then returns to its assigned home lane, but only when that home lane is clear.
-- The occupancy check includes cars ahead and behind, and treats a car facing against the recorded route direction as an oncoming obstruction.
-- The pass planner is intentionally conservative. If the recorded width does not fit the car's bounding boxes plus margin, the pass is refused.
+## Required in-game validation
 
-### Spawn and recovery
+This branch has not been run inside Assetto Corsa from this environment. Do not treat the implementation as proven until these checks pass on the user's CSP 0.3.2-preview2 install:
 
-- Spawn waits for a stable AI roster and for every AI to report that the generated spline was accepted.
-- AI cars are spaced along the recorded loop. A nil direction argument asks CSP to align each car to its assigned spline.
-- A car below 0.8 m/s for 10 seconds after startup is treated as stuck. Recovery searches forward along the route for a position clear of other cars, then teleports with a nil direction so the spline controls heading.
-- CSP does not expose a single airborne boolean in the inspected car state. RoutePilot uses the four `ac.StateWheel.load` values instead: all four below 120 N while the car is moving for 10 continuous seconds triggers the same free-position recovery. This is a heuristic, not a definitive flight-state API.
+1. Start with 3–5 AI cars and confirm each accelerates after placement. In the trace, `AI_SPLINE_ASSIGNED` must be followed by increasing `SPEED`, not repeated `SPEED=0.00`.
+2. Check `AI_SPLINE_BUILD_OK`: `surfaceFallbacks` should be low and no `AI_SPLINE_BUILD_FAILED` should occur. Inspect the rendered line at elevation changes and track crossings.
+3. Confirm every car receives the rightmost home lane. The passing car should log `PASS_START`, move left smoothly, pass without changing the leader's controls, reach the clearance threshold, then log `PASS_COMPLETE` and `PASS_RELEASE`.
+4. Check the 3D line and both boundary lines at walls, poles, kerbs, bridges and underpasses. A saved corridor is only as safe as its recorded limits; no automatic wall/column collision map is implemented.
+5. Inspect wheel loads, route error, speed, rescue frequency and contacts in a replay before increasing traffic density.
 
-### Map and rendering
-
-- The map is drawn in the main app window and fills the available area below the controls.
-- The map uses the same averaged-tangent boundary vertices as the 3D overlay. No artificial pixel separation is added to the red lines.
-- Boundary-only recording can start at any point inside the existing corridor. It rewrites only the boundary on the player's side, preserves the opposite edge, and clamps both edges to the old corridor. Recording stops and saves if the player leaves the old limits.
-- During route recording, 3D lines preview the existing route a short distance ahead and behind the car without drawing the unfinished end-to-start closure. A completed route can be displayed at full distance.
-- The map's 1/2/3/4-lane selector shows the active preset. The speed and following-distance sliders and the AI-disable button are absent.
-- The 3D overlay draws short upcoming walls of blue chevrons across corners, aligned with the local route tangent. During recording, arrow rendering is limited to the preview range to avoid drawing the unfinished closure.
-
-## Files changed in RoutePilot 1.0
-
-- `RoutePilot.lua`: native spline build/load lifecycle, stable spawn, safe route recovery, same-window map, accurate continuous boundaries and 3D preview.
-- `spline_builder.lua`: version-7 binary spline writer, curvature speed hints, braking envelope, road-side widths and surface normals.
-- `driver.lua`: native spline assignment, pace profile, stable lane assignment, follower-only adjacent-lane passing, telemetry and stuck recovery.
-- `manifest.ini`: version 1.0.0 and larger main window.
-- `README.md`: installation and operating notes.
-
-## Validation status
-
-Source was inspected against the repository SDK and reference apps. This environment does not provide the Assetto Corsa runtime or LuaJIT compiler, so the implementation has not been syntax-compiled or driven in-game. Do not treat source-level inspection as a successful race test. The first in-game test should use a short AI field on the exact track/layout used to record the route, then inspect `routepilot_trace.txt` for `AI_SPLINE_ASSIGNED`, `SPAWN_FINISH`, `LANE_ASSIGN`, `PASS_START`, `PASS_COMPLETE`, `PASS_BLOCKED` and `RECOVERY_ATTEMPT`.
-
-A no-accident guarantee is not possible across arbitrary mod cars and track meshes. The design avoids direct Lua actuator conflicts, refuses passes that do not fit the saved corridor, and preserves native CSP AI awareness; it cannot make malformed route boundaries or arbitrary car physics safe by itself.
+A zero-collision guarantee cannot be made for arbitrary mod cars and track meshes. If any check fails, use the new trace to isolate the failing layer before changing the driving model again.

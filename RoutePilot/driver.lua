@@ -7,16 +7,16 @@
 local Driver = {}
 local CFG, S, H
 
-local PASS_TRIGGER_GAP = 48.0
+local PASS_TRIGGER_GAP = 120.0
 local PASS_MIN_GAP = 6.0
-local PASS_CLEAR_GAP = 7.0
+local PASS_CLEAR_GAP = 15.0
 local PASS_MAX_TIME = 18.0
-local PASS_OFFSET_RATE = 3.0
+local PASS_OFFSET_RATE = 5.0
 local PASS_SEPARATION = 0.28
 local PASS_EDGE_MARGIN = 0.12
 local WIDTH_PRESETS = {3, 7, 11, 15}
-local PASS_LOOKAHEAD = 42.0
-local PASS_OCCUPANCY_RANGE = 40.0
+local PASS_LOOKAHEAD = 140.0
+local PASS_OCCUPANCY_RANGE = 100.0
 local STUCK_SPEED = 0.8
 local STUCK_TIME = 10.0
 
@@ -101,29 +101,47 @@ local function laneLayout()
 end
 
 local laneFits
+local function playerBlocksLane(follower, player, target, metrics)
+  if not player then return false end
+  local gap=signedGap(follower,player,metrics.total)
+  local longitudinalClose=gap>-15.0 and gap<PASS_OCCUPANCY_RANGE
+  if player.headingDot<0.25 then
+    local dx,dz=player.x-follower.x,player.z-follower.z
+    longitudinalClose=dx*dx+dz*dz<50.0*50.0
+  end
+  return longitudinalClose and
+    math.abs(player.lateral-target)<follower.half+player.half+PASS_SEPARATION
+end
+
 local function assignLanes(snapshots,metrics)
   local cars={}
   for _,snap in pairs(snapshots) do
     if snap.p and snap.p.splineLoaded then cars[#cars+1]=snap end
   end
   if #cars==0 then return false end
-  table.sort(cars,function(a,b)
-    if a.p.targetLevel==b.p.targetLevel then return a.index<b.index end
-    return a.p.targetLevel>b.p.targetLevel
-  end)
-  local laneCount,laneWidth,offsets=laneLayout()
-  local groupSize=math.max(1,math.ceil(#cars/laneCount))
-  for rank,snap in ipairs(cars) do
-    local lane=math.min(laneCount,math.floor((rank-1)/groupSize)+1)
-    local home=offsets[lane]
-    if not laneFits(snap.seg,home,snap.half,metrics) then home=0; lane=0 end
+
+  -- Prefer the rightmost lane, but never assign a car into the player's
+  -- occupied corridor. If the player blocks the right lane, use the next
+  -- safe lane to the left; if no lane fits, remain on the recorded centreline.
+  local laneCount,_,offsets=laneLayout()
+  local player=snapshots[0]
+  for _,snap in ipairs(cars) do
+    local lane,home=0,0
+    for candidate=laneCount,1,-1 do
+      local target=offsets[candidate]
+      if laneFits(snap.seg,target,snap.half,metrics) and
+        not playerBlocksLane(snap,player,target,metrics) then
+        lane,home=candidate,target
+        break
+      end
+    end
     snap.p.laneIndex=lane
     snap.p.homeOffset=home
     snap.p.targetOffset=home
     snap.p.currentOffset=0
     snap.p.laneAssigned=true
-    H.log('LANE_ASSIGN car=%d rank=%d lane=%d offset=%.2f pace=%.3f',
-      snap.index,rank,lane,home,snap.p.targetLevel)
+    H.log('LANE_ASSIGN car=%d lane=%d offset=%.2f pace=%.3f playerBlock=%s',
+      snap.index,lane,home,snap.p.targetLevel,tostring(lane==0))
   end
   S.lanesAssigned=true
   return true
@@ -138,12 +156,19 @@ laneFits=function(seg, target, half, metrics)
     if remaining <= 0 then break end
     index = index % metrics.count + 1
   end
-  return remaining <= 0
+  -- If the entire closed route is shorter than the lookahead horizon,
+  -- every segment has already been checked; do not reject a valid lane.
+  return remaining <= 0 or metrics.total <= PASS_LOOKAHEAD
 end
 
 local function laneIsFree(follower, leader, target, snapshots, metrics)
+  local leaderIndex=leader and leader.index or -1
+  local leaderIsAI=leader and leader.p~=nil
   for index, other in pairs(snapshots) do
-    if index ~= follower.index and index ~= leader.index then
+    -- An AI leader is already known to be in its home lane; the player is
+    -- different: if the player is the leader, still treat the player's actual
+    -- position as an obstacle in the proposed passing corridor.
+    if index ~= follower.index and (index ~= leaderIndex or not leaderIsAI) then
       local gap = signedGap(follower, other, metrics.total)
       local longitudinalClose = math.abs(gap) < PASS_OCCUPANCY_RANGE
       if other.headingDot < 0.25 then
@@ -166,16 +191,14 @@ end
 local function choosePassOffset(follower, leader, snapshots, metrics)
   local laneCount,_,offsets=laneLayout()
   if laneCount<2 or not follower.p or not follower.p.laneIndex or follower.p.laneIndex<1 then return nil,0 end
-  local lane=follower.p.laneIndex
-  local candidates={}
-  if lane>1 then candidates[#candidates+1]=lane-1 end
-  if lane<laneCount then candidates[#candidates+1]=lane+1 end
-  for _,nextLane in ipairs(candidates) do
-    local target=offsets[nextLane]
-    if laneFits(follower.seg,target,follower.half,metrics) and
-      laneIsFree(follower,leader,target,snapshots,metrics) then
-      return target,target<follower.lateral and -1 or 1
-    end
+  local nextLane=follower.p.laneIndex-1
+  if nextLane<1 then return nil,0 end
+
+  -- Never pass on the right: use only the immediately adjacent left lane.
+  local target=offsets[nextLane]
+  if laneFits(follower.seg,target,follower.half,metrics) and
+    laneIsFree(follower,leader,target,snapshots,metrics) then
+    return target,-1
   end
   return nil,0
 end
@@ -218,12 +241,30 @@ local function ensureCar(index, car, dt)
 
   if not p.settingsApplied then
     local okLevel, errLevel = pcall(physics.setAILevel, index, p.targetLevel)
-    local okAgg, errAgg = pcall(physics.setAIAggression, index, 1.0)
-    p.settingsApplied = okLevel and okAgg
-    H.log('AI_PROFILE id=%d level=%.3f aggression=1.00 levelOK=%s aggressionOK=%s',
-      index, p.targetLevel, tostring(okLevel), tostring(okAgg))
+    -- CSP documents 0.95 as the value corresponding to 100% aggression.
+    local okAgg, errAgg = pcall(physics.setAIAggression, index, 0.95)
+    local okCaution, errCaution = true, nil
+    local okThrottle, errThrottle = true, nil
+    local okTopSpeed, errTopSpeed = true, nil
+    if physics.setAICaution then
+      okCaution, errCaution = pcall(physics.setAICaution, index, 1.0)
+    end
+    -- Remove artificial AI caps; physical car limits still apply.
+    if physics.setAIThrottleLimit then
+      okThrottle, errThrottle = pcall(physics.setAIThrottleLimit, index, 1.0)
+    end
+    if physics.setAITopSpeed then
+      okTopSpeed, errTopSpeed = pcall(physics.setAITopSpeed, index, 1e9)
+    end
+    p.settingsApplied = okLevel and okAgg and okCaution and okThrottle and okTopSpeed
+    H.log('AI_PROFILE id=%d level=%.3f aggression=0.95 caution=1.00 throttleLimit=1 topSpeed=unlimited levelOK=%s aggressionOK=%s cautionOK=%s throttleOK=%s topSpeedOK=%s',
+      index, p.targetLevel, tostring(okLevel), tostring(okAgg), tostring(okCaution),
+      tostring(okThrottle), tostring(okTopSpeed))
     if not okLevel then H.log('AI_PROFILE_ERROR id=%d kind=level err=%s', index, tostring(errLevel)) end
     if not okAgg then H.log('AI_PROFILE_ERROR id=%d kind=aggression err=%s', index, tostring(errAgg)) end
+    if not okCaution then H.log('AI_PROFILE_ERROR id=%d kind=caution err=%s', index, tostring(errCaution)) end
+    if not okThrottle then H.log('AI_PROFILE_ERROR id=%d kind=throttle_limit err=%s', index, tostring(errThrottle)) end
+    if not okTopSpeed then H.log('AI_PROFILE_ERROR id=%d kind=top_speed err=%s', index, tostring(errTopSpeed)) end
   end
   return p
 end
@@ -475,6 +516,9 @@ function Driver.release(index)
   if not p then return end
   pcall(physics.setAISplineAbsoluteOffset, index, 0, false)
   pcall(physics.setAISpline, index, nil, nil)
+  if physics.setAICaution then pcall(physics.setAICaution, index, 1.0) end
+  if physics.setAIThrottleLimit then pcall(physics.setAIThrottleLimit, index, 1.0) end
+  if physics.setAITopSpeed then pcall(physics.setAITopSpeed, index, 1e9) end
   if p.baseLevel then pcall(physics.setAILevel, index, p.baseLevel) end
   if p.baseAggression then pcall(physics.setAIAggression, index, p.baseAggression) end
   S.p[index], S.trafficHints[index] = nil, nil

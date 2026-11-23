@@ -69,19 +69,91 @@ local function curvatureAt(nodes, index)
   return curvature, 1 / curvature
 end
 
+local SURFACE_RAY_START = 1.5
+local SURFACE_RAY_LENGTH = 8.0
+local SURFACE_LIFT = 0.3
+
+-- Cast from just above the recorded car position, not 10 m above it.
+-- A high ray can hit an upper bridge deck while the car is on a lower road.
+-- A short local ray also prevents a failed cast from silently preserving a
+-- bad 8–11 m height spike in the generated spline.
 local function snapSurface(pos)
-  local snapped=vec3(pos.x,pos.y,pos.z)
-  local normal=vec3(0,1,0)
-  if physics and physics.raycastTrack then
-    pcall(
+  local snapped = vec3(pos.x, pos.y, pos.z)
+  local normal = vec3(0, 1, 0)
+  if type(physics) == 'table' and type(physics.raycastTrack) == 'function' then
+    local origin = vec3(pos.x, pos.y + SURFACE_RAY_START, pos.z)
+    local ok, distance = pcall(
       physics.raycastTrack,
-      vec3(pos.x,pos.y+10.0,pos.z),
-      DOWN,20.0,snapped,normal
+      origin, DOWN, SURFACE_RAY_LENGTH, snapped, normal
     )
+    if ok and type(distance) == 'number' and distance >= 0 and
+      distance <= SURFACE_RAY_LENGTH and normal.y > 0.25 and
+      math.abs(snapped.y - pos.y) <= 2.5 then
+      snapped.y = snapped.y + SURFACE_LIFT
+      return snapped, normal, true
+    end
   end
-  -- Match AISplineEditor: snap to the track surface and lift 0.3 m.
-  snapped.y=snapped.y+0.3
-  return snapped,normal
+  return nil, normal, false
+end
+
+-- Missing ray hits are interpolated from the nearest valid road samples.
+-- This is deliberately height-only: X/Z remain the exact recorded route.
+local function resolveMissingSurfaceSamples(nodes, aiNodes, normals, valid)
+  local count = #nodes
+  local validCount = 0
+  for i = 1, count do
+    if valid[i] then validCount = validCount + 1 end
+  end
+  if validCount < 2 then
+    error('track surface raycast failed: fewer than two valid samples')
+  end
+
+  local fallbackCount = count - validCount
+  if fallbackCount > count * 0.40 then
+    error(string.format(
+      'track surface raycast failed for %.0f%% of route samples',
+      fallbackCount / count * 100
+    ))
+  end
+
+  for i = 1, count do
+    if not valid[i] then
+      local prev, nextPoint
+      local prevDistance, nextDistance = 0, 0
+
+      for step = 1, count - 1 do
+        local from = ((i - step - 1) % count) + 1
+        local to = from % count + 1
+        prevDistance = prevDistance + flatDistance(nodes[from], nodes[to])
+        if valid[from] then
+          prev = from
+          break
+        end
+      end
+
+      for step = 1, count - 1 do
+        local from = ((i + step - 2) % count) + 1
+        local to = from % count + 1
+        nextDistance = nextDistance + flatDistance(nodes[from], nodes[to])
+        if valid[to] then
+          nextPoint = to
+          break
+        end
+      end
+
+      if not prev or not nextPoint then
+        error(string.format('cannot interpolate road height at route point %d', i))
+      end
+
+      local span = prevDistance + nextDistance
+      local t = span > 0.001 and prevDistance / span or 0.5
+      local y = aiNodes[prev].y + (aiNodes[nextPoint].y - aiNodes[prev].y) * t
+      aiNodes[i] = vec3(nodes[i].x, y, nodes[i].z)
+      normals[i] = vec3(0, 1, 0)
+    end
+  end
+
+  return fallbackCount
 end
 
 local function sideWidths(boundsL, boundsR, index)
@@ -89,7 +161,11 @@ local function sideWidths(boundsL, boundsR, index)
   local right = tonumber(boundsR and boundsR[index]) or DEFAULT_SIDE
   if left > 0 then left = -left end
   if right < 0 then right = -right end
-  return math.max(0.1, -left), math.max(0.1, right)
+
+  -- RoutePilot stores signed lateral bounds (left < 0, right > 0).
+  -- AISplineEditor stores positive magnitudes on its forward × up frame,
+  -- which matches RoutePilot's positive lateral direction.
+  return math.max(0.1, right), math.max(0.1, -left)
 end
 
 function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute)
@@ -103,7 +179,7 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
     return false, 'native RoutePilot spline currently requires a closed lap'
   end
 
-  local ok, err = pcall(function()
+  local ok, totalLength, diagnostics = pcall(function()
     local count = #nodes
     local closureGap=fullDistance(nodes[count],nodes[1])
     if closureGap>30.0 then
@@ -112,10 +188,14 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
     local distances = {}
     local speeds = {}
     local radii = {}
-    local aiNodes, normals = {}, {}
-    for i=1,count do
-      aiNodes[i],normals[i]=snapSurface(nodes[i])
-      nodes[i].y=aiNodes[i].y
+    local aiNodes, normals, valid = {}, {}, {}
+    for i = 1, count do
+      local snapped, normal, hit = snapSurface(nodes[i])
+      aiNodes[i], normals[i], valid[i] = snapped, normal, hit
+    end
+    local fallbackCount = resolveMissingSurfaceSamples(nodes, aiNodes, normals, valid)
+    for i = 1, count do
+      nodes[i].y = aiNodes[i].y
     end
     local maxSpeed = math.max(MIN_SPEED_KMH, tonumber(maxSpeedKmh) or 300.0) / 3.6
 
@@ -160,9 +240,24 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
       point.payloadIndex = i - 1
 
       local payload = ffi.new(splinePayload)
-      payload.speed = speeds[i] * 3.6
-      payload.gas = 0.0
-      payload.brake = 0.0
+      -- fast_lane.ai stores speed in m/s, not km/h.
+      payload.speed = speeds[i]
+
+      -- Encode an aggressive throttle/braking profile from the same
+      -- curvature-limited speed envelope. Flat and accelerating sections
+      -- receive full throttle; deceleration sections receive a proportional
+      -- brake hint. This avoids the previous all-zero pedal profile, which
+      -- left every car stationary after being placed on the custom spline.
+      local nextSpeed = speeds[nextIndex]
+      local longitudinalAccel = (nextSpeed * nextSpeed - speeds[i] * speeds[i]) /
+        math.max(0.1, 2 * distance)
+      if longitudinalAccel < -0.25 then
+        payload.gas = 0.0
+        payload.brake = clamp(-longitudinalAccel / BRAKE_ACCEL, 0.0, 1.0)
+      else
+        payload.gas = 1.0
+        payload.brake = 0.0
+      end
       payload.obsoleteLatG = 0.0
       payload.radius = radii[i]
       payload.sideLeft, payload.sideRight = sideWidths(boundsL, boundsR, i)
@@ -187,11 +282,15 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
       :commit(filename)
       :dispose()
 
-    return totalLength
+    return totalLength, {
+      surfaceHits = count - fallbackCount,
+      surfaceFallbacks = fallbackCount,
+      maxSpeedMs = maxSpeed
+    }
   end)
 
-  if not ok then return false, tostring(err) end
-  return true, err
+  if not ok then return false, tostring(totalLength) end
+  return true, totalLength, diagnostics
 end
 
 return Builder

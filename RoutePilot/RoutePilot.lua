@@ -124,7 +124,7 @@ local function buildAISpline()
   state.aiRevision=state.aiRevision+1
   local path=string.gsub(getLineFilePath(),"%.txt$",
     "_native_"..tostring(stamp).."_"..tostring(state.aiRevision)..".ai")
-  local ok,info=Builder.build(state.nodes,state.boundsL,state.boundsR,path,state.speedMax,state.loopRoute)
+  local ok,info,diagnostics=Builder.build(state.nodes,state.boundsL,state.boundsR,path,state.speedMax,state.loopRoute)
   if not ok then
     state.aiSplineBuilt=false
     state.aiSplinePath=nil
@@ -149,8 +149,10 @@ local function buildAISpline()
   state.spawnStable=0
   state.spawnLastRoster=""
   state.status=string.format("Native AI готов: %d точек, %.0f м",#state.nodes,info or 0)
-  writeLog("AI_SPLINE_BUILD_OK path=%s points=%d length=%.2f speedMax=%.1f widthPreset=%d",
-    path,#state.nodes,info or 0,state.speedMax,state.widthPreset)
+  writeLog("AI_SPLINE_BUILD_OK path=%s points=%d length=%.2f speedMax=%.1f widthPreset=%d surfaceHits=%d surfaceFallbacks=%d speedUnits=m/s",
+    path,#state.nodes,info or 0,state.speedMax,state.widthPreset,
+    diagnostics and diagnostics.surfaceHits or 0,
+    diagnostics and diagnostics.surfaceFallbacks or 0)
   flushLog()
   return true
 end
@@ -352,7 +354,10 @@ local function findNearestSeg(pos,hintSeg)
     local t=clamp(((px-a.x)*vx+(pz-a.z)*vz)/lenSq,0,1)
     local cx,cz=a.x+vx*t,a.z+vz*t
     local dx,dz=px-cx,pz-cz
-    local dSq=dx*dx+dz*dz
+    local routeY=a.y+(b.y-a.y)*t
+    local dy=pos.y-routeY
+    -- Include height so crossings on bridges/underpasses select the correct deck.
+    local dSq=dx*dx+dz*dz+dy*dy*4.0
     if dSq<bestDist then bestDist=dSq; bestSeg=index; bestT=t end
   end
   local back=math.min(5,segs-1)
@@ -454,7 +459,10 @@ local function findRouteDistanceAtPosition(position,metrics)
       local t=clamp(((position.x-a.x)*vx+(position.z-a.z)*vz)/lenSq,0,1)
       local px,pz=a.x+vx*t,a.z+vz*t
       local dx,dz=position.x-px,position.z-pz
-      local dSq=dx*dx+dz*dz
+      local routeY=a.y+(b.y-a.y)*t
+      local dy=position.y-routeY
+      -- Resolve overlapping X/Z track sections by their actual world height.
+      local dSq=dx*dx+dz*dz+dy*dy*4.0
       if dSq<bestDistSq then bestDistSq=dSq; bestRoute=seg.start+seg.length*t end
     end
   end
@@ -477,6 +485,22 @@ local function sampleSpawnRoute(metrics,distance)
   end
   return nil,nil
 end
+local function wakeAIAfterTeleport(carIndex)
+  if type(physics)~="table" then return end
+  -- A teleport can leave CSP's post-incident stop counter or parked-input
+  -- state active. Clear both before handing control back to the native AI.
+  local stopOK,inputOK=true,true
+  if physics.setAIStopCounter then
+    stopOK=pcall(physics.setAIStopCounter,carIndex,0)
+    if not stopOK then writeLog("AI_WAKE_ERROR id=%d api=setAIStopCounter",carIndex) end
+  end
+  if physics.setAINoInput then
+    inputOK=pcall(physics.setAINoInput,carIndex,false,false)
+    if not inputOK then writeLog("AI_WAKE_ERROR id=%d api=setAINoInput",carIndex) end
+  end
+  writeLog("AI_WAKE id=%d stopCounter=%s noInput=%s",carIndex,tostring(stopOK),tostring(inputOK))
+end
+
 local function spotIsClear(pos, exceptIndex, ignored)
   local sim=ac.getSim()
   if not sim then return true end
@@ -486,8 +510,10 @@ local function spotIsClear(pos, exceptIndex, ignored)
       local other=ac.getCar(i)
       if other and other.isActive then
         local dx=other.position.x-pos.x
+        local dy=other.position.y-pos.y
         local dz=other.position.z-pos.z
-        if dx*dx+dz*dz < clearSq then return false end
+        -- Cars on a different bridge/deck do not occupy this spawn position.
+        if dx*dx+dy*dy+dz*dz < clearSq then return false end
       end
     end
   end
@@ -594,7 +620,11 @@ local function trySpawnTeleport(sim,dt)
     local plannedClear=true
     if position then
       for j=1,#planned do
-        if flatDist(position,planned[j])<CFG.SAFE_RESPAWN_CLEAR*2 then
+        local dx=position.x-planned[j].x
+        local dy=position.y-planned[j].y
+        local dz=position.z-planned[j].z
+        local clear=CFG.SAFE_RESPAWN_CLEAR*2
+        if dx*dx+dy*dy+dz*dz<clear*clear then
           plannedClear=false
           break
         end
@@ -605,6 +635,7 @@ local function trySpawnTeleport(sim,dt)
       if ok and result~=false then
         moved=moved+1
         planned[#planned+1]=position
+        wakeAIAfterTeleport(carIndex)
         if Driver.resetAfterTeleport then Driver.resetAfterTeleport(carIndex) end
         writeLog("SPAWN_CAR id=%d order=%d routeDistance=%.1f pos=(%.2f,%.2f,%.2f) direction=AI_SPLINE",
           carIndex,order,routeDistance,position.x,position.y,position.z)
@@ -638,6 +669,7 @@ local function teleportHome(carIndex,car)
     if pos and spotIsClear(pos,carIndex) then
       local ok,result=pcall(physics.setAICarPosition,carIndex,pos,nil)
       if ok and result~=false then
+        wakeAIAfterTeleport(carIndex)
         if Driver and Driver.resetAfterTeleport then Driver.resetAfterTeleport(carIndex) end
         writeLog("RESCUE id=%d offset=%.1f pos=(%.2f,%.2f,%.2f) direction=AI_SPLINE",
           carIndex,offset,pos.x,pos.y,pos.z)
@@ -650,16 +682,35 @@ local function teleportHome(carIndex,car)
   flushLog()
   return false
 end
+local function recordedSurfacePoint(pos)
+  local point=vec3(pos.x,pos.y,pos.z)
+  local normal=vec3(0,1,0)
+  if type(physics)=="table" and type(physics.raycastTrack)=="function" then
+    local ok,distance=pcall(
+      physics.raycastTrack,
+      vec3(pos.x,pos.y+1.5,pos.z),
+      vec3(0,-1,0),8.0,point,normal
+    )
+    if ok and type(distance)=="number" and distance>=0 and distance<=8.0 and
+      normal.y>0.25 and math.abs(point.y-pos.y)<=2.5 then
+      return vec3(pos.x,point.y+0.3,pos.z)
+    end
+  end
+  -- Builder performs a second validation pass and interpolates failed hits.
+  return vec3(pos.x,pos.y+0.1,pos.z)
+end
+
 local function addPoint(pos)
   if #state.nodes>=CFG.MAX_ROUTE_POINTS then
     state.recLine=false; state.status="Достигнут лимит точек"; return
   end
+  local sample=recordedSurfacePoint(pos)
   if state.loopRoute and #state.nodes>=3 and
-    flatDist(state.nodes[1],pos)<CFG.RECORD_DISTANCE then
+    flatDist(state.nodes[1],sample)<CFG.RECORD_DISTANCE then
     return
   end
-  if #state.nodes==0 or flatDist(state.nodes[#state.nodes],pos)>=CFG.RECORD_DISTANCE then
-    state.nodes[#state.nodes+1]=vec3(pos.x,pos.y+0.1,pos.z)
+  if #state.nodes==0 or flatDist(state.nodes[#state.nodes],sample)>=CFG.RECORD_DISTANCE then
+    state.nodes[#state.nodes+1]=sample
     local half=WIDTH_PRESETS[state.widthPreset]/2
     state.boundsL[#state.nodes]=-half
     state.boundsR[#state.nodes]=half
