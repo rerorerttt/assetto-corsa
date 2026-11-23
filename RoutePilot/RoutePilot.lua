@@ -3002,67 +3002,71 @@ function windowMain(dt)
     state.loaded = false
   end
 
-  -- The radar is an explicit ImGui child region of this one manifest window.
-  -- It cannot become a second top-level/floating app window.
+  -- The route map is drawn inline in this single main window, below the controls.
   local canvas = vec2(ui.availableSpaceX(), math.min(360, ui.availableSpaceY()))
-  ui.childWindow("##route_map", canvas, function()
-    ui.invisibleButton("##route_map_canvas", vec2(ui.availableSpaceX(), ui.availableSpaceY()))
-    local p0 = ui.getItemRectMin()
-    local p1 = ui.getItemRectMax()
 
-    ui.drawRectFilled(
-      p0,
-      p1,
-      rgbm(0.1, 0.1, 0.12, 1),
-      4
-    )
+  ui.invisibleButton("line_radar", canvas)
 
-    ui.drawRect(
-      p0,
-      p1,
-      rgbm(0.3, 0.3, 0.35, 1),
-      4
-    )
+  local p0 = ui.getItemRectMin()
+  local p1 = ui.getItemRectMax()
 
-    if #state.nodes >= 2 then
-      local cx = player and player.position.x or state.nodes[1].x
-      local cz = player and player.position.z or state.nodes[1].z
-      local scale = 1.2
-      local mx = (p0.x + p1.x) * 0.5
-      local my = (p0.y + p1.y) * 0.5
-      local segmentCount = state.loopRoute and
-        #state.nodes or (#state.nodes - 1)
+  ui.drawRectFilled(
+    p0,
+    p1,
+    rgbm(0.1, 0.1, 0.12, 1),
+    4
+  )
 
-      for i = 1, segmentCount do
-        local a = state.nodes[i]
-        local b = state.nodes[(i % #state.nodes) + 1]
-        local x1 = mx + (a.x - cx) * scale
-        local y1 = my + (a.z - cz) * scale
-        local x2 = mx + (b.x - cx) * scale
-        local y2 = my + (b.z - cz) * scale
+  ui.drawRect(
+    p0,
+    p1,
+    rgbm(0.3, 0.3, 0.35, 1),
+    4
+  )
 
-        if x1 >= p0.x and x1 <= p1.x and
-           y1 >= p0.y and y1 <= p1.y and
-           x2 >= p0.x and x2 <= p1.x and
-           y2 >= p0.y and y2 <= p1.y then
-          ui.drawLine(
-            vec2(x1, y1),
-            vec2(x2, y2),
-            rgbm(1.0, 0.85, 0.0, 0.9),
-            2
-          )
-        end
+  if #state.nodes >= 2 then
+    local cx = player and player.position.x or state.nodes[1].x
+    local cz = player and player.position.z or state.nodes[1].z
+
+    local scale = 1.2
+
+    local mx = (p0.x + p1.x) * 0.5
+    local my = (p0.y + p1.y) * 0.5
+
+    local segmentCount = state.loopRoute and
+      #state.nodes or (#state.nodes - 1)
+
+    for i = 1, segmentCount do
+      local a = state.nodes[i]
+      local b = state.nodes[(i % #state.nodes) + 1]
+
+      local x1 = mx + (a.x - cx) * scale
+      local y1 = my + (a.z - cz) * scale
+
+      local x2 = mx + (b.x - cx) * scale
+      local y2 = my + (b.z - cz) * scale
+
+      if x1 >= p0.x and x1 <= p1.x and
+         y1 >= p0.y and y1 <= p1.y and
+         x2 >= p0.x and x2 <= p1.x and
+         y2 >= p0.y and y2 <= p1.y then
+
+        ui.drawLine(
+          vec2(x1, y1),
+          vec2(x2, y2),
+          rgbm(1.0, 0.85, 0.0, 0.9),
+          2
+        )
       end
-
-      ui.drawCircleFilled(
-        vec2(mx, my),
-        4.5,
-        rgbm(0.0, 0.8, 1.0, 1.0),
-        12
-      )
     end
-  end)
 
+    ui.drawCircleFilled(
+      vec2(mx, my),
+      4.5,
+      rgbm(0.0, 0.8, 1.0, 1.0),
+      12
+    )
+  end
 
 end
 
