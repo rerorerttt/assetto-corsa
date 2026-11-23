@@ -8,7 +8,7 @@ Copy the complete `RoutePilot` directory into `assettocorsa/apps/lua/RoutePilot/
 
 ## Setup
 
-Record a complete closed lap with **Запись линии**, stop recording and press **Сохранить**. The road-width selector controls the corridor width: 3 m creates one centered lane with no passing; 7 m or wider creates two independent lanes. With two lanes, odd-numbered AI car indices are assigned to the left fast lane and even-numbered indices to the right slow lane. Cars are placed directly on their assigned lane at startup.
+Record a complete closed lap with **Запись линии**, stop recording and press **Сохранить**. The road-width selector controls the corridor width: 3 m creates one centered lane with no passing; 7 m or wider creates two independent lanes. With two lanes, odd-numbered AI car indices are assigned to the right slow lane and even-numbered indices to the left fast lane. Cars are placed directly on their assigned lane at startup.
 
 ## Traffic behavior
 
