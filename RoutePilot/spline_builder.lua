@@ -35,7 +35,7 @@ local Builder = {}
 
 local MAX_LATERAL_ACCEL = 10.5
 local BRAKE_ACCEL = 12.0
-local MIN_SPEED_KMH = 35.0
+local MIN_SPEED_KMH = 8.0
 local DEFAULT_SIDE = 3.5
 local UP = vec3(0, 1, 0)
 local DOWN = vec3(0, -1, 0)
