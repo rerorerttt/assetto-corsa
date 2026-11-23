@@ -663,15 +663,17 @@ local function updateBoundsRecording(player)
   end
 end
 local function applyWidthPreset(preset)
-  state.widthPreset=preset
+  state.widthPreset=clamp(math.floor(preset),1,4)
   local n=#state.nodes
   if n<2 then return end
-  local half=WIDTH_PRESETS[preset]/2
+  local half=WIDTH_PRESETS[state.widthPreset]/2
   for i=1,n do
     state.boundsL[i]=-half
     state.boundsR[i]=half
   end
-  writeLog("WIDTH_PRESET preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
+  saveBounds()
+  writeLog("WIDTH_PRESET preset=%d width=%dm",state.widthPreset,WIDTH_PRESETS[state.widthPreset])
+  buildAISpline()
 end
 local function releaseCar(carIndex)
   if Driver and Driver.release then
@@ -893,7 +895,7 @@ local function drawMapInRect(q0,q1)
             ui.drawCircleFilled(s,5,rgbm(0.0,0.8,1.0,1.0),12)
           else
             local p=state.p[i]
-            if p and p.overtakeSide~=0 then
+            if p and p.passState and p.passState~="RETURN" then
               ui.drawCircleFilled(s,4,rgbm(0.2,1.0,0.4,1.0),10)
             else
               ui.drawCircleFilled(s,4,rgbm(1,1,1,0.95),10)
@@ -917,8 +919,10 @@ function windowMain(dt)
     if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
+        if driverReady and Driver and Driver.invalidateAll then pcall(Driver.invalidateAll) end
         state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
-        state.loaded=false; state.recBounds=false
+        state.loaded=false; state.aiSplineBuilt=false; state.aiSplinePath=nil
+        state.spawnDone=true; state.recBounds=false
         state.status="Запись линии и границ..."
       else
         state.status="Записано точек: "..#state.nodes
@@ -927,7 +931,10 @@ function windowMain(dt)
     ui.sameLine(0,4)
     if ui.button(state.recBounds and "СТОП запись границ" or "Запись границ",vec2(-0.5,24)) then
       if state.recBounds then
-        state.recBounds=false; state.status="Границы записаны"
+        state.recBounds=false
+        saveBounds()
+        buildAISpline()
+        state.status="Границы записаны; native AI обновлён"
       else
         local player=ac.getCar(0)
         if player then
@@ -943,15 +950,18 @@ function windowMain(dt)
     ui.sameLine(0,4)
     if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ",vec2(-0.5,22)) then
       state.loopRoute=not state.loopRoute
-      state.p={}
+      buildAISpline()
     end
     if ui.button("Сохранить",vec2(-0.25,22)) then saveLine() end
     ui.sameLine(0,4)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
+      if driverReady and Driver and Driver.invalidateAll then pcall(Driver.invalidateAll) end
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
-      state.status="Очищено"; state.loaded=false
+      state.aiSplineBuilt=false; state.aiSplinePath=nil
+      state.spawnDone=true; state.loaded=false
+      state.status="Очищено"
     end
     ui.separator()
     if #state.nodes>=2 then
@@ -981,13 +991,13 @@ function windowMain(dt)
 end
 if ac.onRelease then
   ac.onRelease(function()
-    for idx in pairs(state.p) do releaseCar(idx) end
+    if Driver and Driver.invalidateAll and driverReady then pcall(Driver.invalidateAll) end
     if logger and logger.shutdown then
       pcall(logger.shutdown,logger,"RoutePilot released")
     end
   end)
 end
 loadLine()
-loadBounds()
-writeLog("ROUTEPILOT 0.9.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 1.0.0 NATIVE AI INITIALIZED track=%s points=%d aiSpline=%s",
+  getTrackTag(),#state.nodes,tostring(state.aiSplineBuilt))
 flushLog()
