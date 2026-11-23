@@ -294,3 +294,38 @@ Code commit: cfaaa28608be53d43866fe811ba7665486731b32. Source changes are limite
 Important remaining defect: HEADING_GUARD currently applies full brake and zero steering whenever heading alignment falls below 0.35, then returns without an automatic reorientation/recovery path. In the new trace this leaves cars 2 and 5 stopped at their guard positions. Do not mistake that brake lock for a working recovery system. After the corrected steering geometry is tested, implement a deliberate recovery state that can safely realign/reposition a misoriented or off-route car without teleporting into occupied space.
 
 Next trace acceptance criteria: all five cars should maintain bounded line error without repeated full-lock steering; the lookahead target must remain at the configured distance ahead except at a route end; slip and yaw should not diverge; no car should become permanently frozen in the heading guard. Only after this baseline is stable should coordinated passing be re-enabled.
+
+
+## Full controller and CSP SDK audit — 2026-11-23
+
+Re-read the current RoutePilot.lua, the latest routepilot_trace.txt, the route file, logger.lua, manifest.ini, and the repository's CSP Lua SDK definitions (lua-sdk/ac_apps/lib.lua and generated README.md). Current branch head at the start of this audit was 5f824450be04adb87cc03d0d584b274c2724f7ec; the main source was unchanged from the prior controller commit, while the uploaded trace was new.
+
+### What the new trace actually proves
+
+The new run is substantially worse than the previous trace. Five AI cars are teleported and initially aligned with the route (CAR_INIT heading_dot 0.902–1.000). They begin diverging within the first two seconds. At 9.26 s, car 2 is already at 3.68 m line error with normalized steering command +0.719, yaw rate -1.591 rad/s and estimated lateral acceleration 13.80 m/s². It then enters HEADING_GUARD and is stopped. Cars 1–4 are ultimately held at zero speed with brake=1. Car 5 continues away from the route: at 9.26 s it is at (-49.74, -362.01), while the recorded route at the same Z is approximately X=-48.6; it has LOOK=(-0.36, 0.93) and receives positive steering. By 15.27 s it is at X=-54.06 while the route near Z=-286.6 is around X=-30, with steering at +0.735 and line error 14.61 m. By 18.27 s line error is about 29.6 m. This is not a route-recording zigzag: the car is turning away from the route while the controller increases steering in that same wrong direction.
+
+### Steering sign correction
+
+The previous audit changed the X/Z cross-product sign based on a mistaken assumption about how the normalized steering override maps to yaw. The new trace disproves that assumption. With the vehicle initially facing +Z, positive override values are correlated with yaw toward -X; meanwhile, the route for car 5 bends toward +X. The changed cross product generated a positive target angle for a target to +X and therefore commanded the wrong steering direction. Restored the original expression ax * bz - az * bx, with the sign explanation now explicitly tied to observed telemetry rather than an undocumented SDK sign convention. This is the primary confirmed route-loss defect in this trace.
+
+### SDK contract checked
+
+The checked-in CSP SDK declares ac.overrideCarControls(carIndex) as returning ac.CarControlsInput?. Its steer field is normalized from -1 to +1; combineAxis=false is documented to replace original pedal and handbrake values. CarControlsInput:active() reports whether the override has been read by AC physics in the last couple of frames. ac.StateCar exposes look as normalized forward, position and velocity in world space, and steer as steering-wheel angle in degrees. physics.setAICarPosition(carIndex, pos, dir) takes a zero-based car index and a vec3 direction; passing nil aligns to the AI spline. The current spawn code's API names and argument shapes match these definitions, and the live trace confirms that the spawn call is taking effect.
+
+The telemetry previously logged only the controller's requested p.steer, not the actual car.steer value and not whether the override was consumed by physics. Added ACTUAL_STEER_DEG, CTRL_ACTIVE, HEADING_DOT, TARGET_DIST and TARGET_ANGLE fields so the next run can distinguish a bad steering calculation from an override/API handoff failure.
+
+### Remaining defects found in the full source review
+
+- The function labelled PURE PURSUIT is not the standard pure-pursuit controller. It multiplies the target heading angle by a fixed gain and sends that value directly as normalized steering. It does not calculate path curvature from lookahead distance or convert curvature through vehicle wheelbase/steering geometry. The sign correction is necessary, but it does not prove the steering magnitude is now physically correct. Do not increase gain or claim stable handling until the new telemetry is reviewed; a proper geometry-based controller remains required.
+- HEADING_GUARD still applies full brake and zero steering below headingDot 0.35 and has no recovery transition. In this trace it permanently immobilizes cars 1–4. It is a fail-stop, not a recovery system. A safe recovery/teleport routine remains unimplemented.
+- findNearestSegment() searches up to 20% of the route ahead (55 segments on this 277-point line) and scores candidates using a fixed heading penalty of 250. That broad window can potentially jump to another leg at a crossover. The current trace does not isolate this as the cause, so it is recorded as an audit risk rather than changed speculatively.
+- The speed planner uses fixed generic lateral-acceleration and braking constants, not car-specific limits. Its interaction with the new steering controller still needs telemetry validation.
+- The fallback guarded by if ac.storage then is not declared in the checked-in SDK definitions; file I/O is the effective route persistence path in this source. It does not explain the driving failure, and was not altered in this focused fix.
+- FOLLOW_LATERAL and FOLLOW_DISTANCE are unused, and the UI's followGap slider is not connected to a follow controller. Passing helpers exist but are deliberately not called; passing remains disabled. These are functional/UI cleanup items, not the cause of the current route-loss trace.
+- manifest.ini still presents the app as “Arcade AI” and contains an old description; this is a naming/documentation mismatch, not a controller cause.
+
+### Changes in this audit
+
+Restored the steering cross-product sign and added control-handoff/actual-steering telemetry. No arbitrary gain, speed, lookahead, route, collision, passing, or UI parameter was changed. The new source is committed separately. The SDK was inspected at source-definition level, but this environment has no LuaJIT/Lua compiler and no Assetto Corsa runtime. Therefore syntax compilation, API execution, physics acceptance, and in-game handling remain unverified.
+
+Next test: run the exact current branch source and check whether the steering sign now makes the car yaw toward the route. Inspect CTRL_ACTIVE and ACTUAL_STEER_DEG alongside requested STEER; if control is accepted but yaw remains excessive or oscillatory, replace the angle-times-gain controller with a geometry-based steering law before touching traffic coordination. Do not re-enable passing until the baseline line follower is stable.
