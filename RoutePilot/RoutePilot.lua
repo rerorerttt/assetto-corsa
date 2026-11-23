@@ -48,6 +48,7 @@ local state = {
   nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   aiSplineBuilt=false, aiSplinePath=nil, aiRevision=0, sessionTime=0, trafficHints={},
 }
+local driverReady=false
 local logger=nil
 if Logger and type(Logger.new)=="function" then
   local ok, result = pcall(function()
@@ -673,22 +674,18 @@ local function applyWidthPreset(preset)
   writeLog("WIDTH_PRESET preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
 end
 local function releaseCar(carIndex)
-  local ok,controls=pcall(ac.overrideCarControls,carIndex)
-  if ok and controls then
-    controls.combineAxis=false
-    controls.steer=0; controls.gas=0; controls.brake=0; controls.handbrake=0
+  if Driver and Driver.release then
+    pcall(Driver.release,carIndex)
+  else
+    state.p[carIndex]=nil
   end
-  state.p[carIndex]=nil
 end
-local driverReady=false
 local function ensureDriver()
   if driverReady or not Driver then return Driver~=nil end
   if type(Driver.setup)~="function" then return false end
   Driver.setup(CFG,state,{
-    segmentCount=segmentCount, segEnd=segEnd, walkLine=walkLine,
-    findNearestSeg=findNearestSeg, lateralOf=lateralOf, boundsAt=boundsAt,
-    getVertexCurvature=getVertexCurvature, carAheadFull=carAheadFull,
-    teleportHome=teleportHome, log=writeLog,
+    segmentCount=segmentCount, segEnd=segEnd, findNearestSeg=findNearestSeg,
+    lateralOf=lateralOf, boundsAt=boundsAt, teleportHome=teleportHome, log=writeLog,
   })
   driverReady=true
   return true
@@ -699,16 +696,17 @@ function script.update(dt)
   local ok,err=pcall(function()
     local sim=ac.getSim()
     if not sim then return end
+    state.sessionTime=state.sessionTime+dt
     local player=ac.getCar(0)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
-    if state.enabled and state.loaded and #state.nodes>=2 then
+
+    if state.enabled and state.loaded and state.aiSplineBuilt and
+      #state.nodes>=3 and Driver and ensureDriver() then
+      -- Prepare the complete field first: all cars see the same positions,
+      -- progress values and pass reservations before any offset is applied.
+      if Driver.beginFrame then Driver.beginFrame(sim,dt) end
       trySpawnTeleport(sim,dt)
-    end
-    -- INSTANT ADOPTION + DRIVING: every active AI car is driven from the
-    -- very first frame. Nothing blocks this. (This was the bug: the spawn
-    -- gate used to block driving forever — cars stayed on the stock AI.)
-    if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
       for i=1,sim.carsCount-1 do
         local car=ac.getCar(i)
         if car and car.isActive and car.isAIControlled then
@@ -724,6 +722,7 @@ function script.update(dt)
     else
       for idx in pairs(state.p) do releaseCar(idx) end
     end
+
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
       state.logAccum=state.logAccum-CFG.LOG_INTERVAL
