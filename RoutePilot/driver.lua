@@ -100,6 +100,7 @@ local function laneLayout()
   return laneCount,laneWidth,offsets
 end
 
+local laneFits
 local function assignLanes(snapshots,metrics)
   local cars={}
   for _,snap in pairs(snapshots) do
@@ -128,7 +129,7 @@ local function assignLanes(snapshots,metrics)
   return true
 end
 
-local function laneFits(seg, target, half, metrics)
+laneFits=function(seg, target, half, metrics)
   local remaining, index = PASS_LOOKAHEAD, seg
   for _ = 1, metrics.count do
     local left, right = H.boundsAt(index)
