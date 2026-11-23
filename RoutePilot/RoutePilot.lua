@@ -1077,7 +1077,7 @@ function windowMain(dt)
     for idx=1,4 do
       local label=string.format("%s%d м / %s",idx==state.widthPreset and "● " or "",WIDTH_PRESETS[idx],idx==1 and "1 полоса" or "2 полосы")
       if idx>1 then ui.sameLine(0,4) end
-      if ui.button(label,vec2(92,22)) then
+      if ui.button(label,vec2(120,22)) then
         applyWidthPreset(idx)
       end
     end
