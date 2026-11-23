@@ -21,21 +21,21 @@ local CFG = {
 
   STEER_GAIN = 0.48,
   STEER_LIMIT = 0.75,
-  STEER_RATE = 3.6,
-  STEER_FILTER = 0.14,
+  STEER_RATE = 2.4,
+  STEER_FILTER = 0.18,
 
   SLIP_START = 0.16,
   SLIP_FULL = 0.62,
 
-  MAX_LATERAL_ACCEL = 20.0,
-  LATERAL_ACCEL_LIMIT = 27.0,
+  MAX_LATERAL_ACCEL = 11.5,
+  LATERAL_ACCEL_LIMIT = 17.0,
 
-  BRAKE_ACCEL = 16.0,
+  BRAKE_ACCEL = 12.0,
   MAX_BRAKE = 0.75,
   MAX_GAS = 1.0,
 
-  SPEED_GAIN = 0.85,
-  MIN_CORNER_SPEED = 14.0,
+  SPEED_GAIN = 0.55,
+  MIN_CORNER_SPEED = 9.0,
   SCAN_RAY_LENGTH = 14.0,
   SCAN_RAYS_PER_FRAME = 64,
   SCAN_CACHE_VERSION = 2,
@@ -65,7 +65,7 @@ local CFG = {
   COLLISION_RADIUS = 6.5,
   COLLISION_EMERGENCY_RADIUS = 3.2,
 
-  OVERTAKE_DISTANCE = 60.0,
+  OVERTAKE_DISTANCE = 42.0,
   OVERTAKE_REAR_DISTANCE = 30.0,
   OVERTAKE_MIN_ADVANTAGE = 0.5,
   OVERTAKE_OFFSET = 1.45,
@@ -79,7 +79,7 @@ local CFG = {
   TRAFFIC_LOOKAHEAD = 125.0,
   TRAFFIC_ONCOMING_TIME = 8.0,
   TRAFFIC_ONCOMING_RANGE = 9.0,
-  TRAFFIC_OFFSET_RATE = 5.0,
+  TRAFFIC_OFFSET_RATE = 3.0,
 
   LOG_INTERVAL = 1.0,
   MAX_ROUTE_POINTS = 50000,
@@ -1825,9 +1825,6 @@ local function updateTrafficCoordinator(sim, dt)
               end
 
               local closingSpeed = follower.speed - leader.speed
-              local followerPace = follower.p and follower.p.paceMultiplier or 1.0
-              local leaderPace = leader.p and leader.p.paceMultiplier or 1.0
-              local paceAdvantage = followerPace - leaderPace
               local leaderStopped = leader.speed < 1.5 and
                 (leader.isPlayer and state.playerSlowTimer > 1.5 or
                  leader.p and (leader.p.slowTimer or 0) > 1.5)
@@ -1838,12 +1835,11 @@ local function updateTrafficCoordinator(sim, dt)
               local routeAligned = routeGap and routeGap > 4.0 and
                 routeGap < CFG.OVERTAKE_DISTANCE and
                 math.abs(routeGap - gap) < 12.0 and routeLateral < 5.5
-              -- Arcade race logic: a modest real closing speed OR a clear pace
-              -- advantage is enough to request a pass. This avoids waiting until
-              -- the faster car has already reached the leader's bumper.
-              local setupDistance = math.max(8.0, math.max(0, closingSpeed) * 0.8 + 5.0)
-              local canPass = ((closingSpeed > 0.65 or paceAdvantage > 0.025) and
-                gap > setupDistance) or leaderStopped
+              -- Personality pace is not a physical reason to change lanes.
+              -- Start the lane change early enough to finish it before reaching
+              -- the leader. At high closing speed, a seven-metre trigger is too late.
+              local setupDistance = math.max(7.0, math.abs(closingSpeed) * 0.65 + 4.0)
+              local canPass = (closingSpeed > 2.5 and gap > setupDistance) or leaderStopped
 
               if routeAligned and gap > 7.0 and gap < CFG.OVERTAKE_DISTANCE and
                  lateral < 5.5 and canPass then
