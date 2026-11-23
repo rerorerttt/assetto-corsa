@@ -1,15 +1,20 @@
--- RoutePilot.lua — v0.5.1 (CSP 0.3.2-preview2)
--- Total-width bounds (2 m = one car, 4 m = two cars, line in center);
--- map clipped inside ui.beginChild (cannot float away); rescue teleport
--- only via driver stuck-timer; 3D world lines via render callback Draw3D.
+-- RoutePilot.lua — v0.5.2 (CSP 0.3.2-preview2)
+-- MAP FIX: v0.5.1 drew the map inside ui.beginChild(0, 250) — a zero-width
+-- child renders EMPTY in this CSP build (user saw a blank window). Reverted
+-- to the PROVEN RoutePilot_Back canvas: plain invisibleButton + getItemRect
+-- with manual per-segment clipping (Back used this and the map worked).
+-- Driver: Back-proven controller core (driver.lua v0.5.2). Bounds width is
+-- TOTAL (2 m = one car). Rescue teleports only when stuck.
+-- 3D lines need [RENDER_CALLBACKS] TRANSPARENT = Draw3D in manifest.ini.
+
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.7, LOOKAHEAD_MIN=12.0, LOOKAHEAD_MAX=45.0,
-  STEER_GAIN=0.55, STEER_LIMIT=1.0, STEER_RATE=2.5, STEER_FILTER=0.15,
+  LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.42, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=25.0,
+  STEER_GAIN=0.72, STEER_LIMIT=0.75, STEER_RATE=2.0, STEER_FILTER=0.18,
   MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0, MIN_APEX_SPEED=11.0,
   CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
   SLIP_START=0.09, SLIP_FULL=0.45, SLIP_DAMP_MIN_SPEED=8.0,
@@ -71,7 +76,6 @@ end
 local function getBoundsFilePath()
   return string.gsub(getLineFilePath(),"%.txt$","_bounds.txt")
 end
-
 local function serializeNodes(nodes)
   local out={}
   for i=1,#nodes do
@@ -202,7 +206,6 @@ local function smoothLine()
     for i=1,n do state.nodes[i]=vec3(newX[i],state.nodes[i].y,newZ[i]) end
   end
 end
-
 local function segmentCount()
   if state.loopRoute then return #state.nodes end
   return math.max(0,#state.nodes-1)
@@ -499,7 +502,7 @@ local function addPoint(pos)
   end
   if #state.nodes==0 or flatDist(state.nodes[#state.nodes],pos)>=CFG.RECORD_DISTANCE then
     state.nodes[#state.nodes+1]=vec3(pos.x,pos.y+0.1,pos.z)
-    local half=state.boundsWidth/2  -- TOTAL width: half each side
+    local half=state.boundsWidth/2
     state.boundsL[#state.nodes]=-half
     state.boundsR[#state.nodes]=half
   end
@@ -568,7 +571,6 @@ local function ensureDriver()
   driverReady=true
   return true
 end
-
 function script.update(dt)
   if not dt or dt<=0 then return end
   dt=math.min(dt,0.05)
@@ -611,8 +613,6 @@ function script.update(dt)
     if logger then writeLog("UPDATE_ERROR err=%s",tostring(err)); flushLog() end
   end
 end
-
--- 3D world lines: TRANSPARENT render callback (manifest [RENDER_CALLBACKS])
 function script.Draw3D(dt)
   if not state.showWorldLines then return end
   local n=#state.nodes
@@ -645,8 +645,6 @@ function script.Draw3D(dt)
     writeLog("DRAW3D_ERROR disabled"); flushLog()
   end
 end
-
--- Map inside beginChild: clipped to the window, cannot float away
 local function computeMapBounds()
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
   for i=1,#state.nodes do
@@ -668,89 +666,97 @@ local function computeMapBounds()
   if minX==math.huge then return nil end
   return {minX=minX,maxX=maxX,minZ=minZ,maxZ=maxZ}
 end
-local function drawMapChild()
-  if #state.nodes<2 then ui.text(" ") return end
-  local ok=pcall(function()
-    ui.beginChild("routepilot_map",vec2(0,CFG.MAP_HEIGHT),false,0)
-    local size=ui.availableSpaceX()
-    local b=computeMapBounds()
-    if b then
-      local width=size
-      if width<80 then width=80 end
-      ui.invisibleButton("map_area",vec2(width,CFG.MAP_HEIGHT-8))
-      local q0=ui.getItemRectMin()
-      local q1=ui.getItemRectMax()
-      ui.drawRectFilled(q0,q1,rgbm(0.08,0.08,0.10,1),4)
-      ui.drawRect(q0,q1,rgbm(0.3,0.3,0.35,1),4)
-      local spanX=math.max(1,b.maxX-b.minX)+16
-      local spanZ=math.max(1,b.maxZ-b.minZ)+16
-      local scale=math.min((q1.x-q0.x)/spanX,(q1.y-q0.y)/spanZ)
-      local cx=(b.minX+b.maxX)*0.5
-      local cz=(b.minZ+b.maxZ)*0.5
-      local mx=(q0.x+q1.x)*0.5
-      local my=(q0.y+q1.y)*0.5
-      local function toScreen(x,z)
-        return vec2(mx+(x-cx)*scale,my+(z-cz)*scale)
+local function drawMapInRect(q0,q1)
+  if #state.nodes<2 then return end
+  local b=computeMapBounds()
+  if not b then return end
+  ui.drawRectFilled(q0,q1,rgbm(0.08,0.08,0.10,1),4)
+  ui.drawRect(q0,q1,rgbm(0.3,0.3,0.35,1),4)
+  local spanX=math.max(1,b.maxX-b.minX)+16
+  local spanZ=math.max(1,b.maxZ-b.minZ)+16
+  local scale=math.min((q1.x-q0.x)/spanX,(q1.y-q0.y)/spanZ)
+  local cx=(b.minX+b.maxX)*0.5
+  local cz=(b.minZ+b.maxZ)*0.5
+  local mx=(q0.x+q1.x)*0.5
+  local my=(q0.y+q1.y)*0.5
+  local function toScreen(x,z)
+    return vec2(mx+(x-cx)*scale,my+(z-cz)*scale)
+  end
+  local n=#state.nodes
+  local minOff=4
+  for pass=1,2 do
+    local prev
+    for i=1,n do
+      local node=state.nodes[i]
+      local nxt=state.nodes[(i%n)+1]
+      local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
+      local l,r=boundsAt(i)
+      local off=(pass==1) and l or r
+      if math.abs(off)*scale<minOff then
+        off=(off>=0 and 1 or -1)*(minOff/math.max(scale,0.0001))
       end
-      local n=#state.nodes
-      -- bounds dark red, min screen offset so always visible
-      local minOff=4
-      for pass=1,2 do
-        local prev
-        for i=1,n do
-          local node=state.nodes[i]
-          local nxt=state.nodes[(i%n)+1]
-          local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
-          local l,r=boundsAt(i)
-          local off=(pass==1) and l or r
-          if math.abs(off)*scale<minOff then
-            off=(off>=0 and 1 or -1)*(minOff/math.max(scale,0.0001))
-          end
-          local px,pz=node.x-lz*off,node.z+lx*off
-          local cur=toScreen(px,pz)
-          if prev then ui.drawLine(prev,cur,rgbm(0.55,0.05,0.05,1),1.5) end
-          prev=cur
-        end
+      local px,pz=node.x-lz*off,node.z+lx*off
+      local sx=mx+(px-cx)*scale
+      local sy=my+(pz-cz)*scale
+      if prev and not (prev.x<q0.x and sx<q0.x) and not (prev.x>q1.x and sx>q1.x)
+        and not (prev.y<q0.y and sy<q0.y) and not (prev.y>q1.y and sy>q1.y) then
+        ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),1.5)
       end
-      -- AI line yellow
-      do
-        local prev=toScreen(state.nodes[1].x,state.nodes[1].z)
-        for i=2,n do
-          local cur=toScreen(state.nodes[i].x,state.nodes[i].z)
-          ui.drawLine(prev,cur,rgbm(1.0,0.85,0.0,0.95),2)
-          prev=cur
-        end
-        if state.loopRoute then
-          ui.drawLine(prev,toScreen(state.nodes[1].x,state.nodes[1].z),rgbm(1.0,0.85,0.0,0.95),2)
-        end
+      prev=vec2(sx,sy)
+    end
+  end
+  do
+    local prev=toScreen(state.nodes[1].x,state.nodes[1].z)
+    for i=2,n do
+      local cur=toScreen(state.nodes[i].x,state.nodes[i].z)
+      local inside=not (prev.x<q0.x and cur.x<q0.x) and not (prev.x>q1.x and cur.x>q1.x)
+        and not (prev.y<q0.y and cur.y<q0.y) and not (prev.y>q1.y and cur.y>q1.y)
+      if inside then
+        ui.drawLine(prev,cur,rgbm(1.0,0.85,0.0,0.95),2)
       end
-      local sim=ac.getSim()
-      if sim then
-        for i=0,sim.carsCount-1 do
-          local car=ac.getCar(i)
-          if car and car.isActive then
-            local s=toScreen(car.position.x,car.position.z)
-            if s.x>q0.x and s.x<q1.x and s.y>q0.y and s.y<q1.y then
-              if i==0 then
-                ui.drawCircleFilled(s,4.5,rgbm(0.0,0.8,1.0,1.0),12)
-              else
-                local p=state.p[i]
-                if p and p.overtakeSide~=0 then
-                  ui.drawCircleFilled(s,3.5,rgbm(0.2,1.0,0.4,1.0),10)
-                else
-                  ui.drawCircleFilled(s,3.5,rgbm(1,1,1,0.9),10)
-                end
-              end
+      prev=cur
+    end
+    if state.loopRoute then
+      ui.drawLine(prev,toScreen(state.nodes[1].x,state.nodes[1].z),rgbm(1.0,0.85,0.0,0.95),2)
+    end
+  end
+  local sim=ac.getSim()
+  if sim then
+    for i=0,sim.carsCount-1 do
+      local car=ac.getCar(i)
+      if car and car.isActive then
+        local s=toScreen(car.position.x,car.position.z)
+        if s.x>q0.x and s.x<q1.x and s.y>q0.y and s.y<q1.y then
+          if i==0 then
+            ui.drawCircleFilled(s,4.5,rgbm(0.0,0.8,1.0,1.0),12)
+          else
+            local p=state.p[i]
+            if p and p.overtakeSide~=0 then
+              ui.drawCircleFilled(s,3.5,rgbm(0.2,1.0,0.4,1.0),10)
+            else
+              ui.drawCircleFilled(s,3.5,rgbm(1,1,1,0.9),10)
             end
           end
         end
       end
     end
-    ui.endChild()
+  end
+end
+local function drawMap()
+  if #state.nodes<2 then
+    ui.text(" ")
+    return
+  end
+  local ok=pcall(function()
+    local width=ui.availableSpaceX()
+    if width<80 then width=80 end
+    ui.invisibleButton("line_map",vec2(width,CFG.MAP_HEIGHT))
+    local q0=ui.getItemRectMin()
+    local q1=ui.getItemRectMax()
+    drawMapInRect(q0,q1)
   end)
   if not ok then pcall(ui.text," ") end
 end
-
 function windowMain(dt)
   local okDraw=pcall(function()
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
@@ -793,11 +799,10 @@ function windowMain(dt)
       state.status="Очищено"; state.loaded=false
     end
     ui.separator()
-    drawMapChild()
+    drawMap()
   end)
   if not okDraw then pcall(ui.text,"UI error") end
 end
-
 if ac.onRelease then
   ac.onRelease(function()
     for idx in pairs(state.p) do releaseCar(idx) end
@@ -806,9 +811,8 @@ if ac.onRelease then
     end
   end)
 end
-
 loadLine()
 smoothLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.5.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.5.2 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
