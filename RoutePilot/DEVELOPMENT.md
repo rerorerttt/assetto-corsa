@@ -48,7 +48,7 @@ Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 - Payload speed hints are derived from horizontal curvature. Straight sections are capped at 300 km/h; the curve target uses 10.5 m/s² lateral acceleration, and a two-pass cyclic braking envelope uses 12 m/s² deceleration.
 - Throttle and brake hints are left neutral. The game AI remains responsible for actual inputs.
 - Left and right side widths come from the user's signed boundary arrays. The spline builder stores their positive magnitudes in the native payload.
-- Surface normals are sampled downward from each route point. These rays do not search for obstacles.
+- Each route point is snapped to the track surface and lifted 0.3 m, matching AISplineEditor. The same downward ray supplies the payload surface normal; these rays do not search for obstacles.
 
 ### Lanes and overtaking
 
