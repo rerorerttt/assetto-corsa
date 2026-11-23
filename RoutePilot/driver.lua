@@ -161,11 +161,12 @@ end
 
 local function laneIsFree(follower, leader, target, snapshots, metrics)
   local leaderIndex=leader and leader.index or -1
+  local leaderIsAI=leader and leader.p~=nil
   for index, other in pairs(snapshots) do
     -- An AI leader is already known to be in its home lane; the player is
     -- different: if the player is the leader, still treat the player's actual
     -- position as an obstacle in the proposed passing corridor.
-    if index ~= follower.index and (index ~= leaderIndex or not leader.p) then
+    if index ~= follower.index and (index ~= leaderIndex or not leaderIsAI) then
       local gap = signedGap(follower, other, metrics.total)
       local longitudinalClose = math.abs(gap) < PASS_OCCUPANCY_RANGE
       if other.headingDot < 0.25 then
