@@ -232,7 +232,11 @@ local function loadBounds()
   return false
 end
 local function saveLine()
-  if #state.nodes<2 then state.status="Недостаточно точек" return end
+  trimDuplicateClosure()
+  if #state.nodes<3 then state.status="Недостаточно точек" return end
+  saveBounds()
+  local built=buildAISpline()
+  -- The builder snaps nodes to the track surface; serialize after that step.
   local data=serializeNodes(state.nodes)
   local wroteFile=false
   if io and io.open then
@@ -240,11 +244,10 @@ local function saveLine()
     if ok and f then wroteFile=pcall(function() f:write(data) f:close() end) end
   end
   if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
-  saveBounds()
   if wroteFile then
     state.loaded=true
-    writeLog("SAVE_ROUTE points=%d",#state.nodes)
-    buildAISpline()
+    writeLog("SAVE_ROUTE points=%d nativeSplineBuilt=%s",#state.nodes,tostring(built))
+    if not built then state.status="Линия сохранена, но native AI spline не построен" end
     flushLog()
   else
     state.loaded=false
