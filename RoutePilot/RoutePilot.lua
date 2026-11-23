@@ -817,8 +817,10 @@ local function drawCornerArrows(startSeg,partial,maxDistance)
       local tx,tz=normalize2(bx,bz)
       local rx,rz=-tz,tx
       local left,right=boundsAt(seg)
-      local offset=left+0.8
-      while offset<=right-0.8 do
+      local arrowCount=math.max(1,math.floor((right-left)/2.4))
+      local arrowSpacing=(right-left)/(arrowCount+1)
+      for arrowIndex=1,arrowCount do
+        local offset=left+arrowSpacing*arrowIndex
         local center=vec3(cur.x+rx*offset,cur.y+1.25,cur.z+rz*offset)
         local tip=vec3(center.x+tx*1.25,center.y,center.z+tz*1.25)
         local back=vec3(center.x-tx*0.75,center.y,center.z-tz*0.75)
@@ -828,7 +830,6 @@ local function drawCornerArrows(startSeg,partial,maxDistance)
         render.debugLine(back,tip,color)
         render.debugLine(tip,wingL,color)
         render.debugLine(tip,wingR,color)
-        offset=offset+2.4
       end
       nextArrow=travelled+6.0
     end
