@@ -2521,6 +2521,7 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
   local leftClear = math.min(distances[7], distances[8], distances[9], distances[10], distances[11])
   local forwardClear = math.min(distances[5], center, distances[7])
   local correction = 0
+  local staticCorrection = 0
   local speed = math.max(0, safeNumber(car.speedMs))
 
   -- Cached track hits must protect the normal racing line too, not only
@@ -2550,9 +2551,9 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
 
   if staticThreatDistance < 14.0 then
     if staticThreatSide >= 0 then
-      correction = -0.36
+      staticCorrection = -0.36
     else
-      correction = 0.36
+      staticCorrection = 0.36
     end
     if staticThreatDistance < 9.0 then
       targetSpeed = math.min(targetSpeed, math.max(9.0, speed * 0.72))
@@ -2591,6 +2592,7 @@ local function applyLiveObstacleGuard(car, p, steer, targetSpeed)
   if leftClear < 2.0 and steer > 0 then steer = 0 end
   if rightClear < 2.0 and steer < 0 then steer = 0 end
 
+  correction = clamp(correction + staticCorrection, -0.55, 0.55)
   steer = clamp(steer + correction, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
 
   if staticThreatDistance < 14.0 then
