@@ -1,6 +1,6 @@
-# RoutePilot 0.2.1
+# RoutePilot 0.4
 
-CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
+CSP Lua app for Assetto Corsa. Records a custom route from the player car and uses it to control AI cars on that route, with centralized traffic coordination and recovery.
 
 ## Install
 
@@ -8,38 +8,40 @@ Copy the `RoutePilot` folder into:
 
 `assettocorsa/apps/lua/RoutePilot/`
 
-The folder must contain:
-- `manifest.ini`
-- `RoutePilot.lua`
-
-Enable RoutePilot in Content Manager's Lua Apps list and open it in a session.
+Enable RoutePilot in Content Manager's Lua Apps list and open it in a session. Keep `manifest.ini`, `RoutePilot.lua`, and `logger.lua` together.
 
 ## First use
 
-1. Drive the desired route with the player car.
-2. Press **Начать запись маршрута** before driving.
-3. Drive one full lap and press **Остановить запись**.
-4. Keep **Замкнутый маршрут (круг)** enabled for a lap route.
-5. Press **Сохранить маршрут этой трассы**.
-6. Add AI cars to the session and press **Запустить автопилот**.
+1. Enable route recording and drive the desired route.
+2. Stop recording after completing the desired lap/route.
+3. Keep loop mode enabled for a circular route.
+4. Save the route for the current track/layout.
+5. Enable AI cars in the session and enable RoutePilot.
 
-Routes are stored separately by full track ID using CSP `ac.storage` and are autoloaded when the app starts on a track with a saved route.
+Routes are stored separately by track/layout. The app attempts to load the saved route on startup. The route file currently uses plain XYZ rows.
 
-## Current scope
+## Current controller
 
-- Records player-car world X/Z coordinates and speed.
-- Stores and loads routes per track/layout, with autoload on app start.
-- Uses a Pure Pursuit-style steering controller and a curvature/braking speed planner.
-- Car-following collision avoidance (v0.2.0): each AI car checks for the nearest car ahead in its own lane (lateral offset within 2.4 m) and limits its target speed to a safe value based on the gap and the leader's speed. Below the minimum gap (adjustable, 3–15 m) the car stops completely.
-- Controls only steering, throttle and brake. No gear, clutch, reverse or stock AI spline commands are issued.
-- Applies to active AI-controlled cars with index 1 and above.
+- Uses a player-recorded world-space route rather than relying on the track's stock AI fast lane.
+- Uses Pure Pursuit-style steering and a curvature-based speed planner.
+- Controls steering, throttle and brake through CSP; gearbox/transmission remain under vehicle control.
+- Builds one active-car snapshot and coordinates same-direction pass/yield pairs and opposite-direction meeting/yield pairs.
+- Applies per-car pace variation to create race pressure and passing opportunities.
+- Uses car-to-car following and predicted collision checks, plus stuck/airborne/off-route recovery.
+- Writes periodic telemetry to `routepilot_trace.txt`.
 
-## Changelog
+## Current development status
 
-- 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
-- 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
+The `routepilot-traffic-coordinator` branch is under active development. Commit `62fc5f5` introduced an arcade tuning pass: higher default speed, more responsive steering/throttle, revised curvature/braking assumptions, 2.65 m traffic offsets, a shorter lane-rejection window and alternating AI pace multipliers. These values have not yet been validated in-game. Collect a fresh trace after testing; the previous trace is baseline evidence from before this tuning pass.
 
-## Known limitations
+Static track-obstacle scanning is planned but not implemented yet. The checked-in CSP SDK documents `physics.raycastTrack()` for ray tests against physics surfaces; see `DEVELOPMENT.md` for the proposed cached obstacle-map design and its limitations.
 
-- Car-following only prevents rear-ending the car directly ahead in the same lane; side-by-side contact during overtakes is not handled (no overtaking logic yet).
-- This is an initial controller implementation. It must be tested in-game on a clear track before use in traffic. The controller does not yet perform overtaking, pit handling, or automatic recovery from a spin/off-track situation.
+## Development handoff
+
+Before continuing work, read `DEVELOPMENT.md`. It records the active branch, reviewed commits, known traffic bugs, verified CSP APIs, design constraints, and validation status. Update it whenever the implementation, API findings, file format, or test results change.
+
+## Important limitations
+
+- Traffic coordination is an evolving system and must be tested on the actual track, especially where the route crosses itself or contains opposing traffic.
+- The obstacle cache is not implemented. `physics.raycastTrack()` can detect collision-enabled physics surfaces; it cannot guarantee detection of visible objects without physics collision geometry.
+- No code change should be described as in-game verified until a fresh session and telemetry confirm it.
