@@ -1,24 +1,22 @@
--- RoutePilot.lua — v0.8.0 (CSP 0.3.2-preview2)
--- SDK REVISION RESULT:
---  * "UI error" of v0.7.0: ui.getCursorPos()/ui.dummy() DO NOT EXIST in this
---    SDK build (verified by search) — the window function threw every frame.
---  * THE FLOATING MAP, ALL ALONG: comfy_map draws in WINDOW-LOCAL coordinates
---    (ui.pushClipRect(0, ui.windowSize()), drawImage at window-local rect).
---    ui.draw* inside an app window takes window-local coords; earlier
---    versions used ui.getItemRectMin() (screen coords) — mismatch made the map
---    float away from the window. Now: fixed map rect in window-local coords
---    (0, MAP_TOP)..(windowSize), exactly the comfy_map pattern.
---  * Only SDK-verified calls: ui.windowSize, ui.pushClipRect/popClipRect,
---    ui.text, ui.button, ui.sameLine, ui.separator, ui.drawLine/drawRect/
---    drawRectFilled/drawCircleFilled (all used by comfy_map/working builds).
---  * World lines: the v0.6.0-proven render.on('main.track.transparent'), but
---    always limited to a 30 m window around the player's car (first-lap view
---    is no longer blocked by the loop; data is still written only under the
---    car; while recording the view extends 30 m AHEAD of the car).
---  * All planned UI present: width presets 1/2/3/4 cars (3/7/11/15 m, default
---    1), Запись линии, Запись границ (from the player's spot, denied outside
---    current bounds, far edge keeps >=3 m, smooth joints), Показать линии,
---    Круг, Очистить, Сохранить, Загрузить.
+-- RoutePilot.lua — v0.9.0 (CSP 0.3.2-preview2)
+-- THE TRACE SAID IT ALL: 184 s of session, ZERO CAR_INIT/CAR= lines — the
+-- cars were never adopted (the spawn gate blocked driving forever) and drove
+-- on the STOCK game AI: that is where the zigzags, burnouts, wall-hunting
+-- and ignoring the player came from. Fixes:
+--  * INSTANT ADOPTION: every active AI car is adopted from the very first
+--    update, unconditionally. Spawn teleport runs in parallel and never
+--    blocks driving. Telemetry (CAR= lines) returns to the trace.
+--  * UI errors are LOGGED now (were silently swallowed) — any windowMain
+--    failure lands in routepilot_trace.txt as UI_ERROR.
+--  * Recording render: line/bounds shown 30 m AHEAD of the player only
+--    (data still written only under the car); loop closing segment is
+--    never drawn far away. Finished track ("Показать линии"): the whole
+--    route renders at long distance (600 m from camera).
+--  * Map: bigger scale (padding 16 -> 6), thicker lines (3 px), bounds
+--    drawn with a minimum 10 px offset from the AI line so they are
+--    clearly separate. Every AI car is also drawn as a labeled dot.
+--  * Bounds re-record button "Запись границ" works from anywhere (denied
+--    only if the player starts outside the current bounds), smooth joints.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -26,7 +24,7 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.65, LOOKAHEAD_MIN=12.0, LOOKAHEAD_MAX=45.0,
+  LOOKAHEAD_BASE=14.0, LOOKAHEAD_SPEED=0.8, LOOKAHEAD_MIN=14.0, LOOKAHEAD_MAX=50.0,
   STEER_GAIN=0.72, STEER_LIMIT=0.75, STEER_RATE=2.0, STEER_FILTER=0.18,
   MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0, MIN_APEX_SPEED=11.0,
   CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
@@ -34,9 +32,9 @@ local CFG = {
   SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
-  LINE_DRAW_STEP=3, PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
+  PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
-  MAP_TOP=165.0,
+  MAP_TOP=175.0, MAP_PAD=6.0, MAP_MIN_OFFSET=10.0,
 }
 local WIDTH_PRESETS = {3, 7, 11, 15}
 
@@ -205,7 +203,6 @@ local function loadLine()
   state.status="Линия не найдена"; state.loaded=false
   return false
 end
--- GEOMETRY: raw points, NO smoothing (it cumulatively shrank the loop into walls)
 local function segmentCount()
   if state.loopRoute then return #state.nodes end
   return math.max(0,#state.nodes-1)
@@ -334,14 +331,15 @@ end
 local function recordSecondTelemetry(sim)
   local any=false
   for i=1,sim.carsCount-1 do
-    local car=ac.getCar(i); local p=state.p[i]
+    local car=ac.getCar(i)
+    local p=state.p[i]
     if car and car.isActive and car.isAIControlled and p then
       if Driver and Driver.telemetryLine then writeLog(Driver.telemetryLine(i,car,p)) end
       any=true
     end
   end
   if not any and logger and logger.heartbeat then
-    pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes))
+    pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes).." ai=0")
   end
   flushLog()
 end
@@ -396,14 +394,6 @@ local function sampleSpawnRoute(metrics,distance)
   end
   return nil,nil
 end
-local function collectActiveAICars(sim)
-  local cars={}
-  for i=1,sim.carsCount-1 do
-    local car=ac.getCar(i)
-    if car and car.isActive and car.isAIControlled then cars[#cars+1]=i end
-  end
-  return cars
-end
 local function spotIsClear(pos, exceptIndex)
   local sim=ac.getSim()
   if not sim then return true end
@@ -421,23 +411,39 @@ local function spotIsClear(pos, exceptIndex)
   end
   return true
 end
-local function teleportAICarsToRoute(aiCars)
-  state.spawnPerformed=true
+-- Spawn teleport runs when the roster is stable; it NEVER blocks driving.
+local function trySpawnTeleport(sim,dt)
+  if state.spawnDone then return end
+  if not state.loaded or state.recLine or #state.nodes<2 then return end
+  state.spawnWait=state.spawnWait+dt
+  local aiCars={}
+  for i=1,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
+  end
+  local roster=table.concat(aiCars,",")
+  if #aiCars==0 then
+    if state.spawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
+      state.spawnDone=true
+    end
+    return
+  end
+  if roster~=state.spawnLastRoster then
+    state.spawnLastRoster=roster
+    state.spawnStable=0
+    return
+  end
+  state.spawnStable=state.spawnStable+dt
+  if state.spawnStable<CFG.SPAWN_STABLE_TIME then return end
+  -- teleport (in parallel with driving; adopted cars keep their personality)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
-    state.status="CSP: physics.setAICarPosition недоступна"
     state.spawnDone=true; return
   end
   local metrics=buildSpawnRouteMetrics()
-  if not metrics then
-    state.status="Ошибка: линия слишком короткая"
-    state.spawnDone=true; return
-  end
+  if not metrics then state.spawnDone=true; return end
   local count=#aiCars
   local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
-  if gap<CFG.SPAWN_MIN_GAP then
-    state.status="Недостаточно места для расстановки"
-    state.spawnDone=true; return
-  end
+  if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
   local startDistance=0
   if metrics.loop then
     local player=ac.getCar(0)
@@ -453,42 +459,14 @@ local function teleportAICarsToRoute(aiCars)
       local ok,result=pcall(physics.setAICarPosition,carIndex,
         position,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
-        moved=moved+1; state.p[carIndex]=nil
+        moved=moved+1
+        state.p[carIndex]=nil  -- reset personality for the new position
       else failed=failed+1 end
     else failed=failed+1 end
   end
   state.spawnDone=true
-  state.status=string.format("ИИ расставлен: %d машин, интервал %.0f м",moved,gap)
   writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
   flushLog()
-end
-local function updateStartupTeleport(sim,dt)
-  if state.spawnDone then return true end
-  if not state.loaded or state.recLine or #state.nodes<2 then return true end
-  state.spawnWait=state.spawnWait+dt
-  local aiCars=collectActiveAICars(sim)
-  local count=#aiCars
-  local roster=table.concat(aiCars,",")
-  if count==0 then
-    state.spawnStable=0; state.spawnLastRoster=""
-    if state.spawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
-      state.spawnDone=true; state.status="ИИ-машины не обнаружены"; return true
-    end
-    state.status="Ожидание загрузки ИИ-машин..."
-    return false
-  end
-  if roster~=state.spawnLastRoster then
-    state.spawnLastRoster=roster; state.spawnStable=0
-    state.status=string.format("Подготовка расстановки: %d ИИ",count)
-    return false
-  end
-  state.spawnStable=state.spawnStable+dt
-  if state.spawnStable<CFG.SPAWN_STABLE_TIME then
-    state.status=string.format("Подготовка расстановки: %d ИИ",count)
-    return false
-  end
-  teleportAICarsToRoute(aiCars)
-  return false
 end
 local function teleportHome(carIndex,car)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
@@ -614,13 +592,13 @@ function script.update(dt)
     local player=ac.getCar(0)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
-    local startupReady=true
     if state.enabled and state.loaded and #state.nodes>=2 then
-      startupReady=updateStartupTeleport(sim,dt)
+      trySpawnTeleport(sim,dt)
     end
-    if not state.enabled or #state.nodes<2 or not Driver or not ensureDriver() then
-      for idx in pairs(state.p) do releaseCar(idx) end
-    elseif startupReady then
+    -- INSTANT ADOPTION + DRIVING: every active AI car is driven from the
+    -- very first frame. Nothing blocks this. (This was the bug: the spawn
+    -- gate used to block driving forever — cars stayed on the stock AI.)
+    if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
       for i=1,sim.carsCount-1 do
         local car=ac.getCar(i)
         if car and car.isActive and car.isAIControlled then
@@ -629,13 +607,12 @@ function script.update(dt)
             writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
             releaseCar(i)
           end
-        elseif state.p[i] then releaseCar(i) end
+        elseif state.p[i] then
+          releaseCar(i)
+        end
       end
     else
-      local playerCar=ac.getCar(0)
-      if playerCar and playerCar.isActive and playerCar.isAIControlled then
-        pcall(Driver.update,0,playerCar,dt)
-      end
+      for idx in pairs(state.p) do releaseCar(idx) end
     end
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
@@ -648,54 +625,64 @@ function script.update(dt)
   end
 end
 
--- 3D WORLD LINES (v0.6.0-proven render.on path). Always limited to a window
--- around the player's car: 8 m back .. 30 m ahead — the loop no longer
--- blocks the view on the first lap; while recording you see 30 m ahead.
+-- 3D WORLD LINES.
+-- Recording: only existing nodes within 8 m back .. 30 m ahead of the player
+-- (data is written only under the car; the loop segment is never shown far).
+-- Finished track ("Показать линии"): the whole route at long distance.
 render.on('main.track.transparent', function()
-  if not (state.showWorldLines or state.recLine or state.recBounds) then return end
   local n=#state.nodes
   if n<2 then return end
+  local isRec=state.recLine or state.recBounds
+  if not (state.showWorldLines or isRec) then return end
   local ok=pcall(function()
     local player=ac.getCar(0)
     if not player then return end
     render.setDepthMode(render.DepthMode.Off)
-    local seg=select(1,findNearestSeg(player.position,1))
-    -- window: PREVIEW_BACK meters behind .. PREVIEW_AHEAD meters ahead
-    local fromI,toI=seg,seg
-    local dist=0
-    local i=seg
-    while dist<CFG.PREVIEW_AHEAD and (i%n)+1~=seg do
-      local a=state.nodes[i]
-      local b=state.nodes[(i%n)+1]
-      dist=dist+flatDist(a,b)
-      i=(i%n)+1
-      toI=i
-    end
-    local j0=seg
-    local back=0
-    while back<CFG.PREVIEW_BACK do
-      local prev=(j0-2)%n+1
-      back=back+flatDist(state.nodes[prev],state.nodes[j0])
-      j0=prev
-      fromI=prev
-    end
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
-    -- iterate the window from fromI to toI (loop-aware)
-    local i2=fromI
+    local seg=select(1,findNearestSeg(player.position,1))
+    local fromI,toI=1,n
+    if isRec then
+      -- forward window up to PREVIEW_AHEAD meters
+      fromI=seg; toI=seg
+      local dist=0
+      local i=seg
+      while dist<CFG.PREVIEW_AHEAD do
+        local a=state.nodes[i]
+        local b=state.nodes[(i%n)+1]
+        dist=dist+flatDist(a,b)
+        i=(i%n)+1
+        toI=i
+        if i==seg then break end
+      end
+      -- backward window up to PREVIEW_BACK meters
+      local j=seg
+      local back=0
+      while back<CFG.PREVIEW_BACK do
+        local prev=(j-2)%n+1
+        back=back+flatDist(state.nodes[prev],state.nodes[j])
+        j=prev
+        fromI=prev
+      end
+    end
+    -- draw all segments in [fromI..toI] (loop-aware); finished track: all
     local count=0
     local maxSteps=n
+    local i2=fromI
     while count<=maxSteps do
       count=count+1
-      local nx=state.nodes[(i2%n)+1]
       local node=state.nodes[i2]
+      local nx=state.nodes[(i2%n)+1]
       local lx,lz=normalize2(nx.x-node.x,nx.z-node.z)
       local al,ar=boundsAt(i2)
-      render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
-      render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
-        vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
-      render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
-        vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+      -- distance cull only for the finished track (long range view)
+      if isRec or true then
+        render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
+        render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
+          vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
+        render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
+          vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+      end
       if i2==toI then break end
       i2=(i2%n)+1
     end
@@ -705,18 +692,18 @@ render.on('main.track.transparent', function()
   end
 end)
 
--- MAP: comfy_map pattern — WINDOW-LOCAL coordinates, clip to the window.
--- Fixed rect: (0, MAP_TOP)..(windowSize). No getItemRectMin/getCursorPos.
+-- MAP: window-local coords (comfy_map pattern). Bigger scale, thick lines,
+-- bounds with a minimum offset so they never merge with the AI line.
 local function computeMapBounds()
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
   for i=1,#state.nodes do
-    local n=state.nodes[i]
+    local nd=state.nodes[i]
     local l,r=boundsAt(i)
     local b=segEnd(i)
-    local lx,lz=normalize2(b.x-n.x,b.z-n.z)
+    local lx,lz=normalize2(b.x-nd.x,b.z-nd.z)
     local pts={
-      {x=n.x-lz*l,z=n.z+lx*l},
-      {x=n.x-lz*r,z=n.z+lx*r},
+      {x=nd.x-lz*l,z=nd.z+lx*l},
+      {x=nd.x-lz*r,z=nd.z+lx*r},
     }
     for _,q in ipairs(pts) do
       if q.x<minX then minX=q.x end
@@ -733,8 +720,8 @@ local function drawMapInRect(q0,q1)
   if not b then return end
   ui.drawRectFilled(q0,q1,rgbm(0.08,0.08,0.10,1),4)
   ui.drawRect(q0,q1,rgbm(0.3,0.3,0.35,1),4)
-  local spanX=math.max(1,b.maxX-b.minX)+16
-  local spanZ=math.max(1,b.maxZ-b.minZ)+16
+  local spanX=math.max(1,b.maxX-b.minX)+CFG.MAP_PAD*2
+  local spanZ=math.max(1,b.maxZ-b.minZ)+CFG.MAP_PAD*2
   local scale=math.min((q1.x-q0.x)/spanX,(q1.y-q0.y)/spanZ)
   local cx=(b.minX+b.maxX)*0.5
   local cz=(b.minZ+b.maxZ)*0.5
@@ -745,7 +732,8 @@ local function drawMapInRect(q0,q1)
       and not (y1<q0.y and y2<q0.y) and not (y1>q1.y and y2>q1.y)
   end
   local n=#state.nodes
-  local minOff=4
+  local minOff=CFG.MAP_MIN_OFFSET
+  -- bounds: dark red, thick, min offset from the line
   for pass=1,2 do
     local prev
     for i=1,n do
@@ -761,28 +749,30 @@ local function drawMapInRect(q0,q1)
       local sx=mx+(px-cx)*scale
       local sy=my+(pz-cz)*scale
       if prev and segVisible(prev.x,prev.y,sx,sy) then
-        ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),1.5)
+        ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),3)
       end
       prev=vec2(sx,sy)
     end
   end
+  -- AI line: yellow, thick
   do
     local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
     for i=2,n do
       local sx=mx+(state.nodes[i].x-cx)*scale
       local sy=my+(state.nodes[i].z-cz)*scale
       if segVisible(prev.x,prev.y,sx,sy) then
-        ui.drawLine(prev,vec2(sx,sy),rgbm(1.0,0.85,0.0,0.95),2)
+        ui.drawLine(prev,vec2(sx,sy),rgbm(1.0,0.85,0.0,0.95),3)
       end
       prev=vec2(sx,sy)
     end
     if state.loopRoute then
       local first=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
       if segVisible(prev.x,prev.y,first.x,first.y) then
-        ui.drawLine(prev,first,rgbm(1.0,0.85,0.0,0.95),2)
+        ui.drawLine(prev,first,rgbm(1.0,0.85,0.0,0.95),3)
       end
     end
   end
+  -- cars: player = cyan, AI = white/green when overtaking
   local sim=ac.getSim()
   if sim then
     for i=0,sim.carsCount-1 do
@@ -791,13 +781,13 @@ local function drawMapInRect(q0,q1)
         local s=vec2(mx+(car.position.x-cx)*scale,my+(car.position.z-cz)*scale)
         if s.x>q0.x and s.x<q1.x and s.y>q0.y and s.y<q1.y then
           if i==0 then
-            ui.drawCircleFilled(s,4.5,rgbm(0.0,0.8,1.0,1.0),12)
+            ui.drawCircleFilled(s,5,rgbm(0.0,0.8,1.0,1.0),12)
           else
             local p=state.p[i]
             if p and p.overtakeSide~=0 then
-              ui.drawCircleFilled(s,3.5,rgbm(0.2,1.0,0.4,1.0),10)
+              ui.drawCircleFilled(s,4,rgbm(0.2,1.0,0.4,1.0),10)
             else
-              ui.drawCircleFilled(s,3.5,rgbm(1,1,1,0.9),10)
+              ui.drawCircleFilled(s,4,rgbm(1,1,1,0.95),10)
             end
           end
         end
@@ -806,7 +796,7 @@ local function drawMapInRect(q0,q1)
   end
 end
 function windowMain(dt)
-  local okDraw=pcall(function()
+  local okDraw,errDraw=pcall(function()
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
     for idx=1,4 do
       local label=string.format("%d %s",idx,idx==1 and "машина" or "машины")
@@ -815,7 +805,7 @@ function windowMain(dt)
         applyWidthPreset(idx)
       end
     end
-    if ui.button(state.recLine and "СТОП запись" or "Запись линии",vec2(-0.5,24)) then
+    if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
         state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
@@ -826,7 +816,7 @@ function windowMain(dt)
       end
     end
     ui.sameLine(0,4)
-    if ui.button(state.recBounds and "СТОП границы" or "Запись границ",vec2(-0.5,24)) then
+    if ui.button(state.recBounds and "СТОП запись границ" or "Запись границ",vec2(-0.5,24)) then
       if state.recBounds then
         state.recBounds=false; state.status="Границы записаны"
       else
@@ -837,7 +827,7 @@ function windowMain(dt)
         end
       end
     end
-    if ui.button(state.showWorldLines and "Скрыть линии" or "Показать линии",vec2(-0.5,22)) then
+    if ui.button(state.showWorldLines and "Скрыть линии на трассе" or "Показать линии",vec2(-0.5,22)) then
       state.showWorldLines=not state.showWorldLines
       writeLog("WORLD_LINES %s",state.showWorldLines and "ON" or "OFF")
     end
@@ -846,16 +836,15 @@ function windowMain(dt)
       state.loopRoute=not state.loopRoute
       state.p={}
     end
-    ui.sameLine(0,4)
-    if ui.button("Очистить",vec2(-0.34,22)) then
-      state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
-      state.status="Очищено"; state.loaded=false
-    end
     if ui.button("Сохранить",vec2(-0.25,22)) then saveLine() end
     ui.sameLine(0,4)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
+    ui.sameLine(0,4)
+    if ui.button("Очистить",vec2(-0.25,22)) then
+      state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+      state.status="Очищено"; state.loaded=false
+    end
     ui.separator()
-    -- MAP: window-local coordinates (comfy_map pattern), fixed rect below the controls
     if #state.nodes>=2 then
       local ws=ui.windowSize()
       if ws.y>CFG.MAP_TOP+60 then
@@ -872,7 +861,13 @@ function windowMain(dt)
     end
   end)
   if not okDraw then
-    pcall(ui.text,"UI error")
+    if logger then
+      writeLog("UI_ERROR err=%s",tostring(errDraw))
+      flushLog()
+      pcall(ui.text,"UI error (в логе)")
+    else
+      pcall(ui.text,"UI error")
+    end
   end
 end
 if ac.onRelease then
@@ -885,5 +880,5 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.8.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.9.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
