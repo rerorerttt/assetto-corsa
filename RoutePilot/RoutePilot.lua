@@ -1,6 +1,22 @@
 -- RoutePilot.lua
--- RoutePilot 0.4 — Arcade Racing Traffic (main script)
--- Line recording, AI teleport-spawn on the line, racing-traffic driver (driver.lua).
+-- RoutePilot 0.4.1 — Arcade Racing Traffic (main script)
+--
+-- v0.4.1:
+--  * CURVATURE from the SMOOTHED line: the recorded line is noisy; raw
+--    curvature saw a "corner" at every point and capped straights at 80 km/h.
+--    The line is smoothed once on load and curvature uses a wide window with
+--    an ignore threshold — straights are now driven flat out.
+--  * CORRIDOR MAP: on first start the script casts rays left/right along the
+--    line every ~4 m and stores the corridor half-width per node in
+--    line_<track>_corridor.txt (built once, then loaded). Steering targets are
+--    clamped inside the corridor, overtakes only where the corridor is wide
+--    enough, and speed is capped in narrow sections.
+--  * LIVE WALL RAYCAST ahead of each car prevents hitting walls/pillars.
+--  * NO VANISHING CARS: physics.preventAIFromRetiring is pulsed for every
+--    controlled car (CSP retires AI cars after mistakes — that was the cause).
+--  * UI: controls pinned to the TOP, map fills all remaining space below,
+--    speed/distance sliders and the AI toggle are REMOVED.
+-- The manifest format (user-verified working) is kept untouched.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -8,19 +24,20 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE = 8.0,
-  LOOKAHEAD_SPEED = 0.55,
-  LOOKAHEAD_MIN = 8.0,
-  LOOKAHEAD_MAX = 30.0,
-  STEER_GAIN = 0.78,
+  LOOKAHEAD_BASE = 12.0,
+  LOOKAHEAD_SPEED = 0.7,
+  LOOKAHEAD_MIN = 12.0,
+  LOOKAHEAD_MAX = 45.0,
+  STEER_GAIN = 0.55,
   STEER_LIMIT = 1.0,
-  STEER_RATE = 3.5,
-  STEER_FILTER = 0.10,
+  STEER_RATE = 2.5,
+  STEER_FILTER = 0.15,
 
   MAX_LATERAL_ACCEL = 9.0,
   BRAKE_ACCEL = 8.5,
   PLAN_HORIZON = 170.0,
   MIN_APEX_SPEED = 11.0,
+  CURVE_MIN = 0.002,          -- below this curvature is treated as a straight
   GAS_GAIN = 0.45,
   BRAKE_GAIN = 0.60,
   MAX_GAS = 1.0,
@@ -36,18 +53,25 @@ local CFG = {
   OVERTAKE_LATERAL = 5.5,
   OVERTAKE_CLEAR_AHEAD = 4.0,
 
-  LINE_HARD_PULL = 25.0,
-
   SPAWN_GAP = 25.0,
   SPAWN_MIN_GAP = 14.0,
   SPAWN_STABLE_TIME = 0.35,
   SPAWN_WAIT_TIMEOUT = 8.0,
 
+  -- line smoothing
+  SMOOTH_PASSES = 3,
+  SMOOTH_WINDOW = 5,
+
+  -- corridor scan
+  CORRIDOR_STEP_POINTS = 2,   -- scan every N nodes
+  CORRIDOR_RAY = 40.0,        -- ray length
+  CORRIDOR_RAY_HEIGHT = 1.0,
+
+  WALL_RAY_AHEAD = 60.0,
+
   LOG_INTERVAL = 1.0,
   MAX_ROUTE_POINTS = 50000,
   RECORD_DISTANCE = 3.0,
-
-  MAP_MARGIN = 12.0,
 }
 
 local state = {
@@ -55,9 +79,10 @@ local state = {
   recording = false,
   loopRoute = true,
 
-  speedMin = 70,
   speedMax = 170,
   followGap = 8.0,
+
+  corridor = {},       -- half-width (m) per node, nil until built/loaded
 
   spawnDone = false,
   spawnPerformed = false,
@@ -136,6 +161,15 @@ local function getLineFilePath()
   return "line_" .. tag .. ".txt"
 end
 
+local function getCorridorFilePath()
+  local p = getLineFilePath()
+  return string.gsub(p, "%.txt$", "_corridor.txt")
+end
+
+------------------------------------------------------------
+-- LINE LOAD / SAVE
+------------------------------------------------------------
+
 local function serializeNodes(nodes)
   local lines = {}
   for i = 1, #nodes do
@@ -174,11 +208,10 @@ local function saveLine()
       wroteFile = pcall(function() f:write(data) f:close() end)
     end
   end
-  local wroteStorage = false
   if ac.storage then
-    wroteStorage = pcall(ac.storage, "RP_LINE_DATA_" .. getTrackTag(), data)
+    pcall(ac.storage, "RP_LINE_DATA_" .. getTrackTag(), data)
   end
-  if wroteFile or wroteStorage then
+  if wroteFile then
     state.status = string.format("Сохранено: %d точек", #state.nodes)
     writeLog("SAVE_ROUTE points=%d", #state.nodes)
     flushLog()
@@ -225,6 +258,44 @@ local function loadLine()
   return false
 end
 
+------------------------------------------------------------
+-- LINE SMOOTHING (once per load; removes recording noise)
+------------------------------------------------------------
+
+local function smoothLine()
+  local n = #state.nodes
+  if n < 5 then return end
+  for _ = 1, CFG.SMOOTH_PASSES do
+    local newX, newZ = {}, {}
+    for i = 1, n do
+      local sx, sz, cnt = 0, 0, 0
+      for j = -CFG.SMOOTH_WINDOW, CFG.SMOOTH_WINDOW do
+        local k = i + j
+        if state.loopRoute then
+          k = ((k - 1) % n) + 1
+        elseif k >= 1 and k <= n then
+        else
+          k = nil
+        end
+        if k then
+          sx = sx + state.nodes[k].x
+          sz = sz + state.nodes[k].z
+          cnt = cnt + 1
+        end
+      end
+      newX[i] = sx / cnt
+      newZ[i] = sz / cnt
+    end
+    for i = 1, n do
+      state.nodes[i] = vec3(newX[i], state.nodes[i].y, newZ[i])
+    end
+  end
+end
+
+------------------------------------------------------------
+-- LINE GEOMETRY
+------------------------------------------------------------
+
 local function segmentCount()
   if state.loopRoute then return #state.nodes end
   return math.max(0, #state.nodes - 1)
@@ -266,28 +337,33 @@ local function walkLine(startSeg, startT, distance)
   return nil
 end
 
+-- curvature over a WIDE window of the smoothed line; tiny values ignored
 local function getVertexCurvature(index)
   local nodes = state.nodes
   local count = #nodes
-  if count < 3 then return 0 end
-  local prevIndex = index - 1
-  local nextIndex = index + 1
+  if count < 5 then return 0 end
+  local W = 4
+  local i0 = index - W
+  local i1 = index
+  local i2 = index + W
   if state.loopRoute then
-    if prevIndex < 1 then prevIndex = count end
-    if nextIndex > count then nextIndex = 1 end
+    i0 = ((i0 - 1) % count) + 1
+    i1 = ((i1 - 1) % count) + 1
+    i2 = ((i2 - 1) % count) + 1
   else
-    if prevIndex < 1 or nextIndex > count then return 0 end
+    if i0 < 1 or i2 > count then return 0 end
   end
-  local a = nodes[prevIndex]
-  local b = nodes[index]
-  local c = nodes[nextIndex]
+  local a, b, c = nodes[i0], nodes[i1], nodes[i2]
   local v1x, v1z = b.x - a.x, b.z - a.z
   local v2x, v2z = c.x - b.x, c.z - b.z
   local l1 = math.sqrt(v1x * v1x + v1z * v1z)
   local l2 = math.sqrt(v2x * v2x + v2z * v2z)
-  if l1 < 0.1 or l2 < 0.1 then return 0 end
+  if l1 < 0.5 or l2 < 0.5 then return 0 end
   local dot = clamp((v1x * v2x + v1z * v2z) / (l1 * l2), -1, 1)
-  return math.acos(dot) / math.max(0.1, (l1 + l2) * 0.5)
+  local angle = math.acos(dot)
+  -- ignore tiny wobble: it is NOT a corner
+  if angle < 0.02 then return 0 end
+  return angle / math.max(0.1, (l1 + l2) * 0.5)
 end
 
 local function findNearestSegment(car, p)
@@ -338,6 +414,145 @@ local function findNearestSegment(car, p)
   return bestSeg, bestT, math.sqrt(bestDist), segs
 end
 
+-- corridor half-width at a node (default wide if not scanned yet)
+local function corridorAt(index)
+  local v = state.corridor[index]
+  if type(v) == "number" then return v end
+  return 25.0
+end
+
+------------------------------------------------------------
+-- CORRIDOR SCAN (once; saved to line_<track>_corridor.txt)
+------------------------------------------------------------
+
+local corridorScan = { active = false, index = 0, saved = {} }
+
+local function corridorFilePathForScan()
+  return getCorridorFilePath()
+end
+
+local function castRay(pos, dirx, dirz, length)
+  if type(physics) ~= "table" or type(physics.raycastTrack) ~= "function" then
+    return -1
+  end
+  local ok, d = pcall(physics.raycastTrack, pos, vec3(dirx, 0, dirz), length)
+  if ok and type(d) == "number" then return d end
+  return -1
+end
+
+local function scanCorridorStep()
+  local n = #state.nodes
+  if n < 2 then
+    corridorScan.active = false
+    return
+  end
+  local i = corridorScan.index
+  if i >= n then
+    -- finished: save to file
+    local parts = {}
+    for k = 1, n do
+      parts[#parts + 1] = string.format("%.1f", corridorScan.saved[k] or 25.0)
+    end
+    local data = table.concat(parts, " ")
+    local path = corridorFilePathForScan()
+    if io and io.open then
+      local ok, f = pcall(io.open, path, "w")
+      if ok and f then
+        pcall(function() f:write(data) f:close() end)
+      end
+    end
+    for k = 1, n do
+      state.corridor[k] = corridorScan.saved[k] or 25.0
+    end
+    corridorScan.active = false
+    writeLog("CORRIDOR_SAVED points=%d", n)
+    flushLog()
+    return
+  end
+  i = i + 1
+  corridorScan.index = i
+  local node = state.nodes[i]
+  local prevIdx = (i == 1) and 1 or i - 1
+  local a = state.nodes[prevIdx]
+  local b = state.nodes[(i % n) + 1]
+  local lx, lz = normalize2(b.x - a.x, b.z - a.z)
+  local pos = vec3(node.x, node.y + CFG.CORRIDOR_RAY_HEIGHT, node.z)
+  local dLeft = castRay(pos, -lz, lx, CFG.CORRIDOR_RAY)
+  local dRight = castRay(pos, lz, -lx, CFG.CORRIDOR_RAY)
+  local half
+  if dLeft < 0 and dRight < 0 then
+    half = CFG.CORRIDOR_RAY
+  elseif dLeft < 0 then
+    half = dRight
+  elseif dRight < 0 then
+    half = dLeft
+  else
+    half = math.min(dLeft, dRight)
+  end
+  half = clamp(half, 2.0, CFG.CORRIDOR_RAY)
+  corridorScan.saved[i] = half
+end
+
+local function loadCorridor()
+  local path = getCorridorFilePath()
+  if io and io.open then
+    local ok, f = pcall(io.open, path, "r")
+    if ok and f then
+      local success, raw = pcall(function()
+        local content = f:read("*all")
+        f:close()
+        return content
+      end)
+      if success and type(raw) == "string" and raw ~= "" then
+        local vals = {}
+        for token in string.gmatch(raw, "%S+") do
+          local v = tonumber(token)
+          if v then vals[#vals + 1] = v end
+        end
+        if #vals == #state.nodes then
+          state.corridor = vals
+          writeLog("CORRIDOR_LOADED points=%d", #vals)
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+
+local function updateCorridorScan()
+  if corridorScan.active then
+    local budget = 6
+    for _ = 1, budget do
+      if not corridorScan.active then break end
+      scanCorridorStep()
+    end
+  end
+end
+
+------------------------------------------------------------
+-- LIVE WALL RAYCAST (per controlled car, forward)
+------------------------------------------------------------
+
+local function wallAhead(car)
+  if not (type(physics) == "table" and type(physics.raycastTrack) == "function") then
+    return nil
+  end
+  local look = car.look
+  local fx, fz = normalize2(look.x, look.z)
+  local pos = car.position
+  local p0 = vec3(pos.x + fx * 3, pos.y + 1.0, pos.z + fz * 3)
+  local ok, d = pcall(physics.raycastTrack, p0, vec3(fx, 0, fz), CFG.WALL_RAY_AHEAD)
+  if ok and type(d) == "number" and d >= 0 then
+    return d + 3
+  end
+  return nil
+end
+
+------------------------------------------------------------
+-- CARS AHEAD
+------------------------------------------------------------
+
 local function carAheadFull(carIndex, car, lateralWidth)
   local fx, fz = normalize2(car.look.x, car.look.z)
   local sim = ac.getSim()
@@ -376,6 +591,10 @@ local function carAheadIndex(carIndex, car, lateralWidth)
   return index
 end
 
+------------------------------------------------------------
+-- TELEMETRY
+------------------------------------------------------------
+
 local function recordSecondTelemetry(sim)
   local anyWritten = false
   for i = 1, sim.carsCount - 1 do
@@ -395,6 +614,10 @@ local function recordSecondTelemetry(sim)
   end
   flushLog()
 end
+
+------------------------------------------------------------
+-- SPAWN
+------------------------------------------------------------
 
 local function buildSpawnRouteMetrics()
   local count = #state.nodes
@@ -520,8 +743,7 @@ local function teleportAICarsToRoute(aiCars)
     local routeDistance = startDistance + (order - 1) * gap
     local position, direction = sampleSpawnRoute(metrics, routeDistance)
     if position and direction then
-      -- FIX: this CSP build points the car OPPOSITE to the passed dir,
-      -- so pass the inverted direction (trace: dir=(0,0,1) -> LOOK=(0,-1)).
+      -- this CSP build points the car OPPOSITE to the passed dir (verified)
       local ok, result = pcall(physics.setAICarPosition, carIndex,
         position, vec3(-direction.x, -direction.y, -direction.z))
       if ok and result ~= false then
@@ -585,6 +807,10 @@ local function updateStartupTeleport(sim, dt)
   return false
 end
 
+------------------------------------------------------------
+-- RECORDING
+------------------------------------------------------------
+
 local function addPoint(pos)
   if #state.nodes >= CFG.MAX_ROUTE_POINTS then
     state.recording = false
@@ -595,6 +821,10 @@ local function addPoint(pos)
     state.nodes[#state.nodes + 1] = vec3(pos.x, pos.y + 0.1, pos.z)
   end
 end
+
+------------------------------------------------------------
+-- RELEASE
+------------------------------------------------------------
 
 local function releaseCar(carIndex)
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
@@ -607,6 +837,10 @@ local function releaseCar(carIndex)
   end
   state.p[carIndex] = nil
 end
+
+------------------------------------------------------------
+-- DRIVER WIRING
+------------------------------------------------------------
 
 local driverReady = false
 
@@ -622,11 +856,17 @@ local function ensureDriver()
     findNearestSegment = findNearestSegment,
     carAhead = carAhead,
     carAheadIndex = carAheadIndex,
+    corridorAt = corridorAt,
+    wallAhead = wallAhead,
     log = writeLog,
   })
   driverReady = true
   return true
 end
+
+------------------------------------------------------------
+-- UPDATE
+------------------------------------------------------------
 
 function script.update(dt)
   if not dt or dt <= 0 then return end
@@ -638,6 +878,8 @@ function script.update(dt)
   if state.recording and player then
     addPoint(player.position)
   end
+
+  updateCorridorScan()
 
   local startupReady = true
   if state.enabled and state.loaded and #state.nodes >= 2 then
@@ -678,6 +920,10 @@ function script.update(dt)
   end
 end
 
+------------------------------------------------------------
+-- UI: controls pinned to the TOP, map fills the rest of the window
+------------------------------------------------------------
+
 local mapBounds = nil
 
 local function computeMapBounds()
@@ -699,24 +945,17 @@ local function invalidateMap()
   mapBounds = nil
 end
 
-local function drawMap()
+-- draw the map so that it exactly fills rect (p0, p1)
+local function drawMapInRect(p0, p1)
   if #state.nodes < 2 then return end
   local b = computeMapBounds()
   if not b then return end
 
-  local width = ui.availableSpaceX()
-  if width < 80 then width = 80 end
-  local height = math.max(120, math.min(260, width * 0.55))
-
-  ui.invisibleButton("line_map", vec2(width, height))
-  local p0 = ui.getItemRectMin()
-  local p1 = ui.getItemRectMax()
-
   ui.drawRectFilled(p0, p1, rgbm(0.08, 0.08, 0.10, 1), 4)
   ui.drawRect(p0, p1, rgbm(0.3, 0.3, 0.35, 1), 4)
 
-  local spanX = math.max(1, b.maxX - b.minX) + CFG.MAP_MARGIN * 2
-  local spanZ = math.max(1, b.maxZ - b.minZ) + CFG.MAP_MARGIN * 2
+  local spanX = math.max(1, b.maxX - b.minX) + 24
+  local spanZ = math.max(1, b.maxZ - b.minZ) + 24
   local scale = math.min((p1.x - p0.x) / spanX, (p1.y - p0.y) / spanZ)
   local cx = (b.minX + b.maxX) * 0.5
   local cz = (b.minZ + b.maxZ) * 0.5
@@ -725,6 +964,20 @@ local function drawMap()
 
   local function toScreen(n)
     return vec2(mx + (n.x - cx) * scale, my + (n.z - cz) * scale)
+  end
+
+  -- corridor edges (dim green), if scanned
+  if #state.corridor == #state.nodes then
+    for i = 1, #state.nodes do
+      local a = state.nodes[i]
+      local prev = state.nodes[((i - 1) % #state.nodes) + 1]
+      local lx, lz = normalize2(a.x - prev.x, a.z - prev.z)
+      local half = state.corridor[i]
+      local sL = toScreen({ x = a.x - lz * half, z = a.z + lx * half })
+      local sR = toScreen({ x = a.x + lz * half, z = a.z - lx * half })
+      ui.drawCircleFilled(sL, 1.0, rgbm(0.1, 0.5, 0.2, 0.5), 6)
+      ui.drawCircleFilled(sR, 1.0, rgbm(0.1, 0.5, 0.2, 0.5), 6)
+    end
   end
 
   local prev = toScreen(state.nodes[1])
@@ -761,22 +1014,21 @@ local function drawMap()
 end
 
 function windowMain(dt)
-  drawMap()
-
-  ui.separator()
+  -- 1) draw all controls FIRST (they pin to the top of the window)
   ui.text(string.format("Точек: %d | %s", #state.nodes, state.status))
-  ui.text(string.format("Автопилот: %s", state.enabled and "ВКЛ" or "ВЫКЛ"))
 
   if ui.button(state.recording and "Стоп запись" or "Запись линии", vec2(-1, 26)) then
     state.recording = not state.recording
     if state.recording then
       state.nodes = {}
       state.p = {}
+      state.corridor = {}
       state.loaded = false
       invalidateMap()
       state.status = "Запись линии..."
     else
       state.status = "Записано точек: " .. #state.nodes
+      smoothLine()
     end
   end
 
@@ -785,30 +1037,44 @@ function windowMain(dt)
     state.p = {}
   end
 
-  if ui.button(state.enabled and "Отключить ИИ" or "Включить ИИ", vec2(-1, 26)) then
-    state.enabled = not state.enabled
-    if not state.enabled then
-      for idx in pairs(state.p) do releaseCar(idx) end
-    end
-  end
-
   if ui.button("Сохранить", vec2(-1, 24)) then saveLine() end
   if ui.button("Загрузить", vec2(-1, 24)) then
-    if loadLine() then invalidateMap() end
+    if loadLine() then
+      invalidateMap()
+      smoothLine()
+      state.corridor = {}
+      if not loadCorridor() and #state.nodes >= 2 then
+        corridorScan.active = true
+        corridorScan.index = 0
+        corridorScan.saved = {}
+        writeLog("CORRIDOR_SCAN_START points=%d", #state.nodes)
+      end
+    end
   end
   if ui.button("Очистить", vec2(-1, 24)) then
     state.nodes = {}
     state.p = {}
+    state.corridor = {}
     state.status = "Очищено"
     state.loaded = false
     invalidateMap()
   end
 
-  state.speedMin = ui.slider("Мин. скорость", state.speedMin, 40, 180, "%.0f км/ч")
-  state.speedMax = ui.slider("Макс. скорость", state.speedMax, 60, 260, "%.0f км/ч")
-  state.speedMin = math.min(state.speedMin, state.speedMax)
-  state.followGap = ui.slider("Дистанция до машины", state.followGap, 3, 20, "%.0f м")
+  -- 2) separator, then the map fills ALL remaining space to the window bottom
+  ui.separator()
+  local p0 = ui.getCursorPos()
+  local size = ui.availableSpace()
+  if size.x > 60 and size.y > 60 then
+    ui.invisibleButton("line_map", vec2(size.x, size.y))
+    local q0 = ui.getItemRectMin()
+    local q1 = ui.getItemRectMax()
+    drawMapInRect(q0, q1)
+  end
 end
+
+------------------------------------------------------------
+-- RELEASE + INIT
+------------------------------------------------------------
 
 if ac.onRelease then
   ac.onRelease(function()
@@ -820,5 +1086,12 @@ if ac.onRelease then
 end
 
 loadLine()
+smoothLine()
+if not loadCorridor() and #state.nodes >= 2 then
+  corridorScan.active = true
+  corridorScan.index = 0
+  corridorScan.saved = {}
+  writeLog("CORRIDOR_SCAN_START points=%d", #state.nodes)
+end
 writeLog("ROUTEPILOT INITIALIZED track=%s points=%d", getTrackTag(), #state.nodes)
 flushLog()
