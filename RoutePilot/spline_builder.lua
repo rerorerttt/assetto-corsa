@@ -92,7 +92,7 @@ local function sideWidths(boundsL, boundsR, index)
   return math.max(0.1, -left), math.max(0.1, right)
 end
 
-function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute)
+function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute, laneOffset, laneHalfWidth, fixedSpeedKmh)
   if type(nodes) ~= 'table' or #nodes < 3 then
     return false, 'at least three route points are required'
   end
@@ -113,9 +113,17 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
     local speeds = {}
     local radii = {}
     local aiNodes, normals = {}, {}
+    laneOffset = tonumber(laneOffset) or 0.0
     for i=1,count do
-      aiNodes[i],normals[i]=snapSurface(nodes[i])
-      nodes[i].y=aiNodes[i].y
+      local prev = nodes[(i - 2) % count + 1]
+      local next = nodes[i % count + 1]
+      local tx, tz = next.x - prev.x, next.z - prev.z
+      local tl = math.sqrt(tx * tx + tz * tz)
+      if tl < 0.001 then error('invalid lane tangent at point ' .. tostring(i)) end
+      tx, tz = tx / tl, tz / tl
+      -- CSP SDK convention: negative lateral offset is the left side.
+      local lanePoint = vec3(nodes[i].x + tz * laneOffset, nodes[i].y, nodes[i].z - tx * laneOffset)
+      aiNodes[i],normals[i]=snapSurface(lanePoint)
     end
     local maxSpeed = math.max(MIN_SPEED_KMH, tonumber(maxSpeedKmh) or 300.0) / 3.6
 
@@ -129,8 +137,12 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
 
       local curvature, radius = curvatureAt(aiNodes, i)
       radii[i] = radius
-      local v = curvature > 0 and math.sqrt(MAX_LATERAL_ACCEL / curvature) or maxSpeed
-      speeds[i] = math.max(MIN_SPEED_KMH / 3.6, math.min(maxSpeed, v))
+      if fixedSpeedKmh and fixedSpeedKmh > 0 then
+        speeds[i] = fixedSpeedKmh / 3.6
+      else
+        local v = curvature > 0 and math.sqrt(MAX_LATERAL_ACCEL / curvature) or maxSpeed
+        speeds[i] = math.max(MIN_SPEED_KMH / 3.6, math.min(maxSpeed, v))
+      end
     end
 
     -- Backward braking envelope. Two cyclic passes propagate corner limits
@@ -165,7 +177,11 @@ function Builder.build(nodes, boundsL, boundsR, filename, maxSpeedKmh, loopRoute
       payload.brake = 0.0
       payload.obsoleteLatG = 0.0
       payload.radius = radii[i]
-      payload.sideLeft, payload.sideRight = sideWidths(boundsL, boundsR, i)
+      if laneHalfWidth and laneHalfWidth > 0 then
+        payload.sideLeft, payload.sideRight = laneHalfWidth, laneHalfWidth
+      else
+        payload.sideLeft, payload.sideRight = sideWidths(boundsL, boundsR, i)
+      end
       payload.camber = 0.0
       payload.direction = 0.0
       payload.normal:set(normals[i])
