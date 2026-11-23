@@ -1,3 +1,25 @@
+## Racing AI implementation — 2026-11-23
+
+Current implementation commit: `aa691e9dc78da919c1f3edaa13816d7cd62af50f`. This is a code change on top of the user's stable 0.3 baseline; no Assetto Corsa runtime test has been performed here.
+
+### What changed
+
+- Route preview was extended from 12 to 36 route vertices; lookahead now scales from 13 m with speed and is capped at 42 m.
+- Default cruise range is now 150–230 km/h (midpoint 190 km/h); UI allows 80–220 km/h minimum and 100–300 km/h maximum. Cars receive a small deterministic ±5% cruise-speed spread so the pack has faster and slower cars.
+- Curvature speed planning now uses 12.5 m/s² as the planned lateral-acceleration ceiling, 18 m/s² as the stability severity ceiling, and 10 m/s² as the braking-distance estimate. These are initial aggressive settings and must be validated against the actual cars and route.
+- Added left-only pass planning. A car detects a slower vehicle in its forward route corridor, checks a left-side world-space corridor for other traffic (including oncoming cars), and claims a single shared pass reservation. Only one pass is allowed at a time globally, preventing two RoutePilot cars from simultaneously claiming the same left lane.
+- During a pass, the target path is shifted 3.8 m left and the passing car receives a temporary target-speed boost of up to 9 m/s above its own cruise target. The leading car is not instructed to brake, yield, or move aside. A narrow emergency gap brake remains if no pass can be started and the gap becomes critically small.
+- The pass ends after the overtaker is at least 9 m ahead of the leader. It then returns to the recorded route. A pass is aborted if the leader disappears, the left corridor becomes occupied, the pass exceeds 12 seconds, or the car reports wheels outside the allowed track area.
+- Telemetry now includes `PASS` and `PASS_OFFSET`; event log records `PASS_START`, `PASS_ABORT`, `PASS_COMPLETE`, and `PASS_RELEASE`.
+
+### Important validation caveats
+
+- The spawn direction passed to `physics.setAICarPosition()` remains the reversed route tangent. The new trace shows the resulting `car.look` aligned with the actual recorded route tangent; do not revert this based on comparing `look` directly to the API argument.
+- The passing corridor is currently a conservative world-space occupancy test, not a full track-surface or collision prediction system. It checks traffic on the left but does not yet prove the entire lateral path is clear of barriers. The `wheelsOutside` guard only detects a violation after it occurs.
+- The pass reservation is global (one pass at a time), intentionally prioritizing deterministic safe behaviour over maximum parallel overtakes.
+- The 3.8 m left offset and aggressive speed/acceleration values are initial test parameters, not verified performance. The user must test on the Nevada oval and upload the new trace. Check whether `PASS_START` occurs, whether `PASS_COMPLETE` follows, peak speed, route error, `wheelsOutside`, braking and any `PASS_ABORT` reason.
+- No claim is made that overtakes or high-speed stability have been verified in-game. Do not add further aggression until the next trace shows the actual result.
+
 ## Current verified baseline — 2026-11-23 (supersedes older status below)
 
 Active branch HEAD before this review: `9f95428f5fe88d3c7184f7c5a3c40cb9482b5b68`, user-uploaded stable RoutePilot 0.3. This snapshot is materially different from the older 0.5/traffic-coordinator implementation described in much of the historical text below. Do not treat historical features, tuning or collision-map code as present in the current runtime source.
