@@ -287,9 +287,14 @@ function Driver.beginFrame(sim, dt)
         if gap < -PASS_CLEAR_GAP then
           p.passState, p.targetOffset = 'RETURN', p.homeOffset or 0
           H.log('PASS_COMPLETE car=%d leader=%d gap=%.1f side=%d', i, p.passLeader, gap, p.passSide)
+        elseif p.passTimer > PASS_MAX_TIME and gap > 12.0 then
+          p.passState, p.targetOffset = 'RETURN', p.homeOffset or 0
+          H.log('PASS_ABORT car=%d leader=%d reason=timeout_no_progress gap=%.1f',
+            i,p.passLeader,gap)
         elseif p.passTimer > PASS_MAX_TIME and not p.passLoggedTimeout then
           p.passLoggedTimeout = true
-          H.log('PASS_LONG car=%d leader=%d gap=%.1f offset=%.2f', i, p.passLeader, gap, p.currentOffset)
+          H.log('PASS_LONG car=%d leader=%d gap=%.1f offset=%.2f',
+            i,p.passLeader,gap,p.currentOffset)
         end
       end
     end
