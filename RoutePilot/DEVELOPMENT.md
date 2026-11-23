@@ -16,7 +16,7 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 - `comfy_map/comfy_map.lua`: map rendering and UI composition patterns. RoutePilot's map is drawn directly inside `windowMain`; it is not a separate floating map window.
 - `RoutePilot/RoutePilot_Back.lua` on `feature/arcade-traffic`: previous manual-control implementation using `ac.overrideCarControls`. It is retained as a historical reference, not loaded by the native-AI app.
 - `RoutePilot/Задачи грок.txt`: numbered requirements and subsequent corrections.
-- Current `RoutePilot/routepilot_trace.txt` and `line_nevadadrift.txt`: post-change stationary-car trace and route-height anomalies.
+- Current `RoutePilot/routepilot_trace.txt` and `line_nevadadrift.txt`: post-change stationary-car trace and route-height anomalies. The 290-point line has 46 adjacent vertical jumps greater than 1 m; its Y range is 0.30–11.33 m with a 0.30 m median.
 
 ## Confirmed SDK contracts
 
@@ -56,7 +56,7 @@ A fast racing field that follows the recorded route, stays inside the saved corr
 - Route matching includes world height so cars on overlapping track levels do not get projected onto the wrong deck.
 - Cars prefer the rightmost valid lane, but the player's actual occupied corridor takes priority; if it blocks the right lane, AI chooses the next safe lane left or stays on the centreline if no lane fits. Only a faster follower can move left; the leader is never commanded to yield or slow. A shared reservation allows one active pass at a time. The pass begins with a 120 m trigger horizon and the follower does not return until at least 15 m ahead and the home lane is clear.
 - The map, lane selector, route/boundary recording controls, clear button and 3D line preview are already in the main RoutePilot window. Collision-mesh discovery/recording is deliberately disabled; the saved corridor and native CSP awareness are the safety mechanisms.
-- Spawn and recovery use `physics.setAICarPosition(index, position, nil)`, then clear the AI stop counter and parked-input state. Stuck recovery searches forward for a free route position before teleporting.
+- Spawn and recovery use `physics.setAICarPosition(index, position, nil)`, then clear the AI stop counter and parked-input state. Stuck recovery searches forward for a free route position before teleporting. Spawn clearance is checked in 3D so a car on a different track deck does not falsely occupy the same X/Z location.
 
 ## Current changes on this branch
 
