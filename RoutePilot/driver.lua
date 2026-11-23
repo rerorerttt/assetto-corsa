@@ -1,16 +1,18 @@
--- RoutePilot/driver.lua — v0.11.1 RAILS AI (CSP 0.3.2-preview2)
--- Textbook PURE PURSUIT (bicycle model) rail follower:
---    ld = clamp(LOOKAHEAD_TIME * v, LOOK_MIN, LOOK_MAX)
---    alpha = angle(heading -> target on the rail ld ahead)
---    steer = atan(2 * WHEELBASE * sin(alpha) / ld) / STEER_LOCK
--- One geometric command, no low-pass phase lag (lag = lateral oscillation),
--- no multi-point averaging (it cut corners outside the bounds in v0.10).
--- Lane count comes from state.widthPreset (set by the 1/2/3/4 buttons);
--- rail centers are derived from the SAVED per-segment bounds, so rails
--- always stay inside the recorded track even where it narrows.
--- Burnout control: wheel slip feedback (car.wheels[2]/[3].slipRatio,
--- guarded with pcall) + soft launch. Blockers only in the SAME lane;
--- overtakes are decisive changes into a CLEAR adjacent lane.
+-- RoutePilot/driver.lua — v0.12.0 RACING TRAFFIC (CSP 0.3.2-preview2)
+-- Rails: textbook PURE PURSUIT (unchanged from v0.11 - it finally drove
+-- straight; STEER was ~0 on rails in the fresh trace).
+-- Racing upgrade per the fresh trace:
+--  * The whole field crawled because everyone followed the leader at a
+--    fixed 6 m gap and braked down to the leader's speed. Now: home rails
+--    are pace-ranked (fast cars left), a blocked fast car CHANGES LANES and
+--    passes at ITS OWN target speed - slow cars never brake the passer.
+--  * Overtake trigger at any speed (was speed>8), 0.3 s.
+--  * Following gap is dynamic: 5 + 0.45*v meters (no more rear-ending at
+--    speed; the v0.11 log showed a 6 m overlap at spawn -> a pile-up that
+--    flung CAR=4 570 m off the track).
+--  * Cruise: speedMax(210 km/h) * pace (0.88..1.10) = 185..231 km/h.
+--  * Curvature: window 6 nodes, CURVE_MIN 0.0035 - the raw recorded line's
+--    per-point noise no longer cuts the target speed on straights.
 
 local Driver = {}
 local CFG, S, H
@@ -19,9 +21,11 @@ local WHEELBASE, STEER_LOCK = 2.6, 0.60
 local LOOKAHEAD_TIME, LOOK_MIN, LOOK_MAX = 0.55, 6, 35
 local BOUND_MARGIN  = 0.35
 local SAME_LANE_HALF = 1.15
-local PASS_CLEAR, MIN_GAP = 16, 6
-local TRIGGER_TIME, PASS_TIMEOUT = 0.55, 8
-local RESCUE_SPEED, RESCUE_TIME = 1.5, 3.5
+local PASS_CLEAR     = 16
+local TRIGGER_TIME   = 0.3
+local PASS_TIMEOUT   = 8
+local RESCUE_SPEED, RESCUE_TIME = 1.5, 5.0
+local RESCUE_COOLDOWN = 10.0   -- s from session start: no teleports at spawn
 local STEER_DEAD = 0.004
 
 local function clamp(x,a,b) return math.max(a, math.min(b,x)) end
@@ -46,7 +50,7 @@ function Driver.setup(cfg,state,helpers) CFG,S,H=cfg,state,helpers end
 
 -- rail centers for the preset lane count, inside the SAVED bounds at seg
 local function lanes(seg)
-  local count=clamp(math.floor(num(S.widthPreset,1)),1,4)
+  local count=clamp(math.floor(num(S.widthPreset,2)),1,4)
   local left,right=H.boundsAt(seg)
   local lo,hi=left+BOUND_MARGIN,right-BOUND_MARGIN
   if hi<=lo then return {0} end
@@ -57,21 +61,27 @@ local function lanes(seg)
   return c
 end
 
+-- dynamic safe gap: grows with speed (no rear-ending at 200 km/h)
+local function minGap(speed)
+  return 5.0 + 0.45*speed
+end
+
 local function newDriver(i)
   local pace=0.88+rnd(i,1)*0.22
   local p={segIdx=1,pace=pace,
-    cruise=num(S.speedMax,170)*pace/3.6,
+    cruise=num(S.speedMax,210)/3.6*pace,
     homeLane=1,lane=1,passSide=0,passTime=0,blocked=0,
     steer=0,gas=0,brake=0,stuck=0,retire=0,
     lineDist=0,off=0,target=0}
-  S.p[i]=p
   local c=lanes(1)
   if #c>1 then
-    -- fast cars left (lane 1), slow right, by pace ranking
+    -- pace-ranked rails: fastest left (lane 1), slowest right
     p.homeLane=clamp(1+math.floor((1.10-pace)/0.22*(#c-1)+0.5),1,#c)
     p.lane=p.homeLane
   end
-  H.log('CAR_INIT id=%d pace=%.2f lane=%d/%d',i,pace,p.homeLane,#c)
+  S.p[i]=p
+  H.log('CAR_INIT id=%d pace=%.2f cruise=%.0fkmh lane=%d/%d',
+    i,pace,p.cruise*3.6,p.homeLane,#c)
   return p
 end
 
@@ -101,9 +111,7 @@ local function purePursuit(car,p,speed)
   local fx,fz=norm(car.look.x,car.look.z)
   local alpha=angle(fx,fz,dx/dist,dz/dist)
   local steer=math.atan(2*WHEELBASE*math.sin(alpha)/ld)/STEER_LOCK
-  -- deadband: on a rail, zero angle error means literally zero steering
   if math.abs(alpha)<STEER_DEAD then steer=0 end
-  -- recovery ONLY when the car is actually near/crossing a recorded edge
   if p.off<bl+0.25 then steer=math.max(steer,0.28)
   elseif p.off>br-0.25 then steer=math.min(steer,-0.28) end
   return clamp(steer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
@@ -133,7 +141,7 @@ local function laneClear(i,car,seg,targetLat)
       if o and o.isActive then
         local dx,dz=o.position.x-car.position.x,o.position.z-car.position.z
         local forward=dx*fx+dz*fz
-        if forward>-3 and forward<PASS_CLEAR then
+        if forward>-4 and forward<PASS_CLEAR then
           local os=select(1,H.findNearestSeg(o.position,seg))
           local oo=H.lateralOf(o.position,os)
           if math.abs(oo-targetLat)<SAME_LANE_HALF*2 then return false end
@@ -174,25 +182,34 @@ local function updateTraffic(i,car,p,speed,target,dt)
   if p.lane>#c then p.lane=#c end
   local lat=c[p.lane] or 0
   local gap,leadSpeed=H.carAheadFull(i,car,SAME_LANE_HALF*2)
+
+  -- mid-pass: hold the rail, do NOT slow for the passed car
   if p.passSide~=0 then
     p.passTime=p.passTime+dt
-    local stillBlocked=gap and (leadSpeed or 0)<speed-1
+    local stillBlocked=gap and (leadSpeed or 0)<speed-1 and gap<12
     if p.passTime>PASS_TIMEOUT or not stillBlocked then
       p.passSide=0; p.passTime=0
       if p.lane~=p.homeLane and c[p.homeLane] and laneClear(i,car,p.segIdx,c[p.homeLane]) then
         p.lane=p.homeLane
+        H.log('CAR=%d LANE_RETURN home=%d',i,p.homeLane)
       end
       return target
     end
-    if gap then
-      return math.min(math.max(target,(leadSpeed or 0)+3),math.max(leadSpeed or 0,speed))
+    if gap and gap<minGap(speed) then
+      -- someone pulled into our passing rail: brief lift, still decisive
+      local safe=math.sqrt(math.max(0,(leadSpeed or 0)^2+2*CFG.BRAKE_ACCEL*math.max(0,gap-minGap(leadSpeed or 0))))
+      return math.min(target,math.max(safe,(leadSpeed or 0)))
     end
     return target
   end
+
   if not gap then p.blocked=0; return target end
+
+  -- slower car ahead in OUR rail (or a standing player)
   if (leadSpeed or 0)<speed-1.5 then
     p.blocked=p.blocked+dt
-    if speed>8 and p.blocked>TRIGGER_TIME and #c>1 then
+    -- decisive lane change as soon as a rail is clear
+    if p.blocked>TRIGGER_TIME and #c>1 then
       local best,bestLat=nil,nil
       for li=1,#c do
         if li~=p.lane and laneClear(i,car,p.segIdx,c[li]) then
@@ -204,12 +221,14 @@ local function updateTraffic(i,car,p,speed,target,dt)
       if best then
         p.passSide=(bestLat>lat) and 1 or -1
         p.lane=best; p.passTime=0; p.blocked=0
-        H.log('CAR=%d LANE_CHANGE to=%d lat=%.1f gap=%.1f',i,best,bestLat,gap)
-        return math.max(target,(leadSpeed or 0)+3)
+        H.log('CAR=%d LANE_CHANGE to=%d lat=%.1f gap=%.1f own=%.0f lead=%.0f',
+          i,best,bestLat,gap,target*3.6,(leadSpeed or 0)*3.6)
+        return target  -- pass at FULL own target, no lift
       end
     end
-    local safe=math.sqrt(math.max(0,(leadSpeed or 0)^2+2*CFG.BRAKE_ACCEL*math.max(0,gap-MIN_GAP)))
-    return math.min(target,math.max(safe,5))
+    -- single rail or no clear rail: follow at a safe speed
+    local safe=math.sqrt(math.max(0,(leadSpeed or 0)^2+2*CFG.BRAKE_ACCEL*math.max(0,gap-minGap(speed))))
+    return math.min(target,math.max(safe,3))
   end
   p.blocked=0
   return target
@@ -222,7 +241,7 @@ local function throttle(p,car,speed,target)
   if slip and slip>0.18 then
     gas=gas*clamp(1-(slip-0.18)*1.8,0.12,1)
   end
-  if speed<3 then gas=math.min(gas,0.4) end
+  if speed<2 then gas=math.min(gas,0.5) end
   local brake=clamp(-err*CFG.BRAKE_GAIN,0,CFG.MAX_BRAKE)
   if err>=0 then brake=0 end
   p.gas,p.brake=gas,brake
@@ -238,7 +257,7 @@ function Driver.update(i,car,dt)
   local speed=math.max(0,num(car.speedMs,0))
   if speed<RESCUE_SPEED then
     p.stuck=p.stuck+dt
-    if p.stuck>RESCUE_TIME then
+    if p.stuck>RESCUE_TIME and num(S.sessionTime,999)>RESCUE_COOLDOWN then
       p.stuck=0
       if H.teleportHome then H.teleportHome(i,car) end
       return
@@ -247,7 +266,6 @@ function Driver.update(i,car,dt)
   local target=planTargetSpeed(p)
   target=updateTraffic(i,car,p,speed,target,dt)
   p.target=target
-  -- one geometric command per frame, applied directly (no lag -> no weave)
   p.steer=purePursuit(car,p,speed)
   throttle(p,car,speed,target)
   local ok,c=pcall(ac.overrideCarControls,i)
