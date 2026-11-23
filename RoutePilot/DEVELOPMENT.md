@@ -26,7 +26,7 @@ Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 - `physics.setAISpline(carIndex, filename, aiHintsFilename)` loads a per-car spline in the background. Passing `nil` as filename resets the car to its default spline. The function returns a boolean; RoutePilot only considers the spline accepted when the result is `true`, retries failures once per second, and waits at least 0.8 seconds before spawning.
 - `physics.setAISplineAbsoluteOffset(carIndex, offset, overrideAiAwareness)` uses meters; negative is left and positive is right. Actual offset is limited by track width. RoutePilot passes `false` so CSP awareness is not explicitly overridden.
 - `physics.setAICarPosition(carIndex, pos, nil)` aligns the car along its current AI spline. This replaces the earlier ambiguous manually constructed direction vector.
-- `physics.setAILevel` accepts 0–2. `physics.setAIAggression` accepts 0–1; the SDK notes that launcher aggression is multiplied by 0.95, so 0.95 corresponds to full launcher aggression.
+- `physics.setAILevel` accepts 0–2. `physics.setAIAggression` accepts 0–1; the SDK notes that launcher aggression is multiplied by 0.95, so 1.0 is the maximum aggression value.
 - `physics.preventAIFromRetiring` must be called repeatedly to keep an AI from retiring while stationary; RoutePilot calls it every two seconds.
 - `physics.raycastTrack` is used only when building a spline to obtain a road-surface normal. There is no wall/column collision scan, collision map or obstacle raycast system.
 - `ac.CarState.aabbSize` provides the car's bounding-box size and is used to estimate the half-width needed for side-by-side lane clearance.
@@ -53,7 +53,7 @@ Source of truth: [lua-sdk/ac_apps/lib.lua](../lua-sdk/ac_apps/lib.lua).
 
 - Width presets are 3, 7, 11 and 15 metres, representing one through four lanes.
 - Default is preset 1 (3 m), preserving the requested initial selection. Select preset 2 (7 m) or wider to enable adjacent-lane passing; one lane intentionally disables passing.
-- AI cars receive a small deterministic pace spread around their existing AI level (0.94–1.06 multiplier, clamped to 0.70–1.15) and 0.95 aggression.
+- AI cars receive a small deterministic pace spread around their existing AI level (0.94–1.06 multiplier, clamped to 0.70–1.15) and 1.0 aggression.
 - Cars are sorted by pace: the fastest group receives the leftmost lane; progressively slower groups receive lanes to the right.
 - The leader is not assigned a pass-specific offset, speed reduction, throttle reduction or brake command. If a faster follower catches a car in its own lane, it may move to an adjacent lane only when the recorded limits and traffic-occupancy check leave enough room.
 - A pass is complete when the follower is more than seven metres ahead; it then returns to its assigned home lane.
