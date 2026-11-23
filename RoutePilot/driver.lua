@@ -186,7 +186,7 @@ local function planRaceSpeed(p, speed)
   -- Dynamic look-ahead includes the full stopping distance at the current speed.
   local horizon = math.max(CFG.PLAN_HORIZON,
     speed * speed / (2 * CFG.BRAKE_ACCEL) + 45.0)
-  horizon = math.min(horizon, 1400.0)
+  horizon = math.min(horizon, 3000.0)
 
   local target = math.huge
   local distance = 0
@@ -255,7 +255,7 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
   return nearest
 end
 
-local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
+local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz, allowLeaderAhead)
   local sim = ac.getSim()
   if not sim then return false end
   local ownLateral = H.lateralOf(car.position, p.segIdx)
@@ -285,7 +285,9 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
           otherLaneCoordinate <= math.max(p.laneOffset, targetOffset) + LANE_HALF_WIDTH
         if (inTargetLane or reservingTarget) and
           longitudinal >= -rearClear and longitudinal <= frontClear then
-          return false, i, longitudinal
+          if not (allowLeaderAhead and longitudinal > 0 and not inTransitionSweep) then
+            return false, i, longitudinal
+          end
         end
         if inTransitionSweep then return false, i, longitudinal end
       end
@@ -312,6 +314,7 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
       if clear then
         p.laneStartOffset = p.laneOffset
         p.laneTargetOffset = targetOffset
+        p.laneChangeAborting = false
         p.laneChangeProgress = 0
         p.laneCooldown = LANE_CHANGE_COOLDOWN
         p.laneChanges = p.laneChanges + 1
@@ -335,6 +338,7 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
       (p.laneTargetOffset - p.laneStartOffset) * smooth
     if p.laneChangeProgress >= 1.0 then
       p.laneOffset = p.laneTargetOffset
+      p.laneChangeAborting = false
       H.log("LANE_CHANGE_DONE id=%d lane=%s changes=%d",
         carIndex, p.laneRole, p.laneChanges)
     end
@@ -344,7 +348,7 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
   -- acceleration until the transition is complete.
   if p.laneChangeProgress < 1.0 then
     local clear, blockedBy, blockedGap = adjacentLaneIsClear(
-      carIndex, car, p, p.laneTargetOffset, tx, tz)
+      carIndex, car, p, p.laneTargetOffset, tx, tz, p.laneChangeAborting)
     if not clear then
       -- A car entered the destination lane after the merge began. Abort back
       -- toward the original lane and brake behind the leader if one is present.
@@ -352,6 +356,7 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
       p.laneStartOffset = p.laneOffset
       p.laneTargetOffset = returnOffset
       p.laneChangeProgress = 0
+      p.laneChangeAborting = true
       p.laneCooldown = LANE_CHANGE_COOLDOWN
       p.laneRole = laneRoleForOffset(returnOffset, true)
       p.trafficBlocked = true
