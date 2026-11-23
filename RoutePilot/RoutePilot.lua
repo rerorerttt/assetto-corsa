@@ -2872,19 +2872,6 @@ function windowMain(dt)
     state.p = {}
   end
 
-  if ui.button(
-    state.enabled and "Отключить ИИ" or "Включить ИИ",
-    vec2(-1, 24)
-  ) then
-    state.enabled = not state.enabled
-
-    if not state.enabled then
-      for idx in pairs(state.p) do
-        releaseCar(idx)
-      end
-    end
-  end
-
   local canvas = vec2(ui.availableSpaceX(), 250)
 
   ui.invisibleButton("line_radar", canvas)
@@ -3017,13 +3004,6 @@ function windowMain(dt)
     "%.0f км/ч"
   )
 
-  state.followGap = ui.slider(
-    "Дистанция до машины",
-    state.followGap,
-    3,
-    20,
-    "%.0f м"
-  )
 end
 
 ------------------------------------------------------------
