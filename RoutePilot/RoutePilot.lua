@@ -1,16 +1,21 @@
--- RoutePilot.lua — v0.6.0 (CSP 0.3.2-preview2)
--- LESSONS FROM OTHER DEVS' APPS (AISplineEditor, Verve, comfy_map, all on main):
---  * comfy_map/Verve keep ALL content inside the window (window sizes match
---    content); the old 340x340 window was the reason the map was BLANK:
---    buttons+slider+text took ~250 px and the 250 px map was fully below the
---    window edge. Manifest now 400x560 and the UI is compact (buttons in
---    pairs), the map takes the remaining height.
---  * AISplineEditor draws world lines with render.on('main.track.transparent'),
---    NOT with manifest [RENDER_CALLBACKS] — that's how the official spline
---    editor does it and it works on this CSP build. Same approach here, with
---    render.setDepthMode(render.DepthMode.Off) and camera-distance culling.
---  * RoutePilot_Back.lua is the proven driving core — driver.lua v0.5.2 is
---    built on it (slip-compensated steering 0.62, Back steering constants).
+-- RoutePilot.lua — v0.7.0 (CSP 0.3.2-preview2)
+-- ROOT CAUSES FIXED:
+--  * LINES IN WALLS: smoothLine() ran 3 passes EVERY load; each session the
+--    closed loop shrank more until it drifted into the walls. Smoothing
+--    removed entirely: the file keeps RAW points exactly as the player drove.
+--  * FLOATING MAP: custom drawing in CSP windows uses window-local
+--    coordinates; comfy_map draws in a fixed-size window. Now the map is a
+--    FIXED rect reserved with ui.dummy and drawn in window-local coords —
+--    part of the window layout, cannot detach when the window is dragged.
+--  * Recording preview: while recording, the render shows existing nodes up
+--    to 30 m AHEAD of the car (the driver sees where the line goes); data is
+--    still written only under the car. The loop segment also renders only
+--    within 30 m of the car.
+--  * Width presets: buttons 1/2/3/4 cars (3/7/11/15 m corridor); default 1.
+--  * Запись границ (bounds re-record from the player's spot, denied outside
+--    current bounds, far edge keeps a passable minimum) — restored.
+--  * Safe respawn: rescue scans forward along the line for a spot clear of
+--    all cars by 8 m before teleporting.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -18,19 +23,24 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.42, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=25.0,
+  LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.65, LOOKAHEAD_MIN=12.0, LOOKAHEAD_MAX=45.0,
   STEER_GAIN=0.72, STEER_LIMIT=0.75, STEER_RATE=2.0, STEER_FILTER=0.18,
   MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0, MIN_APEX_SPEED=11.0,
   CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
   SLIP_START=0.09, SLIP_FULL=0.45, SLIP_DAMP_MIN_SPEED=8.0,
-  SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180, BOUNDS_MIN_PASS=2.4,
+  SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
-  SMOOTH_PASSES=3, SMOOTH_WINDOW=5, LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000,
-  RECORD_DISTANCE=3.0, LINE_DRAW_STEP=3, DRAW_RANGE=600.0,
+  LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
+  MAP_W=400.0, MAP_H=380.0,
+  LINE_DRAW_STEP=3, DRAW_RANGE=600.0,
+  PREVIEW_AHEAD=30.0,
+  BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
 }
+local WIDTH_PRESETS = {3, 7, 11, 15}
+
 local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
-  speedMax=170, followGap=8.0, boundsWidth=2,
+  speedMax=170, followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
@@ -109,7 +119,7 @@ local function saveBounds()
   local parts={}
   for i=1,n do
     parts[#parts+1]=string.format("%.2f %.2f",
-      safeNumber(state.boundsL[i],-1),safeNumber(state.boundsR[i],1))
+      safeNumber(state.boundsL[i],-1.5),safeNumber(state.boundsR[i],1.5))
   end
   if io and io.open then
     local ok,f=pcall(io.open,getBoundsFilePath(),"w")
@@ -132,8 +142,8 @@ local function loadBounds()
         local L,R={},{}
         for line in string.gmatch(raw,"[^\r\n]+") do
           local ls,rs=string.match(line,"^%s*([%-0-9%.]+)%s+([%-0-9%.]+)%s*$")
-          L[#L+1]=tonumber(ls) or -1
-          R[#R+1]=tonumber(rs) or 1
+          L[#L+1]=tonumber(ls) or -1.5
+          R[#R+1]=tonumber(rs) or 1.5
         end
         if #L==n then
           state.boundsL,state.boundsR=L,R
@@ -144,7 +154,8 @@ local function loadBounds()
     end
   end
   state.boundsL,state.boundsR={},{}
-  for i=1,n do state.boundsL[i]=-1 state.boundsR[i]=1 end
+  local half=WIDTH_PRESETS[state.widthPreset]/2
+  for i=1,n do state.boundsL[i]=-half state.boundsR[i]=half end
   writeLog("BOUNDS_DEFAULT points=%d",n)
   return false
 end
@@ -191,25 +202,6 @@ local function loadLine()
   end
   state.status="Линия не найдена"; state.loaded=false
   return false
-end
-local function smoothLine()
-  local n=#state.nodes
-  if n<5 then return end
-  for _=1,CFG.SMOOTH_PASSES do
-    local newX,newZ={},{}
-    for i=1,n do
-      local sx,sz,cnt=0,0,0
-      for j=-CFG.SMOOTH_WINDOW,CFG.SMOOTH_WINDOW do
-        local k=i+j
-        if state.loopRoute then k=((k-1)%n)+1
-        elseif k>=1 and k<=n then k=k
-        else k=nil end
-        if k then sx=sx+state.nodes[k].x; sz=sz+state.nodes[k].z; cnt=cnt+1 end
-      end
-      newX[i]=sx/cnt; newZ[i]=sz/cnt
-    end
-    for i=1,n do state.nodes[i]=vec3(newX[i],state.nodes[i].y,newZ[i]) end
-  end
 end
 local function segmentCount()
   if state.loopRoute then return #state.nodes end
@@ -303,11 +295,11 @@ local function lateralOf(pos,seg)
 end
 local function boundsAt(index)
   local n=#state.nodes
-  if n<1 then return -1,1 end
+  if n<1 then return -1.5,1.5 end
   local i=index
   if state.loopRoute then i=((i-1)%n)+1
   elseif i<1 or i>n then i=clamp(i,1,n) end
-  return safeNumber(state.boundsL[i],-1),safeNumber(state.boundsR[i],1)
+  return safeNumber(state.boundsL[i],-1.5),safeNumber(state.boundsR[i],1.5)
 end
 local function carAheadFull(carIndex,car,lateralWidth)
   local fx,fz=normalize2(car.look.x,car.look.z)
@@ -409,6 +401,23 @@ local function collectActiveAICars(sim)
   end
   return cars
 end
+local function spotIsClear(pos, exceptIndex)
+  local sim=ac.getSim()
+  if not sim then return true end
+  for i=0,sim.carsCount-1 do
+    if i~=exceptIndex then
+      local other=ac.getCar(i)
+      if other and other.isActive then
+        local dx=other.position.x-pos.x
+        local dz=other.position.z-pos.z
+        if dx*dx+dz*dz < CFG.SAFE_RESPAWN_CLEAR*CFG.SAFE_RESPAWN_CLEAR then
+          return false
+        end
+      end
+    end
+  end
+  return true
+end
 local function teleportAICarsToRoute(aiCars)
   state.spawnPerformed=true
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
@@ -489,17 +498,23 @@ local function teleportHome(carIndex,car)
     local d=flatDist(car.position,state.nodes[i])
     if d<bestD then bestD,bestI=d,i end
   end
-  local node=state.nodes[bestI]
-  local nxt=state.nodes[(bestI%n)+1]
-  local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
-  local pos=vec3(node.x-dx*4,node.y+0.1,node.z-dz*4)
-  local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
-  if ok then
-    state.p[carIndex]=nil
-    writeLog("RESCUE id=%d node=%d",carIndex,bestI)
-    flushLog()
+  for k=0,n-1 do
+    local i=((bestI-1+k)%n)+1
+    local node=state.nodes[i]
+    if spotIsClear(node,carIndex) then
+      local nxt=state.nodes[(i%n)+1]
+      local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
+      local pos=vec3(node.x-dx*4,node.y+0.1,node.z-dz*4)
+      local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
+      if ok then
+        state.p[carIndex]=nil
+        writeLog("RESCUE id=%d node=%d offset=%d",carIndex,i,k)
+        flushLog()
+      end
+      return ok
+    end
   end
-  return ok
+  return false
 end
 local function addPoint(pos)
   if #state.nodes>=CFG.MAX_ROUTE_POINTS then
@@ -507,7 +522,7 @@ local function addPoint(pos)
   end
   if #state.nodes==0 or flatDist(state.nodes[#state.nodes],pos)>=CFG.RECORD_DISTANCE then
     state.nodes[#state.nodes+1]=vec3(pos.x,pos.y+0.1,pos.z)
-    local half=state.boundsWidth/2
+    local half=WIDTH_PRESETS[state.widthPreset]/2
     state.boundsL[#state.nodes]=-half
     state.boundsR[#state.nodes]=half
   end
@@ -536,13 +551,13 @@ local function updateBoundsRecording(player)
   local l,r=boundsAt(seg)
   local newL,newR=l,r
   if off>=0 then
-    newR=math.max(off+0.5,1.0)
+    newR=math.max(off+0.5,1.5)
     newL=math.min(l,newR-CFG.BOUNDS_MIN_PASS)
-    if newL>-1 then newL=-1 end
+    if newL>-1.5 then newL=-1.5 end
   else
-    newL=math.min(off-0.5,-1.0)
+    newL=math.min(off-0.5,-1.5)
     newR=math.max(r,newL+CFG.BOUNDS_MIN_PASS)
-    if newR<1 then newR=1 end
+    if newR<1.5 then newR=1.5 end
   end
   local idx=seg
   if state.loopRoute then idx=((seg-1)%n)+1 end
@@ -554,6 +569,17 @@ local function updateBoundsRecording(player)
     state.boundsR[state.recBoundsSeg]=newR
     state.recBoundsSeg=seg
   end
+end
+local function applyWidthPreset(preset)
+  state.widthPreset=preset
+  local n=#state.nodes
+  if n<2 then return end
+  local half=WIDTH_PRESETS[preset]/2
+  for i=1,n do
+    state.boundsL[i]=-half
+    state.boundsR[i]=half
+  end
+  writeLog("WIDTH_PRESET preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
 end
 local function releaseCar(carIndex)
   local ok,controls=pcall(ac.overrideCarControls,carIndex)
@@ -619,46 +645,64 @@ function script.update(dt)
   end
 end
 
--- 3D world lines: the AISplineEditor way — render.on('main.track.transparent').
--- No manifest section needed; works on this CSP build (that is how the
--- official AI Spline Editor draws its splines in the world).
+-- 3D WORLD LINES. Recording preview: only existing nodes, up to 30 m AHEAD
+-- of the car (data is written only under the car). Loop renders within 30 m.
 render.on('main.track.transparent', function()
-  if not state.showWorldLines then return end
   local n=#state.nodes
   if n<2 then return end
+  if not (state.showWorldLines or state.recLine or state.recBounds) then return end
   local ok=pcall(function()
     local sim=ac.getSim()
     if not sim then return end
+    local player=ac.getCar(0)
+    if not player then return end
     local cam=sim.cameraPosition
     render.setDepthMode(render.DepthMode.Off)
     local step=CFG.LINE_DRAW_STEP
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
+    local fromI,toI=1,n
+    if state.recLine or state.recBounds then
+      local seg=select(1,findNearestSeg(player.position,1))
+      fromI=seg
+      local dist=0
+      local i=seg
+      toI=seg
+      while dist<CFG.PREVIEW_AHEAD do
+        local a=state.nodes[i]
+        local b=state.nodes[(i%n)+1]
+        dist=dist+flatDist(a,b)
+        i=(i%n)+1
+        toI=i
+        if i==seg then break end
+      end
+    end
     for i=1,n,step do
-      local j=((i+step-1)%n)+1
-      local a=state.nodes[i]; local b=state.nodes[j]
-      local midx,midz=(a.x+b.x)*0.5,(a.z+b.z)*0.5
-      local ddx,ddz=midx-cam.x,midz-cam.z
-      if ddx*ddx+ddz*ddz<CFG.DRAW_RANGE*CFG.DRAW_RANGE then
-        local la=state.nodes[((i-1)%n)+1]
-        local lx,lz=normalize2(b.x-la.x,b.z-la.z)
-        local al,ar=boundsAt(i)
-        render.debugLine(vec3(a.x,a.y+0.05,a.z),vec3(b.x,b.y+0.05,b.z),YELLOW)
-        render.debugLine(vec3(a.x-lz*al,a.y+0.05,a.z+lx*al),
-          vec3(b.x-lz*al,b.y+0.05,b.z+lx*al),RED)
-        render.debugLine(vec3(a.x-lz*ar,a.y+0.05,a.z+lx*ar),
-          vec3(b.x-lz*ar,b.y+0.05,b.z+lx*ar),RED)
+      if i>=fromI and i<=toI then
+        local j=((i+step-1)%n)+1
+        local a=state.nodes[i]; local b=state.nodes[j]
+        local midx,midz=(a.x+b.x)*0.5,(a.z+b.z)*0.5
+        local ddx,ddz=midx-cam.x,midz-cam.z
+        if ddx*ddx+ddz*ddz<CFG.DRAW_RANGE*CFG.DRAW_RANGE then
+          local la=state.nodes[((i-1)%n)+1]
+          local lx,lz=normalize2(b.x-la.x,b.z-la.z)
+          local al,ar=boundsAt(i)
+          render.debugLine(vec3(a.x,a.y+0.05,a.z),vec3(b.x,b.y+0.05,b.z),YELLOW)
+          render.debugLine(vec3(a.x-lz*al,a.y+0.05,a.z+lx*al),
+            vec3(b.x-lz*al,b.y+0.05,b.z+lx*al),RED)
+          render.debugLine(vec3(a.x-lz*ar,a.y+0.05,a.z+lx*ar),
+            vec3(b.x-lz*ar,b.y+0.05,b.z+lx*ar),RED)
+        end
       end
     end
   end)
   if not ok then
-    state.showWorldLines=false
-    writeLog("DRAW3D_ERROR disabled"); flushLog()
+    writeLog("DRAW3D_ERROR"); flushLog()
   end
 end)
 
--- MAP: content fits the window (400x560, compact two-column buttons),
--- canvas = invisibleButton + itemRect (Back-proven), height fills the rest.
+-- MAP: fixed rect reserved with ui.dummy, drawn in WINDOW-LOCAL coordinates
+-- (comfy_map style). Part of the window layout — cannot detach on drag.
 local function computeMapBounds()
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
   for i=1,#state.nodes do
@@ -758,29 +802,16 @@ local function drawMapInRect(q0,q1)
     end
   end
 end
-local function drawMap()
-  if #state.nodes<2 then
-    ui.textWrapped("Нет линии. Нажмите «Запись линии» и проедьте круг.")
-    return
-  end
-  local ok=pcall(function()
-    local width=ui.availableSpaceX()
-    if width<80 then width=80 end
-    local height=ui.availableSpaceY and ui.availableSpaceY() or 0
-    if type(height)~="number" or height<160 then height=160 end
-    if height>600 then height=600 end
-    ui.invisibleButton("line_map",vec2(width,height))
-    local q0=ui.getItemRectMin()
-    local q1=ui.getItemRectMax()
-    drawMapInRect(q0,q1)
-  end)
-  if not ok then pcall(ui.text," ") end
-end
 function windowMain(dt)
   local okDraw=pcall(function()
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
-    local w,ch=ui.slider("Ширина трассы, м (общая)",state.boundsWidth,2,30,"%.0f")
-    if ch then state.boundsWidth=math.floor(clamp(w,2,30)) end
+    for idx=1,4 do
+      local label=string.format("%d %s",idx,idx==1 and "машина" or "машины")
+      if idx>1 then ui.sameLine(0,4) end
+      if ui.button(label,vec2(92,22)) then
+        applyWidthPreset(idx)
+      end
+    end
     if ui.button(state.recLine and "СТОП запись" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
@@ -788,7 +819,6 @@ function windowMain(dt)
         state.loaded=false; state.recBounds=false
         state.status="Запись линии и границ..."
       else
-        smoothLine()
         state.status="Записано точек: "..#state.nodes
       end
     end
@@ -804,25 +834,28 @@ function windowMain(dt)
         end
       end
     end
-    if ui.button(state.showWorldLines and "Скрыть линии" or "Показать линии",vec2(-0.5,24)) then
+    if ui.button(state.showWorldLines and "Скрыть линии" or "Показать линии",vec2(-0.5,22)) then
       state.showWorldLines=not state.showWorldLines
       writeLog("WORLD_LINES %s",state.showWorldLines and "ON" or "OFF")
     end
     ui.sameLine(0,4)
-    if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ",vec2(-0.5,24)) then
+    if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ",vec2(-0.5,22)) then
       state.loopRoute=not state.loopRoute
       state.p={}
     end
-    if ui.button("Сохранить",vec2(-0.34,22)) then saveLine() end
-    ui.sameLine(0,4)
-    if ui.button("Загрузить",vec2(-0.34,22)) then loadLine() end
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.34,22)) then
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
     end
+    if ui.button("Сохранить",vec2(-0.25,22)) then saveLine() end
+    ui.sameLine(0,4)
+    if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
     ui.separator()
-    drawMap()
+    local q0=ui.getCursorPos()
+    ui.dummy(vec2(CFG.MAP_W,CFG.MAP_H))
+    local q1=vec2(q0.x+CFG.MAP_W,q0.y+CFG.MAP_H)
+    drawMapInRect(q0,q1)
   end)
   if not okDraw then pcall(ui.text,"UI error") end
 end
@@ -835,7 +868,6 @@ if ac.onRelease then
   end)
 end
 loadLine()
-smoothLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.6.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.7.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
