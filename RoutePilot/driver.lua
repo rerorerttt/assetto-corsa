@@ -217,9 +217,6 @@ local function planRaceSpeed(p, speed)
   return target
 end
 
-local function laneOffsetAtPosition(car, ownTangentX, ownTangentZ)
-  local dx = car.position.x
-  local dz = car.position.z
 local function scanTraffic(carIndex, car, p, speed, tx, tz)
   local sim = ac.getSim()
   if not sim then return nil end
