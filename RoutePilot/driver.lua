@@ -236,7 +236,10 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
         local otherP = state.p[i]
         local otherLaneCoordinate = otherP and otherP.laneOffset or
           (ownLateral + lateral)
-        local sameLane = math.abs(otherLaneCoordinate - p.laneOffset) <= LANE_HALF_WIDTH
+        local sameLane = math.abs(otherLaneCoordinate - p.laneOffset) <= LANE_HALF_WIDTH or
+          (p.laneChangeProgress < 1.0 and
+            (math.abs(otherLaneCoordinate - p.laneStartOffset) <= LANE_HALF_WIDTH or
+             math.abs(otherLaneCoordinate - p.laneTargetOffset) <= LANE_HALF_WIDTH))
         if longitudinal > 0.5 and sameLane and longitudinal < nearestGap then
           nearestGap = longitudinal
           nearest = {
