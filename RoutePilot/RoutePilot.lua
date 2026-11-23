@@ -1459,7 +1459,7 @@ local function updatePassingPlan(carIndex, car, p, targetSpeed, dt)
       p.passOffset = lerp(p.passOffset, CFG.PASS_LEFT_OFFSET,
         clamp(dt * 4.0, 0, 1))
       local boost = math.min(p.cruiseSpeed + CFG.PASS_BOOST,
-        state.speedMax / 3.6 + CFG.PASS_BOOST)
+        state.speedMax / 3.6)
       targetSpeed = math.max(targetSpeed, boost)
     else
       p.passOffset = lerp(p.passOffset, 0,
@@ -1610,7 +1610,24 @@ local function updateLineCar(carIndex, car, dt)
   -- 1. Detect vehicle instability.
   calculateStability(p)
 
-  -- 2. Calculate steering using the recorded route.
+  -- 2. Calculate the normal corner-speed target first.
+  local targetSpeed = planTargetSpeed(p, speed)
+
+  -- 3. Only the faster/following car performs a passing manoeuvre.
+  -- The slower car is never commanded to brake, slow down or move aside.
+  -- The pass offset is applied before steering so the lookahead target
+  -- follows the passing corridor for this frame.
+  targetSpeed = select(1, updatePassingPlan(
+    carIndex,
+    car,
+    p,
+    targetSpeed,
+    dt
+  ))
+
+  p.targetSpeed = targetSpeed
+
+  -- 4. Calculate steering using the recorded route and current pass offset.
   local steerTarget = calculateSteering(
     car,
     p,
@@ -1619,25 +1636,12 @@ local function updateLineCar(carIndex, car, dt)
     fz
   )
 
-  -- 3. Smooth steering.
+  -- 5. Smooth steering.
   local steer = filterSteering(
     p,
     steerTarget,
     dt
   )
-
-  -- 4. Calculate speed required for upcoming corners.
-  local targetSpeed = planTargetSpeed(p, speed)
-
-  -- 5. Lane-changing passes are temporarily disabled. The latest trace
-  -- showed unstable route tracking and wall impacts; first validate the
-  -- corrected spawn heading and route follower without lateral pass offsets.
-  p.passState = nil
-  p.passLeader = nil
-  p.passOffset = 0
-  state.passOwner = nil
-
-  p.targetSpeed = targetSpeed
 
   -- 6. Adapt throttle to grip and actual vehicle movement.
   local gas, brake = calculateThrottle(
