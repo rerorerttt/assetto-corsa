@@ -1761,7 +1761,7 @@ local function updateTrafficCoordinator(sim, dt)
         if b and not plans[i] and not plans[j] then
           local headingDot = a.hx * b.hx + a.hz * b.hz
 
-          if false and headingDot < -0.55 then
+          if headingDot < -0.55 then
             local dx = b.x - a.x
             local dz = b.z - a.z
             local rvx = b.vx - a.vx
@@ -1896,7 +1896,7 @@ local function updateTrafficCoordinator(sim, dt)
         local b = infos[j]
         if b and b.isAI and not plans[j] then
           local headingDot = a.hx * b.hx + a.hz * b.hz
-          if false and headingDot >= -0.55 and headingDot <= 0.72 then
+          if headingDot >= -0.55 and headingDot <= 0.72 then
             local dx = b.x - a.x
             local dz = b.z - a.z
             local rvx = b.vx - a.vx
@@ -3028,17 +3028,8 @@ function windowMain(dt)
     state.loaded = false
   end
 
-  state.speedMax = ui.slider(
-    "Макс. скорость",
-    state.speedMax,
-    100,
-    320,
-    "%.0f км/ч"
-  )
-
-  -- The radar is a child region of the main app window, not a separate
-  -- floating window. It stays attached when the app is moved or resized.
-  ui.childWindow("##route_map", vec2(ui.availableSpaceX(), 250), function()
+  -- Draw directly into the main window's current ImGui context.
+  -- No separate child/root window is created for the radar.
   local canvas = vec2(ui.availableSpaceX(), ui.availableSpaceY())
 
   ui.invisibleButton("line_radar", canvas)
@@ -3136,7 +3127,6 @@ function windowMain(dt)
       12
     )
   end
-  end)
 
 end
 
