@@ -95,7 +95,20 @@ end
 local function getBoundsFilePath()
   return string.gsub(getLineFilePath(),"%.txt$","_bounds.txt")
 end
+local function trimDuplicateClosure()
+  if #state.nodes>3 then
+    local first,last=state.nodes[1],state.nodes[#state.nodes]
+    local dx,dz=last.x-first.x,last.z-first.z
+    if dx*dx+dz*dz<0.25 then
+      table.remove(state.nodes)
+      if state.boundsL then table.remove(state.boundsL) end
+      if state.boundsR then table.remove(state.boundsR) end
+      writeLog("ROUTE_DUPLICATE_CLOSURE_REMOVED remaining=%d",#state.nodes)
+    end
+  end
+end
 local function buildAISpline()
+  trimDuplicateClosure()
   if not Builder then
     state.aiSplineBuilt=false
     state.status="Не загружен модуль native AI spline"
@@ -262,6 +275,7 @@ local function loadLine()
     state.status=string.format("Загружено: %d точек",#loaded)
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
     loadBounds()
+    trimDuplicateClosure()
     buildAISpline()
     flushLog()
     return true
