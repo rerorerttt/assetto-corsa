@@ -14,10 +14,10 @@ end
 ------------------------------------------------------------
 
 local CFG = {
-  LOOKAHEAD_BASE = 10.0,
-  LOOKAHEAD_SPEED = 0.42,
-  LOOKAHEAD_MIN = 10.0,
-  LOOKAHEAD_MAX = 25.0,
+  LOOKAHEAD_BASE = 13.0,
+  LOOKAHEAD_SPEED = 0.58,
+  LOOKAHEAD_MIN = 12.0,
+  LOOKAHEAD_MAX = 42.0,
 
   STEER_GAIN = 0.72,
   STEER_LIMIT = 0.75,
@@ -27,12 +27,21 @@ local CFG = {
   SLIP_START = 0.09,
   SLIP_FULL = 0.38,
 
-  MAX_LATERAL_ACCEL = 5.5,
-  LATERAL_ACCEL_LIMIT = 11.0,
+  MAX_LATERAL_ACCEL = 10.5,
+  LATERAL_ACCEL_LIMIT = 16.0,
 
-  BRAKE_ACCEL = 5.0,
-  MAX_BRAKE = 0.75,
-  MAX_GAS = 0.90,
+  BRAKE_ACCEL = 8.5,
+  MAX_BRAKE = 0.90,
+  MAX_GAS = 1.0,
+
+  PASS_TRIGGER_DISTANCE = 48.0,
+  PASS_MIN_GAP = 5.0,
+  PASS_LEFT_OFFSET = -3.8,
+  PASS_CLEAR_REAR = 16.0,
+  PASS_CLEAR_FRONT = 75.0,
+  PASS_COMPLETE_GAP = -9.0,
+  PASS_BOOST = 9.0,
+  PASS_RETURN_RATE = 1.25,
 
   SPEED_GAIN = 0.28,
 
@@ -59,10 +68,11 @@ local state = {
   recording = false,
   loopRoute = true,
 
-  speedMin = 60,
-  speedMax = 140,
+  speedMin = 150,
+  speedMax = 230,
 
   followGap = 8.0,
+  passOwner = nil,
 
   spawnDone = false,
   spawnPerformed = false,
@@ -467,13 +477,12 @@ local function sampleSpawnRoute(metrics, distance)
         lerp(a.z, b.z, t)
       )
 
-      -- physics.setAICarPosition() expects the direction vector opposite
-      -- to ac.CarState.look (the car's forward vector). Keep the spawned
-      -- vehicle facing along the recorded route, not against it.
+      -- CSP applies its own orientation convention to the direction
+      -- argument. This vector is the forward tangent of the recorded route.
       local direction = vec3(
-        a.x - b.x,
-        a.y - b.y,
-        a.z - b.z
+        b.x - a.x,
+        b.y - a.y,
+        b.z - a.z
       )
 
       if direction:length() < 0.0001 then
@@ -733,11 +742,16 @@ local function newPersonality(carIndex)
   local span = math.max(0, state.speedMax - state.speedMin)
 
   local kmh = state.speedMin + span * 0.5
+  local speedVariation = 1.0 + (((carIndex * 7) % 5) - 2) * 0.025
 
   local p = {
     segIdx = 1,
 
-    cruiseSpeed = kmh / 3.6,
+    cruiseSpeed = kmh * speedVariation / 3.6,
+    passState = nil,
+    passLeader = nil,
+    passOffset = 0,
+    passTime = 0,
 
     steer = 0,
     steerFiltered = 0,
@@ -966,6 +980,14 @@ local function getLookaheadTarget(car, p, speed)
     end
   end
 
+  -- Shift the preview point along the route normal. Negative offset
+  -- means left, matching CSP's documented AI spline offset convention.
+  local sa = nodes[currentSeg]
+  local sb = getSegmentEnd(currentSeg, count)
+  local tangentX, tangentZ = normalize2(sb.x - sa.x, sb.z - sa.z)
+  targetX = targetX + tangentZ * p.passOffset
+  targetZ = targetZ - tangentX * p.passOffset
+
   return targetX, targetZ
 end
 
@@ -1032,7 +1054,7 @@ local function planTargetSpeed(p, speed)
   local current = p.segIdx
 
   -- Look ahead through upcoming corners.
-  for offset = 0, 12 do
+  for offset = 0, 36 do
     local index = current + offset
 
     if state.loopRoute then
@@ -1254,48 +1276,135 @@ end
 -- CAR FOLLOWING
 ------------------------------------------------------------
 
-local function carAhead(carIndex, car)
+local function findTrafficAhead(carIndex, car)
   local fx, fz = normalize2(car.look.x, car.look.z)
-
   local sim = ac.getSim()
+  if not sim then return nil, nil, nil end
 
-  if not sim then
-    return nil, nil
-  end
-
-  local bestGap = nil
-  local bestSpeed = nil
-
+  local bestGap, bestSpeed, bestIndex = nil, nil, nil
   for i = 0, sim.carsCount - 1 do
     if i ~= carIndex then
       local other = ac.getCar(i)
-
       if other and other.isActive then
         local dx = other.position.x - car.position.x
         local dz = other.position.z - car.position.z
-
         local forward = dx * fx + dz * fz
-
-        if forward > 0 and forward < 80 then
-          local lateral = math.abs(
-            dx * fz - dz * fx
-          )
-
-          if lateral <= CFG.FOLLOW_LATERAL then
-            if not bestGap or forward < bestGap then
-              bestGap = forward
-              bestSpeed = math.max(
-                0,
-                safeNumber(other.speedMs)
-              )
-            end
+        local lateral = dx * fz - dz * fx
+        if forward > 0 and forward < CFG.PASS_TRIGGER_DISTANCE and
+           math.abs(lateral) <= 2.8 then
+          if not bestGap or forward < bestGap then
+            bestGap = forward
+            bestSpeed = math.max(0, safeNumber(other.speedMs))
+            bestIndex = i
           end
         end
       end
     end
   end
+  return bestGap, bestSpeed, bestIndex
+end
 
-  return bestGap, bestSpeed
+local function leftPassingCorridorClear(carIndex, car, leaderIndex)
+  local fx, fz = normalize2(car.look.x, car.look.z)
+  local sim = ac.getSim()
+  if not sim then return false end
+
+  for i = 0, sim.carsCount - 1 do
+    if i ~= carIndex and i ~= leaderIndex then
+      local other = ac.getCar(i)
+      if other and other.isActive then
+        local dx = other.position.x - car.position.x
+        local dz = other.position.z - car.position.z
+        local forward = dx * fx + dz * fz
+        local lateral = dx * fz - dz * fx
+
+        -- Signed lateral distance is negative on the left. This also
+        -- rejects an oncoming car occupying the left-side passing corridor.
+        if forward > -CFG.PASS_CLEAR_REAR and
+           forward < CFG.PASS_CLEAR_FRONT and
+           lateral < -1.2 and lateral > -8.5 then
+          return false, i
+        end
+      end
+    end
+  end
+  return true, nil
+end
+
+local function updatePassingPlan(carIndex, car, p, targetSpeed, dt)
+  local gap, leaderSpeed, leaderIndex = findTrafficAhead(carIndex, car)
+  local fx, fz = normalize2(car.look.x, car.look.z)
+
+  if not p.passState and gap and gap > CFG.PASS_MIN_GAP and
+     gap < CFG.PASS_TRIGGER_DISTANCE and
+     targetSpeed > p.cruiseSpeed * 0.82 and
+     leaderSpeed < p.cruiseSpeed - 1.0 then
+    local laneClear = leftPassingCorridorClear(carIndex, car, leaderIndex)
+    local reservationFree = state.passOwner == nil or state.passOwner == carIndex
+
+    if laneClear and reservationFree then
+      p.passState = "passing"
+      p.passLeader = leaderIndex
+      p.passTime = 0
+      state.passOwner = carIndex
+      writeLog("PASS_START car=%d leader=%d gap=%.2f leader_speed=%.2f cruise=%.2f side=left",
+        carIndex, leaderIndex, gap, leaderSpeed, p.cruiseSpeed)
+    end
+  end
+
+  if p.passState then
+    p.passTime = p.passTime + dt
+    local leader = p.passLeader and ac.getCar(p.passLeader) or nil
+    local forward = nil
+
+    if leader and leader.isActive then
+      local dx = leader.position.x - car.position.x
+      local dz = leader.position.z - car.position.z
+      forward = dx * fx + dz * fz
+    end
+
+    local laneClear, blocker = leftPassingCorridorClear(
+      carIndex, car, p.passLeader
+    )
+
+    if p.passState == "passing" then
+      if forward == nil or p.passTime > 12.0 then
+        p.passState = "returning"
+        writeLog("PASS_ABORT car=%d leader=%s reason=%s",
+          carIndex, tostring(p.passLeader), forward == nil and "leader_lost" or "timeout")
+      elseif not laneClear then
+        p.passState = "returning"
+        writeLog("PASS_ABORT car=%d leader=%d blocker=%d reason=left_lane_occupied",
+          carIndex, p.passLeader, blocker or -1)
+      elseif forward < CFG.PASS_COMPLETE_GAP then
+        p.passState = "returning"
+        writeLog("PASS_COMPLETE car=%d leader=%d pass_time=%.2f",
+          carIndex, p.passLeader, p.passTime)
+      end
+    end
+
+    if p.passState == "passing" then
+      p.passOffset = lerp(p.passOffset, CFG.PASS_LEFT_OFFSET,
+        clamp(dt * 1.8, 0, 1))
+      local boost = math.min(p.cruiseSpeed + CFG.PASS_BOOST,
+        state.speedMax / 3.6 + CFG.PASS_BOOST)
+      targetSpeed = math.max(targetSpeed, boost)
+    else
+      p.passOffset = lerp(p.passOffset, 0,
+        clamp(dt * CFG.PASS_RETURN_RATE, 0, 1))
+      if math.abs(p.passOffset) < 0.12 then
+        p.passOffset = 0
+        writeLog("PASS_RELEASE car=%d leader=%s duration=%.2f",
+          carIndex, tostring(p.passLeader), p.passTime)
+        p.passState = nil
+        p.passLeader = nil
+        p.passTime = 0
+        if state.passOwner == carIndex then state.passOwner = nil end
+      end
+    end
+  end
+
+  return targetSpeed, gap, leaderSpeed, leaderIndex
 end
 
 ------------------------------------------------------------
@@ -1366,6 +1475,7 @@ local function releaseCar(carIndex)
   end
 
   state.p[carIndex] = nil
+  if state.passOwner == carIndex then state.passOwner = nil end
 end
 
 ------------------------------------------------------------
@@ -1408,30 +1518,18 @@ local function updateLineCar(carIndex, car, dt)
   -- 4. Calculate speed required for upcoming corners.
   local targetSpeed = planTargetSpeed(p, speed)
 
-  -- 5. Avoid the vehicle ahead.
-  local gap, leaderSpeed = carAhead(
-    carIndex,
-    car
-  )
+  -- 5. Reserve the left corridor and accelerate through a pass.
+  local gap, leaderSpeed, leaderIndex
+  targetSpeed, gap, leaderSpeed, leaderIndex =
+    updatePassingPlan(carIndex, car, p, targetSpeed, dt)
 
-  if gap then
-    local safeSpeed = math.sqrt(
-      math.max(
-        0,
-        leaderSpeed * leaderSpeed +
-        2 * CFG.BRAKE_ACCEL *
-        math.max(0, gap - state.followGap)
-      )
-    )
-
-    targetSpeed = math.min(
-      targetSpeed,
-      safeSpeed
-    )
-
-    if gap < state.followGap then
-      targetSpeed = 0
-    end
+  -- Emergency-only spacing protection if a pass cannot be started.
+  -- The leading car is never asked to slow down or move aside.
+  if gap and not p.passState and gap < state.followGap then
+    local safeSpeed = math.sqrt(math.max(0,
+      leaderSpeed * leaderSpeed +
+      2 * CFG.BRAKE_ACCEL * math.max(0, gap - 2.5)))
+    targetSpeed = math.min(targetSpeed, safeSpeed)
   end
 
   p.targetSpeed = targetSpeed
@@ -1509,6 +1607,8 @@ local function recordSecondTelemetry(sim)
         "CURVATURE=%.5f " ..
         "TARGET_SPEED=%.2f " ..
         "LINE_ERROR=%.2f " ..
+        "PASS=%s " ..
+        "PASS_OFFSET=%.2f " ..
         "SEGMENT=%d " ..
         "VELOCITY=(%.2f,%.2f) " ..
         "LOOK=(%.2f,%.2f)",
@@ -1537,6 +1637,8 @@ local function recordSecondTelemetry(sim)
         p.lastCurve,
         p.targetSpeed,
         p.lineDist,
+        tostring(p.passState or "none"),
+        p.passOffset,
 
         p.segIdx,
 
@@ -1774,16 +1876,16 @@ function windowMain(dt)
   state.speedMin = ui.slider(
     "Мин. скорость",
     state.speedMin,
-    40,
-    180,
+    80,
+    220,
     "%.0f км/ч"
   )
 
   state.speedMax = ui.slider(
     "Макс. скорость",
     state.speedMax,
-    60,
-    260,
+    100,
+    300,
     "%.0f км/ч"
   )
 
