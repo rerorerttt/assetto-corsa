@@ -19,9 +19,9 @@ local STEER_LIMIT = 0.68
 local STEER_GAIN = 0.78
 local STEER_FILTER_TIME = 0.22
 local STEER_RATE = 1.5
-local LOOKAHEAD_BASE = 13.0
-local LOOKAHEAD_SPEED = 0.38
-local LOOKAHEAD_MAX = 30.0
+local LOOKAHEAD_BASE = 16.0
+local LOOKAHEAD_SPEED = 0.55
+local LOOKAHEAD_MAX = 75.0
 local LANE_RESCUE_SPEED = 1.5
 local LANE_RESCUE_TIME = 5.0
 local GAS_RISE_RATE = 1.8
@@ -111,7 +111,10 @@ local function applyTractionLimiter(car,p,dt)
   p.tractionFactor=factor
   local requested=math.min(p.gas,factor)
   local rate
-  if requested<p.gasOutput then
+  if p.brake > 0.02 then
+    requested=0
+    rate=GAS_SPIN_CUT_RATE
+  elseif requested<p.gasOutput then
     rate=(p.wheelSlip>0.14) and GAS_SPIN_CUT_RATE or GAS_RELEASE_RATE
   else
     rate=GAS_RISE_RATE
@@ -265,17 +268,21 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
         local longitudinal = dx * tx + dz * tz
         local lateral = dx * -tz + dz * tx
         local otherP = state.p[i]
+        local otherSpeed = math.max(0, safeNumber(other.speedMs, 0))
         local reservedOffset = otherP and
           (otherP.laneTargetOffset or otherP.laneOffset) or lateral
         local inTargetLane = math.abs(lateral - targetOffset) <= LANE_HALF_WIDTH
         local reservingTarget = otherP and
           math.abs(reservedOffset - targetOffset) <= LANE_HALF_WIDTH
-        local inTransitionSweep = math.abs(longitudinal) < 8.0 and
+        local frontClear = math.max(LANE_FRONT_CLEAR,
+          math.max(0, safeNumber(car.speedMs, 0) - otherSpeed) * 1.5 + 10.0)
+        local rearClear = math.max(LANE_REAR_CLEAR,
+          math.max(0, otherSpeed - safeNumber(car.speedMs, 0)) * 1.5 + 10.0)
+        local inTransitionSweep = math.abs(longitudinal) < 10.0 and
           lateral >= math.min(p.laneOffset, targetOffset) - LANE_HALF_WIDTH and
           lateral <= math.max(p.laneOffset, targetOffset) + LANE_HALF_WIDTH
         if (inTargetLane or reservingTarget) and
-          longitudinal >= -LANE_REAR_CLEAR and
-          longitudinal <= LANE_FRONT_CLEAR then
+          longitudinal >= -rearClear and longitudinal <= frontClear then
           return false, i, longitudinal
         end
         if inTransitionSweep then return false, i, longitudinal end
