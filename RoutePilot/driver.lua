@@ -682,10 +682,10 @@ function Driver.update(carIndex, car, dt)
   p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
   if p.projectionLost then targetSpeed=0 end
-  if p.boundaryEmergency then
-    local decel=p.boundaryDeficit and p.boundaryDeficit>0.5 and 8.0 or 4.0
-    targetSpeed=math.min(targetSpeed,math.max(0,speed-decel))
-  end
+  -- Boundary correction is a steering task, not a reason to stop.
+  -- The predictive footprint guard already bends the target path back into
+  -- the corridor. Do not convert lateral correction magnitude into a speed
+  -- cap: that caused repeated full stops even with zero corridor deficit.
   p.targetSpeed=targetSpeed
   local steer = filterSteering(p, steerTarget, dt)
 
