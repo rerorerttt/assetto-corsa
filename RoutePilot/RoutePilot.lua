@@ -254,13 +254,17 @@ local function getVertexCurvature(index)
   if angle<0.02 then return 0 end
   return angle/math.max(0.1,(l1+l2)*0.5)
 end
-local function findNearestSeg(pos,hintSeg,allowGlobal)
+local function findNearestSeg(pos,hintSeg,allowGlobal,heading)
   local nodes=state.nodes; local segs=segmentCount()
   if segs<1 then return 1,0,0 end
   local px,pz=pos.x,pos.z
   local base=clamp(hintSeg or 1,1,segs)
   local bestSeg,bestT=base,0
-  local bestDist=math.huge
+  local bestDist,bestScore=math.huge,math.huge
+  local hx,hz=nil,nil
+  if heading and type(heading.x)=="number" and type(heading.z)=="number" then
+    hx,hz=normalize2(heading.x,heading.z)
+  end
   local function check(index)
     local a=nodes[index]; local b=segEnd(index)
     local vx,vz=b.x-a.x,b.z-a.z
@@ -270,7 +274,15 @@ local function findNearestSeg(pos,hintSeg,allowGlobal)
     local cx,cz=a.x+vx*t,a.z+vz*t
     local dx,dz=px-cx,pz-cz
     local dSq=dx*dx+dz*dz
-    if dSq<bestDist then bestDist=dSq; bestSeg=index; bestT=t end
+    local score=dSq
+    if hx then
+      local tx,tz=normalize2(vx,vz)
+      local alignment=math.abs(hx*tx+hz*tz)
+      score=score+12*(1-alignment)
+    end
+    if score<bestScore then
+      bestScore=score; bestDist=dSq; bestSeg=index; bestT=t
+    end
   end
   local back=math.min(5,segs-1)
   local ahead=math.min(segs-1,math.max(20,math.floor(segs*0.25)))
@@ -285,10 +297,10 @@ local function findNearestSeg(pos,hintSeg,allowGlobal)
     end
     if idx then check(idx) end
   end
-  -- Global reacquisition is allowed only when a driver has no route lock.
-  -- Once locked, stay in the local progress window to avoid jumping to a
-  -- geometrically close but topologically unrelated branch at crossings.
-  if allowGlobal ~= false and bestDist>15*15 then
+  -- A new car gets one global acquisition, biased toward the segment whose
+  -- direction best matches its current heading. Locked cars never jump to a
+  -- distant, topologically unrelated branch.
+  if allowGlobal == true or (allowGlobal ~= false and bestDist>15*15) then
     for i=1,segs do check(i) end
   end
   return bestSeg,bestT,math.sqrt(bestDist)
