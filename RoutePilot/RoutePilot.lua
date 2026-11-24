@@ -696,6 +696,12 @@ function script.update(dt)
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
       state.logAccum=state.logAccum-CFG.LOG_INTERVAL
+      local playerState=ac.getCar(0)
+      writeLog("PLAYER_AI_STATE active=%s ai=%s loaded=%s points=%d driver=%s p0=%s",
+        tostring(playerState and playerState.isActive),
+        tostring(playerState and playerState.isAIControlled),
+        tostring(state.loaded),#state.nodes,tostring(Driver~=nil),
+        tostring(state.p[0]~=nil))
       recordSecondTelemetry(sim)
     end
   end)
