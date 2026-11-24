@@ -105,13 +105,11 @@ local function routeGap(ownProgress, otherProgress)
 end
 
 local function newPersonality(carIndex)
-  -- Every participant uses the same configured cruise ceiling. Actual speed
-  -- differences come from the car physics, not an index-based class.
   -- No artificial cruise-speed ceiling: the route planner and vehicle physics
   -- determine speed. Curvature and measured braking capability remain limits.
   local p = {
     segIdx = 1, cruiseSpeed = math.huge, brakeAccelEstimate = CFG.BRAKE_ACCEL,
-    previousSpeed = nil, playerAutopilot = carIndex == 0,
+    accelEstimate = 4.0, previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
     previousFx = nil, previousFz = nil,
@@ -160,13 +158,20 @@ local function readVehicleDynamics(car, p, dt)
   local speed = math.max(0, safeNumber(car.speedMs, longVel))
   -- Learn this car's real braking response from measured speed loss while
   -- the previous frame was braking. Ignore noisy samples and filter changes.
-  if p.previousSpeed ~= nil and dt > 0.002 and p.brake > 0.15 and
-     speed < p.previousSpeed then
-    local measured = (p.previousSpeed - speed) / dt
-    if measured >= 1.5 and measured <= 25.0 then
-      local estimate = clamp(measured, 2.5, 16.0)
-      p.brakeAccelEstimate = lerp(
-        safeNumber(p.brakeAccelEstimate, CFG.BRAKE_ACCEL), estimate, 0.12)
+  if p.previousSpeed ~= nil and dt > 0.002 then
+    if p.brake > 0.15 and speed < p.previousSpeed then
+      local measured = (p.previousSpeed - speed) / dt
+      if measured >= 1.5 and measured <= 25.0 then
+        local estimate = clamp(measured, 2.5, 16.0)
+        p.brakeAccelEstimate = lerp(
+          safeNumber(p.brakeAccelEstimate, CFG.BRAKE_ACCEL), estimate, 0.12)
+      end
+    elseif p.gas > 0.2 and speed > p.previousSpeed then
+      local measured = (speed - p.previousSpeed) / dt
+      if measured >= 0.3 and measured <= 18.0 then
+        local estimate = clamp(measured, 0.5, 12.0)
+        p.accelEstimate = lerp(safeNumber(p.accelEstimate,4.0),estimate,0.08)
+      end
     end
   end
   p.previousSpeed = speed
@@ -769,15 +774,26 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
 
-  local effectivePace=math.max(speed,p.cruiseSpeed)
-  local speedAdvantage=effectivePace-(leaderSpeed or 0)
+  local leaderPace=leaderSpeed or 0
+  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,12.0)
+  -- Predict one second of available acceleration rather than treating an
+  -- unbounded cruise target as an instantaneous speed advantage.
+  local speedAdvantage=speed-leaderPace+acceleration
   local slower=speedAdvantage>=3.0
   if slower then
     local targetCar=ac.getCar(leaderIndex)
     local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
     local targetLength=math.max(3.0,safeNumber(targetCar and targetCar.aabbSize and targetCar.aabbSize.z,4.5))
-    local estimatedPassDistance=(ownLength+targetLength+6.0)*
-      math.max(speed,(leaderSpeed or 0)+1.0)/math.max(1.0,speedAdvantage)
+    local clearanceDistance=ownLength+targetLength+6.0
+    local estimatedPassDistance
+    if speed-leaderPace>=3.0 then
+      estimatedPassDistance=clearanceDistance*
+        math.max(speed,leaderPace+1.0)/(speed-leaderPace)
+    else
+      local passTime=math.sqrt(2.0*clearanceDistance/acceleration)
+      estimatedPassDistance=math.max(speed,leaderPace)*passTime+
+        0.5*acceleration*passTime*passTime
+    end
     local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
     local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
       speed>=(leaderSpeed or 0)-4.0
