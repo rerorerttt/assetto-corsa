@@ -971,5 +971,5 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.9.2 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
