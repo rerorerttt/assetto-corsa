@@ -39,14 +39,14 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
 - 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
 
-## Traffic behavior (alternating left-lane / right-lane passing)
+## Traffic behavior (speed-based coordinated passing)
 
-- All AI cars are assigned to the left lane initially.
-- AI order alternates deterministically: car index 1 = 40 km/h, index 2 = fast class (uses the existing app speed limit and curve planner), index 3 = 40 km/h, and so on.
-- Only fast-class cars initiate overtakes. They detect a slower car in the left lane, check that the right lane has enough recorded width and is clear ahead/behind, move to the right lane, and remain there until their rear has cleared the target by approximately two car lengths.
-- After that clearance, the car checks that the left lane is clear and returns to it. If it is not clear, the car stays in the right lane and retries; it does not cut back across another car.
-- Passing requires a corridor wide enough for two lanes (at least 2.7 m on each side of the corridor midpoint). On narrower routes, cars remain single-file.
-- Lane centers are derived from the saved route bounds. With a symmetric 7 m corridor, the nominal centers are +1.75 m (left) and -1.75 m (right) from the recorded route.
+- All AI-controlled cars, including the player car while Assetto Corsa's native Ctrl+8 AI takeover is active, use the same RoutePilot route follower. The app detects the takeover through the car's existing `isAIControlled` state; it adds no key binding or separate control.
+- There is no alternating slow/fast class and no hardcoded 40 km/h cruise assignment. Every controlled car uses the configured `speedMax` as its cruise ceiling, then the curvature planner calculates its current safe target speed.
+- Any car may request a pass when its current safe target speed exceeds the leader's speed by at least 1.5 m/s and the estimated pass distance is within 180 m. The passing lane must fit the complete vehicle footprint and be clear ahead, behind, and alongside.
+- A local route-progress reservation allows only one active pass within a 110 m traffic cluster. Cars behind the active passer follow at a calculated safe speed and retry after the reservation is released. Separate clusters farther apart can pass independently.
+- During a pass, the car also follows traffic in the passing lane. It does not return until its rear has cleared the target and the original lane is clear. If the route is too narrow for two lanes, it stays single-file and follows the car ahead using a braking-distance speed limit.
+- Failed pass requests do not authorize forcing a lane change. The car stays in its lane and reduces speed according to the gap and speed of the vehicle ahead.
 
 ## Known limitations
 
