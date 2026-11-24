@@ -1,6 +1,6 @@
-# RoutePilot 0.2.2
+# RoutePilot 0.9.x
 
-CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
+CSP Lua app for Assetto Corsa. Records a route and its permitted corridor, then controls AI cars along discrete virtual lanes derived from that corridor.
 
 ## Install
 
@@ -10,23 +10,24 @@ Copy the `RoutePilot` folder into:
 
 Enable RoutePilot in Content Manager's Lua Apps list and open it in a session.
 
-## First use
+## Route and lane model
 
-Drive and save a route, keep the loop option enabled for a lap route, record the track boundaries, then add AI cars to the session. The existing route recording, loading, map, world-line display and controls remain part of the app.
+- Record the desired route and both corridor boundaries. Routes and bounds are saved per track/layout.
+- A narrow corridor remains single-file. A corridor wide enough for two vehicle envelopes receives two virtual lane centres, normally at approximately ±1.75 m from the recorded route.
+- Each AI car keeps a current lane assignment. When it closes on a slower car ahead, it checks the adjacent lane's front and rear clearance, the full lateral transition band, the recorded road corridor and other cars' in-progress lane reservations.
+- A lane change is committed only after all checks pass. The car moves directly between the two lane rails over a fixed transition interval; if the destination is occupied or the corridor narrows, it stays in its lane and follows a safe speed.
+- Vehicle width and length are read from CSP's `car.aabbSize` and projected onto the route axes. Clearance therefore uses the actual footprints of both cars rather than one fixed width.
+- After passing, a car remains in its new lane. It does not immediately return; the next obstacle scan starts a new decision cycle.
+- Steering validates the pure-pursuit preview chord against intermediate route-boundary samples. If the chord would cut across a bend or leave the permitted lane/corridor, the preview is shortened.
+- Leaving the permitted corridor is treated as a driving failure. The driver does not teleport a car back onto the road as an off-track recovery.
 
-## Traffic and driving model
+## Controls
 
-- Active AI cars are initially distributed alternately between the physical LEFT and RIGHT lanes. Negative lateral offset is physical LEFT in the current spawn coordinate basis; the map and spawn log use the same convention.
-- A recorded corridor at least 6 m wide uses two lane centres, normally 1.75 m to either side of the route centreline. A corridor narrower than 6 m remains single-file.
-- Neither lane has a fixed speed target or artificial straight-line speed ceiling. On a straight with no traffic constraint, the controller requests full throttle. The corner planner now assumes 17.5 m/s² lateral acceleration and 14 m/s² braking for an aggressive late-braking profile; actual speed still depends on the car's engine, gearing, drag and tyre grip. The controller does not impose a 200 or 320 km/h limiter.
-- At 320 km/h the corner planner expands its preview to roughly the full calculated stopping distance plus a margin. Route projection for active AI is restricted to a local segment window so it cannot snap to a nearby parallel section of a hairpin.
-- Every AI car receives a stable LEFT/RIGHT lane assignment. Lane changes use only the two canonical lane centres; the target centre is derived from the assigned lane geometry, never by negating a partially completed transition offset. Traffic occupancy is measured from each car's actual position projected onto its nearest route segment. A car closing on a vehicle in its current lane requests a lane change when the gap is around 10 m or the time-to-collision falls below 3 seconds. The target lane must be clear ahead, behind and through the lateral transition corridor; active lane-change targets are reservations, preventing two cars from claiming the same gap. Rear clearance scales with the closing speed rather than using a fixed oversized exclusion zone.
-- If the destination becomes occupied mid-transition, the car starts one return transition to its original lane. That return is not repeatedly restarted each physics frame. The controller maintains safe following speed while blocked or returning.
-- A lane change is a smooth transition between the two fixed lane centres. After completing it, the car continues following the same recorded route in the new lane; it does not generate a new racing line or choose a complex overtaking trajectory.
-- If the adjacent lane is occupied, the car stays in its lane and calculates a safe following speed from the leader's speed, remaining gap and braking capability. It brakes rather than forcing a merge. The lane is checked again on subsequent updates.
-- Factory traction control is requested per car. A second wheel-slip throttle limiter reduces gas if driven wheels spin, and throttle is released quickly whenever braking is commanded.
-- Steering uses filtered look-ahead control with a longer speed-dependent look-ahead for high-speed stability. The desired car centre is clamped at least 1.10 m inside the recorded boundaries; when the actual car centre leaves that safety envelope, steering recovery is strengthened and speed is reduced, with a stronger speed reduction near the recorded edge. Gear selection remains with the car's normal drivetrain.
+RoutePilot overrides steering, throttle and brake. Gear selection and drivetrain behavior remain with the normal Assetto Corsa/CSP AI drivetrain. CSP Lua API version targeted by this implementation: 0.3.2-preview2.
 
-## Logging and validation
+## Validation
 
-`routepilot_trace.txt` includes lane assignments, lane-change start/completion/abort-return events, current/target lane offsets, actual lateral position (`LAT_OFF`), boundary recovery error/status, traffic gap/block status, speed targets, brake/throttle, wheel slip and heading alignment. Static source checks do not replace an in-game test with the current car pack, track and CSP build. The latest implementation has not yet been runtime-validated in Assetto Corsa.
+Source-level checks are recorded in `DEVELOPMENT_STATUS.md`. The implementation still requires live Assetto Corsa testing with several cars, different vehicle dimensions, occupied and free adjacent lanes, narrow corridors and tight corners. Do not treat source-level checks as proof of collision-free in-game behavior.
+
+
+The existing stuck-car rescue is intentionally preserved: after 5 seconds below 1.5 m/s, the driver calls `H.teleportHome()`, which selects a clear recovery position. The spawn update also no longer calls the undefined `alignRouteDirectionToPlayer()` global that previously caused `UPDATE_ERROR` every frame; the recorded route direction is retained.

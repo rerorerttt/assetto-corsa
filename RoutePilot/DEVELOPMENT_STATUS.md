@@ -132,3 +132,19 @@ Do not merge PR #4 until these runtime checks pass.
 - Confirmed by source inspection that the branch's main loop still detects native AI through `car.isAIControlled`, includes car index 0, calls `Driver.update()`, and logs driver exceptions. RoutePilot does not and cannot claim to enable the game's native Ctrl+8 mode itself.
 - Commit: `4ca980e01e96a7783ac318d8ae9d5e010c987e29`.
 - Static source checks confirm exactly one local `makeTarget` definition, no remaining `lateralError` reference, and the expected route-following helper is supplied to the driver. Lua interpreter and Assetto Corsa runtime validation were unavailable during this pass; do not treat the fix as runtime-confirmed until a fresh in-game trace has no `DRIVER_ERROR` and shows steering/throttle telemetry for car 0.
+
+## Physical-geometry lane-change and boundary revision (2026-11-24)
+
+- Added per-car footprint measurement from CSP `car.aabbSize` (width and length), projected onto the route tangent and normal. Traffic clearance uses both vehicles' projected half-widths and half-lengths rather than treating cars as points or using one fixed width.
+- Lane-change admission checks the recorded corridor at 3 m samples using the moving vehicle's actual body width. Destination-lane and swept-transition occupancy checks include physical footprints, relative-speed front/rear windows and other cars' in-progress lane reservations.
+- After a successful pass, a car remains in the new lane. The next obstacle scan begins a fresh decision cycle; there is no automatic immediate return to the previous lane.
+- Steering preview checks intermediate points along the pure-pursuit chord against the recorded boundaries and assigned lane. If the chord cuts across a bend or leaves the legal corridor, preview distance is shortened until a legal target is found. Boundary detection uses the actual vehicle footprint.
+- Preserved the established stuck-car rescue: if speed remains below 1.5 m/s for 5 seconds, the driver calls the existing `H.teleportHome()` recovery routine. Startup placement and stuck recovery are separate mechanisms; the recovery routine checks for a clear position before moving the car.
+- Static Lua block-balance and delimiter checks pass for the modified driver source. This is not an interpreter compile or in-game validation. CSP SDK documents `ac.StateCar.aabbSize` as the vehicle AABB dimensions in meters. No Assetto Corsa runtime test was possible during source editing; physical steering and lane-clearance behavior remain unverified.
+
+
+## Regression repair: preserve recovery and unblock update loop (2026-11-24)
+
+- Restored the original `Driver.update()` stuck recovery block from the known-good `routepilot/two-lane-traffic-2026-11-24` base: below 1.5 m/s continuously for 5 seconds calls `H.teleportHome(carIndex, car)` and returns. The existing `teleportHome()` implementation in `RoutePilot.lua` was already intact; it checks candidate positions with `spotIsClear()` and uses `physics.setAICarPosition()`.
+- Removed the call to the undefined global `alignRouteDirectionToPlayer()` from `trySpawnTeleport()`. The supplied log proved this nil call was throwing on every update and aborting the update body before AI drivers were processed. Spawn now retains the recorded route direction rather than invoking a nonexistent alignment function.
+- These are targeted regression repairs. No other steering, lane-change, boundary, or traffic behavior was intentionally changed. Static source inspection only; a new Assetto Corsa runtime log is required to confirm that `UPDATE_ERROR` is gone, cars spawn, and the 5-second stuck rescue still triggers.

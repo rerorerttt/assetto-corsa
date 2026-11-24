@@ -55,6 +55,22 @@ local function safeNumber(v, fallback)
   return v
 end
 
+-- Use actual CSP vehicle dimensions and project the oriented body onto route axes.
+local function vehicleFootprint(car, tx, tz)
+  local size = car and car.aabbSize
+  local width = size and safeNumber(size.x, 2.1) or 2.1
+  local length = size and safeNumber(size.z, 4.5) or 4.5
+  width = clamp(width, 1.4, 3.6)
+  length = clamp(length, 2.4, 8.5)
+  local look = car and car.look
+  local fx, fz = normalize2(look and look.x or tx, look and look.z or tz)
+  local routeDot = math.abs(fx * tx + fz * tz)
+  local crossDot = math.abs(fx * (-tz) + fz * tx)
+  local halfLateral = 0.5 * (width * routeDot + length * crossDot)
+  local halfLongitudinal = 0.5 * (length * routeDot + width * crossDot)
+  return halfLateral, halfLongitudinal, width, length
+end
+
 function Driver.setup(cfg, st, helpers)
   CFG = cfg or {}
   -- Keep the driver operational even if an older RoutePilot.lua supplies
@@ -228,7 +244,9 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
   local sim=ac.getSim()
   if not sim then return nil end
   local nearest=nil
-  local laneCenter=p.laneOffset
+  local normalX,normalZ=-tz,tx
+  local ownHalfLat,ownHalfLong=vehicleFootprint(car,tx,tz)
+  local ownCenter=p.laneOffset or 0
   for i=0,sim.carsCount-1 do
     if i~=carIndex then
       local other=ac.getCar(i)
@@ -236,24 +254,26 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
         local dx=other.position.x-car.position.x
         local dz=other.position.z-car.position.z
         local longitudinal=dx*tx+dz*tz
-        local lateral=H.lateralOf(other.position,p.segIdx)
+        local lateral=dx*normalX+dz*normalZ
+        local otherHalfLat,otherHalfLong=vehicleFootprint(other,tx,tz)
         local otherP=state.p[i]
-        local inCurrent=math.abs(lateral-laneCenter)<=LANE_HALF_WIDTH
-        if p.laneChangeProgress<1.0 then
-          inCurrent=inCurrent or
-            math.abs(lateral-p.laneStartOffset)<=LANE_HALF_WIDTH or
-            math.abs(lateral-p.laneTargetOffset)<=LANE_HALF_WIDTH
+        local inCurrent=math.abs(lateral-ownCenter)<=ownHalfLat+otherHalfLat+0.30
+        if p.laneChangeProgress and p.laneChangeProgress<1.0 then
+          local ownLo=math.min(p.laneStartOffset,p.laneTargetOffset)-ownHalfLat
+          local ownHi=math.max(p.laneStartOffset,p.laneTargetOffset)+ownHalfLat
+          inCurrent=inCurrent or (lateral+otherHalfLat>=ownLo and lateral-otherHalfLat<=ownHi)
         end
-        if otherP and otherP.laneChangeProgress<1.0 then
-          inCurrent=inCurrent or
-            math.abs(lateral-otherP.laneStartOffset)<=LANE_HALF_WIDTH or
-            math.abs(lateral-otherP.laneTargetOffset)<=LANE_HALF_WIDTH
+        if otherP and otherP.laneChangeProgress and otherP.laneChangeProgress<1.0 then
+          local otherLo=math.min(otherP.laneStartOffset,otherP.laneTargetOffset)-otherHalfLat
+          local otherHi=math.max(otherP.laneStartOffset,otherP.laneTargetOffset)+otherHalfLat
+          inCurrent=inCurrent or (otherHi>=ownCenter-ownHalfLat and otherLo<=ownCenter+ownHalfLat)
         end
-        if inCurrent and longitudinal>0.5 and
-            (not nearest or longitudinal<nearest.gap) then
+        local bodyGap=longitudinal-ownHalfLong-otherHalfLong
+        if inCurrent and bodyGap>-0.5 and bodyGap<120 and
+            (not nearest or bodyGap<nearest.gap) then
           local otherSpeed=math.max(0,safeNumber(other.speedMs,0))
-          nearest={index=i,gap=longitudinal,speed=otherSpeed,
-            closing=speed-otherSpeed}
+          nearest={index=i,gap=math.max(0,bodyGap),centerGap=longitudinal,
+            speed=otherSpeed,closing=speed-otherSpeed}
         end
       end
     end
@@ -263,30 +283,32 @@ end
 
 -- Check the whole manoeuvre window in the destination lane. The source and
 -- destination lane centres must both remain inside the recorded corridor.
-local function laneChangePathFits(carIndex,p,targetOffset,speed)
-  if not H.walkLine or not H.safeBoundsAt then return false end
+local function laneChangePathFits(carIndex,car,p,targetOffset,speed)
+  if not H.walkLine or not H.boundsAt then return false end
   local distance=math.max(25.0,speed*LANE_CHANGE_TIME+12.0)
-  for sample=0,distance,5.0 do
+  local sourceOffset=p.laneStartOffset or p.laneOffset
+  for sample=0,distance,3.0 do
     local _,seg=H.walkLine(p.segIdx,p.segT or 0,sample)
     if not seg then return false end
-    local safeMin,safeMax=H.safeBoundsAt(seg)
+    local a=state.nodes[seg]
+    local b=H.segEnd(seg)
+    if not a or not b then return false end
+    local tx,tz=normalize2(b.x-a.x,b.z-a.z)
+    local halfLat=vehicleFootprint(car,tx,tz)
+    local left1,right1=H.boundsAt(seg)
+    local left2,right2=H.boundsAt(seg+1)
+    local safeMin=math.max(left1,left2)+halfLat+CFG.BOUNDARY_CLEARANCE
+    local safeMax=math.min(right1,right2)-halfLat-CFG.BOUNDARY_CLEARANCE
     local _,twoLane=H.laneOffset(carIndex,seg)
-    if not twoLane then return false end
-    local sourceSign=p.laneStartOffset<0 and -1 or 1
-    local targetSign=targetOffset<0 and -1 or 1
-    local assignedCenter=H.laneOffset(carIndex,seg)
-    local laneMagnitude=math.abs(assignedCenter)
-    local destination=targetSign<0 and -laneMagnitude or laneMagnitude
-    local source=sourceSign<0 and -laneMagnitude or laneMagnitude
-    -- safeBoundsAt() already includes the vehicle half-width and clearance.
-    local margin=0.05
-    if source<safeMin+margin or source>safeMax-margin or
-       destination<safeMin+margin or destination>safeMax-margin then
-      return false
-    end
+    if not twoLane or safeMin>safeMax then return false end
+    local laneMagnitude=math.abs(select(1,H.laneOffset(carIndex,seg)))
+    local source=(sourceOffset<0 and -1 or 1)*laneMagnitude
+    local destination=(targetOffset<0 and -1 or 1)*laneMagnitude
     local fraction=clamp(sample/distance,0,1)
     local swept=lerp(source,destination,fraction)
-    if swept<safeMin+margin or swept>safeMax-margin then return false end
+    if source<safeMin or source>safeMax or
+       destination<safeMin or destination>safeMax or
+       swept<safeMin or swept>safeMax then return false end
   end
   return true
 end
@@ -297,8 +319,12 @@ local function adjacentLaneIsClear(carIndex,car,p,targetOffset,tx,tz)
   local sim=ac.getSim()
   if not sim then return false end
   local ownSpeed=math.max(0,safeNumber(car.speedMs,0))
-  local frontWindow=18.0
-  local rearWindow=16.0
+  local ownHalfLat,ownHalfLong=vehicleFootprint(car,tx,tz)
+  local source=p.laneOffset or p.laneStartOffset or 0
+  local targetLo=targetOffset-ownHalfLat
+  local targetHi=targetOffset+ownHalfLat
+  local sweepLo=math.min(source,targetOffset)+ownHalfLat+0.10
+  local sweepHi=math.max(source,targetOffset)-ownHalfLat-0.10
   for i=0,sim.carsCount-1 do
     if i~=carIndex then
       local other=ac.getCar(i)
@@ -306,28 +332,28 @@ local function adjacentLaneIsClear(carIndex,car,p,targetOffset,tx,tz)
         local dx=other.position.x-car.position.x
         local dz=other.position.z-car.position.z
         local longitudinal=dx*tx+dz*tz
-        local lateral=H.lateralOf(other.position,p.segIdx)
-        local otherP=state.p[i]
-        local occupiesTarget=math.abs(lateral-targetOffset)<=LANE_HALF_WIDTH
-        if otherP and otherP.laneChangeProgress<1.0 then
-          occupiesTarget=occupiesTarget or
-            math.abs(otherP.laneStartOffset-targetOffset)<=LANE_HALF_WIDTH or
-            math.abs(otherP.laneTargetOffset-targetOffset)<=LANE_HALF_WIDTH
-        end
+        local lateral=dx*(-tz)+dz*tx
+        local otherHalfLat,otherHalfLong=vehicleFootprint(other,tx,tz)
         local otherSpeed=math.max(0,safeNumber(other.speedMs,0))
-        local dynamicFront=math.max(frontWindow,
-          math.max(0,ownSpeed-otherSpeed)*LANE_CHANGE_TIME+12.0)
-        local dynamicRear=math.max(rearWindow,
-          math.max(0,otherSpeed-ownSpeed)*LANE_CHANGE_TIME+12.0)
-        if occupiesTarget and longitudinal>=-dynamicRear and
-            longitudinal<=dynamicFront then
-          return false,i,longitudinal
+        local dynamicFront=ownHalfLong+otherHalfLong+
+          math.max(LANE_FRONT_CLEAR,math.max(0,ownSpeed-otherSpeed)*LANE_CHANGE_TIME+12.0)
+        local dynamicRear=ownHalfLong+otherHalfLong+
+          math.max(LANE_REAR_CLEAR,math.max(0,otherSpeed-ownSpeed)*LANE_CHANGE_TIME+12.0)
+        local bodyLo=lateral-otherHalfLat
+        local bodyHi=lateral+otherHalfLat
+        local occupiesDestination=bodyHi>=targetLo-0.30 and bodyLo<=targetHi+0.30
+        local occupiesSweep=sweepHi>=sweepLo and bodyHi>=sweepLo-0.30 and bodyLo<=sweepHi+0.30
+        local otherP=state.p[i]
+        local reserved=false
+        if otherP and otherP.laneChangeProgress and otherP.laneChangeProgress<1.0 then
+          local reserveLo=math.min(otherP.laneStartOffset,otherP.laneTargetOffset)-otherHalfLat
+          local reserveHi=math.max(otherP.laneStartOffset,otherP.laneTargetOffset)+otherHalfLat
+          reserved=reserveHi>=targetLo-0.30 and reserveLo<=targetHi+0.30
+          if sweepHi>=sweepLo then
+            reserved=reserved or (reserveHi>=sweepLo-0.30 and reserveLo<=sweepHi+0.30)
+          end
         end
-        -- Also reserve the entire lateral transition band. This prevents
-        -- two cars from committing to intersecting merges simultaneously.
-        local lo=math.min(p.laneOffset,targetOffset)+LANE_HALF_WIDTH
-        local hi=math.max(p.laneOffset,targetOffset)-LANE_HALF_WIDTH
-        if lateral>=lo and lateral<=hi and
+        if (occupiesDestination or occupiesSweep or reserved) and
             longitudinal>=-dynamicRear and longitudinal<=dynamicFront then
           return false,i,longitudinal
         end
@@ -395,7 +421,7 @@ local function updateLaneChange(carIndex,car,p,speed,tx,tz,dt)
       local target=-current
       p.laneOffset=current
       p.laneStartOffset=current
-      local fits=laneChangePathFits(carIndex,p,target,speed)
+      local fits=laneChangePathFits(carIndex,car,p,target,speed)
       local clear,blockedBy,blockedGap=false,-1,-1
       if fits then
         clear,blockedBy,blockedGap=adjacentLaneIsClear(
@@ -431,51 +457,14 @@ local function updateLaneChange(carIndex,car,p,speed,tx,tz,dt)
       p.laneRole=p.laneTransitionTarget or laneRoleForOffset(p.laneOffset,true)
       H.log("LANE_CHANGE_DONE id=%d kind=%s lane=%s",
         carIndex,p.laneTransitionKind or "UNKNOWN",p.laneRole)
-      if p.laneTransitionKind=="RETURN" then
-        p.overtakeState="IDLE"
-        p.overtakeTargetIndex=nil
-        p.returnRole=nil
-        p.laneCooldown=1.0
-      else
-        p.overtakeState="PASSING"
-      end
+      -- Remain in the new lane after passing. A fresh obstacle scan starts
+      -- the next decision cycle; there is no automatic immediate return.
+      p.overtakeState="IDLE"
+      p.overtakeTargetIndex=nil
+      p.returnRole=nil
+      p.laneCooldown=1.0
       p.laneTransitionKind=nil
       p.laneTransitionTarget=nil
-    end
-  end
-
-  -- Return only after the passed car is clearly behind and the original lane
-  -- has a full front/rear safety window. If it is occupied, remain in the
-  -- overtaking lane; never dart back and forth.
-  if p.overtakeState=="PASSING" and p.laneChangeProgress>=1.0 and
-      p.laneCooldown<=0 and p.returnRole then
-    local passed=not p.overtakeTargetIndex
-    if p.overtakeTargetIndex then
-      local other=ac.getCar(p.overtakeTargetIndex)
-      if not other or not other.isActive then
-        passed=true
-      else
-        local dx=other.position.x-car.position.x
-        local dz=other.position.z-car.position.z
-        local longitudinal=dx*tx+dz*tz
-        passed=longitudinal < -14.0
-      end
-    end
-    if passed then
-      local returnOffset=laneCenterForRole(carIndex,p.segIdx,p.returnRole)
-      local fits=laneChangePathFits(carIndex,p,returnOffset,speed)
-      local clear,blockedBy,blockedGap=false,-1,-1
-      if fits then
-        clear,blockedBy,blockedGap=adjacentLaneIsClear(
-          carIndex,car,p,returnOffset,tx,tz)
-      end
-      if clear then
-        beginLaneTransition(p,returnOffset,p.returnRole,"RETURN",carIndex,nil)
-      else
-        p.trafficBlocked=true
-        p.blockedBy=blockedBy
-        p.blockedGap=blockedGap
-      end
     end
   end
 
@@ -505,26 +494,28 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   elseif p.laneChangeProgress >= 1.0 then
     if p.laneRole=="SINGLE" then p.laneRole=laneRoleForOffset(baseOffset,true) end
     local canonical = laneCenterForRole(carIndex, seg, p.laneRole)
-    p.laneOffset, p.laneTargetOffset, p.laneStartOffset =
-      canonical, canonical, canonical
+    p.laneOffset, p.laneTargetOffset, p.laneStartOffset = canonical, canonical, canonical
   end
-  local laneOffset = p.laneOffset
+  local laneOffset = p.laneOffset or baseOffset
 
-  local left, right = H.boundsAt(seg)
-  local safeMin, safeMax
-  if H.safeBoundsAt then
-    safeMin,safeMax=H.safeBoundsAt(seg)
-  else
-    safeMin,safeMax=left+BOUNDARY_MARGIN,right-BOUNDARY_MARGIN
+  local function corridorAt(index)
+    local a=state.nodes[index]
+    local b=H.segEnd(index)
+    local tx,tz=normalize2(b.x-a.x,b.z-a.z)
+    local halfLat=vehicleFootprint(car,tx,tz)
+    local l1,r1=H.boundsAt(index)
+    local l2,r2=H.boundsAt(index+1)
+    return math.max(l1,l2)+halfLat+CFG.BOUNDARY_CLEARANCE,
+      math.min(r1,r2)-halfLat-CFG.BOUNDARY_CLEARANCE,
+      halfLat,l1,r1
   end
-  if safeMin > safeMax then
-    safeMin, safeMax = (left + right) * 0.5, (left + right) * 0.5
-  end
-  local vehicleMargin=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
+
+  local safeMin,safeMax,halfLat,left,right=corridorAt(seg)
+  if safeMin>safeMax then safeMin,safeMax=(left+right)*0.5,(left+right)*0.5 end
   local laneMin,laneMax=safeMin,safeMax
   if twoLane and p.laneChangeProgress>=1.0 then
-    if p.laneRole=="LEFT" then laneMax=math.min(laneMax,-vehicleMargin)
-    else laneMin=math.max(laneMin,vehicleMargin) end
+    if p.laneRole=="LEFT" then laneMax=math.min(laneMax,-halfLat)
+    else laneMin=math.max(laneMin,halfLat) end
   end
   local targetOffset=clamp(laneOffset,laneMin,laneMax)
   p.boundaryError=0
@@ -532,84 +523,93 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   elseif p.latOff>laneMax then p.boundaryError=laneMax-p.latOff end
   p.laneViolation=math.abs(p.boundaryError)>0.05
   p.boundaryViolation=p.laneViolation
-  p.boundaryHard=p.latOff<left+BOUNDARY_HARD_MARGIN or
-    p.latOff>right-BOUNDARY_HARD_MARGIN
+  p.boundaryHard=p.latOff<left+halfLat+BOUNDARY_HARD_MARGIN or
+    p.latOff>right-halfLat-BOUNDARY_HARD_MARGIN
 
-  -- Build the preview target from the recorded route. The previous revision
-  -- called a non-existent global makeTarget(), causing DRIVER_ERROR on every
-  -- AI update; the main loop then released the controls and the car never
-  -- entered the RoutePilot controller.
   local function makeTarget(distanceAhead)
     if not H.walkLine then return nil,nil end
     local point,targetSeg=H.walkLine(p.segIdx,p.segT or 0,distanceAhead)
     if not point or not targetSeg then return nil,nil end
-
     local a=state.nodes[targetSeg]
     local b=H.segEnd(targetSeg)
     if not a or not b then return nil,nil end
     local tx,tz=normalize2(b.x-a.x,b.z-a.z)
-
-    local targetOffset=p.laneOffset or 0
+    local targetHalf=vehicleFootprint(car,tx,tz)
+    local l1,r1=H.boundsAt(targetSeg)
+    local l2,r2=H.boundsAt(targetSeg+1)
+    local minOffset=math.max(l1,l2)+targetHalf+CFG.BOUNDARY_CLEARANCE
+    local maxOffset=math.min(r1,r2)-targetHalf-CFG.BOUNDARY_CLEARANCE
     local _,targetTwoLane=H.laneOffset(carIndex,targetSeg)
+    local offset=p.laneOffset or 0
     if not targetTwoLane then
-      targetOffset=select(1,H.laneOffset(carIndex,targetSeg))
+      offset=select(1,H.laneOffset(carIndex,targetSeg))
     elseif p.laneChangeProgress>=1.0 then
-      targetOffset=select(1,laneCenterForRole(carIndex,targetSeg,p.laneRole))
+      offset=select(1,laneCenterForRole(carIndex,targetSeg,p.laneRole))
+      if p.laneRole=="LEFT" then maxOffset=math.min(maxOffset,-targetHalf)
+      else minOffset=math.max(minOffset,targetHalf) end
     end
+    if minOffset>maxOffset then return nil,nil end
+    offset=clamp(offset,minOffset,maxOffset)
+    return point.x-tz*offset,point.z+tx*offset
+  end
 
-    local safeMin,safeMax
-    if H.safeBoundsAt then
-      safeMin,safeMax=H.safeBoundsAt(targetSeg)
-    else
-      local l,r=H.boundsAt(targetSeg)
-      safeMin,safeMax=l+CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE,
-        r-CFG.VEHICLE_HALF_WIDTH-CFG.BOUNDARY_CLEARANCE
-    end
-    if targetTwoLane and p.laneChangeProgress>=1.0 then
-      local margin=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
-      if p.laneRole=="LEFT" then
-        safeMax=math.min(safeMax,-margin)
-      else
-        safeMin=math.max(safeMin,margin)
+  -- Check the actual pure-pursuit chord, not just its endpoint: a long chord
+  -- must not cut across a bend, the lane divider or the recorded road edge.
+  local function previewChordFits(targetX,targetZ)
+    local dx,dz=targetX-car.position.x,targetZ-car.position.z
+    local distance=math.sqrt(dx*dx+dz*dz)
+    local samples=math.max(2,math.ceil(distance/2.5))
+    for j=1,samples do
+      local f=j/samples
+      local pos=vec3(car.position.x+dx*f,car.position.y,car.position.z+dz*f)
+      local sampleSeg=select(1,H.findNearestSeg(pos,p.segIdx,false))
+      local a=state.nodes[sampleSeg]
+      local b=H.segEnd(sampleSeg)
+      local tx,tz=normalize2(b.x-a.x,b.z-a.z)
+      local sampleHalf=vehicleFootprint(car,tx,tz)
+      local l1,r1=H.boundsAt(sampleSeg)
+      local l2,r2=H.boundsAt(sampleSeg+1)
+      local minOffset=math.max(l1,l2)+sampleHalf+CFG.BOUNDARY_CLEARANCE
+      local maxOffset=math.min(r1,r2)-sampleHalf-CFG.BOUNDARY_CLEARANCE
+      local lateral=H.lateralOf(pos,sampleSeg)
+      if lateral<minOffset or lateral>maxOffset then return false end
+      local _,sampleTwoLane=H.laneOffset(carIndex,sampleSeg)
+      if sampleTwoLane and p.laneChangeProgress>=1.0 then
+        if p.laneRole=="LEFT" and lateral> -sampleHalf then return false end
+        if p.laneRole=="RIGHT" and lateral< sampleHalf then return false end
       end
     end
-    targetOffset=clamp(targetOffset,safeMin,safeMax)
-
-    -- lateralOf() uses the route's left normal (-tangent.z, tangent.x).
-    return point.x-tz*targetOffset,point.z+tx*targetOffset
+    return true
   end
 
-  -- Stable speed-adaptive preview, sampled along the polyline rather than
-  -- aiming at an undefined or straight-line world-space target.
-  local lookahead=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
-    LOOKAHEAD_BASE,LOOKAHEAD_MAX)
-  local targetX,targetZ=makeTarget(lookahead)
-  if not targetX then
-    lookahead=LOOKAHEAD_BASE
+  local lookahead=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,LOOKAHEAD_BASE,LOOKAHEAD_MAX)
+  local targetX,targetZ=nil,nil
+  local fits=false
+  for attempt=1,8 do
     targetX,targetZ=makeTarget(lookahead)
+    if targetX and targetZ then
+      fits=previewChordFits(targetX,targetZ)
+      if fits then break end
+    end
+    if lookahead<=5.0 then break end
+    lookahead=math.max(5.0,lookahead*0.72)
   end
   p.previewDistance=lookahead
+  p.previewBlocked=not fits
   if not targetX or not targetZ then return p.steer end
 
-  local dx = targetX - car.position.x
-  local dz = targetZ - car.position.z
-  local distance = math.sqrt(dx * dx + dz * dz)
-  if distance < 0.001 then return p.steer end
-
-  local angle = signedAngle(fx, fz, dx / distance, dz / distance)
-  -- Pure pursuit heading correction, matching the original working
-  -- controller's angle sign and avoiding a second lateral-error loop.
-  local targetSteer = clamp(angle * STEER_GAIN, -STEER_LIMIT, STEER_LIMIT)
-
-  if math.abs(angle) < 0.0015 then
-    targetSteer = 0
-  end
-
-  local alpha = clamp(dt / (STEER_FILTER_TIME + dt), 0, 1)
-  p.steerFiltered = lerp(p.steerFiltered, targetSteer, alpha)
-  local maxChange = STEER_RATE * dt
-  p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer,
-    -maxChange, maxChange), -STEER_LIMIT, STEER_LIMIT)
+  local dx=targetX-car.position.x
+  local dz=targetZ-car.position.z
+  local distance=math.sqrt(dx*dx+dz*dz)
+  if distance<0.001 then return p.steer end
+  local angle=signedAngle(fx,fz,dx/distance,dz/distance)
+  local targetSteer=clamp(angle*STEER_GAIN,-STEER_LIMIT,STEER_LIMIT)
+  if math.abs(angle)<0.0015 then targetSteer=0 end
+  local alpha=clamp(dt/(STEER_FILTER_TIME+dt),0,1)
+  p.steerFiltered=lerp(p.steerFiltered,targetSteer,alpha)
+  local maxChange=STEER_RATE*dt
+  p.steer=clamp(p.steer+clamp(p.steerFiltered-p.steer,-maxChange,maxChange),
+    -STEER_LIMIT,STEER_LIMIT)
   return p.steer
 end
 
@@ -675,10 +675,14 @@ function Driver.update(carIndex, car, dt)
     targetSpeed = targetSpeed and math.min(targetSpeed, trafficSpeed) or trafficSpeed
   end
 
-  if p.boundaryHard then
-    targetSpeed = math.min(targetSpeed or 10.0, 10.0)
+  if p.previewBlocked then
+    -- No legal preview chord exists even at minimum look-ahead: stop rather
+    -- than continue toward an unverified boundary-crossing trajectory.
+    targetSpeed = math.min(targetSpeed or 0.0, 0.0)
+  elseif p.boundaryHard then
+    targetSpeed = math.min(targetSpeed or 8.0, 8.0)
   elseif p.boundaryViolation then
-    targetSpeed = math.min(targetSpeed or 22.0, 22.0)
+    targetSpeed = math.min(targetSpeed or 14.0, 14.0)
   end
 
   if targetSpeed then
