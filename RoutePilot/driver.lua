@@ -297,7 +297,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.laneOffset=p.overtakeSide==0 and leftCenter or rightCenter
   local laneTarget=clamp(p.laneOffset or leftCenter,safeMin,safeMax)
   local maxStep=1.5*math.max(0,dt or 0)
-  local previousOffset=clamp(p.laneOffsetCurrent or laneTarget,safeMin,safeMax)
+  local previousOffset=p.laneOffsetCurrent
+  if previousOffset==nil then previousOffset=laneTarget end
   p.laneOffsetCurrent=previousOffset+
     clamp(laneTarget-previousOffset,-maxStep,maxStep)
 
@@ -681,7 +682,10 @@ function Driver.update(carIndex, car, dt)
   p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
   if p.projectionLost then targetSpeed=0 end
-  if p.boundaryEmergency then targetSpeed=math.min(targetSpeed,math.max(8.0,speed-4.0)) end
+  if p.boundaryEmergency then
+    local decel=p.boundaryDeficit and p.boundaryDeficit>0.5 and 8.0 or 4.0
+    targetSpeed=math.min(targetSpeed,math.max(0,speed-decel))
+  end
   p.targetSpeed=targetSpeed
   local steer = filterSteering(p, steerTarget, dt)
 
