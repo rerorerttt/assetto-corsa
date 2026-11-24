@@ -483,20 +483,19 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
 
         local longitudinal,actualLateral
         local otherFx,otherFz=normalize2(other.look.x,other.look.z)
-        local otherRouteSample=progress and Geometry.sample(state.routeGeometry,progress)
-        local directionDot=otherRouteSample and
-          (otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz) or 1.0
-        if progress~=nil and directionDot>=-0.25 then
+        local dx=safeNumber(other.position.x)-ownSample.x
+        local dz=safeNumber(other.position.z)-ownSample.z
+        local worldDistanceSq=dx*dx+dz*dz
+        local directionDot=otherFx*ownSample.tx+otherFz*ownSample.tz
+        if worldDistanceSq<=65.0*65.0 then
+          -- In the near field, use the actual relative position. This includes
+          -- the manually driven player even when their route projection fails.
+          longitudinal,actualLateral=relativeToRoute(other.position,ownSample)
+        elseif progress~=nil and directionDot>=-0.25 then
           longitudinal=routeGap(ownProgress,progress)
           actualLateral=lateral
-        else
-          -- Opposing-direction traffic on a shared route is measured in the
-          -- local forward frame, not by same-direction loop progress.
-          local dx=safeNumber(other.position.x)-ownSample.x
-          local dz=safeNumber(other.position.z)-ownSample.z
-          if dx*dx+dz*dz<=120.0*120.0 then
-            longitudinal,actualLateral=relativeToRoute(other.position,ownSample)
-          end
+        elseif worldDistanceSq<=120.0*120.0 then
+          longitudinal,actualLateral=relativeToRoute(other.position,ownSample)
         end
 
         if longitudinal~=nil and actualLateral~=nil then
@@ -585,17 +584,16 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         end
         local gap,actualLateral
         local otherFx,otherFz=normalize2(other.look.x,other.look.z)
-        local otherRouteSample=progress and Geometry.sample(state.routeGeometry,progress)
-        local directionDot=otherRouteSample and
-          (otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz) or 1.0
-        if progress~=nil and directionDot>=-0.25 then
+        local dx=safeNumber(other.position.x)-ownSample.x
+        local dz=safeNumber(other.position.z)-ownSample.z
+        local worldDistanceSq=dx*dx+dz*dz
+        local directionDot=otherFx*ownSample.tx+otherFz*ownSample.tz
+        if worldDistanceSq<=65.0*65.0 then
+          gap,actualLateral=relativeToRoute(other.position,ownSample)
+        elseif progress~=nil and directionDot>=-0.25 then
           gap=routeGap(ownProgress,progress);actualLateral=lateral
-        else
-          local dx=safeNumber(other.position.x)-ownSample.x
-          local dz=safeNumber(other.position.z)-ownSample.z
-          if dx*dx+dz*dz<=120.0*120.0 then
-            gap,actualLateral=relativeToRoute(other.position,ownSample)
-          end
+        elseif worldDistanceSq<=120.0*120.0 then
+          gap,actualLateral=relativeToRoute(other.position,ownSample)
         end
         local halfLengths=(safeNumber(car.aabbSize and car.aabbSize.z,4.5)+
           safeNumber(other.aabbSize and other.aabbSize.z,4.5))*0.5
