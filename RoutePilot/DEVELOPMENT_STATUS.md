@@ -333,7 +333,7 @@ Implemented on `routepilot/multi-lane-emergency-evasion-2026-11-25` after review
 - The planner scores feasible candidates by requested-offset error, lateral transition magnitude, estimated offset-path curvature, and minimum boundary clearance. It publishes the selected offset and diagnostics to telemetry.
 - The selected offset-path curvature samples are fed into the existing forward speed planner. Each sample contributes a curvature speed limit and a braking-distance constraint; the centerline curvature planner remains active as an additional constraint.
 - Removed the old infeasible common-corridor midpoint fallback. The legacy passing-offset search now rejects an empty common corridor. If no swept-footprint candidate is feasible, the driver sets the boundary failure state, requests zero throttle and full brake, and does not continue normal steering toward an invented offset.
-- Added telemetry fields `PLAN_OFFSET`, `PLAN_CLEAR`, `PLAN_CURVE`, `PLAN_REJECT`, and `PLAN_FAIL`.
+- Added telemetry fields `PLAN_OFFSET`, `PLAN_CLEAR`, `PLAN_CURVE`, `PLAN_REJECT`, `PLAN_FAIL`, and `CANDIDATE_RANGE`. The latter is explicitly a candidate-generation envelope, not a promise that every offset in it is safe.
 
 ### Engineering limitations and validation
 
