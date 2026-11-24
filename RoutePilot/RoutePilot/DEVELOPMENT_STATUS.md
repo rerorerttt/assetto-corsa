@@ -27,6 +27,7 @@ Last updated: 2026-11-24
 - It is not yet verified whether repeated position updates preserve natural engine sound, gear changes, wheel rotation, suspension animation and collision behavior without visible snapping.
 - Progress uses the car's actual `speedMs`. If the native AI does not accelerate under overridden full throttle, the path will not advance; the log will expose this instead of substituting a fabricated speed.
 - The current direction sign follows the convention in the existing RoutePilot spawn code; confirm heading in-game.
+- Static review confirms that only the first active AI is spawned and updated, the existing UI/recording/map functions remain in the application file, and the kinematic driver uses native throttle controls plus `setAICarPosition` without `setCarVelocity`.
 - This branch has not been run inside Assetto Corsa. Do not merge into main before a live test.
 
 ## First runtime test
