@@ -350,9 +350,15 @@ local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
     local clearance=math.min(offset-bl-envelope,br-envelope-offset)
     minClearance=math.min(minClearance,clearance)
     if clearance < -0.015 then return nil,"boundary",minClearance,maxCurvature,maxEnvelope end
-    local curvature=math.abs(safeNumber(sample.k))+
-      math.abs(second)/math.pow(1+slope*slope,1.5)+
-      2.0*math.abs(safeNumber(sample.k)*slope)
+    local baseCurvature=math.abs(safeNumber(sample.k))
+    -- A lateral offset changes the radius of the road-relative path. Account
+    -- for the normal-offset scale so an inside-line path is not assigned the
+    -- centerline's more generous radius.
+    local normalScale=math.max(0.25,1.0-baseCurvature*math.abs(offset))
+    local curvature=baseCurvature/normalScale+
+      math.abs(second)/(normalScale*normalScale*normalScale*
+        math.pow(1+slope*slope,1.5))+
+      2.0*baseCurvature*math.abs(slope)/(normalScale*normalScale)
     maxCurvature=math.max(maxCurvature,curvature)
     if distance>=0 then
       samples[#samples+1]={distance=distance,curvature=curvature}
