@@ -24,8 +24,8 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE=14.0, LOOKAHEAD_SPEED=0.8, LOOKAHEAD_MIN=14.0, LOOKAHEAD_MAX=50.0,
-  STEER_GAIN=0.72, STEER_LIMIT=0.75, STEER_RATE=2.0, STEER_FILTER=0.18,
+  LOOKAHEAD_BASE=7.0, LOOKAHEAD_SPEED=0.10, LOOKAHEAD_MIN=7.0, LOOKAHEAD_MAX=18.0,
+  STEER_GAIN=0.90, STEER_LIMIT=0.75, STEER_RATE=4.0, STEER_FILTER=0.10,
   MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0, MIN_APEX_SPEED=11.0,
   CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
   SLIP_START=0.09, SLIP_FULL=0.45, SLIP_DAMP_MIN_SPEED=8.0,
@@ -223,7 +223,7 @@ local function walkLine(startSeg,startT,distance)
       local room=length*(1-t)
       if room>=remaining then
         local nt=(length*t+remaining)/length
-        return vec3(lerp(a.x,b.x,nt),lerp(a.y,b.y,nt),lerp(a.z,b.z,nt))
+        return vec3(lerp(a.x,b.x,nt),lerp(a.y,b.y,nt),lerp(a.z,b.z,nt)),seg,nt
       end
       remaining=remaining-room; t=0
     end
