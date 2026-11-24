@@ -54,3 +54,13 @@ Last updated: 2026-11-24
 Use the saved 7 m corridor with at least four AI cars. Confirm the physical LEFT/RIGHT spawn positions, then observe cars accelerating without a fixed straight-line speed target, braking before corners, initiating a lane change when closing on a leader, rejecting a merge when the adjacent lane is occupied, and braking safely while waiting. Inspect `LANE_CHANGE_START`, `LANE_CHANGE_DONE`, `LANE_CHANGE_ABORT`, `LANE_CHANGE_RETURNED`, `TRAFFIC_GAP`, `TRAFFIC_BLOCKED`, `LAT_OFF`, `BOUNDARY_ERROR`, `BOUNDARY_HARD`, `TARGET`, `GAS`, `BRAKE`, `WHEEL_SLIP`, `TC_FACTOR`, `HEADING_DOT` and any `DRIVER_ERROR` entries. Repeat on a narrow single-file corridor to confirm that cars remain on the centreline and still have no artificial 40 km/h cap.
 
 Do not merge PR #4 until these runtime checks pass.
+
+
+## Live route control and speed sections (2026-11-24)
+
+- Route geometry is recalculated when a line is loaded, line recording is stopped, bounds recording is stopped, the width preset changes, or “Рассчитать участки” is pressed. No session restart is required.
+- Segments are classified from recorded centreline coordinates: corners/hairpins target 70 km/h, straight runs shorter than 250 m target 160 km/h, and continuous straights of at least 250 m target 320 km/h. Braking distance is applied to upcoming section limits.
+- Steering lookahead is local (6–18 m, speed-adaptive), replacing the previous 20–110 m target. Lane changes are rejected if any sampled lateral position across the transition leaves the precomputed vehicle-centre corridor.
+- UI controls start/stop RoutePilot driving during the current session. Stopping line recording makes the in-memory route immediately usable; saving remains optional.
+- Car index 0 is driven by the same controller when CSP reports isAIControlled=true. The player car is not repositioned or sent through AI recovery teleports.
+- Static source inspection only. Assetto Corsa/CSP runtime testing has not been performed; verify speed classification and Ctrl+8 autopilot detection in-session.
