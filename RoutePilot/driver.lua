@@ -359,12 +359,14 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 end
 
 local function filterSteering(p, target, dt)
-  if safeNumber(p.emergencySteerBoostT)>0 then
+  if safeNumber(p.emergencySteerBoostT)>0 and math.abs(target)>0.02 then
     p.emergencySteerBoostT=math.max(0,p.emergencySteerBoostT-dt)
-    local fullLock=target>=0 and 1.0 or -1.0
+    local fullLock=target>0 and 1.0 or -1.0
     p.steer=fullLock
     p.steerFiltered=fullLock
     return fullLock
+  else
+    p.emergencySteerBoostT=0
   end
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
