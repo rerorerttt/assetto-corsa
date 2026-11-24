@@ -272,7 +272,8 @@ local function laneChangePathFits(carIndex,p,targetOffset,speed)
     local laneMagnitude=math.abs(assignedCenter)
     local destination=targetSign<0 and -laneMagnitude or laneMagnitude
     local source=sourceSign<0 and -laneMagnitude or laneMagnitude
-    local margin=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
+    -- safeBoundsAt() already includes the vehicle half-width and clearance.
+    local margin=0.05
     if source<safeMin+margin or source>safeMax-margin or
        destination<safeMin+margin or destination>safeMax-margin then
       return false
