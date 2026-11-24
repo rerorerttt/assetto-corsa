@@ -55,3 +55,8 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Route-progress conflict checks currently assume traffic follows the same recorded route direction. Opposing-direction traffic on a shared oval still requires explicit direction-aware conflict handling.
 - If a locked route projection is lost, the driver currently fails safe by braking rather than attempting an unverified global branch reacquisition.
 - Pit handling and automatic recovery from every spin/off-track situation are outside the current traffic implementation; the existing stuck-car rescue remains in place.
+
+
+### Manual driver telemetry test
+
+When a saved or completed route with at least two points is available, RoutePilot also records the manually driven player car (index 0) to `routepilot_trace.txt` once per second. Its row uses the same fields as AI telemetry and is marked `CAR=0` and `MODE=PLAYER`. Steering is the normalized live controller input; throttle and brake are the actual car input values. The player is observed passively every update frame to keep route progress continuous. No AI controls are applied to the player car. `TARGET_SPEED=-1.00` means not applicable to manual driving.
