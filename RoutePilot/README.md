@@ -73,3 +73,10 @@ The curvature speed planner no longer forces an 11 m/s minimum in tight bends; i
 ## Best-known-good baseline
 
 The user has tested the 2026-11-24 RoutePilot build in Assetto Corsa and confirmed accurate lane keeping and clean coordinated overtaking. Preserve this revision as the known-good baseline. Future behavior changes should be developed on separate experimental branches created from the baseline, not directly on top of it.
+
+
+## Experimental boundary-safety build
+
+The separate branch `routepilot/predictive-boundary-guard-2026-11-24` contains an experimental correction for AI spawn direction and predictive road-boundary avoidance. It uses the recorded route's forward direction when spawning, heading-aware route selection for the spawn reference, a first-acquisition distance/direction gate, and a lookahead corridor check that accounts for the car's bounding-box footprint. New trace fields are `BOUNDARY`, `SAFE`, and `BODY`.
+
+This build is not yet validated in Assetto Corsa/CSP. Keep using the confirmed baseline unless deliberately testing this experimental branch.
