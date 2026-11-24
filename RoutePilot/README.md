@@ -52,7 +52,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - The route curvature estimate is smoothed over a 12 m baseline to suppress small recording irregularities. High-speed steering uses a 16–45 m preview, predictive curvature feed-forward, and a 14.5 m/s² initial lateral-acceleration target, adapted to measured stability.
 - Stuck detection is not reset merely because another car exists ahead. After ten seconds without movement, the app attempts a respawn only at a point whose actual spawn position is clear of other vehicles.
 
-## Experimental 0.9.1 changes (2026-11-25)
+## Experimental 0.9.2 changes (2026-11-25)
 
 - Removed the fixed 170 km/h cruise setting. RoutePilot uses an unbounded cruise target; speed is limited by upcoming route curvature and braking distance.
 - Braking deceleration and usable lateral grip are estimated from measured vehicle response, then filtered and used by curve planning and car-following. Acceleration is also learned to estimate whether a pass can be completed.
@@ -60,6 +60,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Lane occupancy checks physical vehicle-width overlap, active passing reservations, the swept lateral transition, and opposing-direction traffic using local heading geometry.
 - Following speed is evaluated in the current corridor rather than taking the minimum speed across every lateral offset.
 - A stationary queue no longer disables stuck recovery. Rescue is attempted after ten seconds and validates the actual spawn position.
+- Emergency evasion controls closing speed while the car is moving out of a blocked lane: it maintains a small rolling speed for steering but brakes from excessive approach speed until lateral clearance is achieved.
 - This source revision is experimental and has not yet been validated in Assetto Corsa/CSP. Test each blocked lane, a bumper-distance stationary obstacle, and multiple AI cars passing one at a time.
 
 ## Known limitations
