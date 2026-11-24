@@ -281,8 +281,12 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
           math.max(0, otherSpeed - ownSpeed) * LANE_CHANGE_TIME + 4.0)
         local sweepMin = math.min(p.laneOffset, targetOffset) - LANE_HALF_WIDTH
         local sweepMax = math.max(p.laneOffset, targetOffset) + LANE_HALF_WIDTH
-        local insideSweptCorridor = actualOffset >= sweepMin and
-          actualOffset <= sweepMax and
+        local sourceOffset = (p.laneChangeProgress < 1.0 and
+          p.laneStartOffset) or p.laneOffset
+        local transitionMin = math.min(sourceOffset,targetOffset) + LANE_HALF_WIDTH
+        local transitionMax = math.max(sourceOffset,targetOffset) - LANE_HALF_WIDTH
+        local insideSweptCorridor = actualOffset > transitionMin and
+          actualOffset < transitionMax and
           longitudinal >= -rearClear and longitudinal <= frontClear
         if (inTargetLane or reservingTarget) and
           longitudinal >= -rearClear and longitudinal <= frontClear then
