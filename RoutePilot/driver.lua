@@ -225,7 +225,7 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
       if other and other.isActive then
         local seg = select(1, H.findNearestSeg(other.position, state.p[carIndex].segIdx))
         local otherOffset = H.lateralOf(other.position, seg)
-        if math.abs(otherOffset - laneOffset) < 1.45 then
+        if math.abs(otherOffset - laneOffset) < 2.2 then
           local dx = other.position.x - car.position.x
           local dz = other.position.z - car.position.z
           local longitudinal = dx * fx + dz * fz
