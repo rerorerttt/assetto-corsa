@@ -538,15 +538,14 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.boundaryHard=p.latOff<left+BOUNDARY_HARD_MARGIN or
     p.latOff>right-BOUNDARY_HARD_MARGIN
 
+  local function roadBoundsAt(routeSeg)
+    if H.safeBoundsAt then return H.safeBoundsAt(routeSeg) end
+    local bl,br=H.boundsAt(routeSeg)
+    return bl+vehicleMargin,br-vehicleMargin
+  end
+
   local function laneBoundsAt(routeSeg)
-    local lo,hi
-    if H.safeBoundsAt then
-      lo,hi=H.safeBoundsAt(routeSeg)
-    else
-      local bl,br=H.boundsAt(routeSeg)
-      lo=bl+vehicleMargin
-      hi=br-vehicleMargin
-    end
+    local lo,hi=roadBoundsAt(routeSeg)
     local _,hasTwoLanes=H.laneOffset(carIndex,routeSeg)
     if hasTwoLanes and p.laneChangeProgress>=1.0 then
       if p.laneRole=="LEFT" then
@@ -607,11 +606,16 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     if math.abs(curvature)>0.0001 then
       arcLength=math.abs(2.0*math.asin(clamp(curvature*distance*0.5,-1,1))/curvature)
     end
-    local startMin,startMax=laneBoundsAt(seg)
-    local startError=0
-    if p.latOff<startMin then startError=startMin-p.latOff
-    elseif p.latOff>startMax then startError=p.latOff-startMax end
-    local previousError=startError
+    local laneMin,laneMax=laneBoundsAt(seg)
+    local roadMin,roadMax=roadBoundsAt(seg)
+    local laneStartError=0
+    if p.latOff<laneMin then laneStartError=laneMin-p.latOff
+    elseif p.latOff>laneMax then laneStartError=p.latOff-laneMax end
+    local roadStartError=0
+    if p.latOff<roadMin then roadStartError=roadMin-p.latOff
+    elseif p.latOff>roadMax then roadStartError=p.latOff-roadMax end
+    local previousLaneError=laneStartError
+    local previousRoadError=roadStartError
     local firstUnsafe=preview
     local samples=math.max(1,math.ceil(arcLength/1.0))
     for sampleIndex=1,samples do
@@ -619,10 +623,10 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
       local sample=arcLength*fraction
       local routeDistance=preview*fraction
       local routePoint,routeSeg=H.walkLine(p.segIdx,p.segT or 0,routeDistance)
-      if not routePoint or not routeSeg then return false,routeDistance end
+      if not routePoint or not routeSeg then return false,routeDistance,true end
       local before=H.walkLine(p.segIdx,p.segT or 0,math.max(0,routeDistance-1.0))
       local after=H.walkLine(p.segIdx,p.segT or 0,routeDistance+1.0)
-      if not before or not after then return false,routeDistance end
+      if not before or not after then return false,routeDistance,true end
       local rtx,rtz=normalize2(after.x-before.x,after.z-before.z)
       local px,pz
       if math.abs(curvature)<0.0001 then
@@ -637,28 +641,51 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
       end
       local routeLateral=(px-routePoint.x)*-rtz+(pz-routePoint.z)*rtx
       local lo,hi=laneBoundsAt(routeSeg)
-      local error=0
-      if routeLateral<lo then error=lo-routeLateral
-      elseif routeLateral>hi then error=routeLateral-hi end
-      if startError<=0 then
-        if error>0.08 then
+      local laneError=0
+      if routeLateral<lo then laneError=lo-routeLateral
+      elseif routeLateral>hi then laneError=routeLateral-hi end
+      local rlo,rhi=roadBoundsAt(routeSeg)
+      local roadError=0
+      if routeLateral<rlo then roadError=rlo-routeLateral
+      elseif routeLateral>rhi then roadError=routeLateral-rhi end
+
+      -- A lane-line crossing rejects this preview but is not an emergency
+      -- braking event while the predicted vehicle envelope remains on track.
+      if laneStartError<=0 then
+        if laneError>0.08 then
           firstUnsafe=routeDistance
-          return false,firstUnsafe
+          if roadError>0.08 then return false,firstUnsafe,true end
+          return false,firstUnsafe,false
         end
       else
-        -- If activation starts outside the corridor, only allow a preview
-        -- which moves monotonically back toward the safe region.
-        if error>previousError+0.10 then
+        if laneError>previousLaneError+0.10 then
           firstUnsafe=routeDistance
-          return false,firstUnsafe
+          if roadError>0.08 then return false,firstUnsafe,true end
+          return false,firstUnsafe,false
         end
-        previousError=error
+        previousLaneError=laneError
+      end
+
+      if roadStartError<=0 then
+        if roadError>0.08 then
+          firstUnsafe=routeDistance
+          return false,firstUnsafe,true
+        end
+      else
+        if roadError>previousRoadError+0.10 then
+          firstUnsafe=routeDistance
+          return false,firstUnsafe,true
+        end
+        previousRoadError=roadError
       end
     end
-    if startError>0 and previousError>=startError-0.10 then
-      return false,firstUnsafe
+    if laneStartError>0 and previousLaneError>=laneStartError-0.10 then
+      return false,firstUnsafe,false
     end
-    return true,preview
+    if roadStartError>0 and previousRoadError>=roadStartError-0.10 then
+      return false,firstUnsafe,true
+    end
+    return true,preview,false
   end
 
   local nominal=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
@@ -668,16 +695,18 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local previousPreview=p.previewDistance or nominal
   local candidate=math.min(nominal,previousPreview+1.5)
   local chosenX,chosenZ,lookahead=nil,nil,nil
-  local riskDistance=LOOKAHEAD_MIN
+  local riskDistance=math.huge
+  local laneRiskDistance=math.huge
   while candidate>=LOOKAHEAD_MIN do
     local tx,tz=makeTarget(candidate)
     if tx and tz then
-      local fits,badDistance=predictedPathFits(tx,tz,candidate)
+      local fits,badDistance,roadBlocked=predictedPathFits(tx,tz,candidate)
       if fits then
         chosenX,chosenZ,lookahead=tx,tz,candidate
         break
       end
-      riskDistance=badDistance or riskDistance
+      if roadBlocked then riskDistance=math.min(riskDistance,badDistance or candidate)
+      else laneRiskDistance=math.min(laneRiskDistance,badDistance or candidate) end
     end
     candidate=candidate-1.5
   end
@@ -685,10 +714,14 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     lookahead=LOOKAHEAD_MIN
     chosenX,chosenZ=makeTarget(lookahead)
     p.boundaryPredictBlocked=true
+    p.boundaryRoadBlocked=riskDistance<math.huge
     p.boundaryRiskDistance=riskDistance
+    p.lanePredictRiskDistance=laneRiskDistance
   else
     p.boundaryPredictBlocked=false
+    p.boundaryRoadBlocked=false
     p.boundaryRiskDistance=math.huge
+    p.lanePredictRiskDistance=laneRiskDistance
   end
   p.previewDistance=lookahead or LOOKAHEAD_MIN
   if not chosenX or not chosenZ then return p.steer end
@@ -772,15 +805,13 @@ function Driver.update(carIndex, car, dt)
     targetSpeed = targetSpeed and math.min(targetSpeed, trafficSpeed) or trafficSpeed
   end
 
-  if p.boundaryPredictBlocked then
+  if p.boundaryRoadBlocked then
     local brakingRoom=math.max(0,(p.boundaryRiskDistance or 0)-2.0)
     local boundarySpeed=math.sqrt(2.0*CFG.BRAKE_ACCEL*brakingRoom)
     targetSpeed=math.min(targetSpeed or boundarySpeed,boundarySpeed)
   end
   if p.boundaryHard then
     targetSpeed=math.min(targetSpeed or 10.0,10.0)
-  elseif p.boundaryViolation then
-    targetSpeed=math.min(targetSpeed or 22.0,22.0)
   end
 
   if targetSpeed then
@@ -794,7 +825,10 @@ function Driver.update(carIndex, car, dt)
     p.brake = 0
   end
 
-  applyTractionLimiter(car,p,dt)
+  -- The native CSP traction control is already enabled above. Do not apply
+  -- a second uncalibrated slipRatio throttle limiter on top of it.
+  p.wheelSlip=measureDrivenWheelSlip(car)
+  p.tractionFactor=1.0
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
@@ -821,13 +855,13 @@ function Driver.telemetryLine(i, car, p)
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
   local gapText=p.trafficGap==math.huge and "INF" or string.format("%.2f",p.trafficGap)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s PREVIEW=%.1f SECTION=LOCAL STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_VIOLATION=%s LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s PATH_GUARD_BLOCKED=%s PATH_RISK=%.1f BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s PREVIEW=%.1f SECTION=LOCAL STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_VIOLATION=%s LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s PATH_GUARD_BLOCKED=%s ROAD_GUARD_BLOCKED=%s PATH_RISK=%.1f LANE_RISK=%.1f BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), targetText, p.previewDistance or 0, p.steer, p.gas, p.brake,
     p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx,
     p.latOff, p.laneOffset, p.laneTargetOffset or p.laneOffset, p.laneChangeProgress or 1,
     tostring(p.laneViolation), p.laneChanges or 0, gapText, tostring(p.trafficBlocked),
-    p.boundaryError or 0, tostring(p.boundaryHard), tostring(p.boundaryPredictBlocked), p.boundaryRiskDistance or -1, left, right)
+    p.boundaryError or 0, tostring(p.boundaryHard), tostring(p.boundaryPredictBlocked), tostring(p.boundaryRoadBlocked), p.boundaryRiskDistance or -1, p.lanePredictRiskDistance or -1, left, right)
 end
 
 return Driver
