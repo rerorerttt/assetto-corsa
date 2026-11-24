@@ -119,7 +119,7 @@ local function newPersonality(carIndex)
     slipSeverity = 0, stability = 1,
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
-    overtakeRetryT = 0, emergencyPass = false,
+    overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -348,6 +348,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   if previousOffset==nil then previousOffset=laneTarget end
   p.laneOffsetCurrent=previousOffset+
     clamp(laneTarget-previousOffset,-maxStep,maxStep)
+  if p.returningFromPass and math.abs(p.laneOffsetCurrent-laneTarget)<0.25 then
+    p.returningFromPass=false
+  end
 
   local targetX=future.x-future.tz*p.laneOffsetCurrent
   local targetZ=future.z+future.tx*p.laneOffsetCurrent
@@ -501,7 +504,8 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
             safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
           local separation=ownHalfWidth+otherHalfWidth+0.35
           local actualGap=math.abs(actualLateral-laneOffset)
-          local otherTarget=otherState and otherState.overtakeSide~=0 and
+          local otherTarget=otherState and
+            (otherState.overtakeSide~=0 or otherState.returningFromPass) and
             safeNumber(otherState.laneOffset,actualLateral) or actualLateral
           local reservedGap=math.abs(otherTarget-laneOffset)
           local currentOffset=own and safeNumber(own.laneOffsetCurrent,
@@ -521,7 +525,8 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
 
           -- An active pass reserves only its actual swept corridor and only
           -- near enough to create a time/space conflict.
-          local reservationConflict=otherState and otherState.overtakeSide~=0 and
+          local reservationConflict=otherState and
+            (otherState.overtakeSide~=0 or otherState.returningFromPass) and
             reservedGap<separation+0.25 and
             longitudinal>-math.max(12.0,otherSpeed*0.8+5.0) and
             longitudinal<math.max(22.0,ownSpeed*1.2+7.0)
@@ -609,7 +614,8 @@ local function passingReservationBlocked(carIndex,p,targetOffset,speed)
   if not ownCar then return true end
   local ownWidth=math.max(1.5,safeNumber(ownCar.aabbSize and ownCar.aabbSize.x,2.0))
   for otherIndex,other in pairs(state.p) do
-    if otherIndex~=carIndex and other.overtakeSide~=0 and
+    if otherIndex~=carIndex and
+       (other.overtakeSide~=0 or other.returningFromPass) and
        other.routeProgress~=nil and other.laneOffset~=nil then
       local gap=math.abs(routeGap(p.routeProgress,other.routeProgress))
       local otherCar=ac.getCar(otherIndex)
@@ -710,6 +716,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.routeLocked = true
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
+  if p.returningFromPass then return targetSpeed end
   local leftCenter,rightCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
   local defaultOffset=p.baseLaneOffset or leftCenter or ((bl+br)*0.5)
@@ -770,6 +777,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       p.overtakeSide=0
       p.passTargetIndex=nil
       p.emergencyPass=false
+      p.returningFromPass=true
       p.laneOffset=returnOffset
       p.baseLaneOffset=returnOffset
       p.passFromOffset=nil
