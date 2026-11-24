@@ -105,11 +105,11 @@ local function routeGap(ownProgress, otherProgress)
 end
 
 local function newPersonality(carIndex)
-  -- AI order is deterministic: 1=40 km/h, 2=fast, 3=40 km/h, etc.
-  local slow = (carIndex % 2) == 1
-  local kmh = slow and 40 or clamp(safeNumber(state.speedMax, 170), 80, 240)
+  -- Every participant uses the same configured cruise ceiling. Actual speed
+  -- differences come from the car physics, not an index-based class.
+  local kmh = clamp(safeNumber(state.speedMax, 170), 80, 240)
   local p = {
-    segIdx = 1, slow = slow, cruiseSpeed = kmh / 3.6,
+    segIdx = 1, cruiseSpeed = kmh / 3.6, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
     previousFx = nil, previousFz = nil,
@@ -138,8 +138,8 @@ local function newPersonality(carIndex)
     state.spawnHints[carIndex]=nil
   end
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT class=%s cruise=%.1fkmh",
-    carIndex, slow and "SLOW" or "FAST", kmh)
+  H.log("CAR_INIT id=%d lane=LEFT cruise=%.1fkmh",
+    carIndex, kmh)
 end
 
 local function readVehicleDynamics(car, p, dt)
@@ -499,9 +499,32 @@ local function carAheadInLane(carIndex, car, laneOffset)
   return bestGap, bestSpeed, bestIndex
 end
 
+-- One nearby passing manoeuvre owns the passing lane reservation. Cars farther
+-- away can pass independently; cars in the same convoy queue behind it.
+local function passingReservationBlocked(carIndex, p, speed)
+  if p.routeProgress == nil then return true end
+  local reservationRange = math.max(140.0, math.max(0, speed) * 4.5)
+  for otherIndex, other in pairs(state.p) do
+    if otherIndex ~= carIndex and other.overtakeSide ~= 0 and
+       other.routeProgress ~= nil then
+      local gap = math.abs(routeGap(p.routeProgress, other.routeProgress))
+      if gap < reservationRange then
+        return true, otherIndex, gap
+      end
+    end
+  end
+  return false
+end
+
+local function safeFollowingSpeed(gap, leaderSpeed)
+  local available = math.max(0, gap - math.max(0, safeNumber(state.followGap, 8)))
+  return math.sqrt(math.max(0,
+    leaderSpeed * leaderSpeed + 2 * CFG.BRAKE_ACCEL * available))
+end
+
 local function beginOvertake(carIndex,car,p,gap,leaderIndex,speed)
   local leftCenter,rightCenter=laneCenters(p.segIdx)
-  if not leftCenter or p.slow then return false end
+  if not leftCenter then return false end
   if p.overtakeRetryT>0 then return false end
   local fx,fz=normalize2(car.look.x,car.look.z)
   local passPreview=math.max(40.0,CFG.LOOKAHEAD_MAX)
@@ -512,6 +535,16 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,speed)
     p.overtakeRetryT=1.0
     if not p.overtakeDeniedLogged then
       H.log("CAR=%d OVERTAKE_DENIED passing_lane_not_safe",carIndex)
+      p.overtakeDeniedLogged=true
+    end
+    return false
+  end
+  local reserved, reservedBy, reservedGap = passingReservationBlocked(carIndex,p,speed)
+  if reserved then
+    p.overtakeRetryT=0.8
+    if not p.overtakeDeniedLogged then
+      H.log("CAR=%d OVERTAKE_DENIED passing_slot_reserved by=%d gap=%.1f",
+        carIndex,reservedBy or -1,reservedGap or -1)
       p.overtakeDeniedLogged=true
     end
     return false
@@ -555,6 +588,13 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
 
   if p.overtakeSide ~= 0 then
     p.passT = p.passT + dt
+    local rightGap, rightLeaderSpeed = carAheadInLane(
+      carIndex, car, rightCenter or p.laneOffset or p.passLat or -1.75)
+    local passSafeSpeed = targetSpeed
+    if rightGap then
+      passSafeSpeed = math.min(passSafeSpeed,
+        safeFollowingSpeed(rightGap, rightLeaderSpeed or 0))
+    end
     local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
     local passedClearance = false
     if target and target.isActive then
@@ -601,11 +641,11 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     -- Stay in the right lane until the complete rear-bumper clearance exists.
     p.laneOffset = rightCenter or p.passLat
     p.passLat = p.laneOffset
-    return targetSpeed
+    return passSafeSpeed
   end
 
   if not leftCenter then
-    if not p.slow and not p.overtakeDisabledLogged then
+    if not p.overtakeDisabledLogged then
       local bl, br = H.boundsAt(p.segIdx)
       H.log("CAR=%d OVERTAKE_DISABLED corridor_too_narrow width=%.2f required=5.40",
         carIndex, br - bl)
@@ -635,17 +675,15 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       speed>=(leaderSpeed or 0)-3.0
     local urgent=canActuallyPass and gap<=urgentGap
     p.followTimer=p.followTimer+dt
-    if not p.slow and urgent and p.overtakeSide==0 then
+    if urgent and p.overtakeSide==0 then
       p.emergencyPassRequest=true
       if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
         return targetSpeed
       end
       p.emergencyPassRequest=false
     end
-    local safe = math.sqrt(math.max(0,
-      (leaderSpeed or 0) * (leaderSpeed or 0) +
-      2 * CFG.BRAKE_ACCEL * math.max(0, gap - safeNumber(state.followGap, 8))))
-    if not p.slow and p.followTimer>=TRIGGER_TIME and p.overtakeRetryT<=0 then
+    local safe = safeFollowingSpeed(gap, leaderSpeed or 0)
+    if p.followTimer>=TRIGGER_TIME and p.overtakeRetryT<=0 then
       p.emergencyPassRequest=false
       if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
         return targetSpeed
@@ -656,9 +694,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
 
   p.followTimer = 0
   p.blockedT = 0
-  local safe = math.sqrt(math.max(0,
-    (leaderSpeed or 0) * (leaderSpeed or 0) +
-    2 * CFG.BRAKE_ACCEL * math.max(0, gap - safeNumber(state.followGap, 8))))
+  local safe = safeFollowingSpeed(gap, leaderSpeed or 0)
   return math.min(targetSpeed, safe)
 end
 
@@ -846,7 +882,8 @@ end
 function Driver.telemetryLine(i, car, p)
   local bl, br = H.boundsAt(p.segIdx)
   local steerLimit=p.player and 0.99 or (CFG.STEER_LIMIT-0.01)
-  local mode=p.player and " MODE=PLAYER" or ""
+  local mode=p.player and " MODE=PLAYER" or
+    (p.playerAutopilot and " MODE=AI_AUTOPILOT" or "")
   return string.format(
     "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f%s",
     i, car.position.x, car.position.y, car.position.z,
