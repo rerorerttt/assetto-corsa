@@ -106,3 +106,18 @@ Implemented on the PR branch; not yet validated in Assetto Corsa/CSP:
 Scope deliberately not claimed as complete: this stage does not calibrate normalized steering against each car's steering ratio/wheelbase, does not add lane-boundary recovery, and does not solve direction-aware opposing traffic. Bounds are still read from the saved per-node corridor and are not expanded or fabricated.
 
 Validation performed: source-level inspection of the changed modules and call sites. No Lua interpreter/compiler and no Assetto Corsa/CSP runtime were available, so syntax/runtime behavior and actual vehicle tracking remain unverified. The next in-game trace must confirm monotonic route progress, stable segment identity through bends and the start/finish seam, consistent signed lateral offset, and finite/non-spiking curvature before this stage is accepted.
+
+
+## 2026-11-24 manual player telemetry test build
+
+Added passive telemetry for the human-driven car (car index 0), using the same one-second log cadence and the same telemetry formatter as AI cars:
+
+- The player is observed every app update frame to keep route projection/progress continuous; the most recent snapshot is written by the existing once-per-second logger.
+- The player line is written as `CAR=0 ... MODE=PLAYER` in the existing `routepilot_trace.txt`, alongside AI rows if AI cars are present.
+- Position, speed, velocity-derived slip/yaw/lateral acceleration, route segment, route progress, distance from the drawn route, signed lateral offset, heading error, sampled route curvature, and saved bounds are measured from the player car and the shared route geometry.
+- `STEER` is the normalized live controller input from the documented `ac.getControllerSteerValue()`; `GAS` and `BRAKE` are the actual `ac.StateCar.gas` and `ac.StateCar.brake` values. These are observational values, not commands.
+- `TARGET_SPEED=-1.00` marks “not applicable” for the manually driven car; `PACE=0`, `OT_SIDE=0`, and `LANE=0` are neutral placeholders because the player has no AI target or overtake lane. `SAT` is set only when normalized player steering input is effectively at its full limit.
+- The player observer is separate from `state.p` and is never passed to `Driver.update()`. It does not call `ac.overrideCarControls()`, so it cannot steer, throttle, brake, or otherwise take control of the player's car.
+- Player telemetry is emitted only when a route with at least two points exists and route recording is not actively in progress. It works whether the route was loaded from disk or has just been drawn and stopped.
+
+Validation: verified the input/property names against the repository's bundled CSP Lua SDK (`ac.getControllerSteerValue()`, `ac.StateCar.gas`, `ac.StateCar.brake`, `ac.StateCar.position/velocity/look/speedMs`). Source-level checks confirm player observation is called per update, the row is written through the existing logger, and no player control override is made. No Assetto Corsa/CSP runtime is available here; the next in-game check must confirm one `CAR=0 MODE=PLAYER` row per second with changing inputs and route metrics while the car is driven manually.
