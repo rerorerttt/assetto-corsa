@@ -285,8 +285,8 @@ local function adjacentLaneIsClear(carIndex,car,p,targetOffset,tx,tz)
   local sim=ac.getSim()
   if not sim then return false end
   local ownSpeed=math.max(0,safeNumber(car.speedMs,0))
-  local frontWindow=math.max(18.0,ownSpeed*LANE_CHANGE_TIME+8.0)
-  local rearWindow=math.max(14.0,ownSpeed*LANE_CHANGE_TIME*0.65+8.0)
+  local frontWindow=18.0
+  local rearWindow=16.0
   for i=0,sim.carsCount-1 do
     if i~=carIndex then
       local other=ac.getCar(i)
@@ -304,9 +304,9 @@ local function adjacentLaneIsClear(carIndex,car,p,targetOffset,tx,tz)
         end
         local otherSpeed=math.max(0,safeNumber(other.speedMs,0))
         local dynamicFront=math.max(frontWindow,
-          math.max(0,ownSpeed-otherSpeed)*LANE_CHANGE_TIME+8.0)
+          math.max(0,ownSpeed-otherSpeed)*LANE_CHANGE_TIME+12.0)
         local dynamicRear=math.max(rearWindow,
-          math.max(0,otherSpeed-ownSpeed)*LANE_CHANGE_TIME+8.0)
+          math.max(0,otherSpeed-ownSpeed)*LANE_CHANGE_TIME+12.0)
         if occupiesTarget and longitudinal>=-dynamicRear and
             longitudinal<=dynamicFront then
           return false,i,longitudinal
