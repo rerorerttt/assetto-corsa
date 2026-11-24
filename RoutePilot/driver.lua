@@ -510,7 +510,7 @@ end
 
 local function passingReservationBlocked(carIndex,p,targetOffset,speed)
   if p.routeProgress==nil then return true end
-  local range=math.max(45.0,math.max(0,speed)*2.2)
+  local range=math.max(80.0,math.max(0,speed)*3.0)
   for otherIndex,other in pairs(state.p) do
     if otherIndex~=carIndex and other.overtakeSide~=0 and
        other.routeProgress~=nil and other.laneOffset~=nil then
@@ -583,7 +583,7 @@ local function trafficAheadForRescue(carIndex,car,p)
   local offset=safeMin
   while offset<=safeMax+0.001 do
     local gap,_,index=carAheadInLane(carIndex,car,offset)
-    if gap and gap>-8.0 and gap<32.0 then return true,gap,index end
+    if gap and gap>-8.0 and gap<100.0 then return true,gap,index end
     offset=offset+0.75
   end
   return false
