@@ -319,3 +319,24 @@ Follow-up after source verification (2026-11-25): the driver header and README's
 - README 0.9.3 behavior correction: `ae997fce61932bb6991df2d2453b0aa835d04d32`
 
 Do not infer from the source rollback that off-track behavior is already fixed. The actual 0.9.3 build has not been driven in Assetto Corsa. The next step is an in-game validation trace; if any car still crosses the saved bounds, suspend overtaking and diagnose the boundary controller before adding traffic features.
+
+
+## 2026-11-25 experimental swept-footprint trajectory planner 0.10.0
+
+Implemented on `routepilot/multi-lane-emergency-evasion-2026-11-25` after reviewing the full current driver, route geometry, app configuration, and existing traffic control flow.
+
+### Changes
+
+- Replaced the single common-offset steering clamp with a candidate trajectory planner. Candidate terminal offsets cover the union of the locally usable road offsets, but this union is only a candidate-generation range and is never treated as a safe corridor.
+- Each candidate uses a quintic smoothstep transition from the current lateral offset to a terminal offset over a speed-dependent 18–48 m transition length. The profile has zero lateral velocity and acceleration at its endpoints.
+- Every candidate is sampled at 2 m intervals from the rear of the vehicle through the forward steering horizon. At each sample, the driver transforms saved road bounds into spline coordinates, computes the oriented rectangular vehicle footprint using width, length, path angle, measured current heading error and the 0.4 m margin, then rejects the candidate if either side has less than -0.015 m clearance.
+- The planner scores feasible candidates by requested-offset error, lateral transition magnitude, estimated offset-path curvature, and minimum boundary clearance. It publishes the selected offset and diagnostics to telemetry.
+- The selected offset-path curvature samples are fed into the existing forward speed planner. Each sample contributes a curvature speed limit and a braking-distance constraint; the centerline curvature planner remains active as an additional constraint.
+- Removed the old infeasible common-corridor midpoint fallback. The legacy passing-offset search now rejects an empty common corridor. If no swept-footprint candidate is feasible, the driver sets the boundary failure state, requests zero throttle and full brake, and does not continue normal steering toward an invented offset.
+- Added telemetry fields `PLAN_OFFSET`, `PLAN_CLEAR`, `PLAN_CURVE`, `PLAN_REJECT`, and `PLAN_FAIL`.
+
+### Engineering limitations and validation
+
+This is the first implementation milestone of the racing planner, not the finished cooperative racing traffic system. It now checks the road-boundary footprint along candidate lateral paths and plans speed against the chosen path curvature. It still relies on the existing lane occupancy and reservation logic for other cars; continuous time-indexed collision prediction, coordinated multi-car trajectory reservations, and race-line optimization beyond the local candidate family are not yet implemented.
+
+Validation in this session is limited to source inspection and structural checks. No Assetto Corsa/CSP runtime or Lua compiler is available here. The 2 m path sampling, current-heading footprint envelope, saved-boundary transform, curvature approximation, steering saturation, braking response, and no-candidate fail-safe all require in-game trace validation. Do not call 0.10.0 safe or proven faster until the complete vehicle footprint stays inside saved bounds through straights, corners, lane changes, and emergency passes. Keep the user's confirmed 2026-11-24 baseline and the 0.9.3 recovery revision untouched.
