@@ -535,9 +535,52 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.boundaryHard=p.latOff<left+BOUNDARY_HARD_MARGIN or
     p.latOff>right-BOUNDARY_HARD_MARGIN
 
-  -- Match the proven original RoutePilot follower: one stable target 18–30 m
-  -- ahead. Do not shorten the target to 12 m based on a straight-chord test;
-  -- that caused abrupt target changes and steering oscillation.
+  -- Build the preview target from the recorded route. The previous revision
+  -- called a non-existent global makeTarget(), causing DRIVER_ERROR on every
+  -- AI update; the main loop then released the controls and the car never
+  -- entered the RoutePilot controller.
+  local function makeTarget(distanceAhead)
+    if not H.walkLine then return nil,nil end
+    local point,targetSeg=H.walkLine(p.segIdx,p.segT or 0,distanceAhead)
+    if not point or not targetSeg then return nil,nil end
+
+    local a=state.nodes[targetSeg]
+    local b=H.segEnd(targetSeg)
+    if not a or not b then return nil,nil end
+    local tx,tz=normalize2(b.x-a.x,b.z-a.z)
+
+    local targetOffset=p.laneOffset or 0
+    local _,targetTwoLane=H.laneOffset(carIndex,targetSeg)
+    if not targetTwoLane then
+      targetOffset=select(1,H.laneOffset(carIndex,targetSeg))
+    elseif p.laneChangeProgress>=1.0 then
+      targetOffset=select(1,laneCenterForRole(carIndex,targetSeg,p.laneRole))
+    end
+
+    local safeMin,safeMax
+    if H.safeBoundsAt then
+      safeMin,safeMax=H.safeBoundsAt(targetSeg)
+    else
+      local l,r=H.boundsAt(targetSeg)
+      safeMin,safeMax=l+CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE,
+        r-CFG.VEHICLE_HALF_WIDTH-CFG.BOUNDARY_CLEARANCE
+    end
+    if targetTwoLane and p.laneChangeProgress>=1.0 then
+      local margin=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
+      if p.laneRole=="LEFT" then
+        safeMax=math.min(safeMax,-margin)
+      else
+        safeMin=math.max(safeMin,margin)
+      end
+    end
+    targetOffset=clamp(targetOffset,safeMin,safeMax)
+
+    -- lateralOf() uses the route's left normal (-tangent.z, tangent.x).
+    return point.x-tz*targetOffset,point.z+tx*targetOffset
+  end
+
+  -- Stable speed-adaptive preview, sampled along the polyline rather than
+  -- aiming at an undefined or straight-line world-space target.
   local lookahead=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE,LOOKAHEAD_MAX)
   local targetX,targetZ=makeTarget(lookahead)
@@ -546,6 +589,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     targetX,targetZ=makeTarget(lookahead)
   end
   p.previewDistance=lookahead
+  if not targetX or not targetZ then return p.steer end
 
   local dx = targetX - car.position.x
   local dz = targetZ - car.position.z
