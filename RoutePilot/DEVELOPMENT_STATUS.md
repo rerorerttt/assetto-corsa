@@ -53,7 +53,7 @@ Additional controller refinements in the same trace-driven pass:
 
 ## 2026-11-24 latest user trace: controller and lane-change diagnosis
 
-The newest 74-second trace on `skidpad05_skidpad` confirms that the previous steering/lane-change corrections did not solve the reported behavior. Do not treat PR #6 as validated.
+The latest 153-second trace on `skidpad05_skidpad` confirms that the previous steering/lane-change corrections did not solve the reported behavior. Do not treat PR #6 as validated.
 
 Confirmed from the trace and current source:
 
