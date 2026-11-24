@@ -109,7 +109,8 @@ local function newPersonality(carIndex)
   -- determine speed. Curvature and measured braking capability remain limits.
   local p = {
     segIdx = 1, cruiseSpeed = math.huge, brakeAccelEstimate = CFG.BRAKE_ACCEL,
-    accelEstimate = 4.0, previousSpeed = nil, playerAutopilot = carIndex == 0,
+    accelEstimate = 4.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
+    previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
     previousFx = nil, previousFz = nil,
@@ -177,6 +178,18 @@ local function readVehicleDynamics(car, p, dt)
   p.previousSpeed = speed
   p.previousFx, p.previousFz = fx, fz
   p.lateralAccel = math.abs(p.yawRate * speed)
+  -- Learn usable cornering grip from actual vehicle response. Increase the
+  -- limit only while the car is stable; reduce it when slip indicates loss.
+  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,12.0)
+  if speed>12.0 and math.abs(p.slipAngle)<0.08 and
+     safeNumber(p.wheelSlip)<0.20 and p.lateralAccel>grip*0.70 then
+    grip=lerp(grip,clamp(p.lateralAccel*1.18,grip,12.0),0.015)
+  elseif speed>12.0 and
+     (math.abs(p.slipAngle)>0.15 or safeNumber(p.wheelSlip)>0.30) and
+     p.lateralAccel>3.0 then
+    grip=lerp(grip,clamp(p.lateralAccel*0.95,4.0,grip),0.08)
+  end
+  p.lateralAccelLimit=grip
   return speed, fx, fz
 end
 
@@ -185,7 +198,8 @@ local function calculateStability(p, speed)
   local severity = 0
   if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
     local ss = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
-    local as = clamp((p.lateralAccel - CFG.MAX_LATERAL_ACCEL) / (CFG.MAX_LATERAL_ACCEL * 0.7), 0, 1)
+    local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,12.0)
+    local as = clamp((p.lateralAccel - grip) / (grip * 0.7), 0, 1)
     severity = math.max(ss, as)
   end
   p.slipSeverity = severity
@@ -208,7 +222,8 @@ local function planTargetSpeed(p,speed)
     if not sample then break end
     local curvature=math.abs(sample.k or 0)
     if curvature>CFG.CURVE_MIN then
-      local curveSpeed=math.sqrt(CFG.MAX_LATERAL_ACCEL/curvature)
+      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,12.0)
+      local curveSpeed=math.sqrt(lateralLimit/curvature)
       local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.35)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
         2*brakeAccel*brakingDistanceAvailable)
@@ -858,8 +873,9 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
 
   -- Leave grip reserve for cornering instead of applying full drive torque
   -- while lateral acceleration is already close to the route limit.
+  local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,12.0)
   local lateralUse=clamp(math.abs(safeNumber(p.lateralAccel))/
-    math.max(0.1,CFG.MAX_LATERAL_ACCEL),0,1)
+    math.max(0.1,lateralLimit),0,1)
   local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
   gas=gas*p.tractionScale*cornerScale
 
