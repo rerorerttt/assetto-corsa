@@ -312,3 +312,10 @@ Current recovery commit sequence:
 - Conservative boundary-safe calibration / version 0.9.3: `c280742fd74c428a0612aa08b2be82515ed127e5`
 - Manifest version bump: `822e59a8220581e198957511774791d7ae9702d0`
 - README regression documentation: `e9e2bbfd9420500734533346a784b0c9abee4a1a`
+
+
+Follow-up after source verification (2026-11-25): the driver header and README's earlier urgent-pass description were also corrected to identify 0.9.3 accurately and to remove stale claims that full-lock steering, 12 m/s lane transitions, or 14.5 m/s² calibration remain active. Latest source/documentation commits:
+- Driver version header: `e98e8e5c248c34522d274d0c2905c6478ee33674`
+- README 0.9.3 behavior correction: `ae997fce61932bb6991df2d2453b0aa835d04d32`
+
+Do not infer from the source rollback that off-track behavior is already fixed. The actual 0.9.3 build has not been driven in Assetto Corsa. The next step is an in-game validation trace; if any car still crosses the saved bounds, suspend overtaking and diagnose the boundary controller before adding traffic features.
