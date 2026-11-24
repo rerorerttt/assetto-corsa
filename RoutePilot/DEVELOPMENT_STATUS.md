@@ -36,6 +36,13 @@ Last updated: 2026-11-24
 - `physics.setAssists({tractionControl='on'}, carIndex)` is used for per-car traction control.
 - Spawn and recovery continue to pass the empirically corrected negated route tangent. The next runtime log must confirm positive `HEADING_DOT` and that the physical LEFT/RIGHT labels match the displayed positions.
 
+## Latest log diagnosis (2026-11-24)
+
+- The supplied trace contained 4,478 `LANE_CHANGE_ABORT` events but only 10 `LANE_CHANGE_START` events. The abort branch reset the return transition to progress zero every update, trapping cars between lane centres.
+- Traffic detection used other cars' commanded offsets in place of their actual route-relative positions. This could mark the wrong lane occupied or miss a car whose real position differed from its stored target.
+- Reconstructing lateral position from the saved route and telemetry segment showed positions from approximately -5.27 m to +10.00 m against recorded bounds of [-3.5 m, +3.5 m]; 345 of 1,500 telemetry samples were outside the 1.10 m vehicle-centre safety margin.
+- The Nevada trace reached 32.41 m/s actual speed and 50.07 m/s requested speed. The new corner planner raises assumed lateral acceleration and braking deceleration; straight-line speed remains full throttle with no software speed cap.
+
 ## Validation status
 
 - Source changes are committed to the working branch only; `main` remains untouched.
