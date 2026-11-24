@@ -10,8 +10,7 @@ if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = ni
 
 local CFG = {
   -- Aggressive race pace: late braking and high sustained lateral grip.
-  MAX_LATERAL_ACCEL=17.5, BRAKE_ACCEL=14.0, PLAN_HORIZON=280.0,
-  CURVE_MIN=0.0005,
+  MAX_LATERAL_ACCEL=17.5, BRAKE_ACCEL=14.0,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
@@ -225,11 +224,6 @@ local function walkLine(startSeg,startT,distance)
   end
   return nil
 end
-local function getVertexCurvature(index)
-  if ensureTrackMap then ensureTrackMap() end
-  local entry=state.trackMap and state.trackMap[index]
-  return entry and entry.curvature or 0
-end
 local function findNearestSeg(pos,hintSeg,allowGlobalScan)
   local nodes=state.nodes; local segs=segmentCount()
   if segs<1 then return 1,0,0 end
@@ -289,36 +283,16 @@ ensureTrackMap=function()
       state.trackMap.loop==state.loopRoute and state.trackMap.nodeCount==n then return end
   local map={count=expected,loop=state.loopRoute,nodeCount=n}
   local half=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
-  local function pointAt(index)
-    if state.loopRoute then index=((index-1)%n)+1
-    else index=clamp(index,1,n) end
-    return state.nodes[index]
-  end
-  local function turnMetric(index)
-    local before=pointAt(index-4)
-    local pivot=pointAt(index)
-    local after=pointAt(index+4)
-    local ax,az=pivot.x-before.x,pivot.z-before.z
-    local bx,bz=after.x-pivot.x,after.z-pivot.z
-    local al=math.sqrt(ax*ax+az*az)
-    local bl=math.sqrt(bx*bx+bz*bz)
-    if al<0.5 or bl<0.5 then return 0 end
-    ax,az=ax/al,az/al; bx,bz=bx/bl,bz/bl
-    return math.abs(math.atan2(ax*bz-az*bx,clamp(ax*bx+az*bz,-1,1)))
-  end
   for i=1,expected do
     local nextIndex=(i%expected)+1
-    local prevIndex=i-1
-    if state.loopRoute then prevIndex=((prevIndex-1)%n)+1
-    else prevIndex=math.max(1,prevIndex) end
     local left1,right1=boundsAt(i)
     local left2,right2=boundsAt(nextIndex)
     local safeL=math.max(left1,left2)+half
     local safeR=math.min(right1,right2)-half
-    if safeL>safeR then local mid=(safeL+safeR)*0.5; safeL,safeR=mid,mid end
-    -- Preserve the established two-lane geometry: on a 7 m corridor
-    -- cars use centres at -1.75 m and +1.75 m. Keep the full vehicle
-    -- footprint inside the recorded safe centre envelope.
+    if safeL>safeR then
+      local mid=(safeL+safeR)*0.5
+      safeL,safeR=mid,mid
+    end
     local laneMagnitude=math.min(1.75,math.max(0,-safeL),math.max(0,safeR))
     local twoLane=laneMagnitude*2>=CFG.MIN_LANE_CENTER_GAP-0.05
     local leftOffset,rightOffset
@@ -329,66 +303,22 @@ ensureTrackMap=function()
       leftOffset=clamp(0,safeL,safeR)
       rightOffset=leftOffset
     end
-    local prev,cur,nxt=state.nodes[prevIndex],state.nodes[i],segEnd(i)
-    local turn=turnMetric(i)
-    local curved=turn>=0.12
-    local hairpin=turn>=0.85
-    local ab,bc,ca=flatDist(prev,cur),flatDist(cur,nxt),flatDist(nxt,prev)
-    local cross=math.abs((cur.x-prev.x)*(nxt.z-prev.z)-(cur.z-prev.z)*(nxt.x-prev.x))
-    local curvature=(ab>0.05 and bc>0.05 and ca>0.05 and cross>0.0001)
-      and (2*cross/(ab*bc*ca)) or 0
     map[i]={safeL=safeL,safeR=safeR,twoLane=twoLane,
-      leftOffset=leftOffset,rightOffset=rightOffset,curvature=curvature,
-      length=flatDist(cur,nxt),turnAngle=turn,curved=curved,hairpin=hairpin,
-      speedLimit=hairpin and (70/3.6) or (160/3.6),
-      section=hairpin and "HAIRPIN" or (curved and "CORNER" or "STRAIGHT")}
-  end
-  local runs={}
-  local i=1
-  while i<=expected do
-    if not map[i].curved then
-      local first=i; local length=0
-      while i<=expected and not map[i].curved do
-        length=length+map[i].length; i=i+1
-      end
-      runs[#runs+1]={first=first,last=i-1,length=length}
-    else i=i+1 end
-  end
-  if state.loopRoute and #runs>=2 and runs[1].first==1 and runs[#runs].last==expected then
-    local fr,lr=runs[1],runs[#runs]
-    local limit=(fr.length+lr.length>=250.0) and (320/3.6) or (160/3.6)
-    for k=fr.first,fr.last do map[k].speedLimit=limit end
-    for k=lr.first,lr.last do map[k].speedLimit=limit end
-    fr.merged=true; lr.merged=true
-  end
-  for r=1,#runs do
-    local run=runs[r]
-    if not run.merged then
-      local limit=(run.length>=250.0) and (320/3.6) or (160/3.6)
-      for k=run.first,run.last do map[k].speedLimit=limit end
-    end
+      leftOffset=leftOffset,rightOffset=rightOffset}
   end
   state.trackMap=map
-  local two,single,corners,hairpins,shorts,longs=0,0,0,0,0,0
-  for j=1,expected do
-    local e=map[j]
-    if e.twoLane then two=two+1 else single=single+1 end
-    if e.curved then corners=corners+1; if e.hairpin then hairpins=hairpins+1 end
-    elseif e.speedLimit>(200/3.6) then longs=longs+1 else shorts=shorts+1 end
+  local two,single=0,0
+  for i=1,expected do
+    if map[i].twoLane then two=two+1 else single=single+1 end
   end
-  writeLog("TRACK_MAP_BUILT segments=%d two_lane=%d single_lane=%d corners=%d hairpins=%d short_straight=%d long_straight=%d speed_limits_kmh=70/160/320",
-    expected,two,single,corners,hairpins,shorts,longs)
+  writeLog("TRACK_CORRIDOR_BUILT segments=%d two_lane=%d single_lane=%d",
+    expected,two,single)
 end
 local function safeBoundsAt(index)
   ensureTrackMap()
   local e=state.trackMap and state.trackMap[index]
   if e then return e.safeL,e.safeR end
   return -1.5,1.5
-end
-local function speedLimitAt(index)
-  ensureTrackMap()
-  local e=state.trackMap and state.trackMap[index]
-  return e and e.speedLimit or (160/3.6)
 end
 local function rebuildTrackMap()
   state.trackMap=nil
@@ -764,8 +694,6 @@ local function ensureDriver()
     findNearestSeg=findNearestSeg, lateralOf=lateralOf, boundsAt=boundsAt,
     safeBoundsAt=safeBoundsAt, offsetSafeAhead=offsetSafeAhead,
     laneOffset=laneOffsetForCar,
-    getVertexCurvature=getVertexCurvature,
-    getSpeedLimit=speedLimitAt,
     spawnSegment=function(carIndex)
       local seg=state.spawnSegments[carIndex]
       state.spawnSegments[carIndex]=nil
