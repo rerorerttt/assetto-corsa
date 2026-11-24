@@ -599,11 +599,10 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local lateralError = targetOffset - p.latOff
   local lateralGain = p.boundaryViolation and 0.14 or 0.018
   local lateralLimit = p.boundaryViolation and 0.55 or 0.10
-  -- signedAngle() is positive when the target lies to the vehicle's left,
-  -- while AC's normalized steer input is negative for a left turn.
-  -- Invert the geometric correction before writing controls.steer.
-  local targetSteer = -(angle * STEER_GAIN +
-    clamp(lateralError * lateralGain, -lateralLimit, lateralLimit))
+  -- Keep the same angle sign convention as the original working follower:
+  -- atan2(fx * dirZ - fz * dirX, dot), with positive steer for positive angle.
+  local targetSteer = angle * STEER_GAIN +
+    clamp(lateralError * lateralGain, -lateralLimit, lateralLimit)
   targetSteer = clamp(targetSteer, -STEER_LIMIT, STEER_LIMIT)
 
   if math.abs(angle) < 0.0015 and math.abs(lateralError) < 0.04 then
