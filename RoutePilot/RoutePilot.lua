@@ -29,6 +29,7 @@ local state = {
   spawnDone=false, spawnStable=0, spawnLastRoster="", routeDirectionChecked=false,
   nodes={}, p={}, laneAssignments={}, trackMap=nil, status="Готов", logAccum=0, loaded=false,
 }
+local ensureTrackMap
 local logger=nil
 if Logger and type(Logger.new)=="function" then
   local ok, result = pcall(function()
@@ -224,7 +225,6 @@ local function walkLine(startSeg,startT,distance)
   end
   return nil
 end
-local ensureTrackMap
 local function getVertexCurvature(index)
   if ensureTrackMap then ensureTrackMap() end
   local entry=state.trackMap and state.trackMap[index]
