@@ -275,8 +275,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local safePredicted=clamp(predictedLateral,safeMin,safeMax)
   local boundaryError=safePredicted-predictedLateral
   local boundaryDistance=math.max(8.0,ahead*0.65)
-  local boundaryCurvature=clamp(2.0*boundaryError/
-    (boundaryDistance*boundaryDistance),-0.10,0.10)
+  local boundaryCurvature=clamp(2.5*boundaryError/
+    (boundaryDistance*boundaryDistance),-0.15,0.15)
   desiredCurvature=desiredCurvature+boundaryCurvature
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
@@ -622,6 +622,7 @@ function Driver.update(carIndex, car, dt)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.targetSpeed = targetSpeed
 
+  p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
   if p.projectionLost then targetSpeed=0 end
   if p.boundaryEmergency then targetSpeed=math.min(targetSpeed,math.max(8.0,speed-4.0)) end
