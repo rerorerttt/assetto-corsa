@@ -411,16 +411,13 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
     end
   end
 
-  if front and (p.trafficBlocked or p.laneChangeAborting) then
+  if front then
+    -- Always maintain a stopping-speed envelope to the nearest car in the
+    -- occupied lane(s), even during cooldown or the final part of a merge.
     local available = math.max(0, front.gap - LANE_SAFETY_GAP)
     local safeSpeed = math.sqrt(front.speed * front.speed +
       2 * CFG.BRAKE_ACCEL * available)
     return safeSpeed, front
-  end
-  if front and p.laneChangeProgress < 0.55 then
-    local available = math.max(0, front.gap - LANE_SAFETY_GAP)
-    return math.sqrt(front.speed * front.speed +
-      2 * CFG.BRAKE_ACCEL * available), front
   end
   return nil, front
 end
