@@ -1033,13 +1033,12 @@ function windowMain(dt)
       state.trackMap=nil
       if #state.nodes>=2 then ensureTrackMap() end
     end
-    if ui.button("Рассчитать участки",vec2(-0.33,22)) then rebuildTrackMap() end
+    if ui.button("Рассчитать участки",vec2(150,22)) then rebuildTrackMap() end
     ui.sameLine(0,4)
-    if ui.button("Сохранить",vec2(-0.33,22)) then saveLine() end
+    if ui.button("Сохранить",vec2(82,22)) then saveLine() end
     ui.sameLine(0,4)
-    if ui.button("Загрузить",vec2(-0.33,22)) then loadLine() end
-    ui.sameLine(0,4)
-    if ui.button(state.enabled and "Остановить ИИ" or "Запустить ИИ",vec2(-0.33,22)) then
+    if ui.button("Загрузить",vec2(82,22)) then loadLine() end
+    if ui.button(state.enabled and "Остановить ИИ" or "Запустить ИИ",vec2(150,22)) then
       if state.enabled then
         state.enabled=false
         for idx in pairs(state.p) do releaseCar(idx) end
@@ -1061,7 +1060,7 @@ function windowMain(dt)
       flushLog()
     end
     ui.sameLine(0,4)
-    if ui.button("Очистить",vec2(-0.33,22)) then
+    if ui.button("Очистить",vec2(82,22)) then
       state.nodes={}; state.p={}; state.trackMap=nil; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
     end
