@@ -214,7 +214,8 @@ local function linePointAtLateral(seg, t, ahead, lat)
 end
 
 local function calculateSteering(car, p, speed, fx, fz, dt)
-  local seg, t, lineDist = H.findNearestSeg(car.position, p.segIdx)
+  local seg, t, lineDist = H.findNearestSeg(car.position, p.segIdx, not p.routeLocked)
+  p.routeLocked = true
   p.segIdx, p.lineDist = seg, lineDist
   p.latOff = H.lateralOf(car.position, seg)
   local progress = routeProjection(car, seg, not p.routeLocked)
@@ -330,7 +331,11 @@ local function carAheadInLane(carIndex, car, laneOffset)
     if i ~= carIndex then
       local other = ac.getCar(i)
       if other and other.isActive then
-        local progress, lateral = routeProjection(other, own.segIdx)
+        local otherState = state.p[i]
+        local progress, lateral = routeProjection(other,
+          otherState and otherState.segIdx or own.segIdx,
+          not (otherState and otherState.routeLocked))
+        if otherState then otherState.routeLocked = true end
         if progress ~= nil and math.abs(lateral - laneOffset) < 1.35 then
           local gap = routeGap(ownProgress, progress)
           if gap > 0.5 and gap < 90 and (not bestGap or gap < bestGap) then
@@ -377,8 +382,12 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
     local passedClearance = false
     if target and target.isActive then
-      local targetProgress = routeProjection(target, p.segIdx)
-      local currentProgress = ownProgress or routeProjection(car, p.segIdx)
+      local targetState = state.p[p.passTargetIndex]
+      local targetProgress = routeProjection(target,
+        targetState and targetState.segIdx or p.segIdx,
+        not (targetState and targetState.routeLocked))
+      if targetState then targetState.routeLocked = true end
+      local currentProgress = ownProgress or routeProjection(car, p.segIdx, false)
       local passedDistance = (currentProgress and targetProgress)
         and routeGap(targetProgress, currentProgress) or -math.huge
       local ownLength = (car.aabbSize and car.aabbSize.z) or 4.5
