@@ -456,7 +456,7 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
   return false
 end
 
-local function carAheadInLane(carIndex,car,laneOffset)
+local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   local sim=ac.getSim()
   local own=state.p[carIndex]
   if not sim or not own then return nil,nil,nil,nil end
@@ -471,7 +471,7 @@ local function carAheadInLane(carIndex,car,laneOffset)
   if not ownSample then return nil,nil,nil,nil end
   local bestGap,bestSpeed,bestIndex,bestLateral=nil,nil,nil,nil
   for i=0,sim.carsCount-1 do
-    if i~=carIndex then
+    if i~=carIndex and i~=ignoreIndex then
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
@@ -633,7 +633,8 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   if p.overtakeSide ~= 0 then
     p.passT = p.passT + dt
     local rightGap,rightLeaderSpeed=carAheadInLane(
-      carIndex,car,p.passLat or p.laneOffset or currentLaneOffset or 0)
+      carIndex,car,p.passLat or p.laneOffset or currentLaneOffset or 0,
+      p.passTargetIndex)
     local passSafeSpeed = targetSpeed
     if rightGap then
       passSafeSpeed = math.min(passSafeSpeed,
