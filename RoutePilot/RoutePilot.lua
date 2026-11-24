@@ -194,7 +194,7 @@ local function loadLine()
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
-    state.nodes=loaded; state.p={}; state.routeGeometry=nil; state.loaded=true
+    state.nodes=loaded; state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
     if not state.spawnPerformed then
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
     end
@@ -381,7 +381,7 @@ local function buildSpawnRouteMetrics()
     local a=state.nodes[i]; local b=segEnd(i)
     local length=flatDist(a,b)
     if length>0.05 then
-      segments[#segments+1]={a=a,b=b,start=totalLength,length=length}
+      segments[#segments+1]={a=a,b=b,start=totalLength,length=length,index=i}
       totalLength=totalLength+length
     end
   end
@@ -427,7 +427,7 @@ local function sampleSpawnRoute(metrics,distance)
       local direction=vec3(b.x-a.x,b.y-a.y,b.z-a.z)
       if direction:length()<0.0001 then return nil,nil end
       direction:normalize()
-      return position,direction,i,t
+      return position,direction,seg.index,t
     end
   end
   return nil,nil,nil,nil
