@@ -1,4 +1,4 @@
-# RoutePilot 0.9.3 — boundary-safety recovery
+# RoutePilot 0.10.0 — experimental swept-path planner
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
 
@@ -108,3 +108,14 @@ The 0.9.3 source recovery disables the blind full-lock pulse, removes the emerge
 Hard invariant for all future work: no passing mode, obstacle-avoidance mode, recovery mode, or speed optimization may override the road-boundary envelope. If the full vehicle footprint cannot fit inside the recorded corridor, the controller must reject that lateral target and reduce speed rather than steer toward an infeasible midpoint. Never restore blind full-lock steering. Do not increase lateral speed, steering authority, preview horizon, or grip target until boundary containment has been demonstrated by in-game telemetry across straights, bends, narrow sections, and emergency passes.
 
 Validation state: 0.9.2 failure is confirmed by the supplied trace. The 0.9.3 changes above are source-level regression containment only; they have not yet been tested in Assetto Corsa/CSP and must not be described as proven safe. The next trace must be checked for every AI row satisfying the actual vehicle-footprint constraint against `BOUNDS`, no sustained `LINE_ERROR=999` while the car is moving, no throttle after projection loss, and no collision/off-track event. Preserve the user's 2026-11-24 known-good build separately.
+
+
+## Experimental trajectory planner 0.10.0
+
+The driver now evaluates a family of smooth lateral trajectories instead of clamping the lane target to one common corridor interval. Each candidate uses a quintic lateral transition, and the complete oriented vehicle footprint (width, length, measured initial heading, and a 0.4 m boundary margin) is checked at 2 m intervals against the saved left/right boundaries. Candidate paths that touch or cross a recorded boundary are rejected. The planner scores the remaining candidates using distance from the requested cruise/overtake offset, transition size, path curvature, and minimum boundary clearance.
+
+The selected path's sampled curvature is passed into the speed planner. Speed limits are calculated from the selected offset path as well as the recorded route, with braking-distance allowance applied to each upcoming curvature sample. This makes lane-change and overtake curvature part of the speed decision instead of assuming that the centerline curvature is sufficient.
+
+The former infeasible-corridor midpoint fallback has been removed. A legacy pass-offset search now rejects an empty common corridor rather than inventing a midpoint. If the swept-footprint planner cannot find any valid candidate, it sets a boundary-failure state, requests zero throttle and maximum braking, and records the candidate rejection counts. New trace fields are `PLAN_OFFSET`, `PLAN_CLEAR`, `PLAN_CURVE`, `PLAN_REJECT`, and `PLAN_FAIL`.
+
+This is an experimental source implementation, not a validated racing release. It has not been run in Assetto Corsa/CSP in this development session, and no Lua compiler is available here. The 2 m sampling interval, spline-to-boundary coordinate transform, curvature approximation, steering response, and brake response must be checked against in-game telemetry before increasing speed or merging. The planner currently validates road-boundary geometry and reuses the existing traffic occupancy/reservation system; full continuous space-time collision prediction and multi-car cooperative trajectory reservations remain subsequent work. Preserve the known-good 2026-11-24 baseline and the 0.9.3 recovery revision as rollback points.
