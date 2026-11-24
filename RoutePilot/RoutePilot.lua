@@ -44,7 +44,7 @@ local WIDTH_PRESETS = {3, 7, 11, 15}
 
 local state = {
   enabled=true, recLine=false, recBounds=false, loopRoute=true,
-  speedMax=170, followGap=8.0, widthPreset=1,
+  followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
@@ -534,17 +534,20 @@ local function teleportHome(carIndex,car)
   for k=0,n-1 do
     local i=((bestI-1+k)%n)+1
     local node=state.nodes[i]
-    if spotIsClear(node,carIndex) then
-      local nxt=state.nodes[(i%n)+1]
-      local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
-      local pos=vec3(node.x-dx*4,node.y+0.1,node.z-dz*4)
-      local ok=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
-      if ok then
+    local nxt=state.nodes[(i%n)+1]
+    local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
+    local pos=vec3(node.x-dx*4,node.y+0.1,node.z-dz*4)
+    -- Check the actual spawn point, not the route node four metres ahead.
+    if spotIsClear(pos,carIndex) then
+      local ok,result=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
+      if ok and result~=false then
         state.p[carIndex]=nil
         writeLog("RESCUE id=%d node=%d offset=%d",carIndex,i,k)
         flushLog()
+        return true
       end
-      return ok
+      writeLog("RESCUE_FAILED id=%d node=%d offset=%d error=%s",
+        carIndex,i,k,tostring(result))
     end
   end
   return false
