@@ -510,10 +510,13 @@ local function passInProgressNearby(carIndex, ownProgress)
   return false,nil
 end
 
-local function safeFollowingSpeed(gap,leaderSpeed)
+local function safeFollowingSpeed(gap,leaderSpeed,ownSpeed)
+  -- Reserve half a second of closing distance for controller/physics delay,
+  -- then calculate the speed from the leader's speed and available braking room.
+  local reactionDistance=math.max(0,safeNumber(ownSpeed))*0.5
+  local availableGap=gap-safeNumber(state.followGap,8)-reactionDistance
   return math.sqrt(math.max(0,
-    leaderSpeed*leaderSpeed+
-    2*CFG.BRAKE_ACCEL*math.max(0,gap-safeNumber(state.followGap,8))))
+    leaderSpeed*leaderSpeed+2*CFG.BRAKE_ACCEL*availableGap))
 end
 
 local function beginOvertake(carIndex,car,p,gap,leaderIndex,speed)
@@ -586,7 +589,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local passingLaneSafe=targetSpeed
     if passingLaneGap and passingLaneSpeed then
       passingLaneSafe=math.min(targetSpeed,
-        safeFollowingSpeed(passingLaneGap,passingLaneSpeed))
+        safeFollowingSpeed(passingLaneGap,passingLaneSpeed,speed))
     end
     local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
     local passedClearance = false
@@ -646,7 +649,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     end
     local singleGap,singleSpeed=carAheadInLane(carIndex,car,0)
     if singleGap and singleSpeed then
-      return math.min(targetSpeed,safeFollowingSpeed(singleGap,singleSpeed))
+      return math.min(targetSpeed,safeFollowingSpeed(singleGap,singleSpeed,speed))
     end
     return targetSpeed
   end
@@ -692,7 +695,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   end
 
   p.blockedT=0
-  return math.min(targetSpeed,safeFollowingSpeed(gap,leaderSpeed or 0))
+  return math.min(targetSpeed,safeFollowingSpeed(gap,leaderSpeed or 0,speed))
 end
 
 local function readWheelSlip(car, p)
