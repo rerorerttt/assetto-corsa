@@ -322,7 +322,8 @@ local function carAheadInLane(carIndex, car, laneOffset)
           not (otherState and otherState.routeLocked),
           otherState and otherState.routeProgress, other.speedMs, 0.05)
         if otherState then
-          otherState.routeLocked = true
+          if progress ~= nil then otherState.routeProgress = progress end
+          otherState.routeLocked = progress ~= nil
           if otherSeg then otherState.segIdx = otherSeg end
         end
         local targetOffset = otherState and
@@ -364,6 +365,10 @@ end
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   local ownProgress, _, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
+  if ownProgress == nil then
+    p.projectionLost = true
+    return 0
+  end
   p.routeLocked = true
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
