@@ -535,7 +535,10 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
     math.max(40.0,CFG.LOOKAHEAD_MAX),car,fx,fz)
   if not safeMin or not safeMax or safeMax-safeMin<1.15 then return nil end
-  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or 0
+  local defaultCenter=laneCenters(p.segIdx)
+  local bl,br=H.boundsAt(p.segIdx)
+  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
+    defaultCenter or ((bl+br)*0.5)
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
@@ -600,7 +603,10 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed)
     end
     return false
   end
-  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or 0
+  local defaultCenter=laneCenters(p.segIdx)
+  local bl,br=H.boundsAt(p.segIdx)
+  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
+    defaultCenter or ((bl+br)*0.5)
   p.overtakeDeniedLogged=false
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
   p.overtakeSide=offset<source and -1 or 1
