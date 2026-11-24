@@ -102,3 +102,12 @@ Do not merge PR #4 until these runtime checks pass.
 - Driver single-car test mode bypasses traffic scanning, overtaking, and lane changes. The car follows the saved route with the existing speed-adaptive lookahead and local corner braking; the existing recorded-corridor preview check remains active, but the lane-specific half-road clamp is disabled so the distant route target is not rejected solely for belonging to the opposite side of the local lane classification.
 - The control override is applied to player index 0 with ac.overrideCarControls. This is a CSP input override; it does not change Assetto Corsa's internal car.isAIControlled flag. No unsupported API is claimed to convert the player entity into an engine AI.
 - Runtime validation is pending. Confirm Ctrl+8 acquisition/release, steering/throttle, lane selection, and fresh telemetry in-game.
+
+
+## Correction: native Assetto Corsa Ctrl+8 AI takeover (2026-11-24)
+
+- Removed the custom Ctrl+8 binding, the duplicate UI toggle, and all player-specific override state. Ctrl+8 belongs exclusively to Assetto Corsa and is not intercepted by RoutePilot.
+- The main update loop now follows the engine's `car.isAIControlled` flag for every active car index from 0 onward. When the game's Ctrl+8 transfers car 0 to native AI control, RoutePilot picks it up through the same `Driver.update` path used by every other AI car.
+- Car 0 receives the normal roster-based lane assignment, traffic detection, overtaking, steering, corner-speed planning, traction limiting, telemetry, and stuck-car recovery. No forced LEFT lane and no single-car test bypass remain.
+- RoutePilot does not try to toggle the game's AI mode or emulate Ctrl+8. The user activates native AI takeover in Assetto Corsa; RoutePilot only controls cars that the engine reports as AI.
+- Source-level checks are complete; runtime behavior must be verified in Assetto Corsa by activating Ctrl+8 with a loaded route and checking that car 0 produces normal AI telemetry and follows the line.
