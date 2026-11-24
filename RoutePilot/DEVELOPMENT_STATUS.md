@@ -98,6 +98,7 @@ Do not merge PR #4 until these runtime checks pass.
 
 - Replaced the multi-AI launch action with an isolated player-car autopilot test. Ctrl+8 toggles RoutePilot control of car index 0 using the documented CSP ac.ControlButton binding; the UI button provides the same action.
 - The player car is assigned the recorded LEFT lane once. The test does not spawn, teleport, steer, or otherwise take control of AI opponents.
+- On activation, the route direction is checked against the player's current heading; if reversed, route points and signed boundary arrays are reversed together, then the lane map is rebuilt.
 - Driver single-car test mode bypasses traffic scanning, overtaking, and lane changes. The car follows the saved route with the existing speed-adaptive lookahead and local corner braking; the existing recorded-corridor preview check remains active, but the lane-specific half-road clamp is disabled so the distant route target is not rejected solely for belonging to the opposite side of the local lane classification.
 - The control override is applied to player index 0 with ac.overrideCarControls. This is a CSP input override; it does not change Assetto Corsa's internal car.isAIControlled flag. No unsupported API is claimed to convert the player entity into an engine AI.
 - Runtime validation is pending. Confirm Ctrl+8 acquisition/release, steering/throttle, lane selection, and fresh telemetry in-game.
