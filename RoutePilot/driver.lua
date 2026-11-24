@@ -195,7 +195,7 @@ end
 -- Local preview only: inspect the road directly ahead on every update.
 -- Curvature is measured from route samples, never from a prebuilt track speed map.
 local function planLocalSpeed(p,speed)
-  local target=320/3.6
+  local target=math.huge
   local preview=clamp(math.max(45.0,speed*2.8+18.0),45.0,125.0)
   local distance=3.0
   while distance<=preview do
@@ -522,32 +522,13 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.boundaryHard=p.latOff<left+BOUNDARY_HARD_MARGIN or
     p.latOff>right-BOUNDARY_HARD_MARGIN
 
-  local requestedLookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
-    LOOKAHEAD_BASE, LOOKAHEAD_MAX)
-  local lookahead = requestedLookahead
-  local previousX,previousZ=nil,nil
-  local accumulatedTurn=0
-  local scan=3.0
-  while scan<=requestedLookahead do
-    local q0=H.walkLine(seg,t,math.max(0,scan-1.5))
-    local q1=H.walkLine(seg,t,scan+1.5)
-    if not q0 or not q1 then break end
-    local hx,hz=normalize2(q1.x-q0.x,q1.z-q0.z)
-    if previousX then
-      accumulatedTurn=accumulatedTurn+math.abs(signedAngle(previousX,previousZ,hx,hz))
-      if accumulatedTurn>=0.10 then
-        lookahead=math.max(7.0,scan-3.0)
-        break
-      end
-    end
-    previousX,previousZ=hx,hz
-    scan=scan+3.0
-  end
+  local requestedLookahead=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
+    LOOKAHEAD_BASE,LOOKAHEAD_MAX)
   local function makeTarget(distance)
     local center=H.walkLine(seg,t,distance)
-    local before=H.walkLine(seg,t,math.max(0,distance-1.5))
-    local after=H.walkLine(seg,t,distance+1.5)
-    if not center then center=H.segEnd(seg) end
+    local before=H.walkLine(seg,t,math.max(0,distance-2.5))
+    local after=H.walkLine(seg,t,distance+2.5)
+    if not center then return nil,nil end
     if not before then before=center end
     if not after then after=center end
     local tx,tz=normalize2(after.x-before.x,after.z-before.z)
@@ -556,20 +537,20 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local function previewPathFits(distance,targetX,targetZ)
     local dx,dz=targetX-car.position.x,targetZ-car.position.z
     local total=math.max(0.001,distance)
-    local sample=3.0
-    while sample<distance-1.0 do
+    for sample=5.0,distance-1.0,5.0 do
       local point,pointSeg=H.walkLine(seg,t,sample)
-      local before=H.walkLine(seg,t,math.max(0,sample-1.5))
-      local after=H.walkLine(seg,t,sample+1.5)
+      local before=H.walkLine(seg,t,math.max(0,sample-2.5))
+      local after=H.walkLine(seg,t,sample+2.5)
       if not point or not pointSeg or not before or not after then return false end
-      local tx,tz=normalize2(after.x-before.x,after.z-before.z)
+      local tangentX,tangentZ=normalize2(after.x-before.x,after.z-before.z)
       local fraction=sample/total
       local chordX=car.position.x+dx*fraction
       local chordZ=car.position.z+dz*fraction
-      local lateral=(chordX-point.x)*-tz+(chordZ-point.z)*tx
+      local lateral=(chordX-point.x)*-tangentZ+(chordZ-point.z)*tangentX
       local minOffset,maxOffset=H.safeBoundsAt(pointSeg)
       local _,sampleTwoLane=H.laneOffset(carIndex,pointSeg)
-      if sampleTwoLane and p.laneChangeProgress>=1.0 and not p.boundaryViolation and
+      if sampleTwoLane and p.laneChangeProgress>=1.0 and
+          not p.boundaryViolation and
           (p.laneRole=="LEFT" or p.laneRole=="RIGHT") then
         if p.laneRole=="LEFT" then
           maxOffset=math.min(maxOffset,-vehicleMargin)
@@ -577,14 +558,21 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
           minOffset=math.max(minOffset,vehicleMargin)
         end
       end
-      if lateral<minOffset-0.03 or lateral>maxOffset+0.03 then return false end
-      sample=sample+3.0
+      if lateral<minOffset+0.02 or lateral>maxOffset-0.02 then return false end
     end
     return true
   end
-  local targetX,targetZ=makeTarget(lookahead)
-  while lookahead>3.0 and not previewPathFits(lookahead,targetX,targetZ) do
-    lookahead=math.max(3.0,lookahead-3.0)
+  -- Prefer one distant, stable target. Shorten it only in meaningful steps
+  -- when the swept chord would leave the assigned lane or recorded corridor.
+  local lookahead=requestedLookahead
+  local targetX,targetZ=nil,nil
+  while lookahead>=12.0 do
+    targetX,targetZ=makeTarget(lookahead)
+    if targetX and previewPathFits(lookahead,targetX,targetZ) then break end
+    lookahead=lookahead-15.0
+  end
+  if not targetX or lookahead<12.0 then
+    lookahead=12.0
     targetX,targetZ=makeTarget(lookahead)
   end
   p.previewDistance=lookahead
