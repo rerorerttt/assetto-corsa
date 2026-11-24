@@ -132,3 +132,20 @@ Do not merge PR #4 until these runtime checks pass.
 - Confirmed by source inspection that the branch's main loop still detects native AI through `car.isAIControlled`, includes car index 0, calls `Driver.update()`, and logs driver exceptions. RoutePilot does not and cannot claim to enable the game's native Ctrl+8 mode itself.
 - Commit: `4ca980e01e96a7783ac318d8ae9d5e010c987e29`.
 - Static source checks confirm exactly one local `makeTarget` definition, no remaining `lateralError` reference, and the expected route-following helper is supplied to the driver. Lua interpreter and Assetto Corsa runtime validation were unavailable during this pass; do not treat the fix as runtime-confirmed until a fresh in-game trace has no `DRIVER_ERROR` and shows steering/throttle telemetry for car 0.
+
+
+## Predictive rail-following guard (2026-11-24)
+
+- Added a boundary-aware preview selector to `driver.lua`. The follower still uses one Pure Pursuit target and the existing filtered steering; it does not chase individual recorded nodes or generate alternative trajectories.
+- The target's lateral normal now uses a centred tangent sampled 1.5 m before and after the target point, reducing direction/offset discontinuities at recorded segment joins.
+- Before accepting a preview, the driver predicts the single constant-curvature arc implied by that Pure Pursuit target and samples it every 2 m against the saved safe corridor. The corridor already accounts for vehicle half-width and clearance; when a two-lane segment is active, the check also respects the assigned lane unless a lane transition is in progress.
+- The nominal speed-adaptive preview is shortened only as much as needed to keep the predicted arc inside the corridor. Preview expansion after a corner is rate-limited to 1.5 m per update, while the existing steering filter and rate limiter remain in place to avoid node-to-node steering oscillation.
+- If even the 10 m minimum preview predicts a boundary crossing, telemetry marks `PATH_GUARD_BLOCKED` and records `PATH_RISK`; the speed controller applies a braking envelope based on the predicted distance to the first unsafe sample. Existing boundary-violation limits remain as a last-resort fallback, not the primary prevention mechanism.
+- Added `PATH_GUARD_BLOCKED` and `PATH_RISK` to the per-car telemetry. The two-lane roster, lane-change state machine, traffic detection and overtake behaviour were not removed or rewritten.
+- Trace evidence motivating the change: at 55.56 s the car was already outside the saved corridor (`LAT_OFF=-4.13`, bounds `[-3.5, 3.5]`, `BOUNDARY_HARD=true`) at 22.69 m/s. The previous controller only reduced its target speed to 10 m/s; it had no predictive path check and no boundary-aware target selection. At 56.56 s it reached `LAT_OFF=-6.11`. The initial 12.56 s sample was a separate start-outside condition and was not used as proof of an in-motion failure.
+- Static source checks: Lua block-balance scan passes for the updated `driver.lua`; no Lua interpreter/parser or Assetto Corsa runtime is available in this editing session. The change is therefore source-checked but not runtime-validated. The next in-game trace must show `PATH_GUARD_BLOCKED`, `PATH_RISK`, `PREVIEW`, `LAT_OFF`, `STEER`, `GAS` and `BRAKE` through the same corners before the controller can be considered validated.
+
+## Saved corridor data note
+
+- The checked-in `line_nevadadrift_bounds.txt` contains 230 identical `-3.50 3.50` rows. In the current source, `addPoint()` initializes bounds from the selected width preset; this file therefore represents the configured 7 m corridor, not independently measured mesh edges. The visible red debug lines are drawn from these saved values.
+- `updateBoundsRecording()` is a separate recording mode in this branch and the UI stops line recording when it starts. Do not interpret the current uniform bounds file as proof that both physical track edges were sampled. The new guard enforces the saved corridor as authored; it cannot compensate for incorrect corridor data.
