@@ -137,3 +137,8 @@ Implemented on the feature branch; pending in-game validation:
 Limitations: this is a feedback controller, not a physical guarantee that no tyre can ever spin. Grip, tyre model, drivetrain layout, surface, and physics update timing vary by car. No Assetto Corsa/CSP runtime test or Lua compiler test has been run in this environment. The next in-game trace must be used to verify steering sign, bend entry/exit, lateral error, wheel-slip response, and whether throttle oscillates. Do not treat this implementation as validated until that test is reviewed.
 
 - Corrected the curvature speed cap: removed the old 11 m/s minimum-apex-speed floor, which could override the calculated safe speed in tight bends. The planner now preserves the curvature-derived speed cap instead of forcing the AI to enter a bend too fast.
+
+
+## 2026-11-24 BEST-KNOWN-GOOD BASELINE
+
+The user tested this build in Assetto Corsa and explicitly confirmed it as the best-performing RoutePilot version so far: cars hold their assigned lanes accurately, faster cars change lanes and overtake cleanly. Treat this exact revision as the known-good baseline. Do not replace its lane assignment, lane-following, overtaking coordination, or steering/throttle behavior during future experiments without first creating a separate experimental branch from this baseline. Preserve this branch and compare future changes against it. User's in-game confirmation is the validation evidence for lane discipline and overtaking; it does not imply every possible car/track combination has been tested.
