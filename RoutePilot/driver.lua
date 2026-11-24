@@ -646,9 +646,16 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  -- No off-track/stuck teleport recovery: prevent departure instead of
-  -- hiding a boundary failure by moving the vehicle back onto the track.
-  p.stuck = speed < LANE_RESCUE_SPEED and (p.stuck or 0) + dt or 0
+  if speed < LANE_RESCUE_SPEED then
+    p.stuck = p.stuck + dt
+    if p.stuck >= LANE_RESCUE_TIME then
+      p.stuck = 0
+      if H.teleportHome then H.teleportHome(carIndex, car) end
+      return
+    end
+  else
+    p.stuck = 0
+  end
 
   local seg, segT = H.findNearestSeg(car.position, p.segIdx, false)
   p.segIdx = seg
