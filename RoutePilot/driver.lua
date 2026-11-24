@@ -556,9 +556,9 @@ function Driver.update(carIndex, car, dt)
   end
 
   if p.boundaryHard then
-    targetSpeed = math.min(targetSpeed or speed, 10.0)
+    targetSpeed = math.min(targetSpeed or 10.0, 10.0)
   elseif p.boundaryViolation then
-    targetSpeed = math.min(targetSpeed or speed, 22.0)
+    targetSpeed = math.min(targetSpeed or 22.0, 22.0)
   end
 
   if targetSpeed then
