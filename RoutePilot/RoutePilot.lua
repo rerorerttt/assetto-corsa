@@ -154,6 +154,8 @@ local function saveLine()
   if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
   saveBounds()
   if wroteFile then
+    state.trackMap=nil
+    ensureTrackMap()
     state.loaded=true
     state.spawnDone=false
     state.spawnStable=0
@@ -184,7 +186,9 @@ local function loadLine()
     state.routeDirectionChecked=false
     state.status=string.format("Загружено: %d точек",#loaded)
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
-    loadBounds(); flushLog()
+    loadBounds()
+    ensureTrackMap()
+    flushLog()
     return true
   end
   state.status="Линия не найдена"; state.loaded=false
@@ -280,14 +284,27 @@ end
 ensureTrackMap=function()
   local n=#state.nodes
   local expected=segmentCount()
-  if state.trackMap and state.trackMap.count==expected and state.trackMap.loop==state.loopRoute then return end
-  local map={count=expected,loop=state.loopRoute}
+  if expected<1 then state.trackMap=nil; return end
+  if state.trackMap and state.trackMap.count==expected and
+      state.trackMap.loop==state.loopRoute and state.trackMap.nodeCount==n then return end
+  local map={count=expected,loop=state.loopRoute,nodeCount=n}
   local half=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
-  local function curvature(a,b,c)
-    local ab=flatDist(a,b); local bc=flatDist(b,c); local ca=flatDist(c,a)
-    if ab<0.05 or bc<0.05 or ca<0.05 then return 0 end
-    local cross=math.abs((b.x-a.x)*(c.z-a.z)-(b.z-a.z)*(c.x-a.x))
-    return (cross>0.0001) and (2*cross/(ab*bc*ca)) or 0
+  local function pointAt(index)
+    if state.loopRoute then index=((index-1)%n)+1
+    else index=clamp(index,1,n) end
+    return state.nodes[index]
+  end
+  local function turnMetric(index)
+    local before=pointAt(index-4)
+    local pivot=pointAt(index)
+    local after=pointAt(index+4)
+    local ax,az=pivot.x-before.x,pivot.z-before.z
+    local bx,bz=after.x-pivot.x,after.z-pivot.z
+    local al=math.sqrt(ax*ax+az*az)
+    local bl=math.sqrt(bx*bx+bz*bz)
+    if al<0.5 or bl<0.5 then return 0 end
+    ax,az=ax/al,az/al; bx,bz=bx/bl,bz/bl
+    return math.abs(math.atan2(ax*bz-az*bx,clamp(ax*bx+az*bz,-1,1)))
   end
   for i=1,expected do
     local nextIndex=(i%expected)+1
@@ -296,14 +313,9 @@ ensureTrackMap=function()
     else prevIndex=math.max(1,prevIndex) end
     local left1,right1=boundsAt(i)
     local left2,right2=boundsAt(nextIndex)
-    -- Use the tighter boundary at either end of this segment. The vehicle
-    -- centre must remain one half-width plus clearance inside both edges.
     local safeL=math.max(left1,left2)+half
     local safeR=math.min(right1,right2)-half
-    if safeL>safeR then
-      local mid=(safeL+safeR)*0.5
-      safeL,safeR=mid,mid
-    end
+    if safeL>safeR then local mid=(safeL+safeR)*0.5; safeL,safeR=mid,mid end
     local width=safeR-safeL
     local twoLane=width>=CFG.MIN_LANE_CENTER_GAP
     local leftOffset,rightOffset=0,0
@@ -313,24 +325,80 @@ ensureTrackMap=function()
       if rightOffset-leftOffset<CFG.MIN_LANE_CENTER_GAP then twoLane=false end
     end
     if not twoLane then leftOffset=clamp(0,safeL,safeR); rightOffset=leftOffset end
-    local prev=state.nodes[prevIndex]
-    local cur=state.nodes[i]
-    local nxt=segEnd(i)
+    local prev,cur,nxt=state.nodes[prevIndex],state.nodes[i],segEnd(i)
+    local turn=turnMetric(i)
+    local curved=turn>=0.12
+    local hairpin=turn>=0.85
+    local ab,bc,ca=flatDist(prev,cur),flatDist(cur,nxt),flatDist(nxt,prev)
+    local cross=math.abs((cur.x-prev.x)*(nxt.z-prev.z)-(cur.z-prev.z)*(nxt.x-prev.x))
+    local curvature=(ab>0.05 and bc>0.05 and ca>0.05 and cross>0.0001)
+      and (2*cross/(ab*bc*ca)) or 0
     map[i]={safeL=safeL,safeR=safeR,twoLane=twoLane,
-      leftOffset=leftOffset,rightOffset=rightOffset,
-      curvature=curvature(prev,cur,nxt),length=flatDist(cur,nxt)}
+      leftOffset=leftOffset,rightOffset=rightOffset,curvature=curvature,
+      length=flatDist(cur,nxt),turnAngle=turn,curved=curved,hairpin=hairpin,
+      speedLimit=curved and (70/3.6) or (160/3.6),
+      section=hairpin and "HAIRPIN" or (curved and "CORNER" or "STRAIGHT")}
+  end
+  local runs={}
+  local i=1
+  while i<=expected do
+    if not map[i].curved then
+      local first=i; local length=0
+      while i<=expected and not map[i].curved do
+        length=length+map[i].length; i=i+1
+      end
+      runs[#runs+1]={first=first,last=i-1,length=length}
+    else i=i+1 end
+  end
+  if state.loopRoute and #runs>=2 and runs[1].first==1 and runs[#runs].last==expected then
+    local fr,lr=runs[1],runs[#runs]
+    local limit=(fr.length+lr.length>=250.0) and (320/3.6) or (160/3.6)
+    for k=fr.first,fr.last do map[k].speedLimit=limit end
+    for k=lr.first,lr.last do map[k].speedLimit=limit end
+    fr.merged=true; lr.merged=true
+  end
+  for r=1,#runs do
+    local run=runs[r]
+    if not run.merged then
+      local limit=(run.length>=250.0) and (320/3.6) or (160/3.6)
+      for k=run.first,run.last do map[k].speedLimit=limit end
+    end
   end
   state.trackMap=map
-  writeLog("TRACK_MAP_BUILT segments=%d two_lane=%d single_lane=%d half_width=%.2f clearance=%.2f",
-    expected,(function() local c=0 for i=1,expected do if map[i].twoLane then c=c+1 end end return c end)(),
-    (function() local c=0 for i=1,expected do if not map[i].twoLane then c=c+1 end end return c end)(),
-    CFG.VEHICLE_HALF_WIDTH,CFG.BOUNDARY_CLEARANCE)
+  local two,single,corners,hairpins,shorts,longs=0,0,0,0,0,0
+  for j=1,expected do
+    local e=map[j]
+    if e.twoLane then two=two+1 else single=single+1 end
+    if e.curved then corners=corners+1; if e.hairpin then hairpins=hairpins+1 end
+    elseif e.speedLimit>(200/3.6) then longs=longs+1 else shorts=shorts+1 end
+  end
+  writeLog("TRACK_MAP_BUILT segments=%d two_lane=%d single_lane=%d corners=%d hairpins=%d short_straight=%d long_straight=%d speed_limits_kmh=70/160/320",
+    expected,two,single,corners,hairpins,shorts,longs)
 end
 local function safeBoundsAt(index)
   ensureTrackMap()
   local e=state.trackMap and state.trackMap[index]
   if e then return e.safeL,e.safeR end
   return -1.5,1.5
+end
+local function speedLimitAt(index)
+  ensureTrackMap()
+  local e=state.trackMap and state.trackMap[index]
+  return e and e.speedLimit or (160/3.6)
+end
+local function rebuildTrackMap()
+  state.trackMap=nil
+  if #state.nodes>=2 then
+    ensureTrackMap()
+    state.loaded=true
+    local count=state.trackMap and state.trackMap.count or 0
+    state.status=string.format("Карта рассчитана: %d участков",count)
+    writeLog("TRACK_MAP_RECALCULATED segments=%d",count)
+    flushLog()
+    return count>0
+  end
+  state.status="Сначала запишите или загрузите линию"
+  return false
 end
 local function offsetSafeAhead(startSeg,startT,offset,distance)
   local remaining=math.max(0,distance or 0)
@@ -386,7 +454,7 @@ local function assignLaneRoster(sim)
 end
 local function recordSecondTelemetry(sim)
   local any=false
-  for i=1,sim.carsCount-1 do
+  for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     local p=state.p[i]
     if car and car.isActive and car.isAIControlled and p then
@@ -654,7 +722,6 @@ local function updateBoundsRecording(player)
   if state.loopRoute then idx=((seg-1)%n)+1 end
   if idx>=1 and idx<=n then
     state.boundsL[idx]=newL; state.boundsR[idx]=newR
-    state.trackMap=nil
   end
   if state.recBoundsSeg and seg~=state.recBoundsSeg then
     state.boundsL[state.recBoundsSeg]=newL
@@ -672,6 +739,7 @@ local function applyWidthPreset(preset)
     state.boundsL[i]=-half
     state.boundsR[i]=half
   end
+  if n>=2 then ensureTrackMap() end
   writeLog("WIDTH_PRESET preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
 end
 local function releaseCar(carIndex)
@@ -692,6 +760,7 @@ local function ensureDriver()
     safeBoundsAt=safeBoundsAt, offsetSafeAhead=offsetSafeAhead,
     laneOffset=laneOffsetForCar,
     getVertexCurvature=getVertexCurvature,
+    getSpeedLimit=speedLimitAt,
     teleportHome=teleportHome, log=writeLog,
   })
   driverReady=true
@@ -714,7 +783,7 @@ function script.update(dt)
     -- very first frame. Nothing blocks this. (This was the bug: the spawn
     -- gate used to block driving forever — cars stayed on the stock AI.)
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
-      for i=1,sim.carsCount-1 do
+      for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
         if car and car.isActive and car.isAIControlled then
           local okc,erc=pcall(Driver.update,i,car,dt)
@@ -923,18 +992,28 @@ function windowMain(dt)
     if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
+        state.enabled=false
+        for idx in pairs(state.p) do releaseCar(idx) end
+        state.p={}
         state.nodes={}; state.p={}; state.trackMap=nil; state.boundsL={}; state.boundsR={}
         state.loaded=false; state.recBounds=false
         state.routeDirectionChecked=false
         state.status="Запись линии и границ..."
       else
+        state.loaded=#state.nodes>=2
+        state.trackMap=nil
+        if state.loaded then ensureTrackMap() end
         state.status="Записано точек: "..#state.nodes
       end
     end
     ui.sameLine(0,4)
     if ui.button(state.recBounds and "СТОП запись границ" or "Запись границ",vec2(-0.5,24)) then
       if state.recBounds then
-        state.recBounds=false; state.status="Границы записаны"
+        state.recBounds=false
+        saveBounds()
+        state.trackMap=nil
+        ensureTrackMap()
+        state.status="Границы записаны"
       else
         local player=ac.getCar(0)
         if player then
@@ -951,12 +1030,38 @@ function windowMain(dt)
     if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ",vec2(-0.5,22)) then
       state.loopRoute=not state.loopRoute
       state.p={}
+      state.trackMap=nil
+      if #state.nodes>=2 then ensureTrackMap() end
     end
-    if ui.button("Сохранить",vec2(-0.25,22)) then saveLine() end
+    if ui.button("Рассчитать участки",vec2(-0.33,22)) then rebuildTrackMap() end
     ui.sameLine(0,4)
-    if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
+    if ui.button("Сохранить",vec2(-0.33,22)) then saveLine() end
     ui.sameLine(0,4)
-    if ui.button("Очистить",vec2(-0.25,22)) then
+    if ui.button("Загрузить",vec2(-0.33,22)) then loadLine() end
+    ui.sameLine(0,4)
+    if ui.button(state.enabled and "Остановить ИИ" or "Запустить ИИ",vec2(-0.33,22)) then
+      if state.enabled then
+        state.enabled=false
+        for idx in pairs(state.p) do releaseCar(idx) end
+        state.p={}
+        state.status="Управление ИИ остановлено"
+        writeLog("AI_CONTROL_STOP")
+      elseif #state.nodes>=2 then
+        rebuildTrackMap()
+        state.enabled=true
+        state.spawnDone=false
+        state.spawnStable=0
+        state.spawnLastRoster=""
+        state.p={}
+        state.status="ИИ запущен"
+        writeLog("AI_CONTROL_START")
+      else
+        state.status="Нет записанной линии"
+      end
+      flushLog()
+    end
+    ui.sameLine(0,4)
+    if ui.button("Очистить",vec2(-0.33,22)) then
       state.nodes={}; state.p={}; state.trackMap=nil; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
     end
@@ -996,5 +1101,5 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.9.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.10.0 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
