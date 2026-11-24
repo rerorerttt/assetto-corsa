@@ -263,9 +263,10 @@ local function laneChangePathFits(carIndex,p,targetOffset,speed)
     if not twoLane then return false end
     local sourceSign=p.laneStartOffset<0 and -1 or 1
     local targetSign=targetOffset<0 and -1 or 1
-    local leftCenter,rightCenter=H.laneOffset(carIndex,seg)
-    local destination=(targetSign<0) and leftCenter or rightCenter
-    local source=(sourceSign<0) and leftCenter or rightCenter
+    local assignedCenter=H.laneOffset(carIndex,seg)
+    local laneMagnitude=math.abs(assignedCenter)
+    local destination=targetSign<0 and -laneMagnitude or laneMagnitude
+    local source=sourceSign<0 and -laneMagnitude or laneMagnitude
     local margin=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
     if source<safeMin+margin or source>safeMax-margin or
        destination<safeMin+margin or destination>safeMax-margin then
@@ -312,8 +313,8 @@ local function adjacentLaneIsClear(carIndex,car,p,targetOffset,tx,tz)
         end
         -- Also reserve the entire lateral transition band. This prevents
         -- two cars from committing to intersecting merges simultaneously.
-        local lo=math.min(p.laneOffset,targetOffset)-LANE_HALF_WIDTH
-        local hi=math.max(p.laneOffset,targetOffset)+LANE_HALF_WIDTH
+        local lo=math.min(p.laneOffset,targetOffset)+LANE_HALF_WIDTH
+        local hi=math.max(p.laneOffset,targetOffset)-LANE_HALF_WIDTH
         if lateral>=lo and lateral<=hi and
             longitudinal>=-dynamicRear and longitudinal<=dynamicFront then
           return false,i,longitudinal
