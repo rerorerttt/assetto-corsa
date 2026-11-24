@@ -121,3 +121,17 @@ Added passive telemetry for the human-driven car (car index 0), using the same o
 - Player telemetry is emitted only when a route with at least two points exists and route recording is not actively in progress. It works whether the route was loaded from disk or has just been drawn and stopped.
 
 Validation: verified the input/property names against the repository's bundled CSP Lua SDK (`ac.getControllerSteerValue()`, `ac.StateCar.gas`, `ac.StateCar.brake`, `ac.StateCar.position/velocity/look/speedMs`). Source-level checks confirm player observation is called per update, the row is written through the existing logger, and no player control override is made. No Assetto Corsa/CSP runtime is available here; the next in-game check must confirm one `CAR=0 MODE=PLAYER` row per second with changing inputs and route metrics while the car is driven manually.
+
+
+## 2026-11-24 predictive arc steering and wheel-slip traction control
+
+Implemented on the feature branch; pending in-game validation:
+
+- Replaced the previous blended heading/cross-track point controller with a pure-pursuit curvature controller. The target is sampled from the Catmull–Rom route by arc distance ahead of the car; the controller calculates signed curvature from the target point in the vehicle frame. It does not steer toward the next raw recorded node or treat each node pair as the driving target.
+- Increased the speed-dependent preview from 7 + 0.10 × speed (clamped to 7–18 m) to 12 + 0.35 × speed (clamped to 10–28 m). The sampled spline curvature at 55% of the preview distance is added as a 20% feed-forward term, so steering begins before the heading error becomes large. Normalized steering gain is now 4.5; steering limit and rate limit remain in place.
+- Added a closed-loop traction limiter using the documented CSP ac.StateCar.wheels[0..3].slipRatio and .speedDifference values. Positive longitudinal wheel slip cuts throttle immediately; throttle is restored gradually at 1.25 scale units/second. The configured intervention starts at 0.10 slip and reaches its maximum 88% cut at 0.28 slip.
+- Added a cornering grip reserve: requested throttle is reduced as measured lateral acceleration approaches the planner's configured lateral-acceleration limit. The existing low-speed launch cap remains as a secondary safeguard.
+- The same wheel-slip measurement is included in passive player telemetry for comparison. AI trace rows now append WHEEL_SLIP, TC_SCALE, and STEER_CURV; player rows show measured wheel slip and a neutral traction scale because the app does not control the player.
+- Verified the wheel and steering-related field names against the repository's bundled CSP Lua SDK. Static source assertions confirm the pure-pursuit arc target, curvature feed-forward, wheel-slip read, throttle cut/recovery, telemetry fields, and absence of player control override.
+
+Limitations: this is a feedback controller, not a physical guarantee that no tyre can ever spin. Grip, tyre model, drivetrain layout, surface, and physics update timing vary by car. No Assetto Corsa/CSP runtime test or Lua compiler test has been run in this environment. The next in-game trace must be used to verify steering sign, bend entry/exit, lateral error, wheel-slip response, and whether throttle oscillates. Do not treat this implementation as validated until that test is reviewed.
