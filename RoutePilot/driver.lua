@@ -52,10 +52,11 @@ function Driver.setup(cfg, st, helpers)
 end
 
 local function newPersonality(carIndex)
-  local pace = 0.86 + carRand(carIndex, 1) * 0.28
-  local kmh = clamp(safeNumber(state.speedMax, 170) * pace, 80, 240)
+  -- AI order is deterministic: 1=40 km/h, 2=fast, 3=40 km/h, etc.
+  local slow = (carIndex % 2) == 1
+  local kmh = slow and 40 or clamp(safeNumber(state.speedMax, 170), 80, 240)
   local p = {
-    segIdx = 1, pace = pace, cruiseSpeed = kmh / 3.6,
+    segIdx = 1, slow = slow, cruiseSpeed = kmh / 3.6,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
     previousFx = nil, previousFz = nil,
@@ -63,10 +64,11 @@ local function newPersonality(carIndex)
     lineDist = 0, latOff = 0, targetSpeed = 0,
     slipSeverity = 0, stability = 1,
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
-    retireT = 2.0,
+    laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
   }
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d cruise=%.1fkmh pace=%.2f", carIndex, kmh, pace)
+  H.log("CAR_INIT id=%d lane=LEFT class=%s cruise=%.1fkmh",
+    carIndex, slow and "SLOW" or "FAST", kmh)
 end
 
 local function readVehicleDynamics(car, p, dt)
@@ -155,11 +157,16 @@ local function calculateSteering(car, p, speed, fx, fz)
     CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN, CFG.LOOKAHEAD_MAX)
 
-  local wantLat = 0
-  if p.overtakeSide ~= 0 then
-    wantLat = p.passLat
+  local bl, br = H.boundsAt(seg)
+  local mid = (bl + br) * 0.5
+  local leftCenter = (mid + br) * 0.5
+  local rightCenter = (bl + mid) * 0.5
+  if p.overtakeSide == 0 then
+    p.laneOffset = leftCenter
+  else
+    p.laneOffset = rightCenter
   end
-  wantLat = clampLat(seg, wantLat)
+  local wantLat = clampLat(seg, p.laneOffset or leftCenter)
 
   local tx, tz = linePointAtLateral(seg, t, ahead, wantLat)
 
@@ -195,83 +202,116 @@ local function roomAt(seg, off)
   return off - bl, br - off
 end
 
--- DECISIVE pass: pick the roomier side ONCE and lock it for the whole pass
-local function beginOvertake(carIndex, p, gap)
+-- The road is split into two fixed 3 m lanes when the recorded corridor
+-- is wide enough. Positive lateral offset is the left lane.
+local function laneCenters(seg)
+  local bl, br = H.boundsAt(seg)
+  local mid = (bl + br) * 0.5
+  local left = (mid + br) * 0.5
+  local right = (bl + mid) * 0.5
+  if (mid - bl < 2.7 or br - mid < 2.7) then return nil, nil end
+  return left, right
+end
+
+-- Checks traffic in a specified lane, both ahead and behind. This is used
+-- before entering the passing lane and before returning to the left lane.
+local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
+  local sim = ac.getSim()
+  if not sim then return true end
+  local fx, fz = normalize2(car.look.x, car.look.z)
+  for i = 0, sim.carsCount - 1 do
+    if i ~= carIndex and i ~= ignoreIndex then
+      local other = ac.getCar(i)
+      if other and other.isActive then
+        local seg = select(1, H.findNearestSeg(other.position, state.p[carIndex].segIdx))
+        local otherOffset = H.lateralOf(other.position, seg)
+        if math.abs(otherOffset - laneOffset) < 1.45 then
+          local dx = other.position.x - car.position.x
+          local dz = other.position.z - car.position.z
+          local longitudinal = dx * fx + dz * fz
+          if longitudinal > -14 and longitudinal < 42 then return true end
+        end
+      end
+    end
+  end
+  return false
+end
+
+local function beginOvertake(carIndex, car, p, gap, leaderIndex)
+  local leftCenter, rightCenter = laneCenters(p.segIdx)
+  if not leftCenter or p.slow then return false end
+  if laneOccupied(carIndex, car, rightCenter, nil) then
+    H.log("CAR=%d OVERTAKE_DENIED right_lane_occupied", carIndex)
+    return false
+  end
+  p.overtakeSide = -1
+  p.passLat = rightCenter
+  p.laneOffset = rightCenter
+  p.passTargetIndex = leaderIndex
+  p.passT = 0
   p.followTimer = 0
   p.blockedT = 0
-  p.passT = 0
-  local seg = p.segIdx
-  local roomL, roomR = roomAt(seg, p.blockerOff)
-  local side
-  if roomR >= REQ_SEP and roomL >= REQ_SEP then
-    side = (roomR >= roomL) and 1 or -1
-  elseif roomR >= REQ_SEP then
-    side = 1
-  elseif roomL >= REQ_SEP then
-    side = -1
-  else
-    return false   -- genuinely no room: single file, keep rolling
-  end
-  p.overtakeSide = side
-  p.passLat = clampLat(seg, p.blockerOff + side * REQ_SEP)
-  H.log("CAR=%d OVERTAKE_BEGIN side=%d lane=%.1f gap=%.1f roomL=%.1f roomR=%.1f",
-    carIndex, side, p.passLat, gap or -1, roomL, roomR)
+  H.log("CAR=%d OVERTAKE_BEGIN target=%d from=LEFT to=RIGHT gap=%.1f",
+    carIndex, leaderIndex or -1, gap or -1)
   return true
 end
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  local gap, leaderSpeed, leaderIndex = H.carAheadFull(carIndex, car, 5.0)
-
-  if leaderIndex then
-    local other = ac.getCar(leaderIndex)
-    if other then
-      local bseg = select(1, H.findNearestSeg(other.position, p.segIdx))
-      p.blockerOff = H.lateralOf(other.position, bseg)
-    end
-  end
+  local gap, leaderSpeed, leaderIndex = H.carAheadFull(carIndex, car, 1.8)
+  local leftCenter, rightCenter = laneCenters(p.segIdx)
 
   if p.overtakeSide ~= 0 then
     p.passT = p.passT + dt
-    if not gap then
+    local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
+    local passedClearance = false
+    if target and target.isActive then
+      local fx, fz = normalize2(car.look.x, car.look.z)
+      local dx = car.position.x - target.position.x
+      local dz = car.position.z - target.position.z
+      local passedDistance = dx * fx + dz * fz
+      local ownLength = (car.aabbSize and car.aabbSize.z) or 4.5
+      local otherLength = (target.aabbSize and target.aabbSize.z) or 4.5
+      passedClearance = passedDistance >= ownLength + otherLength
+    else
+      passedClearance = true
+    end
+
+    if passedClearance and leftCenter and
+       not laneOccupied(carIndex, car, leftCenter, p.passTargetIndex) then
       p.overtakeSide = 0
-      H.log("CAR=%d OVERTAKE_END clear", carIndex)
+      p.passTargetIndex = nil
+      p.laneOffset = leftCenter
+      p.passT = 0
+      p.followTimer = 0
+      p.blockedT = 0
+      H.log("CAR=%d OVERTAKE_END return=LEFT clearance=2_car_lengths", carIndex)
       return targetSpeed
     end
-    local laneNow = clampLat(p.segIdx, p.blockerOff + p.overtakeSide * REQ_SEP)
-    local fits = (laneNow - p.blockerOff) * p.overtakeSide >= REQ_SEP - 0.3
-    if p.passT > PASS_TIMEOUT or not fits then
-      p.overtakeSide = 0
-      H.log("CAR=%d OVERTAKE_END %s", carIndex, fits and "timeout" or "closed")
-      return targetSpeed
-    end
-    p.passLat = laneNow
-    local safe = math.sqrt(math.max(0,
-      (leaderSpeed or 0) * (leaderSpeed or 0) +
-      2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - 5)))
-    return math.min(math.max(targetSpeed, (leaderSpeed or 0) + 4), math.max(safe, 6))
+
+    -- Stay in the right lane until the complete rear-bumper clearance exists.
+    p.laneOffset = rightCenter or p.passLat
+    p.passLat = p.laneOffset
+    return targetSpeed
   end
 
-  if not gap then
+  if not leftCenter then return targetSpeed end
+  p.laneOffset = leftCenter
+
+  if not gap or not leaderIndex then
     p.followTimer = 0
     p.blockedT = 0
     return targetSpeed
   end
 
-  -- ANY slower car ahead (including a STANDING PLAYER) is a blocker
-  if (leaderSpeed or 0) < math.min(p.cruiseSpeed, targetSpeed + 3) - 2 then
+  local slower = (leaderSpeed or 0) < p.cruiseSpeed - 1.0
+  if slower then
     p.followTimer = p.followTimer + dt
     local safe = math.sqrt(math.max(0,
       (leaderSpeed or 0) * (leaderSpeed or 0) +
-      2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
-    if p.followTimer > TRIGGER_TIME then
-      if beginOvertake(carIndex, p, gap) then
-        return math.max(targetSpeed, (leaderSpeed or 0) + 4)
-      end
-    end
-    if speed < 3 then
-      p.blockedT = p.blockedT + dt
-      if p.blockedT > FORCE_TIME and beginOvertake(carIndex, p, gap) then
-        return math.max(targetSpeed, 6)
+      2 * CFG.BRAKE_ACCEL * math.max(0, gap - safeNumber(state.followGap, 8))))
+    if not p.slow and p.followTimer >= TRIGGER_TIME then
+      if beginOvertake(carIndex, car, p, gap, leaderIndex) then
+        return targetSpeed
       end
     end
     return math.min(targetSpeed, safe)
@@ -281,10 +321,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.blockedT = 0
   local safe = math.sqrt(math.max(0,
     (leaderSpeed or 0) * (leaderSpeed or 0) +
-    2 * CFG.BRAKE_ACCEL * math.max(0, (gap or 0) - safeNumber(state.followGap, 8))))
-  if (gap or 0) < safeNumber(state.followGap, 8) * 0.5 then
-    return 0
-  end
+    2 * CFG.BRAKE_ACCEL * math.max(0, gap - safeNumber(state.followGap, 8))))
   return math.min(targetSpeed, safe)
 end
 
