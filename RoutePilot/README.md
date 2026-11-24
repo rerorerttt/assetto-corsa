@@ -32,7 +32,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Uses a shared Catmull–Rom route geometry module with an arc-length lookup table, continuity-constrained route projection, signed cross-track feedback, true sampled-curve curvature, and a curvature/braking speed planner.
 - Traffic gaps, lane occupancy, and pass clearance are measured along cumulative route progress, not by projecting onto the car's current heading. The controller logs cross-track error, heading error, signed local route curvature, route progress, lane target, and steering saturation.
 - Controls only steering, throttle and brake. No gear, clutch, reverse or stock AI spline commands are issued.
-- Applies to active AI-controlled cars with index 1 and above.
+- Applies to every active AI-controlled car, including car 0 while Assetto Corsa's native Ctrl+8 autopilot is active. Manual player control remains untouched.
 
 ## Changelog
 
@@ -42,8 +42,9 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 ## Traffic behavior (alternating left-lane / right-lane passing)
 
 - All AI cars are assigned to the left lane initially.
-- AI order alternates deterministically: car index 1 = 40 km/h, index 2 = fast class (uses the existing app speed limit and curve planner), index 3 = 40 km/h, and so on.
-- Only fast-class cars initiate overtakes. They detect a slower car in the left lane, check that the right lane has enough recorded width and is clear ahead/behind, move to the right lane, and remain there until their rear has cleared the target by approximately two car lengths.
+- Every car uses the same configured cruise-speed ceiling and curvature/braking planner; there is no index-based 40 km/h class.
+- Any car can initiate an overtake when its configured pace exceeds the leader's current speed and the passing corridor is safe and clear ahead, behind and alongside.
+- A local passing reservation allows only one nearby car in a convoy to occupy the passing lane at a time; following cars wait for the reservation to clear and then evaluate their own pass.
 - After that clearance, the car checks that the left lane is clear and returns to it. If it is not clear, the car stays in the right lane and retries; it does not cut back across another car.
 - Passing requires a corridor wide enough for two lanes (at least 2.7 m on each side of the corridor midpoint). On narrower routes, cars remain single-file.
 - Lane centers are derived from the saved route bounds. With a symmetric 7 m corridor, the nominal centers are +1.75 m (left) and -1.75 m (right) from the recorded route.
@@ -57,9 +58,9 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Pit handling and automatic recovery from every spin/off-track situation are outside the current traffic implementation; the existing stuck-car rescue remains in place.
 
 
-### Manual driver telemetry test
+### Player driving and native autopilot
 
-When a saved or completed route with at least two points is available, RoutePilot also records the manually driven player car (index 0) to `routepilot_trace.txt` once per second. Its row uses the same fields as AI telemetry and is marked `CAR=0` and `MODE=PLAYER`. Steering is the normalized live controller input; throttle and brake are the actual car input values. The player is observed passively every update frame to keep route progress continuous. No AI controls are applied to the player car. `TARGET_SPEED=-1.00` means not applicable to manual driving.
+When the player drives manually, RoutePilot records car 0 passively as `MODE=PLAYER` and never overrides its controls. When Ctrl+8 activates Assetto Corsa's native AI state for car 0, RoutePilot adopts that car and runs the same route follower, speed planner, lane occupancy checks, passing reservation, overtake and braking logic used by the other AI cars. The trace marks this state as `MODE=AI_AUTOPILOT`; no additional RoutePilot button is added.
 
 ### Predictive arc steering and traction control
 
