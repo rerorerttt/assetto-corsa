@@ -343,7 +343,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.laneOffset=p.passLat
   end
   local laneTarget=clamp(p.laneOffset or leftCenter,safeMin,safeMax)
-  local laneChangeRate=p.emergencyPass and 12.0 or 1.8
+  local laneChangeRate=p.emergencyPass and 2.6 or 1.5
   local maxStep=laneChangeRate*math.max(0,dt or 0)
   local previousOffset=p.laneOffsetCurrent
   if previousOffset==nil then previousOffset=laneTarget end
@@ -396,32 +396,21 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
   local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
-  if p.emergencyPass then
-    steer=steer*CFG.EMERGENCY_STEER_GAIN
-    return clamp(steer,-1.0,1.0)
-  end
+  -- Emergency passing changes the lateral target, never the road-boundary
+  -- authority or steering range. Keep the same hard steering limit in every mode.
   return clamp(steer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
-  if safeNumber(p.emergencySteerBoostT)>0 and p.overtakeSide~=0 then
-    p.emergencySteerBoostT=math.max(0,p.emergencySteerBoostT-dt)
-    -- The sign comes from the selected free corridor, not a tiny or noisy
-    -- pursuit-angle signal at bumper distance.
-    local fullLock=p.overtakeSide>0 and 1.0 or -1.0
-    p.steer=fullLock
-    p.steerFiltered=fullLock
-    return fullLock
-  else
-    p.emergencySteerBoostT=0
-  end
+  -- No blind full-lock pulse: even an urgent pass must follow the selected
+  -- collision-free path and remain under the same steering limit as cruising.
+  p.emergencySteerBoostT=0
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  local steerRate=p.emergencyPass and math.max(CFG.STEER_RATE,CFG.EMERGENCY_STEER_RATE) or CFG.STEER_RATE
+  local steerRate=p.emergencyPass and math.max(CFG.STEER_RATE,5.5) or CFG.STEER_RATE
   local maxChange=steerRate*dt
-  local steerLimit=p.emergencyPass and 1.0 or CFG.STEER_LIMIT
   p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
-    -steerLimit, steerLimit)
+    -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
   return p.steer
 end
 
@@ -724,7 +713,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed)
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex;p.passT=0;p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
-  p.emergencySteerBoostT=(p.emergencyPass and gap<=10.0) and 0.22 or 0
+  p.emergencySteerBoostT=0 -- retained as a telemetry/state field; blind full-lock is disabled
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
