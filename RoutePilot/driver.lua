@@ -63,7 +63,6 @@ function Driver.setup(cfg, st, helpers)
   CFG.BRAKE_ACCEL = safeNumber(CFG.BRAKE_ACCEL, 14.0)
   CFG.VEHICLE_HALF_WIDTH = safeNumber(CFG.VEHICLE_HALF_WIDTH, 1.05)
   CFG.BOUNDARY_CLEARANCE = safeNumber(CFG.BOUNDARY_CLEARANCE, 0.10)
-  CFG.SINGLE_CAR_TEST = CFG.SINGLE_CAR_TEST == true
   state = st
   H = helpers
 end
@@ -643,7 +642,7 @@ function Driver.update(carIndex, car, dt)
   p.retireT = p.retireT + dt
   if p.retireT >= 2.0 then
     p.retireT = 0
-    if carIndex>0 and physics and physics.preventAIFromRetiring then
+    if physics and physics.preventAIFromRetiring then
       pcall(physics.preventAIFromRetiring, carIndex)
     end
   end
@@ -653,8 +652,7 @@ function Driver.update(carIndex, car, dt)
     p.stuck = p.stuck + dt
     if p.stuck >= LANE_RESCUE_TIME then
       p.stuck = 0
-      if carIndex>0 and H.teleportHome then H.teleportHome(carIndex, car) end
-      if carIndex==0 then p.stuck=LANE_RESCUE_TIME-0.5 end
+      if H.teleportHome then H.teleportHome(carIndex, car) end
       return
     end
   else
@@ -669,20 +667,8 @@ function Driver.update(carIndex, car, dt)
   local tx, tz = normalize2(b.x - a.x, b.z - a.z)
 
   local trafficSpeed, front
-  if CFG.SINGLE_CAR_TEST and carIndex==0 then
-    -- One-car test: stay on the chosen recorded lane; no traffic logic,
-    -- no overtaking and no lane switching.
-    p.laneChangeProgress=1.0
-    p.laneStartOffset=p.laneOffset
-    p.laneTargetOffset=p.laneOffset
-    p.trafficGap=math.huge
-    p.trafficBlocked=false
-    p.laneChanges=0
-    trafficSpeed=nil
-  else
-    trafficSpeed,front=updateLaneChange(
-      carIndex,car,p,speed,tx,tz,dt)
-  end
+  trafficSpeed,front=updateLaneChange(
+    carIndex,car,p,speed,tx,tz,dt)
 
   local steer = calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local cornerSpeed = planLocalSpeed(p, speed)
