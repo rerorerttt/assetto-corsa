@@ -622,7 +622,7 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
   if p.routeProgress==nil or leaderLateral==nil then return nil end
   local fx,fz=normalize2(car.look.x,car.look.z)
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
-    math.max(45.0,math.max(0,speed)*1.2+20.0),car,fx,fz)
+    math.max(18.0,math.max(0,speed)*0.8+12.0),car,fx,fz)
   if not safeMin or not safeMax or safeMax-safeMin<1.15 then return nil end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
@@ -798,7 +798,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
       speed>=(leaderSpeed or 0)-4.0
     local urgent=canActuallyPass and gap<=urgentGap
-    local passWindow=clamp(32.0+speed*1.5,45.0,105.0)
+    local passWindow=math.max(45.0,32.0+speed*1.5)
     p.followTimer=p.followTimer+dt
     if canActuallyPass and gap<=passWindow and p.overtakeSide==0 and
        p.overtakeRetryT<=0 then
