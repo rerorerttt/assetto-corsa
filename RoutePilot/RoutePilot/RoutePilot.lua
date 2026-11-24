@@ -198,6 +198,55 @@ local function segEnd(index)
   if state.loopRoute then return state.nodes[(index%count)+1] end
   return state.nodes[index+1]
 end
+local function routeTangentAt(index)
+  local count=#state.nodes
+  local current=state.nodes[index]
+  if not state.loopRoute and (index<=1 or index>=count) then
+    local other=index<=1 and state.nodes[2] or state.nodes[count-1]
+    local dx,dz
+    if index<=1 then dx,dz=other.x-current.x,other.z-current.z
+    else dx,dz=current.x-other.x,current.z-other.z end
+    local length=math.sqrt(dx*dx+dz*dz)
+    if length<0.0001 then return 0,0,0 end
+    return dx/length,(other.y-current.y)/length,dz/length
+  end
+  local previousIndex=index-1
+  local nextIndex=index+1
+  if state.loopRoute then
+    previousIndex=((index-2)%count)+1
+    nextIndex=(index%count)+1
+  end
+  local previous=state.nodes[previousIndex]
+  local following=state.nodes[nextIndex]
+  local before=flatDist(previous,current)
+  local after=flatDist(current,following)
+  local total=before+after
+  if total<0.0001 then return 0,0,0 end
+  return (following.x-previous.x)/total,
+    (following.y-previous.y)/total,
+    (following.z-previous.z)/total
+end
+
+local function interpolateRouteSegment(index,t)
+  local count=#state.nodes
+  local a=state.nodes[index]
+  local nextIndex=state.loopRoute and (index%count)+1 or index+1
+  local b=state.nodes[nextIndex]
+  local length=flatDist(a,b)
+  if length<0.0001 then return vec3(a.x,a.y,a.z) end
+  local ax,ay,az=routeTangentAt(index)
+  local bx,by,bz=routeTangentAt(nextIndex)
+  local t2,t3=t*t,t*t*t
+  local h00=2*t3-3*t2+1
+  local h10=t3-2*t2+t
+  local h01=-2*t3+3*t2
+  local h11=t3-t2
+  return vec3(
+    h00*a.x+h10*length*ax+h01*b.x+h11*length*bx,
+    h00*a.y+h10*length*ay+h01*b.y+h11*length*by,
+    h00*a.z+h10*length*az+h01*b.z+h11*length*bz)
+end
+
 local function walkLine(startSeg,startT,distance)
   local segs=segmentCount()
   if segs<1 then return nil end
@@ -209,7 +258,7 @@ local function walkLine(startSeg,startT,distance)
       local room=length*(1-t)
       if room>=remaining then
         local nt=(length*t+remaining)/length
-        return vec3(lerp(a.x,b.x,nt),lerp(a.y,b.y,nt),lerp(a.z,b.z,nt))
+        return interpolateRouteSegment(seg,clamp(nt,0,1))
       end
       remaining=remaining-room; t=0
     end
