@@ -710,6 +710,16 @@ local function ensureDriver()
   driverReady=true
   return true
 end
+local function preparePlayerRoute()
+  local player=ac.getCar(0)
+  local metrics=buildSpawnRouteMetrics()
+  if player and metrics then
+    alignRouteDirectionToPlayer(metrics,player)
+  end
+  -- Direction alignment can reverse nodes and boundary arrays.
+  state.trackMap=nil
+  ensureTrackMap()
+end
 function script.update(dt)
   if not dt or dt<=0 then return end
   dt=math.min(dt,0.05)
@@ -723,7 +733,7 @@ function script.update(dt)
     if playerAutopilotHotkey:pressed() then
       if not state.playerAutopilot then
         if state.loaded and #state.nodes>=2 and Driver and ensureDriver() then
-          ensureTrackMap()
+          preparePlayerRoute()
           state.playerAutopilot=true
           state.enabled=true
           state.laneAssignments[0]=1 -- fixed LEFT recorded lane for this test
@@ -1009,7 +1019,7 @@ function windowMain(dt)
     if ui.button(autopilotLabel,vec2(220,22)) then
       if not state.playerAutopilot then
         if state.loaded and #state.nodes>=2 and Driver and ensureDriver() then
-          ensureTrackMap()
+          preparePlayerRoute()
           state.playerAutopilot=true
           state.enabled=true
           state.laneAssignments[0]=1
