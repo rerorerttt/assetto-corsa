@@ -105,11 +105,11 @@ local function routeGap(ownProgress, otherProgress)
 end
 
 local function newPersonality(carIndex)
-  -- AI order is deterministic: 1=40 km/h, 2=fast, 3=40 km/h, etc.
-  local slow = (carIndex % 2) == 1
-  local kmh = slow and 40 or clamp(safeNumber(state.speedMax, 170), 80, 240)
+  -- Every AI-controlled car uses the same configured route speed ceiling.
+  -- Actual passing decisions use its current curvature-limited target speed.
+  local kmh = clamp(safeNumber(state.speedMax, 170), 40, 300)
   local p = {
-    segIdx = 1, slow = slow, cruiseSpeed = kmh / 3.6,
+    segIdx = 1, cruiseSpeed = kmh / 3.6,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
     previousFx = nil, previousFz = nil,
@@ -138,8 +138,7 @@ local function newPersonality(carIndex)
     state.spawnHints[carIndex]=nil
   end
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT class=%s cruise=%.1fkmh",
-    carIndex, slow and "SLOW" or "FAST", kmh)
+  H.log("CAR_INIT id=%d lane=LEFT cruise=%.1fkmh",carIndex,kmh)
 end
 
 local function readVehicleDynamics(car, p, dt)
@@ -499,10 +498,37 @@ local function carAheadInLane(carIndex, car, laneOffset)
   return bestGap, bestSpeed, bestIndex
 end
 
+local function passInProgressNearby(carIndex, ownProgress)
+  if ownProgress==nil then return true end
+  for otherIndex,other in pairs(state.p) do
+    if otherIndex~=carIndex and other and other.overtakeSide~=0 and
+       other.routeProgress~=nil then
+      local separation=math.abs(routeGap(ownProgress,other.routeProgress))
+      if separation<110.0 then return true,otherIndex end
+    end
+  end
+  return false,nil
+end
+
+local function safeFollowingSpeed(gap,leaderSpeed)
+  return math.sqrt(math.max(0,
+    leaderSpeed*leaderSpeed+
+    2*CFG.BRAKE_ACCEL*math.max(0,gap-safeNumber(state.followGap,8))))
+end
+
 local function beginOvertake(carIndex,car,p,gap,leaderIndex,speed)
   local leftCenter,rightCenter=laneCenters(p.segIdx)
-  if not leftCenter or p.slow then return false end
+  if not leftCenter then return false end
   if p.overtakeRetryT>0 then return false end
+  local reserved,reservedBy=passInProgressNearby(carIndex,p.routeProgress)
+  if reserved then
+    p.overtakeRetryT=0.35
+    if not p.overtakeDeniedLogged then
+      H.log("CAR=%d OVERTAKE_DENIED nearby_pass_owner=%d",carIndex,reservedBy or -1)
+      p.overtakeDeniedLogged=true
+    end
+    return false
+  end
   local fx,fz=normalize2(car.look.x,car.look.z)
   local passPreview=math.max(40.0,CFG.LOOKAHEAD_MAX)
   local safeMin,safeMax=safeCorridorForPreview(
@@ -555,6 +581,13 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
 
   if p.overtakeSide ~= 0 then
     p.passT = p.passT + dt
+    local passingLaneGap,passingLaneSpeed=carAheadInLane(
+      carIndex,car,rightCenter or p.passLat)
+    local passingLaneSafe=targetSpeed
+    if passingLaneGap and passingLaneSpeed then
+      passingLaneSafe=math.min(targetSpeed,
+        safeFollowingSpeed(passingLaneGap,passingLaneSpeed))
+    end
     local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
     local passedClearance = false
     if target and target.isActive then
@@ -595,21 +628,25 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       p.followTimer = 0
       p.blockedT = 0
       H.log("CAR=%d OVERTAKE_END return=LEFT clearance=2_car_lengths", carIndex)
-      return targetSpeed
+      return passingLaneSafe
     end
 
     -- Stay in the right lane until the complete rear-bumper clearance exists.
     p.laneOffset = rightCenter or p.passLat
     p.passLat = p.laneOffset
-    return targetSpeed
+    return passingLaneSafe
   end
 
   if not leftCenter then
-    if not p.slow and not p.overtakeDisabledLogged then
+    if not p.overtakeDisabledLogged then
       local bl, br = H.boundsAt(p.segIdx)
       H.log("CAR=%d OVERTAKE_DISABLED corridor_too_narrow width=%.2f required=5.40",
         carIndex, br - bl)
       p.overtakeDisabledLogged = true
+    end
+    local singleGap,singleSpeed=carAheadInLane(carIndex,car,0)
+    if singleGap and singleSpeed then
+      return math.min(targetSpeed,safeFollowingSpeed(singleGap,singleSpeed))
     end
     return targetSpeed
   end
@@ -622,44 +659,40 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
 
-  local slower=(leaderSpeed or 0)<p.cruiseSpeed-1.0
-  if slower then
-    local speedAdvantage=p.cruiseSpeed-(leaderSpeed or 0)
-    local targetCar=ac.getCar(leaderIndex)
-    local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
-    local targetLength=math.max(3.0,safeNumber(targetCar and targetCar.aabbSize and targetCar.aabbSize.z,4.5))
-    local estimatedPassDistance=(ownLength+targetLength+8.0)*
-      math.max(speed, (leaderSpeed or 0)+1.0)/math.max(1.0,speedAdvantage)
+  local speedAdvantage=targetSpeed-(leaderSpeed or 0)
+  local targetCar=ac.getCar(leaderIndex)
+  local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
+  local targetLength=math.max(3.0,safeNumber(targetCar and targetCar.aabbSize and targetCar.aabbSize.z,4.5))
+  local estimatedPassDistance=(ownLength+targetLength+8.0)*
+    math.max(targetSpeed,(leaderSpeed or 0)+1.0)/math.max(0.5,speedAdvantage)
+  -- Any car may pass when its safe planned speed is genuinely higher.
+  -- The distance test prevents starting a pass it cannot finish in the
+  -- available forward corridor; no artificial slow/fast vehicle classes.
+  local canActuallyPass=speedAdvantage>=1.5 and estimatedPassDistance<=180.0 and
+    targetSpeed>=(leaderSpeed or 0)+1.0
+  if canActuallyPass then
     local urgentGap=clamp(18.0+speed*0.9,25.0,60.0)
-    local canActuallyPass=speedAdvantage>=5.0 and estimatedPassDistance<=130.0 and
-      speed>=(leaderSpeed or 0)-3.0
-    local urgent=canActuallyPass and gap<=urgentGap
+    local urgent=gap<=urgentGap
     p.followTimer=p.followTimer+dt
-    if not p.slow and urgent and p.overtakeSide==0 then
+    if urgent and p.overtakeSide==0 then
       p.emergencyPassRequest=true
       if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
         return targetSpeed
       end
       p.emergencyPassRequest=false
     end
-    local safe = math.sqrt(math.max(0,
-      (leaderSpeed or 0) * (leaderSpeed or 0) +
-      2 * CFG.BRAKE_ACCEL * math.max(0, gap - safeNumber(state.followGap, 8))))
-    if not p.slow and p.followTimer>=TRIGGER_TIME and p.overtakeRetryT<=0 then
+    if p.followTimer>=TRIGGER_TIME and p.overtakeRetryT<=0 then
       p.emergencyPassRequest=false
       if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
         return targetSpeed
       end
     end
-    return math.min(targetSpeed, safe)
+  else
+    p.followTimer=0
   end
 
-  p.followTimer = 0
-  p.blockedT = 0
-  local safe = math.sqrt(math.max(0,
-    (leaderSpeed or 0) * (leaderSpeed or 0) +
-    2 * CFG.BRAKE_ACCEL * math.max(0, gap - safeNumber(state.followGap, 8))))
-  return math.min(targetSpeed, safe)
+  p.blockedT=0
+  return math.min(targetSpeed,safeFollowingSpeed(gap,leaderSpeed or 0))
 end
 
 local function readWheelSlip(car, p)
@@ -723,7 +756,7 @@ function Driver.update(carIndex, car, dt)
   p.retireT = p.retireT + dt
   if p.retireT >= 2.0 then
     p.retireT = 0
-    if physics and physics.preventAIFromRetiring then
+    if carIndex>0 and physics and physics.preventAIFromRetiring then
       pcall(physics.preventAIFromRetiring, carIndex)
     end
   end
@@ -746,7 +779,7 @@ function Driver.update(carIndex, car, dt)
   calculateStability(p, speed)
   readWheelSlip(car,p)
 
-  if speed < RESCUE_SPEED then
+  if carIndex>0 and speed < RESCUE_SPEED then
     p.stuck = p.stuck + dt
     if p.stuck > RESCUE_TIME then
       p.stuck = 0
