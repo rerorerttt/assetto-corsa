@@ -96,11 +96,8 @@ local function newPersonality(carIndex)
     steer = 0,
     steerFiltered = 0,
     gas = 0,
-    gasOutput = 0,
-    brake = 0,
+unused gas output    brake = 0,
     speedIntegral = 0,
-    wheelSlip = 0,
-    tractionFactor = 1.0,
     wheelSlip = 0,
     tractionFactor = 1.0,
     wheelbase = DEFAULT_WHEELBASE,
@@ -108,7 +105,7 @@ local function newPersonality(carIndex)
     previousFx = nil,
     previousFz = nil,
     stuck = 0,
-    targetSpeed = RIGHT_SPEED,
+    targetSpeed = math.huge,
     lineDist = 0,
     latOff = 0,
     retireT = 2.0
@@ -147,7 +144,7 @@ local function planFastLaneSpeed(p)
     local curvature = H.getVertexCurvature(current)
     if curvature > CFG.CURVE_MIN then
       local cornerSpeed = math.sqrt(CFG.MAX_LATERAL_ACCEL / curvature)
-      cornerSpeed = math.max(8.0, cornerSpeed)
+      cornerSpeed = math.max(5.0, cornerSpeed)
       local brakingSpeed = math.sqrt(cornerSpeed * cornerSpeed +
         2 * CFG.BRAKE_ACCEL * distance)
       if brakingSpeed < target then target = brakingSpeed end
@@ -180,8 +177,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local laneOffset, twoLane = H.laneOffset(carIndex, seg)
   p.laneOffset = laneOffset
   p.twoLane = twoLane
-  p.laneRole = not twoLane and "SINGLE_40" or
-    (laneOffset > 0 and "LEFT_FAST" or "RIGHT_40")
+  p.laneRole = "SINGLE_FAST"
 
   local lookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE, LOOKAHEAD_MAX)
@@ -209,9 +205,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local targetSteer = clamp(roadWheelAngle / ROAD_WHEEL_LOCK,
     -STEER_LIMIT, STEER_LIMIT)
 
-  if math.abs(angle) < 0.0015 and math.abs(lateralError) < 0.04 then
-    targetSteer = 0
-  end
+  if math.abs(angle) < 0.0015 then targetSteer = 0 end
 
   local alpha = clamp(dt / (STEER_FILTER_TIME + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, targetSteer, alpha)
@@ -224,9 +218,8 @@ end
 local function calculateSpeedControls(p, speed, targetSpeed, dt)
   local error = targetSpeed - speed
 
-  -- PI speed hold: stable 40 km/h in the right lane and predictable
-  -- acceleration/braking for the fast lane. Anti-windup prevents delayed
-  -- braking after long full-throttle sections.
+  -- PI speed tracking for the upcoming corner target. Anti-windup prevents
+  -- delayed braking after long full-throttle sections.
   local drive = error * 0.18 + p.speedIntegral * 0.012
   if (drive > -1 and drive < 1) or (drive >= 1 and error < 0) or
       (drive <= -1 and error > 0) then
