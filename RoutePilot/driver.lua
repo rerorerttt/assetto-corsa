@@ -22,6 +22,7 @@ local STEER_FILTER_TIME = 0.16
 local STEER_RATE = 1.15
 local LOOKAHEAD_BASE = 18.0
 local LOOKAHEAD_SPEED = 0.55
+local LOOKAHEAD_MIN = 10.0
 local LOOKAHEAD_MAX = 30.0
 local LANE_RESCUE_SPEED = 1.5
 local LANE_RESCUE_TIME = 5.0
@@ -177,7 +178,9 @@ local function newPersonality(carIndex, car)
     laneChanges = 0,
     boundaryError = 0,
     boundaryViolation = false,
-    boundaryHard = false
+    boundaryHard = false,
+    boundaryPredictBlocked = false,
+    boundaryRiskDistance = math.huge
   }
   state.p[carIndex] = p
   H.log("CAR_INIT id=%d lane=%s", carIndex, p.laneRole)
@@ -535,10 +538,32 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.boundaryHard=p.latOff<left+BOUNDARY_HARD_MARGIN or
     p.latOff>right-BOUNDARY_HARD_MARGIN
 
-  -- Build the preview target from the recorded route. The previous revision
-  -- called a non-existent global makeTarget(), causing DRIVER_ERROR on every
-  -- AI update; the main loop then released the controls and the car never
-  -- entered the RoutePilot controller.
+  local function laneBoundsAt(routeSeg)
+    local lo,hi
+    if H.safeBoundsAt then
+      lo,hi=H.safeBoundsAt(routeSeg)
+    else
+      local bl,br=H.boundsAt(routeSeg)
+      lo=bl+vehicleMargin
+      hi=br-vehicleMargin
+    end
+    local _,hasTwoLanes=H.laneOffset(carIndex,routeSeg)
+    if hasTwoLanes and p.laneChangeProgress>=1.0 then
+      if p.laneRole=="LEFT" then
+        hi=math.min(hi,-vehicleMargin)
+      elseif p.laneRole=="RIGHT" then
+        lo=math.max(lo,vehicleMargin)
+      end
+    end
+    if lo>hi then
+      local mid=(lo+hi)*0.5
+      return mid,mid
+    end
+    return lo,hi
+  end
+
+  -- Interpolate a smooth local tangent around the preview point. The recorded
+  -- samples remain the reference; the controller does not chase individual nodes.
   local function makeTarget(distanceAhead)
     if not H.walkLine then return nil,nil end
     local point,targetSeg=H.walkLine(p.segIdx,p.segT or 0,distanceAhead)
@@ -548,6 +573,12 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     local b=H.segEnd(targetSeg)
     if not a or not b then return nil,nil end
     local tx,tz=normalize2(b.x-a.x,b.z-a.z)
+    local before=H.walkLine(p.segIdx,p.segT or 0,math.max(0,distanceAhead-1.5))
+    local after=H.walkLine(p.segIdx,p.segT or 0,distanceAhead+1.5)
+    if before and after then
+      local sx,sz=normalize2(after.x-before.x,after.z-before.z)
+      if sx*sx+sz*sz>0.5 then tx,tz=sx,sz end
+    end
 
     local targetOffset=p.laneOffset or 0
     local _,targetTwoLane=H.laneOffset(carIndex,targetSeg)
@@ -557,59 +588,119 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
       targetOffset=select(1,laneCenterForRole(carIndex,targetSeg,p.laneRole))
     end
 
-    local safeMin,safeMax
-    if H.safeBoundsAt then
-      safeMin,safeMax=H.safeBoundsAt(targetSeg)
-    else
-      local l,r=H.boundsAt(targetSeg)
-      safeMin,safeMax=l+CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE,
-        r-CFG.VEHICLE_HALF_WIDTH-CFG.BOUNDARY_CLEARANCE
-    end
-    if targetTwoLane and p.laneChangeProgress>=1.0 then
-      local margin=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
-      if p.laneRole=="LEFT" then
-        safeMax=math.min(safeMax,-margin)
-      else
-        safeMin=math.max(safeMin,margin)
-      end
-    end
-    targetOffset=clamp(targetOffset,safeMin,safeMax)
-
-    -- lateralOf() uses the route's left normal (-tangent.z, tangent.x).
+    local targetMin,targetMax=laneBoundsAt(targetSeg)
+    targetOffset=clamp(targetOffset,targetMin,targetMax)
+    -- Offset uses the smoothed tangent, avoiding a normal-vector jump at nodes.
     return point.x-tz*targetOffset,point.z+tx*targetOffset
   end
 
-  -- Stable speed-adaptive preview, sampled along the polyline rather than
-  -- aiming at an undefined or straight-line world-space target.
-  local lookahead=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
+  -- Predict the single constant-curvature arc implied by this Pure Pursuit
+  -- target. Reject a preview if that arc would leave the saved safe corridor.
+  -- This is a guard around one smooth path, not a multi-path trajectory planner.
+  local function predictedPathFits(targetX,targetZ,preview)
+    local dx,dz=targetX-car.position.x,targetZ-car.position.z
+    local distance=math.sqrt(dx*dx+dz*dz)
+    if distance<0.001 then return false,0 end
+    local angle=signedAngle(fx,fz,dx/distance,dz/distance)
+    local curvature=2.0*math.sin(angle)/distance
+    local startMin,startMax=laneBoundsAt(seg)
+    local startError=0
+    if p.latOff<startMin then startError=startMin-p.latOff
+    elseif p.latOff>startMax then startError=p.latOff-startMax end
+    local previousError=startError
+    local firstUnsafe=distance
+    local sample=2.0
+    while sample<=distance do
+      local routePoint,routeSeg=H.walkLine(p.segIdx,p.segT or 0,sample)
+      if not routePoint or not routeSeg then return false,sample end
+      local before=H.walkLine(p.segIdx,p.segT or 0,math.max(0,sample-1.0))
+      local after=H.walkLine(p.segIdx,p.segT or 0,sample+1.0)
+      if not before or not after then return false,sample end
+      local rtx,rtz=normalize2(after.x-before.x,after.z-before.z)
+      local px,pz
+      if math.abs(curvature)<0.0001 then
+        px=car.position.x+fx*sample
+        pz=car.position.z+fz*sample
+      else
+        local turn=curvature*sample
+        local forward=math.sin(turn)/curvature
+        local lateral=(1.0-math.cos(turn))/curvature
+        px=car.position.x+fx*forward-fz*lateral
+        pz=car.position.z+fz*forward+fx*lateral
+      end
+      local routeLateral=(px-routePoint.x)*-rtz+(pz-routePoint.z)*rtx
+      local lo,hi=laneBoundsAt(routeSeg)
+      local error=0
+      if routeLateral<lo then error=lo-routeLateral
+      elseif routeLateral>hi then error=routeLateral-hi end
+      if startError<=0 then
+        if error>0.08 then
+          firstUnsafe=sample
+          return false,firstUnsafe
+        end
+      else
+        -- If activation starts outside the corridor, only allow a preview
+        -- which moves monotonically back toward the safe region.
+        if error>previousError+0.10 then
+          firstUnsafe=sample
+          return false,firstUnsafe
+        end
+        previousError=error
+      end
+      sample=sample+2.0
+    end
+    if startError>0 and previousError>=startError-0.10 then
+      return false,firstUnsafe
+    end
+    return true,distance
+  end
+
+  local nominal=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE,LOOKAHEAD_MAX)
-  local targetX,targetZ=makeTarget(lookahead)
-  if not targetX then
-    lookahead=LOOKAHEAD_BASE
-    targetX,targetZ=makeTarget(lookahead)
+  -- Expand preview gradually after a corner; shorten immediately when the
+  -- predicted arc approaches a boundary. This avoids frame-to-frame hunting.
+  local previousPreview=p.previewDistance or nominal
+  local candidate=math.min(nominal,previousPreview+1.5)
+  local chosenX,chosenZ,lookahead=nil,nil,nil
+  local riskDistance=LOOKAHEAD_MIN
+  while candidate>=LOOKAHEAD_MIN do
+    local tx,tz=makeTarget(candidate)
+    if tx and tz then
+      local fits,badDistance=predictedPathFits(tx,tz,candidate)
+      if fits then
+        chosenX,chosenZ,lookahead=tx,tz,candidate
+        break
+      end
+      riskDistance=badDistance or riskDistance
+    end
+    candidate=candidate-1.5
   end
-  p.previewDistance=lookahead
-  if not targetX or not targetZ then return p.steer end
-
-  local dx = targetX - car.position.x
-  local dz = targetZ - car.position.z
-  local distance = math.sqrt(dx * dx + dz * dz)
-  if distance < 0.001 then return p.steer end
-
-  local angle = signedAngle(fx, fz, dx / distance, dz / distance)
-  -- Pure pursuit heading correction, matching the original working
-  -- controller's angle sign and avoiding a second lateral-error loop.
-  local targetSteer = clamp(angle * STEER_GAIN, -STEER_LIMIT, STEER_LIMIT)
-
-  if math.abs(angle) < 0.0015 then
-    targetSteer = 0
+  if not chosenX then
+    lookahead=LOOKAHEAD_MIN
+    chosenX,chosenZ=makeTarget(lookahead)
+    p.boundaryPredictBlocked=true
+    p.boundaryRiskDistance=riskDistance
+  else
+    p.boundaryPredictBlocked=false
+    p.boundaryRiskDistance=math.huge
   end
+  p.previewDistance=lookahead or LOOKAHEAD_MIN
+  if not chosenX or not chosenZ then return p.steer end
 
-  local alpha = clamp(dt / (STEER_FILTER_TIME + dt), 0, 1)
-  p.steerFiltered = lerp(p.steerFiltered, targetSteer, alpha)
-  local maxChange = STEER_RATE * dt
-  p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer,
-    -maxChange, maxChange), -STEER_LIMIT, STEER_LIMIT)
+  local dx=chosenX-car.position.x
+  local dz=chosenZ-car.position.z
+  local distance=math.sqrt(dx*dx+dz*dz)
+  if distance<0.001 then return p.steer end
+
+  local angle=signedAngle(fx,fz,dx/distance,dz/distance)
+  local targetSteer=clamp(angle*STEER_GAIN,-STEER_LIMIT,STEER_LIMIT)
+  if math.abs(angle)<0.0015 then targetSteer=0 end
+
+  local alpha=clamp(dt/(STEER_FILTER_TIME+dt),0,1)
+  p.steerFiltered=lerp(p.steerFiltered,targetSteer,alpha)
+  local maxChange=STEER_RATE*dt
+  p.steer=clamp(p.steer+clamp(p.steerFiltered-p.steer,
+    -maxChange,maxChange),-STEER_LIMIT,STEER_LIMIT)
   return p.steer
 end
 
@@ -675,10 +766,15 @@ function Driver.update(carIndex, car, dt)
     targetSpeed = targetSpeed and math.min(targetSpeed, trafficSpeed) or trafficSpeed
   end
 
+  if p.boundaryPredictBlocked then
+    local brakingRoom=math.max(0,(p.boundaryRiskDistance or 0)-2.0)
+    local boundarySpeed=math.sqrt(2.0*CFG.BRAKE_ACCEL*brakingRoom)
+    targetSpeed=math.min(targetSpeed or boundarySpeed,boundarySpeed)
+  end
   if p.boundaryHard then
-    targetSpeed = math.min(targetSpeed or 10.0, 10.0)
+    targetSpeed=math.min(targetSpeed or 10.0,10.0)
   elseif p.boundaryViolation then
-    targetSpeed = math.min(targetSpeed or 22.0, 22.0)
+    targetSpeed=math.min(targetSpeed or 22.0,22.0)
   end
 
   if targetSpeed then
@@ -719,13 +815,13 @@ function Driver.telemetryLine(i, car, p)
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
   local gapText=p.trafficGap==math.huge and "INF" or string.format("%.2f",p.trafficGap)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s PREVIEW=%.1f SECTION=LOCAL STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_VIOLATION=%s LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s PREVIEW=%.1f SECTION=LOCAL STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_VIOLATION=%s LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s PATH_GUARD_BLOCKED=%s PATH_RISK=%.1f BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), targetText, p.previewDistance or 0, p.steer, p.gas, p.brake,
     p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx,
     p.latOff, p.laneOffset, p.laneTargetOffset or p.laneOffset, p.laneChangeProgress or 1,
     tostring(p.laneViolation), p.laneChanges or 0, gapText, tostring(p.trafficBlocked),
-    p.boundaryError or 0, tostring(p.boundaryHard), left, right)
+    p.boundaryError or 0, tostring(p.boundaryHard), tostring(p.boundaryPredictBlocked), p.boundaryRiskDistance or -1, left, right)
 end
 
 return Driver
