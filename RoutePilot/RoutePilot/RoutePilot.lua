@@ -644,9 +644,8 @@ function script.update(dt)
     if state.enabled and state.loaded and #state.nodes>=2 then
       trySpawnTeleport(sim,dt)
     end
-    -- INSTANT ADOPTION + DRIVING: every active AI car is driven from the
-    -- very first frame. Nothing blocks this. (This was the bug: the spawn
-    -- gate used to block driving forever — cars stayed on the stock AI.)
+    -- Single-car experiment: only the first active AI is adopted. Other AI
+    -- cars remain under the game's original controller.
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
       local primaryIndex=nil
       for i=1,sim.carsCount-1 do
