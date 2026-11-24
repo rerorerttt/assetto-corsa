@@ -478,10 +478,14 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
         end
 
         local longitudinal,actualLateral
-        if progress~=nil then
+        local otherFx,otherFz=normalize2(other.look.x,other.look.z)
+        local directionDot=otherFx*ownSample.tx+otherFz*ownSample.tz
+        if progress~=nil and directionDot>=-0.25 then
           longitudinal=routeGap(ownProgress,progress)
           actualLateral=lateral
         else
+          -- Opposing-direction traffic on a shared route is measured in the
+          -- local forward frame, not by same-direction loop progress.
           local dx=safeNumber(other.position.x)-ownSample.x
           local dz=safeNumber(other.position.z)-ownSample.z
           if dx*dx+dz*dz<=120.0*120.0 then
@@ -564,12 +568,14 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
           if otherSeg then otherState.segIdx=otherSeg end
         end
         local gap,actualLateral
-        if progress~=nil then
+        local otherFx,otherFz=normalize2(other.look.x,other.look.z)
+        local directionDot=otherFx*ownSample.tx+otherFz*ownSample.tz
+        if progress~=nil and directionDot>=-0.25 then
           gap=routeGap(ownProgress,progress);actualLateral=lateral
         else
           local dx=safeNumber(other.position.x)-ownSample.x
           local dz=safeNumber(other.position.z)-ownSample.z
-          if dx*dx+dz*dz<=100.0*100.0 then
+          if dx*dx+dz*dz<=120.0*120.0 then
             gap,actualLateral=relativeToRoute(other.position,ownSample)
           end
         end
@@ -723,13 +729,9 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
         if targetSeg then targetState.segIdx = targetSeg end
       end
       local currentProgress = ownProgress or routeProjection(car, p.segIdx, false, p.routeProgress, speed, dt)
-      local passedDistance=(currentProgress and targetProgress)
-        and routeGap(targetProgress,currentProgress) or -math.huge
-      if passedDistance==-math.huge then
-        local ownSample=Geometry.sample(state.routeGeometry,currentProgress or ownProgress)
-        local targetLongitudinal=relativeToRoute(target.position,ownSample)
-        if targetLongitudinal~=nil then passedDistance=-targetLongitudinal end
-      end
+      local ownSample=Geometry.sample(state.routeGeometry,currentProgress or ownProgress)
+      local targetLongitudinal=relativeToRoute(target.position,ownSample)
+      local passedDistance=targetLongitudinal~=nil and -targetLongitudinal or -math.huge
       local ownLength = (car.aabbSize and car.aabbSize.z) or 4.5
       local otherLength = (target.aabbSize and target.aabbSize.z) or 4.5
       passedClearance = passedDistance >= ownLength + otherLength
