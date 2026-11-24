@@ -152,7 +152,7 @@ local function linePointAtLateral(seg, t, ahead, lat)
   return pt.x - lz * lat, pt.z + lx * lat
 end
 
-local function calculateSteering(car, p, speed, fx, fz)
+local function calculateSteering(car, p, speed, fx, fz, dt)
   local seg, t, lineDist = H.findNearestSeg(car.position, p.segIdx)
   p.segIdx = seg
   p.lineDist = lineDist
@@ -174,7 +174,14 @@ local function calculateSteering(car, p, speed, fx, fz)
   else
     p.laneOffset = rightCenter
   end
-  local wantLat = clampLat(seg, p.laneOffset or leftCenter)
+  -- Ramp lateral target instead of instantly snapping from one lane center
+  -- to the other. This prevents a step command from producing a steering kick.
+  local laneTarget = clampLat(seg, p.laneOffset or leftCenter)
+  p.laneOffsetCurrent = p.laneOffsetCurrent or laneTarget
+  local maxLateralStep = 1.5 * math.max(0, dt or 0)
+  p.laneOffsetCurrent = p.laneOffsetCurrent +
+    clamp(laneTarget - p.laneOffsetCurrent, -maxLateralStep, maxLateralStep)
+  local wantLat = p.laneOffsetCurrent
 
   local tx, tz = linePointAtLateral(seg, t, ahead, wantLat)
 
@@ -380,7 +387,7 @@ function Driver.update(carIndex, car, dt)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.targetSpeed = targetSpeed
 
-  local steerTarget = calculateSteering(car, p, speed, fx, fz)
+  local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
   local steer = filterSteering(p, steerTarget, dt)
 
   calculateThrottle(p, speed, targetSpeed)
