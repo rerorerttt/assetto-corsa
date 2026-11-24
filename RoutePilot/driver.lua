@@ -404,9 +404,11 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 end
 
 local function filterSteering(p, target, dt)
-  if safeNumber(p.emergencySteerBoostT)>0 and math.abs(target)>0.02 then
+  if safeNumber(p.emergencySteerBoostT)>0 and p.overtakeSide~=0 then
     p.emergencySteerBoostT=math.max(0,p.emergencySteerBoostT-dt)
-    local fullLock=target>0 and 1.0 or -1.0
+    -- The sign comes from the selected free corridor, not a tiny or noisy
+    -- pursuit-angle signal at bumper distance.
+    local fullLock=p.overtakeSide>0 and 1.0 or -1.0
     p.steer=fullLock
     p.steerFiltered=fullLock
     return fullLock
