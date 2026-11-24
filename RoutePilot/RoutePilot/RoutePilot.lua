@@ -1,8 +1,7 @@
 -- RoutePilot.lua — v0.9.1 (CSP 0.3.2-preview2)
 -- Existing route recording, boundary recording, save/load, map and world-line UI
--- are retained. AI traffic uses two independent virtual lanes:
--- first active AI: left/fast; second: right/40 km/h; then alternates.
--- No car-following, yielding, overtaking decisions or inter-car speed control.
+-- are retained. This experimental branch controls only the first active AI car
+-- on the recorded centreline; every other AI remains under the game's AI.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
@@ -203,12 +202,15 @@ local function routeTangentAt(index)
   local current=state.nodes[index]
   if not state.loopRoute and (index<=1 or index>=count) then
     local other=index<=1 and state.nodes[2] or state.nodes[count-1]
-    local dx,dz
-    if index<=1 then dx,dz=other.x-current.x,other.z-current.z
-    else dx,dz=current.x-other.x,current.z-other.z end
+    local dx,dy,dz
+    if index<=1 then
+      dx,dy,dz=other.x-current.x,other.y-current.y,other.z-current.z
+    else
+      dx,dy,dz=current.x-other.x,current.y-other.y,current.z-other.z
+    end
     local length=math.sqrt(dx*dx+dz*dz)
     if length<0.0001 then return 0,0,0 end
-    return dx/length,(other.y-current.y)/length,dz/length
+    return dx/length,dy/length,dz/length
   end
   local previousIndex=index-1
   local nextIndex=index+1
