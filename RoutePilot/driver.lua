@@ -63,6 +63,7 @@ function Driver.setup(cfg, st, helpers)
   CFG.BRAKE_ACCEL = safeNumber(CFG.BRAKE_ACCEL, 14.0)
   CFG.VEHICLE_HALF_WIDTH = safeNumber(CFG.VEHICLE_HALF_WIDTH, 1.05)
   CFG.BOUNDARY_CLEARANCE = safeNumber(CFG.BOUNDARY_CLEARANCE, 0.10)
+  CFG.SINGLE_CAR_TEST = CFG.SINGLE_CAR_TEST == true
   state = st
   H = helpers
 end
@@ -562,7 +563,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
       local lateral=(chordX-point.x)*-tangentZ+(chordZ-point.z)*tangentX
       local minOffset,maxOffset=H.safeBoundsAt(pointSeg)
       local _,sampleTwoLane=H.laneOffset(carIndex,pointSeg)
-      if sampleTwoLane and p.laneChangeProgress>=1.0 and
+      if not CFG.SINGLE_CAR_TEST and sampleTwoLane and p.laneChangeProgress>=1.0 and
           not p.boundaryViolation and
           (p.laneRole=="LEFT" or p.laneRole=="RIGHT") then
         if p.laneRole=="LEFT" then
@@ -667,8 +668,21 @@ function Driver.update(carIndex, car, dt)
   local b = H.segEnd(seg)
   local tx, tz = normalize2(b.x - a.x, b.z - a.z)
 
-  local trafficSpeed, front = updateLaneChange(
-    carIndex, car, p, speed, tx, tz, dt)
+  local trafficSpeed, front
+  if CFG.SINGLE_CAR_TEST and carIndex==0 then
+    -- One-car test: stay on the chosen recorded lane; no traffic logic,
+    -- no overtaking and no lane switching.
+    p.laneChangeProgress=1.0
+    p.laneStartOffset=p.laneOffset
+    p.laneTargetOffset=p.laneOffset
+    p.trafficGap=math.huge
+    p.trafficBlocked=false
+    p.laneChanges=0
+    trafficSpeed=nil
+  else
+    trafficSpeed,front=updateLaneChange(
+      carIndex,car,p,speed,tx,tz,dt)
+  end
 
   local steer = calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local cornerSpeed = planLocalSpeed(p, speed)
