@@ -47,7 +47,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Passing reservations are local to the selected offset and limited to nearby time/space conflicts, so a physically separate free corridor remains available. Cars entering the same narrow corridor are serialized by active reservations.
 - The overtaking car stays on its selected offset until the target's rear is cleared, then returns to its original offset only after that offset is clear.
 - When the current lane is blocked and no passing offset is safe, following speed is limited by the leader in the car's current corridor only. A slow vehicle in a separate lane cannot globally throttle traffic using another free corridor.
-- Urgent passes increase lateral path transition speed to 10 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (8 m or less), the controller adds a brief 80 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
+- Urgent passes increase lateral path transition speed to 12 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (8 m or less), the controller adds a 180 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
 - Stuck detection is not reset merely because another car exists ahead. After ten seconds without movement, the app attempts a respawn only at a point whose actual spawn position is clear of other vehicles.
 
 ## Experimental 0.9.1 changes (2026-11-25)
