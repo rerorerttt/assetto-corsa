@@ -67,16 +67,26 @@ function Geometry.build(nodes, loopRoute, subdivisions)
     end
   end
   if total<1 then return nil end
-  for i=1,#samples do
-    local a=samples[math.max(1,i-1)]
-    local b=samples[math.min(#samples,i+1)]
-    local ds=b.s-a.s
-    if loopRoute and (i==1 or i==#samples) then
+  if loopRoute then
+    for i=1,#samples-1 do
+      local prev=i==1 and samples[#samples-1] or samples[i-1]
+      local nxt=samples[i+1]
+      local prevS=i==1 and (prev.s-total) or prev.s
+      local ds=nxt.s-prevS
+      if ds>1e-5 then
+        samples[i].k=angle(prev.tx,prev.tz,nxt.tx,nxt.tz)/ds
+      end
+    end
+    samples[#samples].k=samples[1].k
+  else
+    for i=1,#samples do
       local prev=samples[math.max(1,i-1)]
       local nxt=samples[math.min(#samples,i+1)]
-      ds=nxt.s-prev.s
+      local ds=nxt.s-prev.s
+      if ds>1e-5 then
+        samples[i].k=angle(prev.tx,prev.tz,nxt.tx,nxt.tz)/ds
+      end
     end
-    if ds>1e-5 then samples[i].k=angle(a.tx,a.tz,b.tx,b.tz)/ds end
   end
   return {samples=samples,total=total,loop=loopRoute==true,nodeCount=count,steps=steps}
 end
