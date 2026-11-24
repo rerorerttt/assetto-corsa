@@ -655,10 +655,10 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       local currentProgress = ownProgress or routeProjection(car, p.segIdx, false, p.routeProgress, speed, dt)
       local passedDistance=(currentProgress and targetProgress)
         and routeGap(targetProgress,currentProgress) or -math.huge
-      if passedDistance==-math.huge and p.passTargetIndex==0 then
+      if passedDistance==-math.huge then
         local ownSample=Geometry.sample(state.routeGeometry,currentProgress or ownProgress)
-        local playerLongitudinal=relativeToRoute(target.position,ownSample)
-        if playerLongitudinal~=nil then passedDistance=-playerLongitudinal end
+        local targetLongitudinal=relativeToRoute(target.position,ownSample)
+        if targetLongitudinal~=nil then passedDistance=-targetLongitudinal end
       end
       local ownLength = (car.aabbSize and car.aabbSize.z) or 4.5
       local otherLength = (target.aabbSize and target.aabbSize.z) or 4.5
