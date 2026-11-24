@@ -204,4 +204,4 @@ Implemented on this experimental branch:
 
 Validation performed: fetched the updated file from GitHub after each write; confirmed all expected urgent-pass/player-fallback/clearance code is present; a structural Lua block and delimiter scan reports balanced blocks and delimiters. This is not a Lua compiler test. No Assetto Corsa/CSP runtime test has been performed. The new behavior remains experimental and must be checked in-game for steering response, lane clearance, player avoidance, and return-to-lane behavior. The trace's player was stationary and outside valid route projection, so it does not itself demonstrate that an AI successfully avoided a moving player.
 
-Latest code commit: 4b37ec06f16e43bc7a8326bcbc6e817cc025301f. The best-known-good baseline, PR #6, and main remain untouched.
+Latest code commit: 34a2430d11481a9c6431490778667610f7a94f0d. The urgent trigger now uses a 25–60 m speed-dependent lead window, requires at least 5 m/s potential speed advantage, and rejects passes whose estimated relative-distance-to-clear exceeds 130 m. The best-known-good baseline, PR #6, and main remain untouched.
