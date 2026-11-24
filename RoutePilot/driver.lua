@@ -309,8 +309,16 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
         end
         if progress ~= nil then
           local longitudinal = routeGap(ownProgress, progress)
-          if math.abs(lateral - laneOffset) < 1.35 and
-             longitudinal > -18 and longitudinal < 48 then
+          local targetOffset = otherState and
+            (otherState.laneOffset or otherState.laneOffsetCurrent) or lateral
+          local reserved = math.abs(targetOffset - laneOffset) < 1.35
+          local actual = math.abs(lateral - laneOffset) < 1.35
+          local otherSpeed = math.max(0, safeNumber(other.speedMs))
+          local ownSpeed = math.max(0, safeNumber(car.speedMs))
+          local rearWindow = math.max(18, (ownSpeed + otherSpeed) * 0.375 + 8)
+          local frontWindow = math.max(48, math.max(ownSpeed, otherSpeed) * 1.2 + 10)
+          if (actual or reserved) and
+             longitudinal > -rearWindow and longitudinal < frontWindow then
             return true
           end
         end
@@ -343,7 +351,11 @@ local function carAheadInLane(carIndex, car, laneOffset)
           otherState.routeLocked = true
           if otherSeg then otherState.segIdx = otherSeg end
         end
-        if progress ~= nil and math.abs(lateral - laneOffset) < 1.35 then
+        local targetOffset = otherState and
+          (otherState.laneOffset or otherState.laneOffsetCurrent) or lateral
+        if progress ~= nil and
+           (math.abs(lateral - laneOffset) < 1.35 or
+            math.abs(targetOffset - laneOffset) < 1.35) then
           local gap = routeGap(ownProgress, progress)
           if gap > 0.5 and gap < 90 and (not bestGap or gap < bestGap) then
             bestGap = gap
