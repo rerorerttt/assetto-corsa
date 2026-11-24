@@ -350,7 +350,9 @@ local function carAheadFull(carIndex,car,lateralWidth)
 end
 local function recordSecondTelemetry(sim)
   local any=false
-  for i=1,sim.carsCount-1 do
+  -- Log every car currently under AI control, including the player when
+  -- the game's native Ctrl+8 autopilot has taken control of car index 0.
+  for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     local p=state.p[i]
     if car and car.isActive and car.isAIControlled and p then
@@ -361,7 +363,9 @@ local function recordSecondTelemetry(sim)
 
   local player=ac.getCar(0)
   local playerTelemetry=state.playerTelemetry
-  if #state.nodes>=2 and not state.recLine and player and player.isActive and playerTelemetry and Driver and Driver.telemetryLine then
+  if player and player.isActive and not player.isAIControlled and
+     #state.nodes>=2 and not state.recLine and playerTelemetry and
+     Driver and Driver.telemetryLine then
     writeLog(Driver.telemetryLine(0,player,playerTelemetry))
     any=true
   end
@@ -644,10 +648,17 @@ function script.update(dt)
     if state.enabled and state.loaded and #state.nodes>=2 then
       trySpawnTeleport(sim,dt)
     end
-    -- Initialize shared route geometry for passive player telemetry too.
-    -- The player is observed only: no overrideCarControls() call is made for car 0.
+    -- Observe the player only while driving manually. When Ctrl+8 enables
+    -- Assetto Corsa's native AI takeover, the same player car is driven by
+    -- RoutePilot below, with no extra key binding or UI control.
+    local playerAI=player and player.isActive and player.isAIControlled or false
+    if playerAI~=state.playerAutopilot then
+      state.playerAutopilot=playerAI
+      writeLog("PLAYER_AUTOPILOT %s",playerAI and "ON" or "OFF")
+      flushLog()
+    end
     if #state.nodes>=2 and not state.recLine and Driver and ensureDriver() then
-      if player and player.isActive and Driver.observePlayer then
+      if player and player.isActive and not playerAI and Driver.observePlayer then
         local steerInput=0
         if ac.getControllerSteerValue then
           local okSteer,value=pcall(ac.getControllerSteerValue)
@@ -658,15 +669,18 @@ function script.update(dt)
           state.playerTelemetry=nil
           writeLog("PLAYER_TELEMETRY_ERROR err=%s",tostring(observeError))
         end
+      elseif playerAI then
+        state.playerTelemetry=nil
       end
     elseif state.recLine then
       state.playerTelemetry=nil
     end
 
-    -- INSTANT ADOPTION + DRIVING: AI cars only. The player car (index 0)
-    -- is never passed to Driver.update() or ac.overrideCarControls().
+    -- Drive every car for which the game reports native AI control. Ctrl+8
+    -- changes this flag for car 0; RoutePilot then feeds that car through the
+    -- exact same route follower, traffic checks and controls as the AI field.
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
-      for i=1,sim.carsCount-1 do
+      for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
         if car and car.isActive and car.isAIControlled then
           local okc,erc=pcall(Driver.update,i,car,dt)
