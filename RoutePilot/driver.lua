@@ -56,7 +56,13 @@ local function safeNumber(v, fallback)
 end
 
 function Driver.setup(cfg, st, helpers)
-  CFG = cfg
+  CFG = cfg or {}
+  -- Keep the driver operational even if an older RoutePilot.lua supplies
+  -- an incomplete configuration table.
+  CFG.MAX_LATERAL_ACCEL = safeNumber(CFG.MAX_LATERAL_ACCEL, 17.5)
+  CFG.BRAKE_ACCEL = safeNumber(CFG.BRAKE_ACCEL, 14.0)
+  CFG.VEHICLE_HALF_WIDTH = safeNumber(CFG.VEHICLE_HALF_WIDTH, 1.05)
+  CFG.BOUNDARY_CLEARANCE = safeNumber(CFG.BOUNDARY_CLEARANCE, 0.10)
   state = st
   H = helpers
 end
