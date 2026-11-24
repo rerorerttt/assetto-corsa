@@ -671,8 +671,8 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   -- Any car may pass when its safe planned speed is genuinely higher.
   -- The distance test prevents starting a pass it cannot finish in the
   -- available forward corridor; no artificial slow/fast vehicle classes.
-  local canActuallyPass=speedAdvantage>=1.5 and estimatedPassDistance<=180.0 and
-    targetSpeed>=(leaderSpeed or 0)+1.0
+  local canActuallyPass=speedAdvantage>=0.5 and estimatedPassDistance<=180.0 and
+    targetSpeed>=(leaderSpeed or 0)+0.5
   if canActuallyPass then
     local urgentGap=clamp(18.0+speed*0.9,25.0,60.0)
     local urgent=gap<=urgentGap
