@@ -2,53 +2,38 @@
 
 Last updated: 2026-11-24
 
-## Current implementation
+## Experimental branch: single-car kinematic path test
 
-- Working branch: `routepilot/two-lane-traffic-2026-11-24`
-- Base: `main` at `fcf5b04bb767638b90a7fc1ed3a069a54089aeac`
-- Pull request: [#4 — deterministic independent two-lane AI traffic](https://github.com/rerorerttt/assetto-corsa/pull/4)
-- `main` has not been modified.
-- The existing RoutePilot interface, route recording, boundary recording, route/bounds save and load, map, world-line drawing and logger are retained.
+- Branch: `routepilot/kinematic-single-car-2026-11-24`
+- Base: current `main`; the default branch is not modified.
+- Scope: only the first active AI car is adopted by RoutePilot and placed along its recorded lane.
+- Existing route recording, boundary recording, save/load, map, world-line rendering and UI are retained from `main`.
+- Other AI cars are not teleported or controlled by RoutePilot in this experiment.
+- The selected AI car receives full throttle, zero steering input and zero braking through `ac.overrideCarControls`. AC retains engine and gearbox simulation.
+- Each update, RoutePilot projects the car onto the recorded route, advances by its current physical speed multiplied by `dt`, applies the assigned lane offset, and calls `physics.setAICarPosition` with the direction convention used by the existing spawn code.
+- There is no route-curvature speed planner, tyre-slip limiter, steering controller or artificial speed cap. The car's engine/gearbox physics determines its acceleration; the path position is externally constrained to the recorded line.
 
-## Traffic rules
+## SDK facts verified
 
-- Active AI cars are assigned in roster order: first, third, fifth, etc. to the left/fast lane; second, fourth, sixth, etc. to the right/40 km/h lane.
-- Assignments are stored by car index and remain stable while cars are temporarily inactive. Newly appearing cars are assigned to the less populated active lane.
-- A recorded corridor narrower than 6 m is treated as one lane: offset 0 m and target speed 40 km/h for all AI cars.
-- A corridor at least 6 m wide uses fixed lane offsets of +1.75 m (left/fast) and -1.75 m (right/40 km/h), clamped to the recorded boundaries.
-- Right lane target: 40 km/h using PI speed control.
-- Left lane: no fixed speed ceiling. It uses full throttle when no corner requires braking; the route-curvature planner supplies a temporary target speed only when a corner is ahead.
-- Cars do not sense or react to other cars during normal driving. No following, yielding, overtaking decisions or inter-car braking. The faster left lane passes the slower right lane naturally.
-- Steering uses a filtered look-ahead target on the assigned lane offset.
-- Startup placement and stuck recovery both place cars at their lane offset.
+- `physics.setAICarPosition(carIndex, pos, dir)` is documented in `lua-sdk/ac_apps/lib.lua` as changing the position of an AI car.
+- `ac.overrideCarControls(carIndex)` returns `ac.CarControlsInput`; `combineAxis=false` overrides original pedal and handbrake values.
+- `physics.preventAIFromRetiring(carIndex)` must be called regularly to keep a non-moving AI from retiring.
+- `physics.setCarVelocity` is intentionally not used: the SDK documents that it invalidates the current lap time.
+- No API for disabling tyre/suspension physics while retaining the native engine was found in the inspected SDK. This experiment therefore does not claim that physics is disabled: it constrains AI position while the normal engine/gearbox physics remains active.
 
-## SDK and heading
+## Important runtime limitations to verify
 
-Checked the SDK in `lua-sdk/ac_apps/README.md`:
-- `ac.overrideCarControls(carIndex)` returns `ac.CarControlsInput`.
-- `physics.setAICarPosition(carIndex, pos, dir)` accepts a direction vector; `nil` aligns to the AI spline.
-- `physics.preventAIFromRetiring(carIndex)` keeps active AI cars from retiring when called periodically.
+- The SDK documents `setAICarPosition` as changing AI position, but does not explicitly document per-physics-frame path animation as a supported use. This must be tested in CSP 0.3.2-preview2.
+- It is not yet verified whether repeated position updates preserve natural engine sound, gear changes, wheel rotation, suspension animation and collision behavior without visible snapping.
+- Progress uses the car's actual `speedMs`. If the native AI does not accelerate under overridden full throttle, the path will not advance; the log will expose this instead of substituting a fabricated speed.
+- The current direction sign follows the convention in the existing RoutePilot spawn code; confirm heading in-game.
+- This branch has not been run inside Assetto Corsa. Do not merge into main before a live test.
 
-The current spawn and recovery code passes the recorded route's forward tangent. This matches the original RoutePilot controller at commit `ad07f8d3469a5be81e1f3efb36ba5b15e9e36f7f`; a later version had inverted this vector.
+## First runtime test
 
-## Repository track data
-
-`RoutePilot/line_nevadadrift_bounds.txt` on `main` contains 230 entries, each with bounds `-3.50 3.50` (7.00 m total), matching the two-lane layout.
-
-## Validation status
-
-- Static block and delimiter-balance checks passed for `RoutePilot.lua` and `driver.lua`.
-- Confirmed the new driver contains no car-following, leader sensing or overtaking logic.
-- Confirmed existing UI, route recording, bounds recording, map and world-line hooks remain present.
-- Not yet run inside Assetto Corsa with CSP 0.3.2-preview2. Do not claim in-game validation. Steering response, lane-side sign, speed-hold accuracy and actual AI spawn behavior still require a live session test.
-
-## Next runtime checks
-
-1. Start a session with the saved 7 m Nevada Drift bounds and at least four AI cars.
-2. Confirm cars appear alternately at +1.75 m and -1.75 m from the recorded line, with no reversed heading.
-3. Confirm right-lane cars settle at 40 km/h and remain there.
-4. Confirm left-lane cars accelerate beyond 40 km/h, brake only for route curvature and pass right-lane cars without changing lane.
-5. Repeat with the 3 m width preset: all AI cars should stay on the centreline at 40 km/h.
-6. Inspect `routepilot_trace.txt` for `LANE_ASSIGN`, `SPAWN_LANE`, `CAR_INIT`, `CAR=` telemetry and any `DRIVER_ERROR` entries.
-
-Do not merge PR #4 until these runtime checks pass.
+1. Load the saved route and its bounds.
+2. Start with one AI car; confirm only that car is adopted and placed on the assigned lane.
+3. Check that it accelerates under full throttle and continues moving while remaining on the line through corners.
+4. Listen for native engine/gearbox sound and inspect gear, RPM, speed and wheel animation.
+5. Confirm no repeated visible teleporting, heading flips, disappearing car, retirement or Lua errors in `routepilot_trace.txt`.
+6. Only after the single-car test passes, consider extending the same controller to additional cars.
