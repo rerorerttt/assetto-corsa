@@ -46,7 +46,7 @@ local state = {
   speedMax=170, followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -427,10 +427,10 @@ local function sampleSpawnRoute(metrics,distance)
       local direction=vec3(b.x-a.x,b.y-a.y,b.z-a.z)
       if direction:length()<0.0001 then return nil,nil end
       direction:normalize()
-      return position,direction
+      return position,direction,i,t
     end
   end
-  return nil,nil
+  return nil,nil,nil,nil
 end
 local function spotIsClear(pos, exceptIndex)
   local sim=ac.getSim()
@@ -496,17 +496,20 @@ local function trySpawnTeleport(sim,dt)
   local moved,failed=0,0
   for order=1,count do
     local carIndex=aiCars[order]
-    local position,direction=sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
+    local position,direction,routeSegment,routeParameter=
+      sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
     if position and direction then
-      -- The recorded route direction is the car's forward direction.
-      -- Negating this vector placed every spawned AI facing against the route.
+      -- Keep the previously user-verified orientation. The SDK documents
+      -- an explicit direction vector but does not define its sign convention.
       local ok,result=pcall(physics.setAICarPosition,carIndex,
-        position,vec3(direction.x,direction.y,direction.z))
+        position,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
         moved=moved+1
-        state.p[carIndex]=nil  -- reset personality for the new position
-        writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f)",
-          carIndex,position.x,position.y,position.z,direction.x,direction.z)
+        state.p[carIndex]=nil
+        state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
+        writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
+          carIndex,position.x,position.y,position.z,direction.x,direction.z,
+          routeSegment,routeParameter)
       else failed=failed+1 end
     else failed=failed+1 end
   end
