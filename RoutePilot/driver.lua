@@ -163,14 +163,14 @@ local function readVehicleDynamics(car, p, dt)
     if p.brake > 0.15 and speed < p.previousSpeed then
       local measured = (p.previousSpeed - speed) / dt
       if measured >= 1.5 and measured <= 25.0 then
-        local estimate = clamp(measured, 2.5, 16.0)
+        local estimate = clamp(measured, 2.5, 22.0)
         p.brakeAccelEstimate = lerp(
           safeNumber(p.brakeAccelEstimate, CFG.BRAKE_ACCEL), estimate, 0.12)
       end
     elseif p.gas > 0.2 and speed > p.previousSpeed then
       local measured = (speed - p.previousSpeed) / dt
       if measured >= 0.3 and measured <= 18.0 then
-        local estimate = clamp(measured, 0.5, 12.0)
+        local estimate = clamp(measured, 0.5, 18.0)
         p.accelEstimate = lerp(safeNumber(p.accelEstimate,4.0),estimate,0.08)
       end
     end
@@ -180,10 +180,10 @@ local function readVehicleDynamics(car, p, dt)
   p.lateralAccel = math.abs(p.yawRate * speed)
   -- Learn usable cornering grip from actual vehicle response. Increase the
   -- limit only while the car is stable; reduce it when slip indicates loss.
-  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,12.0)
+  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
   if speed>12.0 and math.abs(p.slipAngle)<0.08 and
      safeNumber(p.wheelSlip)<0.20 and p.lateralAccel>grip*0.70 then
-    grip=lerp(grip,clamp(p.lateralAccel*1.18,grip,12.0),0.015)
+    grip=lerp(grip,clamp(p.lateralAccel*1.18,grip,20.0),0.015)
   elseif speed>12.0 and
      (math.abs(p.slipAngle)>0.15 or safeNumber(p.wheelSlip)>0.30) and
      p.lateralAccel>3.0 then
@@ -198,7 +198,7 @@ local function calculateStability(p, speed)
   local severity = 0
   if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
     local ss = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
-    local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,12.0)
+    local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
     local as = clamp((p.lateralAccel - grip) / (grip * 0.7), 0, 1)
     severity = math.max(ss, as)
   end
@@ -211,7 +211,7 @@ local function planTargetSpeed(p,speed)
   local route=state.routeGeometry
   if not route or not p.routeProgress then return 11.0 end
   local target=p.cruiseSpeed
-  local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,16.0)
+  local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   -- At high speed, inspect beyond the braking distance plus response margin.
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
@@ -222,7 +222,7 @@ local function planTargetSpeed(p,speed)
     if not sample then break end
     local curvature=math.abs(sample.k or 0)
     if curvature>CFG.CURVE_MIN then
-      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,12.0)
+      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
       local curveSpeed=math.sqrt(lateralLimit/curvature)
       local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.35)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
@@ -613,7 +613,7 @@ end
 
 local function safeFollowingSpeed(gap,leaderSpeed,brakeAccel)
   local available=math.max(0,gap-math.max(0,safeNumber(state.followGap,8)))
-  local decel=clamp(safeNumber(brakeAccel,CFG.BRAKE_ACCEL),2.5,16.0)
+  local decel=clamp(safeNumber(brakeAccel,CFG.BRAKE_ACCEL),2.5,22.0)
   return math.sqrt(math.max(0,leaderSpeed*leaderSpeed+
     2*decel*available))
 end
@@ -790,7 +790,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   end
 
   local leaderPace=leaderSpeed or 0
-  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,12.0)
+  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
   -- Predict one second of available acceleration rather than treating an
   -- unbounded cruise target as an instantaneous speed advantage.
   local speedAdvantage=speed-leaderPace+acceleration
@@ -873,7 +873,7 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
 
   -- Leave grip reserve for cornering instead of applying full drive torque
   -- while lateral acceleration is already close to the route limit.
-  local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,12.0)
+  local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
   local lateralUse=clamp(math.abs(safeNumber(p.lateralAccel))/
     math.max(0.1,lateralLimit),0,1)
   local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
