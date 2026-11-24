@@ -12,11 +12,10 @@ Last updated: 2026-11-24
 
 ## Traffic and speed model
 
-- AI cars are initially distributed alternately between physical LEFT and RIGHT lanes. In the current CSP spawn coordinate basis, negative route-relative lateral offset is physical LEFT; spawn labels, driver roles and map indicators use that same convention.
-- Corridors at least 6 m wide use two canonical lane centres, normally 1.75 m from the route centreline. Narrower corridors remain single-file. At rest and after each completed merge, the lane centre is re-derived from the current lane role and the recorded bounds; a partial merge offset can never become the next lane's permanent centre.
-- Neither lane has a fixed speed limit. With no corner or traffic constraint, the controller requests full throttle. The aggressive planner uses 17.5 m/s² lateral acceleration and 14 m/s² braking assumptions to allow later braking and higher corner speeds. Actual maximum speed is still determined by the car's powertrain, gearing, drag and grip; there is no artificial 200/320 km/h cap.
-- At 320 km/h the corner-planning preview expands to approximately the estimated stopping distance plus 45 m. Active AI route projection is restricted to a local segment window to prevent snapping across nearby parallel track sections.
-- The speed controller no longer assigns a 40 km/h target to either lane.
+- The route map stores corridor geometry only: safe lateral bounds and the two permitted lane centres. It does not classify corners/straights and contains no precomputed speed limits.
+- Every driver update scans the recorded route ahead locally, at 3 m intervals. Curvature is estimated from adjacent route samples; the target speed follows the local lateral-acceleration limit and a braking envelope to the curve. A straight section requests up to 320 km/h/full available acceleration; the car slows only for curvature or traffic.
+- Steering starts with a speed-adaptive 20–110 m preview, but checks the route every 3 m. When accumulated heading change reaches 0.10 rad, the far target is pulled back to the bend entry rather than steering along a chord through the corner.
+- Actual maximum speed remains determined by the car's powertrain, gearing, drag and grip. No whole-track speed plan or fixed speed classification remains.
 
 ## Lane changes and traffic safety
 
@@ -56,15 +55,13 @@ Use the saved 7 m corridor with at least four AI cars. Confirm the physical LEFT
 Do not merge PR #4 until these runtime checks pass.
 
 
-## Live route control and speed sections (2026-11-24)
+## Local path-control revision (2026-11-24)
 
-- Route geometry is recalculated when a line is loaded, line recording is stopped, bounds recording is stopped, the width preset changes, or “Рассчитать участки” is pressed. No session restart is required.
-- Segments are classified from recorded centreline coordinates: corners/hairpins target 70 km/h, straight runs shorter than 250 m target 160 km/h, and continuous straights of at least 250 m target 320 km/h. Braking distance is applied to upcoming section limits.
-- Steering lookahead is local (6–18 m, speed-adaptive), replacing the previous 20–110 m target. Lane changes are rejected if any sampled lateral position across the transition leaves the precomputed vehicle-centre corridor.
-- UI controls start/stop RoutePilot driving during the current session. Stopping line recording makes the in-memory route immediately usable; saving remains optional.
-- Car index 0 is driven by the same controller when CSP reports isAIControlled=true. The player car is not repositioned or sent through AI recovery teleports.
-- Static source inspection only. Assetto Corsa/CSP runtime testing has not been performed; verify speed classification and Ctrl+8 autopilot detection in-session.
-
+- Removed the whole-track speed classification and the driver's route-wide speed planner. The track map now contains corridor/lane geometry only.
+- Replaced speed planning with a live forward scan of the recorded route at 3 m intervals. Curvature determines the local corner speed; the same preview applies a braking envelope based on distance to the detected bend.
+- Steering checks every 3 m in its speed-adaptive preview. Once accumulated heading change reaches 0.10 rad, it shortens the target to the bend entry so the car does not aim at a distant point through a curved section.
+- Traffic occupancy now measures every other car's actual lateral position in the current car's route-segment coordinate frame. It no longer compares lateral offsets calculated from unrelated per-car segments. Desired lane offsets remain reservations for merge-conflict checks, not substitutes for physical position.
+- These changes are committed to the working branch only. Runtime behavior still requires an Assetto Corsa/CSP test; the current GitHub trace blob is empty, so the newly supplied URL did not provide readable trace lines in this inspection.
 
 ## Regression diagnosis and corrective changes (2026-11-24)
 
