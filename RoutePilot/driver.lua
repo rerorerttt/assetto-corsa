@@ -332,8 +332,10 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
       p.laneCooldown <= 0 and front then
     local closing = math.max(0, front.closing)
     local ttc = closing > 0.1 and front.gap / closing or math.huge
-    local trigger = front.gap <= LANE_TRIGGER_DISTANCE or
-      ttc <= LANE_TRIGGER_TTC
+    -- Do not weave around a car travelling at the same speed. A lane change
+    -- is an overtake request only when this car is actually closing.
+    local trigger = closing > 1.0 and
+      (front.gap <= LANE_TRIGGER_DISTANCE or ttc <= LANE_TRIGGER_TTC)
     if trigger then
       local currentOffset = laneCenterForRole(carIndex, p.segIdx, p.laneRole)
       local targetOffset = -currentOffset
@@ -456,13 +458,20 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   if safeMin > safeMax then
     safeMin, safeMax = (left + right) * 0.5, (left + right) * 0.5
   end
-  local targetOffset = clamp(laneOffset, safeMin, safeMax)
-  p.boundaryError = 0
-  if p.latOff < safeMin then p.boundaryError = safeMin - p.latOff
-  elseif p.latOff > safeMax then p.boundaryError = safeMax - p.latOff end
-  p.boundaryViolation = math.abs(p.boundaryError) > 0.05
-  p.boundaryHard = p.latOff < left + BOUNDARY_HARD_MARGIN or
-    p.latOff > right - BOUNDARY_HARD_MARGIN
+  local vehicleMargin=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
+  local laneMin,laneMax=safeMin,safeMax
+  if twoLane and p.laneChangeProgress>=1.0 then
+    if p.laneRole=="LEFT" then laneMax=math.min(laneMax,-vehicleMargin)
+    else laneMin=math.max(laneMin,vehicleMargin) end
+  end
+  local targetOffset=clamp(laneOffset,laneMin,laneMax)
+  p.boundaryError=0
+  if p.latOff<laneMin then p.boundaryError=laneMin-p.latOff
+  elseif p.latOff>laneMax then p.boundaryError=laneMax-p.latOff end
+  p.laneViolation=math.abs(p.boundaryError)>0.05
+  p.boundaryViolation=p.laneViolation
+  p.boundaryHard=p.latOff<left+BOUNDARY_HARD_MARGIN or
+    p.latOff>right-BOUNDARY_HARD_MARGIN
 
   local requestedLookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE, LOOKAHEAD_MAX)
@@ -485,15 +494,51 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     previousX,previousZ=hx,hz
     scan=scan+3.0
   end
-  local center=H.walkLine(seg,t,lookahead)
-  local before=H.walkLine(seg,t,math.max(0,lookahead-2.0))
-  local after=H.walkLine(seg,t,lookahead+2.0)
-  if not center then center=H.segEnd(seg) end
-  if not before then before=center end
-  if not after then after=center end
-  local tx,tz=normalize2(after.x-before.x,after.z-before.z)
-  local targetX=center.x-tz*targetOffset
-  local targetZ=center.z+tx*targetOffset
+  local function makeTarget(distance)
+    local center=H.walkLine(seg,t,distance)
+    local before=H.walkLine(seg,t,math.max(0,distance-1.5))
+    local after=H.walkLine(seg,t,distance+1.5)
+    if not center then center=H.segEnd(seg) end
+    if not before then before=center end
+    if not after then after=center end
+    local tx,tz=normalize2(after.x-before.x,after.z-before.z)
+    return center.x-tz*targetOffset,center.z+tx*targetOffset
+  end
+  local function previewPathFits(distance,targetX,targetZ)
+    if p.boundaryViolation then return true end
+    local dx,dz=targetX-car.position.x,targetZ-car.position.z
+    local total=math.max(0.001,distance)
+    local sample=3.0
+    while sample<distance-1.0 do
+      local point,pointSeg=H.walkLine(seg,t,sample)
+      local before=H.walkLine(seg,t,math.max(0,sample-1.5))
+      local after=H.walkLine(seg,t,sample+1.5)
+      if not point or not pointSeg or not before or not after then return false end
+      local tx,tz=normalize2(after.x-before.x,after.z-before.z)
+      local fraction=sample/total
+      local chordX=car.position.x+dx*fraction
+      local chordZ=car.position.z+dz*fraction
+      local lateral=(chordX-point.x)*-tz+(chordZ-point.z)*tx
+      local minOffset,maxOffset=H.safeBoundsAt(pointSeg)
+      local _,sampleTwoLane=H.laneOffset(carIndex,pointSeg)
+      if sampleTwoLane and p.laneChangeProgress>=1.0 then
+        if p.laneRole=="LEFT" then
+          maxOffset=math.min(maxOffset,-vehicleMargin)
+        else
+          minOffset=math.max(minOffset,vehicleMargin)
+        end
+      end
+      if lateral<minOffset-0.03 or lateral>maxOffset+0.03 then return false end
+      sample=sample+3.0
+    end
+    return true
+  end
+  local targetX,targetZ=makeTarget(lookahead)
+  while lookahead>3.0 and not previewPathFits(lookahead,targetX,targetZ) do
+    lookahead=math.max(3.0,lookahead-3.0)
+    targetX,targetZ=makeTarget(lookahead)
+  end
+  p.previewDistance=lookahead
 
   local dx = targetX - car.position.x
   local dz = targetZ - car.position.z
