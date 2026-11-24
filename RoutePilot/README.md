@@ -47,14 +47,16 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Passing reservations are local to the selected offset and limited to nearby time/space conflicts, so a physically separate free corridor remains available. Cars entering the same narrow corridor are serialized by active reservations.
 - The overtaking car stays on its selected offset until the target's rear is cleared, then returns to its original offset only after that offset is clear.
 - When the current lane is blocked and no passing offset is safe, following speed is limited by the leader in the car's current corridor only. A slow vehicle in a separate lane cannot globally throttle traffic using another free corridor.
-- Urgent passes increase lateral path transition speed to 12 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (8 m or less), the controller adds a 180 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
+- Near-field leader detection uses actual world-space separation and heading, including the manually driven player even when player route projection is unavailable. Emergency passing is permitted for a stopped blocker at bumper distance, but only when a clear adjacent corridor exists. The pass is not released until the car has physically reached the passing offset and cleared the target by its body length plus margin. Candidate rejection logs include safe corridor width and separate reservation/occupancy counts.
+- Urgent passes increase lateral path transition speed to 12 m/s and steering response to 12/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (10 m or less), the controller adds a 220 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
+- The route curvature estimate is smoothed over a 12 m baseline to suppress small recording irregularities. High-speed steering uses a 16–45 m preview, predictive curvature feed-forward, and a 14.5 m/s² initial lateral-acceleration target, adapted to measured stability.
 - Stuck detection is not reset merely because another car exists ahead. After ten seconds without movement, the app attempts a respawn only at a point whose actual spawn position is clear of other vehicles.
 
 ## Experimental 0.9.1 changes (2026-11-25)
 
 - Removed the fixed 170 km/h cruise setting. RoutePilot uses an unbounded cruise target; speed is limited by upcoming route curvature and braking distance.
 - Braking deceleration and usable lateral grip are estimated from measured vehicle response, then filtered and used by curve planning and car-following. Acceleration is also learned to estimate whether a pass can be completed.
-- The forward planning horizon expands with speed and estimated stopping distance, including a reaction-time margin.
+- The forward planning horizon expands with speed and estimated stopping distance, including a reaction-time margin. Straight-line speed remains uncapped by a fixed RoutePilot value.
 - Lane occupancy checks physical vehicle-width overlap, active passing reservations, the swept lateral transition, and opposing-direction traffic using local heading geometry.
 - Following speed is evaluated in the current corridor rather than taking the minimum speed across every lateral offset.
 - A stationary queue no longer disables stuck recovery. Rescue is attempted after ten seconds and validates the actual spawn position.
