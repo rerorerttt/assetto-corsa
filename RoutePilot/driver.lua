@@ -595,14 +595,16 @@ end
 
 function Driver.telemetryLine(i, car, p)
   local bl, br = H.boundsAt(p.segIdx)
+  local steerLimit=p.player and 0.99 or (CFG.STEER_LIMIT-0.01)
+  local mode=p.player and " MODE=PLAYER" or ""
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
     p.crossTrackError or 0, p.headingError or 0, p.pathCurvature or 0,
     p.routeProgress or 0, p.laneOffsetCurrent or 0,
-    math.abs(p.steer or 0) >= CFG.STEER_LIMIT - 0.01 and 1 or 0)
+    math.abs(p.steer or 0) >= steerLimit and 1 or 0, mode)
 end
 
 return Driver
