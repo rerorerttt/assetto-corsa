@@ -499,11 +499,24 @@ local function carAheadInLane(carIndex, car, laneOffset)
   return bestGap, bestSpeed, bestIndex
 end
 
-local function beginOvertake(carIndex, car, p, gap, leaderIndex)
-  local leftCenter, rightCenter = laneCenters(p.segIdx)
+local function beginOvertake(carIndex,car,p,gap,leaderIndex,speed)
+  local leftCenter,rightCenter=laneCenters(p.segIdx)
   if not leftCenter or p.slow then return false end
   if p.overtakeRetryT>0 then return false end
-  if laneOccupied(carIndex, car, rightCenter, nil) then
+  local fx,fz=normalize2(car.look.x,car.look.z)
+  local passPreview=math.max(40.0,CFG.LOOKAHEAD_MAX)
+  local safeMin,safeMax=safeCorridorForPreview(
+    state.routeGeometry,p.routeProgress,passPreview,car,fx,fz)
+  if not safeMin or not safeMax or rightCenter<safeMin+0.05 or
+     rightCenter>safeMax-0.05 then
+    p.overtakeRetryT=1.0
+    if not p.overtakeDeniedLogged then
+      H.log("CAR=%d OVERTAKE_DENIED passing_lane_not_safe",carIndex)
+      p.overtakeDeniedLogged=true
+    end
+    return false
+  end
+  if laneOccupied(carIndex,car,rightCenter,nil) then
     p.overtakeRetryT=1.0
     if not p.overtakeDeniedLogged then
       H.log("CAR=%d OVERTAKE_DENIED right_lane_occupied",carIndex)
@@ -619,7 +632,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     p.followTimer=p.followTimer+dt
     if not p.slow and urgent and p.overtakeSide==0 then
       p.emergencyPassRequest=true
-      if beginOvertake(carIndex,car,p,gap,leaderIndex) then
+      if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
         return targetSpeed
       end
       p.emergencyPassRequest=false
@@ -629,7 +642,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       2 * CFG.BRAKE_ACCEL * math.max(0, gap - safeNumber(state.followGap, 8))))
     if not p.slow and p.followTimer>=TRIGGER_TIME and p.overtakeRetryT<=0 then
       p.emergencyPassRequest=false
-      if beginOvertake(carIndex,car,p,gap,leaderIndex) then
+      if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
         return targetSpeed
       end
     end
