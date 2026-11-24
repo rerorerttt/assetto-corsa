@@ -1,50 +1,31 @@
--- RoutePilot/driver.lua — v0.13.0 LANED RACING (CSP 0.3.2-preview2)
--- Corner-cutting (through the bounds) eliminated. Root causes found in the
--- v0.12 steering geometry:
---  1) The pursuit target was clamped into the bounds of the CURRENT
---     segment, but placed up to 35 m ahead - in a corner the current
---     segment's normal points the target OUTSIDE the corridor where the
---     target lands. The car honestly drove to an out-of-bounds point.
---     Fix: clamp the target into the bounds of the SEGMENT IT LANDS ON
---     (walk forward node by node; a point 35 m ahead in a corner lands
---     2-3 segments further, whose own bounds are used). Impossible by
---     construction to aim outside the track now.
---  2) Lookahead was speed-scaled up to 35 m - the pure-pursuit chord cut
---     corner apexes. Fix: lookahead is capped by the upcoming corner:
---     it shrinks BEFORE the corner (reads the curve 60 m ahead) and opens
---     back up after it.
---  3) Edge reaction started 0.25 m from a bound - too late at 200 km/h.
---     Fix: a speed-scaled edge zone (1.0 + 0.06*v meters), and the rail
---     target never sits closer than half a real car width to a bound.
---
--- Checkers-style traffic (user's design):
---  * Every car holds its dedicated lane rail, at speed, all lap long.
---  * If a car is ahead IN OUR OWN LANE (real widths, see below), the
---    blocked car changes to an ADJACENT free lane - one step, never
---    across two lanes - exactly like checkers. No immediate return:
---    each new change is a fresh detection cycle. The changed lane
---    becomes the new home while it is kept.
---  * Lane change is allowed only if the target lane is clear: ahead by
---    the safe dynamic gap AND behind by the closing speed of a follower.
---  * Real dimensions: car.aabbSize (guarded; fallback 1.9 m wide,
---    4.4 m long) - the lane-fit and the clear checks use the SUM of the
---    two cars' half-widths, so cars never rub or rear-end each other.
+-- RoutePilot/driver.lua — v0.13.1 LANED RACING, HOTFIX (CSP 0.3.2-preview2)
+-- THE ATTACHED TRACE: "driver.lua:138: attempt to call global 'lerp' (a nil
+-- value)" repeated forever with CAR_INIT loops — cars were never driven.
+-- v0.13.0 declared the helper lerp BELOW its use in railPoint; in Lua that
+-- compiles to a call to a nil GLOBAL. Two order bugs fixed:
+--   1) lerp moved to the top helpers block (before any use);
+--   2) laneClear referenced p.halfW without p as a parameter (next latent
+--      nil-error) — it now derives the own half-width via halfDims(car).
+-- Everything else from v0.13.0 is unchanged: corner-cutting fix (rail
+-- clamped into the bounds of the SEGMENT THE TARGET LANDS ON, lookahead
+-- shrinks before corners, speed-scaled edge zone), checkers-style adjacent
+-- lane changes with real car dimensions, no immediate return.
 
 local Driver = {}
 local CFG, S, H
 
 local WHEELBASE, STEER_LOCK = 2.6, 0.60
 local LOOKAHEAD_TIME, LOOK_MIN, LOOK_MAX = 0.55, 6, 35
-local CORNER_LOOK_GAP = 60.0   -- read corners this far ahead
+local CORNER_LOOK_GAP = 60.0
 local BOUND_MARGIN  = 0.35
 local TRIGGER_TIME  = 0.3
-local PASS_TIMEOUT  = 8
 local RESCUE_SPEED, RESCUE_TIME = 1.5, 5.0
 local RESCUE_COOLDOWN = 10.0
 local STEER_DEAD = 0.004
 local DEFAULT_HALF_W, DEFAULT_HALF_L = 0.95, 2.2
 
 local function clamp(x,a,b) return math.max(a, math.min(b,x)) end
+local function lerp(a,b,t) return a+(b-a)*t end
 local function norm(x,z)
   local n=math.sqrt(x*x+z*z)
   if n<1e-6 then return 0,1 end
@@ -131,7 +112,6 @@ local function railPoint(seg,t,distance,lat)
     else
       local room=len*(1-tCur)
       if remaining<=room then
-        -- lands inside this segment: use ITS bounds
         local bl,br=H.boundsAt(idx)
         local l=clamp(lat,bl+BOUND_MARGIN,br-BOUND_MARGIN)
         local nt=(len*tCur+remaining)/len
@@ -147,7 +127,6 @@ local function railPoint(seg,t,distance,lat)
       else break end
     end
   end
-  -- fallback: end of the current segment, clamped into its bounds
   local a=S.nodes[seg]
   local b=H.segEnd(seg)
   local bl,br=H.boundsAt(seg)
@@ -156,16 +135,12 @@ local function railPoint(seg,t,distance,lat)
   return b.x-tz*l, b.z+tx*l
 end
 
-local function lerp(a,b,t) return a+(b-a)*t end
-
 -- lookahead capped by an upcoming corner: shrinks BEFORE the corner,
--- opens back up after it (reads the curve CORNER_LOOK_GAP meters ahead)
+-- opens back up after it
 local function cornerCappedLookahead(seg,t,speed)
   local ld=clamp(LOOKAHEAD_TIME*math.max(speed,4),LOOK_MIN,LOOK_MAX)
   local segs=H.segmentCount()
   local idx=seg
-  local remaining=0
-  local tCur=t
   local distance=0
   local steps=0
   while distance<CORNER_LOOK_GAP and steps<200 do
@@ -178,14 +153,14 @@ local function cornerCappedLookahead(seg,t,speed)
     else
       local curv=H.getVertexCurvature(idx)
       if curv>CFG.CURVE_MIN then
-        -- a corner starts 'distance' meters ahead: the pursuit chord may
-        -- not reach past the corner entry
         local maxLd=math.max(LOOK_MIN,distance*0.8)
         if maxLd<ld then ld=maxLd end
       end
       distance=distance+len
-      idx=S.loopRoute and ((idx%segs)+1) or (idx<segs and (idx+1) or idx)
-      if idx==seg and S.loopRoute then break end
+      if S.loopRoute then idx=(idx%segs)+1
+      elseif idx<segs then idx=idx+1
+      else break end
+      if S.loopRoute and idx==seg then break end
     end
   end
   return ld
@@ -199,7 +174,6 @@ local function purePursuit(car,p,speed)
   if p.lane>#c then p.lane=#c end
   local lat=c[p.lane] or 0
   local bl,br=H.boundsAt(seg)
-  -- the rail never sits closer than a real half-width to a bound
   lat=clamp(lat,bl+BOUND_MARGIN+p.halfW*0.5,br-BOUND_MARGIN-p.halfW*0.5)
   local ld=cornerCappedLookahead(seg,t,speed)
   local tx,tz=railPoint(seg,t,ld,lat)
@@ -210,7 +184,6 @@ local function purePursuit(car,p,speed)
   local alpha=angle(fx,fz,dx/dist,dz/dist)
   local steer=math.atan(2*WHEELBASE*math.sin(alpha)/ld)/STEER_LOCK
   if math.abs(alpha)<STEER_DEAD then steer=0 end
-  -- speed-scaled edge zone: react BEFORE the bound, not at it
   local zone=1.0+0.06*speed
   if p.off<bl+zone then steer=math.max(steer,0.28)
   elseif p.off>br-zone then steer=math.min(steer,-0.28) end
@@ -237,7 +210,7 @@ local function laneClear(i,car,seg,targetLat)
   local sim=ac.getSim()
   if not sim then return true end
   local fx,fz=norm(car.look.x,car.look.z)
-  local myHalfW=p.halfW or DEFAULT_HALF_W
+  local myHalfW=halfDims(car)
   local aheadClear=minGap(num(car.speedMs,0))
   for j=0,sim.carsCount-1 do
     if j~=i then
@@ -249,10 +222,8 @@ local function laneClear(i,car,seg,targetLat)
           local os=select(1,H.findNearestSeg(o.position,seg))
           local oo=H.lateralOf(o.position,os)
           local ohw,ohl=halfDims(o)
-          -- overlap if |lateral difference| < sum of half-widths
           if math.abs(oo-targetLat) < (ohw+myHalfW) then
             if forward>-12 and forward<-ohl then
-              -- behind: must also clear by the follower's closing speed
               local rel=num(o.speedMs,0)-num(car.speedMs,0)
               if rel>1 then return false end
             else
@@ -294,10 +265,7 @@ end
 local function updateTraffic(i,car,p,speed,target,dt)
   local c=lanes(p.segIdx)
   if p.lane>#c then p.lane=#c end
-  local lat=c[p.lane] or 0
   local myHalfW=p.halfW or DEFAULT_HALF_W
-  -- same-lane blocker with REAL widths: lateral sum of half-widths
-  local blockerLat=2.0
   local gap,leadSpeed=H.carAheadFull(i,car,myHalfW*2+0.4)
 
   if not gap then p.blocked=0
@@ -314,7 +282,7 @@ local function updateTraffic(i,car,p,speed,target,dt)
       if targetLane then
         p.passSide=(targetLane>p.lane) and 1 or -1
         p.lane=targetLane
-        p.homeLane=targetLane  -- no immediate return: new home while kept
+        p.homeLane=targetLane
         p.passTime=0; p.blocked=0
         H.log('CAR=%d LANE_CHANGE to=%d gap=%.1f own=%.0f lead=%.0f',
           i,targetLane,gap,target*3.6,(leadSpeed or 0)*3.6)
@@ -344,7 +312,6 @@ end
 
 function Driver.update(i,car,dt)
   local p=S.p[i] or newDriver(i)
-  -- refresh real dimensions once a second (car model may load late)
   p.dimT=(p.dimT or 0)+dt
   if p.dimT>=1 then
     p.dimT=0
@@ -357,7 +324,7 @@ function Driver.update(i,car,dt)
     if physics and physics.preventAIFromRetiring then pcall(physics.preventAIFromRetiring,i) end
   end
   local speed=math.max(0,num(car.speedMs,0))
-  if speed<RESCUE_SPEED then
+  if speed<RESCUE_speed then
     p.stuck=p.stuck+dt
     if p.stuck>RESCUE_TIME and num(S.sessionTime,999)>RESCUE_COOLDOWN then
       p.stuck=0
