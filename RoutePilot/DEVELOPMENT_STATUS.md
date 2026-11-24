@@ -84,3 +84,11 @@ Do not merge PR #4 until these runtime checks pass.
 - Steering now prefers one distant target and shortens its preview in 15 m steps only when the target chord would leave the assigned lane or recorded corridor. Removed the accumulated-small-turn threshold that shortened the target at every small heading change.
 - Removed the 320 km/h straight-line software target. With no detected corner constraint, the controller requests full available throttle; corner curvature and the braking envelope remain the speed constraints. Traffic following and boundary recovery can still reduce speed for safety.
 - Source delimiter scan passes after these changes. This is not a Lua runtime or Assetto Corsa validation. The new state machine and target selection still require in-game testing with a multi-car field, both occupied and free adjacent lanes, and narrow/wide recorded corridors.
+
+
+## Runtime freeze diagnosis and fix (2026-11-24)
+
+- The latest supplied routepilot_trace.txt contains 1,997 identical DRIVER_ERROR entries: driver.lua:517: attempt to perform arithmetic on field VEHICLE_HALF_WIDTH (a nil value).
+- The exception occurs during steering setup before normal control can run. The main loop calls releaseCar() after each exception, clears the per-car state, and initializes the same AI again on the next update. This explains the repeated CAR_INIT messages and cars remaining stationary; it is not evidence of a traffic deadlock.
+- Driver.setup() now normalizes the configuration and supplies defaults for MAX_LATERAL_ACCEL, BRAKE_ACCEL, VEHICLE_HALF_WIDTH, and BOUNDARY_CLEARANCE. The driver therefore no longer depends on the caller having the newest configuration table.
+- The fix is source-level only. Verify in the next runtime trace that DRIVER_ERROR is absent and cars begin producing normal steering/throttle telemetry before evaluating overtaking behavior.
