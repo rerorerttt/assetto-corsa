@@ -78,7 +78,7 @@ end
 
 local function routeProjection(car, hintSeg, allowGlobal)
   refreshRouteMetrics()
-  local seg, t, distance = H.findNearestSeg(car.position, hintSeg or 1, allowGlobal == true)
+  local seg, t, distance = H.findNearestSeg(car.position, hintSeg or 1, allowGlobal == true, car.look)
   local lengths, cumulative = state.routeSegLength, state.routeCum
   if not lengths or not lengths[seg] then return nil end
   local progress = cumulative[seg] + lengths[seg] * t
