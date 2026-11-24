@@ -47,6 +47,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  playerAutopilotLast=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -350,7 +351,7 @@ local function carAheadFull(carIndex,car,lateralWidth)
 end
 local function recordSecondTelemetry(sim)
   local any=false
-  for i=1,sim.carsCount-1 do
+  for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     local p=state.p[i]
     if car and car.isActive and car.isAIControlled and p then
@@ -361,7 +362,8 @@ local function recordSecondTelemetry(sim)
 
   local player=ac.getCar(0)
   local playerTelemetry=state.playerTelemetry
-  if #state.nodes>=2 and not state.recLine and player and player.isActive and playerTelemetry and Driver and Driver.telemetryLine then
+  if not state.p[0] and #state.nodes>=2 and not state.recLine and
+     player and player.isActive and playerTelemetry and Driver and Driver.telemetryLine then
     writeLog(Driver.telemetryLine(0,player,playerTelemetry))
     any=true
   end
@@ -644,9 +646,14 @@ function script.update(dt)
     if state.enabled and state.loaded and #state.nodes>=2 then
       trySpawnTeleport(sim,dt)
     end
-    -- Initialize shared route geometry for passive player telemetry too.
-    -- The player is observed only: no overrideCarControls() call is made for car 0.
-    if #state.nodes>=2 and not state.recLine and Driver and ensureDriver() then
+    -- Ctrl+8 switches the player car into Assetto Corsa's native AI state.
+    -- RoutePilot adopts car 0 only in that state and runs the same route,
+    -- lane, traffic and control loop as every other AI car. Manual driving
+    -- remains passive and is never overridden.
+    local playerAI = player and player.isActive and player.isAIControlled
+    if playerAI then
+      state.playerTelemetry=nil
+    elseif #state.nodes>=2 and not state.recLine and Driver and ensureDriver() then
       if player and player.isActive and Driver.observePlayer then
         local steerInput=0
         if ac.getControllerSteerValue then
@@ -663,12 +670,23 @@ function script.update(dt)
       state.playerTelemetry=nil
     end
 
-    -- INSTANT ADOPTION + DRIVING: AI cars only. The player car (index 0)
-    -- is never passed to Driver.update() or ac.overrideCarControls().
+    local playerRoutePilotActive = state.enabled and #state.nodes>=2 and
+      Driver and playerAI or false
+    if playerRoutePilotActive and not state.playerAutopilotLast then
+      writeLog("PLAYER_AUTOPILOT_ADOPT source=AC_NATIVE_CTRL8")
+    elseif not playerRoutePilotActive and state.playerAutopilotLast then
+      writeLog("PLAYER_AUTOPILOT_RELEASE")
+    end
+    state.playerAutopilotLast = playerRoutePilotActive == true
+
+    -- Drive every active car which Assetto Corsa currently marks as AI,
+    -- including car 0 only while the native Ctrl+8 autopilot is active.
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
-      for i=1,sim.carsCount-1 do
+      for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
-        if car and car.isActive and car.isAIControlled then
+        local shouldDrive=car and car.isActive and car.isAIControlled
+        if i==0 then shouldDrive=shouldDrive and playerAI end
+        if shouldDrive then
           local okc,erc=pcall(Driver.update,i,car,dt)
           if not okc then
             writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
