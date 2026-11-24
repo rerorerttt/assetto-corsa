@@ -11,6 +11,7 @@ if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = ni
 local CFG = {
   -- Aggressive race pace: late braking and high sustained lateral grip.
   MAX_LATERAL_ACCEL=17.5, BRAKE_ACCEL=14.0,
+  SINGLE_CAR_TEST=true,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
@@ -22,13 +23,17 @@ local CFG = {
 local WIDTH_PRESETS = {3, 7, 11, 15}
 
 local state = {
-  enabled=true, recLine=false, recBounds=false, loopRoute=true,
+  enabled=false, playerAutopilot=false, recLine=false, recBounds=false, loopRoute=true,
   widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnStable=0, spawnLastRoster="", routeDirectionChecked=false,
   nodes={}, p={}, laneAssignments={}, spawnSegments={}, trackMap=nil, status="Готов", logAccum=0, loaded=false,
 }
 local ensureTrackMap
+-- Ctrl+8 transfers the player car to RoutePilot control for a one-car line-following test.
+local playerAutopilotHotkey = ac.ControlButton('RoutePilot/PlayerAutopilot', {
+  keyboard = { key = ac.KeyIndex.D8, ctrl = true }
+})
 local logger=nil
 if Logger and type(Logger.new)=="function" then
   local ok, result = pcall(function()
@@ -391,7 +396,8 @@ local function recordSecondTelemetry(sim)
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     local p=state.p[i]
-    if car and car.isActive and car.isAIControlled and p then
+    if car and car.isActive and p and
+        (car.isAIControlled or (i==0 and state.playerAutopilot)) then
       if Driver and Driver.telemetryLine then writeLog(Driver.telemetryLine(i,car,p)) end
       any=true
     end
@@ -714,27 +720,49 @@ function script.update(dt)
     local player=ac.getCar(0)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
-    if state.enabled and state.loaded and #state.nodes>=2 then
-      trySpawnTeleport(sim,dt)
-    end
-    -- INSTANT ADOPTION + DRIVING: every active AI car is driven from the
-    -- very first frame. Nothing blocks this. (This was the bug: the spawn
-    -- gate used to block driving forever — cars stayed on the stock AI.)
-    if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
-      for i=0,sim.carsCount-1 do
-        local car=ac.getCar(i)
-        if car and car.isActive and car.isAIControlled then
-          local okc,erc=pcall(Driver.update,i,car,dt)
-          if not okc then
-            writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
-            releaseCar(i)
-          end
-        elseif state.p[i] then
-          releaseCar(i)
+    if playerAutopilotHotkey:pressed() then
+      if not state.playerAutopilot then
+        if state.loaded and #state.nodes>=2 and Driver and ensureDriver() then
+          ensureTrackMap()
+          state.playerAutopilot=true
+          state.enabled=true
+          state.laneAssignments[0]=1 -- fixed LEFT recorded lane for this test
+          state.p[0]=nil
+          state.status="Автопилот игрока: LEFT / одна машина"
+          writeLog("PLAYER_AUTOPILOT_START car=0 lane=LEFT")
+        else
+          state.status="Нет загруженной линии или driver.lua"
+          writeLog("PLAYER_AUTOPILOT_START_FAILED loaded=%s points=%d",
+            tostring(state.loaded),#state.nodes)
         end
+      else
+        state.playerAutopilot=false
+        state.enabled=false
+        releaseCar(0)
+        state.status="Автопилот игрока остановлен"
+        writeLog("PLAYER_AUTOPILOT_STOP car=0")
       end
-    else
-      for idx in pairs(state.p) do releaseCar(idx) end
+      flushLog()
+    end
+
+    -- Isolated test mode: only the user's car (index 0) receives RoutePilot
+    -- controls. AI traffic is neither repositioned nor driven by this test.
+    if state.playerAutopilot and #state.nodes>=2 and Driver and ensureDriver() then
+      local car=ac.getCar(0)
+      if car and car.isActive then
+        local okc,erc=pcall(Driver.update,0,car,dt)
+        if not okc then
+          writeLog("DRIVER_ERROR id=0 err=%s",tostring(erc))
+          releaseCar(0)
+          state.playerAutopilot=false
+          state.enabled=false
+          state.status="Ошибка автопилота игрока"
+        end
+      else
+        releaseCar(0)
+      end
+    elseif state.p[0] then
+      releaseCar(0)
     end
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
@@ -976,19 +1004,27 @@ function windowMain(dt)
     if ui.button("Сохранить",vec2(82,22)) then saveLine() end
     ui.sameLine(0,4)
     if ui.button("Загрузить",vec2(82,22)) then loadLine() end
-    if not state.enabled and ui.button("Запустить ИИ",vec2(150,22)) then
-      if #state.nodes>=2 then
-        ensureTrackMap()
-        state.enabled=true
-        state.spawnDone=false
-        state.spawnStable=0
-        state.spawnLastRoster=""
-        state.p={}
-        state.spawnSegments={}
-        state.status="ИИ запущен"
-        writeLog("AI_CONTROL_START")
+    local autopilotLabel=state.playerAutopilot and
+      "Остановить автопилот (Ctrl+8)" or "Тест одной машины (Ctrl+8)"
+    if ui.button(autopilotLabel,vec2(220,22)) then
+      if not state.playerAutopilot then
+        if state.loaded and #state.nodes>=2 and Driver and ensureDriver() then
+          ensureTrackMap()
+          state.playerAutopilot=true
+          state.enabled=true
+          state.laneAssignments[0]=1
+          state.p[0]=nil
+          state.status="Автопилот игрока: LEFT / одна машина"
+          writeLog("PLAYER_AUTOPILOT_START car=0 lane=LEFT source=UI")
+        else
+          state.status="Нет загруженной линии"
+        end
       else
-        state.status="Нет записанной линии"
+        state.playerAutopilot=false
+        state.enabled=false
+        releaseCar(0)
+        state.status="Автопилот игрока остановлен"
+        writeLog("PLAYER_AUTOPILOT_STOP car=0 source=UI")
       end
       flushLog()
     end
