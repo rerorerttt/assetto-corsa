@@ -1,4 +1,4 @@
-# RoutePilot 0.9.2 — predictive racing traffic
+# RoutePilot 0.9.3 — boundary-safety recovery
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
 
@@ -52,7 +52,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - The route curvature estimate is smoothed over a 12 m baseline to suppress small recording irregularities. High-speed steering uses a 16–45 m preview, predictive curvature feed-forward, and a 14.5 m/s² initial lateral-acceleration target, adapted to measured stability.
 - Stuck detection is not reset merely because another car exists ahead. After ten seconds without movement, the app attempts a respawn only at a point whose actual spawn position is clear of other vehicles.
 
-## Experimental 0.9.2 changes (2026-11-25)
+## Experimental 0.9.3 boundary-safety recovery (2026-11-25)
 
 - Removed the fixed 170 km/h cruise setting. RoutePilot uses an unbounded cruise target; speed is limited by upcoming route curvature and braking distance.
 - Braking deceleration and usable lateral grip are estimated from measured vehicle response, then filtered and used by curve planning and car-following. Acceleration is also learned to estimate whether a pass can be completed.
@@ -95,3 +95,16 @@ The user has tested the 2026-11-24 RoutePilot build in Assetto Corsa and confirm
 The separate branch `routepilot/predictive-boundary-guard-2026-11-24` contains an experimental correction for AI spawn direction and predictive road-boundary avoidance. It uses the recorded route's forward direction when spawning, heading-aware route selection for the spawn reference, a first-acquisition distance/direction gate, and a lookahead corridor check that transforms saved bounds into spline coordinates and accounts for the car's rotated bounding-box footprint. New trace fields are `BOUNDARY`, `SAFE`, and `BODY`.
 
 This build is not yet validated in Assetto Corsa/CSP. Keep using the confirmed baseline unless deliberately testing this experimental branch.
+
+
+## 2026-11-25 critical regression: boundary departures in 0.9.2
+
+The user's 0.9.2 in-game trace demonstrates that the build is unsafe and must not be treated as a usable release. Recorded road bounds were `[-3.5, +3.5]` m, while telemetry later showed `OFF=-5.6` m and then `OFF=-7.9` m, with `LINE_ERROR=999` after route projection was lost. The controller was still requesting throttle during the departure sequence. The user reports collisions and cars leaving the track; this is consistent with the telemetry and is a release-blocking regression.
+
+Source comparison against `routepilot/predictive-boundary-guard-2026-11-24` identified the aggressive emergency steering changes introduced in 0.9.2: a blind 220 ms full-lock pulse, emergency steering gain 2.6, steering authority raised to the full normalized range (+/-1), emergency steering rate 12/s, and lateral target transition 12 m/s. The earlier predictive-boundary build used the ordinary steering limit (0.75), 5.5/s maximum emergency steering response, and 2.6 m/s lateral target transition. The 0.9.2 combination allowed emergency passing to overpower the bounded path-following controller.
+
+The 0.9.3 source recovery disables the blind full-lock pulse, removes the emergency steering-gain/limit bypass, restores the 2.6 m/s emergency lateral transition, and restores the conservative 2026-11-24 steering and speed-planner calibration: 10–28 m lookahead, 0.75 steering limit, 4/s normal steering response, 6.0 m/s² initial lateral-acceleration target, and the prior curvature feed-forward. Dynamic passing and near-field player detection remain in the branch, but they are subordinate to the bounded steering command.
+
+Hard invariant for all future work: no passing mode, obstacle-avoidance mode, recovery mode, or speed optimization may override the road-boundary envelope. If the full vehicle footprint cannot fit inside the recorded corridor, the controller must reject that lateral target and reduce speed rather than steer toward an infeasible midpoint. Never restore blind full-lock steering. Do not increase lateral speed, steering authority, preview horizon, or grip target until boundary containment has been demonstrated by in-game telemetry across straights, bends, narrow sections, and emergency passes.
+
+Validation state: 0.9.2 failure is confirmed by the supplied trace. The 0.9.3 changes above are source-level regression containment only; they have not yet been tested in Assetto Corsa/CSP and must not be described as proven safe. The next trace must be checked for every AI row satisfying the actual vehicle-footprint constraint against `BOUNDS`, no sustained `LINE_ERROR=999` while the car is moving, no throttle after projection loss, and no collision/off-track event. Preserve the user's 2026-11-24 known-good build separately.
