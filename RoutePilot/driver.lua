@@ -69,13 +69,26 @@ local function refreshRouteMetrics()
   end
 end
 
+local INITIAL_PROJECTION_MAX = 8.0
+local function initialProjectionValid(result, heading)
+  if not result or safeNumber(result.distance, math.huge) > INITIAL_PROJECTION_MAX then
+    return false
+  end
+  if heading then
+    local hx,hz=normalize2(heading.x,heading.z)
+    if hx*result.tx+hz*result.tz < -0.15 then return false end
+  end
+  return true
+end
+
 local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, dt)
   refreshRouteMetrics()
   if not state.routeGeometry then return nil end
+  local locked=allowGlobal ~= true and hintProgress ~= nil
   local result = Geometry.project(state.routeGeometry, car.position,
-    hintProgress, car.look, speed or safeNumber(car.speedMs), dt or 0.05,
-    allowGlobal ~= true and hintProgress ~= nil)
+    hintProgress, car.look, speed or safeNumber(car.speedMs), dt or 0.05, locked)
   if not result then return nil end
+  if not locked and not initialProjectionValid(result,car.look) then return nil end
   return result.s, result.lateral, result.seg, result.t, result.distance,
     result.tx, result.tz
 end
@@ -163,9 +176,33 @@ local function planTargetSpeed(p)
   return math.max(0,target)
 end
 
-local function clampLat(seg, lat)
-  local bl, br = H.boundsAt(seg)
-  return clamp(lat, bl + BOUND_MARGIN, br - BOUND_MARGIN)
+local function safeCorridorForPreview(route, progress, ahead, car, headingAngle)
+  local size=car and car.aabbSize
+  local halfWidth=math.max(0.75,safeNumber(size and size.x,2.0)*0.5)
+  local halfLength=math.max(1.5,safeNumber(size and size.z,4.5)*0.5)
+  -- Project the rotated rectangular car footprint onto the route's lateral axis.
+  local envelope=halfWidth*math.abs(math.cos(headingAngle or 0))+
+    halfLength*math.abs(math.sin(headingAngle or 0))+BOUND_MARGIN
+  local safeMin,safeMax=-math.huge,math.huge
+  local first=-halfLength
+  local last=ahead+halfLength
+  local distance=first
+  while distance<=last+0.001 do
+    local sample=Geometry.sample(route,progress+distance)
+    if sample then
+      local bl,br=H.boundsAt(sample.seg)
+      safeMin=math.max(safeMin,bl+envelope)
+      safeMax=math.min(safeMax,br-envelope)
+    end
+    distance=distance+2.5
+  end
+  if safeMin>safeMax then
+    local sample=Geometry.sample(route,progress+ahead*0.5)
+    local bl,br=H.boundsAt(sample and sample.seg or 1)
+    local center=(bl+br)*0.5
+    safeMin,safeMax=center,center
+  end
+  return safeMin,safeMax,envelope
 end
 
 local function calculateSteering(car, p, speed, fx, fz, dt)
@@ -179,9 +216,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- Project onto the continuous spline, then aim at a point measured by
   -- arc distance. The controller never aims at the next raw recorded node.
+  local locked=p.routeLocked and p.routeProgress~=nil
   local projection=Geometry.project(route,car.position,p.routeProgress,car.look,
-    speed,dt,p.routeLocked and p.routeProgress~=nil)
-  if not projection then
+    speed,dt,locked)
+  if not projection or (not locked and not initialProjectionValid(projection,car.look)) then
     p.projectionLost=true; p.targetSpeed=0; p.gas=0; p.brake=1; p.lineDist=999
     return 0
   end
@@ -189,25 +227,30 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.routeProgress=projection.s; p.segIdx=projection.seg
   p.lineDist=projection.distance; p.latOff=projection.lateral
 
-  -- Speed-dependent preview starts steering before the bend. Pure pursuit
-  -- supplies the geometric turn command; spline curvature adds anticipation.
+  -- Preview the complete vehicle footprint through the steering horizon.
+  -- The common safe lateral interval forces the target to remain inside both
+  -- saved boundaries before the car reaches a narrowing or a bend.
   local ahead=clamp(CFG.LOOKAHEAD_BASE+speed*CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN,CFG.LOOKAHEAD_MAX)
+  local current=Geometry.sample(route,projection.s)
+  local future=Geometry.sample(route,projection.s+ahead)
+  local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
+  if not current or not future or not curvePreview then return 0 end
+
+  local headingAngle=signedAngle(fx,fz,current.tx,current.tz)
+  local safeMin,safeMax,bodyEnvelope=safeCorridorForPreview(
+    route,projection.s,ahead,car,headingAngle)
   local bl,br=H.boundsAt(p.segIdx)
   local mid,width=(bl+br)*0.5,br-bl
   local leftCenter=width>=5.4 and ((mid+br)*0.5) or mid
   local rightCenter=(bl+mid)*0.5
   p.laneOffset=p.overtakeSide==0 and leftCenter or rightCenter
-  local laneTarget=clampLat(p.segIdx,p.laneOffset or leftCenter)
-  p.laneOffsetCurrent=p.laneOffsetCurrent or laneTarget
+  local laneTarget=clamp(p.laneOffset or leftCenter,safeMin,safeMax)
   local maxStep=1.5*math.max(0,dt or 0)
-  p.laneOffsetCurrent=p.laneOffsetCurrent+
-    clamp(laneTarget-p.laneOffsetCurrent,-maxStep,maxStep)
+  local previousOffset=clamp(p.laneOffsetCurrent or laneTarget,safeMin,safeMax)
+  p.laneOffsetCurrent=previousOffset+
+    clamp(laneTarget-previousOffset,-maxStep,maxStep)
 
-  local current=Geometry.sample(route,projection.s)
-  local future=Geometry.sample(route,projection.s+ahead)
-  local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
-  if not current or not future or not curvePreview then return 0 end
   local targetX=future.x-future.tz*p.laneOffsetCurrent
   local targetZ=future.z+future.tx*p.laneOffsetCurrent
   local dx,dz=targetX-car.position.x,targetZ-car.position.z
@@ -222,11 +265,30 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local desiredCurvature=pursuitCurvature+
     previewCurvature*CFG.CURVATURE_FEEDFORWARD
 
+  -- Predict lateral drift over the preview time and steer back before the
+  -- vehicle footprint reaches a saved boundary.
+  local velocity=car.velocity
+  local lateralVelocity=safeNumber(velocity.x)*(-current.tz)+
+    safeNumber(velocity.z)*current.tx
+  local previewTime=clamp(ahead/math.max(5.0,speed),0.35,1.25)
+  local predictedLateral=projection.lateral+lateralVelocity*previewTime
+  local safePredicted=clamp(predictedLateral,safeMin,safeMax)
+  local boundaryError=safePredicted-predictedLateral
+  local boundaryDistance=math.max(8.0,ahead*0.65)
+  local boundaryCurvature=clamp(2.0*boundaryError/
+    (boundaryDistance*boundaryDistance),-0.10,0.10)
+  desiredCurvature=desiredCurvature+boundaryCurvature
+
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
   p.pathCurvature=safeNumber(current.k)
   p.steerCurvature=desiredCurvature
   p.projectionProgressDelta=projection.delta or 0
+  p.boundaryError=boundaryError
+  p.boundarySafeMin=safeMin
+  p.boundarySafeMax=safeMax
+  p.boundaryEnvelope=bodyEnvelope
+  p.boundaryEmergency=math.abs(boundaryError)>0.45
 
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
@@ -562,6 +624,8 @@ function Driver.update(carIndex, car, dt)
 
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
   if p.projectionLost then targetSpeed=0 end
+  if p.boundaryEmergency then targetSpeed=math.min(targetSpeed,math.max(8.0,speed-4.0)) end
+  p.targetSpeed=targetSpeed
   local steer = filterSteering(p, steerTarget, dt)
 
   calculateThrottle(p, speed, targetSpeed, dt)
@@ -641,7 +705,7 @@ function Driver.telemetryLine(i, car, p)
   local steerLimit=p.player and 0.99 or (CFG.STEER_LIMIT-0.01)
   local mode=p.player and " MODE=PLAYER" or ""
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -649,7 +713,9 @@ function Driver.telemetryLine(i, car, p)
     p.routeProgress or 0, p.laneOffsetCurrent or 0,
     math.abs(p.steer or 0) >= steerLimit and 1 or 0,
     safeNumber(p.wheelSlip), safeNumber(p.tractionScale,1),
-    safeNumber(p.steerCurvature), mode)
+    safeNumber(p.steerCurvature), safeNumber(p.boundaryError),
+    safeNumber(p.boundarySafeMin), safeNumber(p.boundarySafeMax),
+    safeNumber(p.boundaryEnvelope), mode)
 end
 
 return Driver
