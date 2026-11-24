@@ -326,8 +326,8 @@ local function offsetProfile(startOffset,targetOffset,transitionLength,initialSl
   return offset,slope,second
 end
 
--- Evaluate one smooth lateral trajectory. Quintic smoothstep gives zero
--- lateral velocity and acceleration at the start and end of a lane transition.
+-- Evaluate one smooth lateral trajectory. The quintic profile starts with
+-- measured lateral velocity and ends with zero lateral velocity/acceleration.
 local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
     transitionLength, horizon, halfWidth, halfLength, fx, fz, initialSlope)
   local samples,minClearance,maxCurvature,maxEnvelope={},math.huge,0,0
