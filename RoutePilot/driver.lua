@@ -323,6 +323,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- Preview the complete vehicle footprint through the steering horizon.
   -- The common safe lateral interval forces the target to remain inside both
   -- saved boundaries before the car reaches a narrowing or a bend.
+  -- Long preview at racing speeds prevents chasing small local spline bends.
   local ahead=clamp(CFG.LOOKAHEAD_BASE+speed*CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN,CFG.LOOKAHEAD_MAX)
   local current=Geometry.sample(route,projection.s)
@@ -502,7 +503,10 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
           local otherSpeed=math.max(0,safeNumber(other.speedMs))
           local otherHalfWidth=math.max(0.75,
             safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
-          local separation=ownHalfWidth+otherHalfWidth+0.35
+          -- The road-boundary envelope already includes a 0.4 m margin.
+          -- Keep only a small additional car-to-car clearance so a real
+          -- two-car corridor is not rejected by double-counted margins.
+          local separation=ownHalfWidth+otherHalfWidth+0.08
           local actualGap=math.abs(actualLateral-laneOffset)
           local otherTarget=otherState and
             (otherState.overtakeSide~=0 or otherState.returningFromPass) and
@@ -600,7 +604,7 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         local otherSpeed=math.max(0,safeNumber(other.speedMs))
         local detectionHorizon=directionDot < -0.25 and
           (ownSpeed+otherSpeed)*2.0+30.0 or ownSpeed*3.0+30.0
-        if gap and actualLateral and gap>-halfLengths-2.0 and
+        if gap and actualLateral and gap>-1.0 and
            gap<math.max(110.0,detectionHorizon) and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or gap<bestGap) then
@@ -664,20 +668,32 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
-  local separation=(ownWidth+targetWidth)*0.5+0.35
+  local separation=(ownWidth+targetWidth)*0.5+0.08
   local candidates={}
-  local step=0.35
+  local candidateCount,reservedCount,occupiedCount=0,0,0
+  local step=0.20
   for i=0,math.floor((safeMax-safeMin)/step) do
     local offset=safeMin+i*step
     if math.abs(offset-source)>=1.15 and math.abs(offset-leaderLateral)>=separation then
       candidates[#candidates+1]=offset
     end
   end
+  candidateCount=#candidates
   table.sort(candidates,function(a,b)return math.abs(a-source)<math.abs(b-source) end)
   for _,offset in ipairs(candidates) do
     local reserved=passingReservationBlocked(carIndex,p,offset,speed)
-    if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then return offset end
+    if reserved then
+      reservedCount=reservedCount+1
+    elseif laneOccupied(carIndex,car,offset,leaderIndex) then
+      occupiedCount=occupiedCount+1
+    else
+      p.passSearchDiag=string.format("safe=[%.2f,%.2f] candidates=%d reserved=%d occupied=%d",
+        safeMin,safeMax,candidateCount,reservedCount,occupiedCount)
+      return offset
+    end
   end
+  p.passSearchDiag=string.format("safe=[%.2f,%.2f] candidates=%d reserved=%d occupied=%d",
+    safeMin,safeMax,candidateCount,reservedCount,occupiedCount)
   return nil
 end
 
@@ -693,7 +709,8 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed)
   if offset==nil then
     p.overtakeRetryT=0.25
     if not p.overtakeDeniedLogged then
-      H.log("CAR=%d OVERTAKE_DENIED no_free_passing_offset gap=%.1f",carIndex,gap or -1)
+      H.log("CAR=%d OVERTAKE_DENIED no_free_passing_offset gap=%.1f %s",
+        carIndex,gap or -1,p.passSearchDiag or "no_diagnostics")
       p.overtakeDeniedLogged=true
     end
     return false
@@ -707,7 +724,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed)
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex;p.passT=0;p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
-  p.emergencySteerBoostT=(p.emergencyPass and gap<=8.0) and 0.18 or 0
+  p.emergencySteerBoostT=(p.emergencyPass and gap<=10.0) and 0.22 or 0
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
@@ -763,20 +780,30 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       local targetFx,targetFz=normalize2(target.look.x,target.look.z)
       local targetDirectionDot=targetRouteSample and
         (targetFx*targetRouteSample.tx+targetFz*targetRouteSample.tz) or 1.0
-      local passedDistance
-      if targetProgress and targetDirectionDot>=-0.25 then
-        passedDistance=routeGap(targetProgress,currentProgress or ownProgress)
-      else
-        local targetLongitudinal=relativeToRoute(target.position,ownSample)
-        passedDistance=targetLongitudinal~=nil and -targetLongitudinal or -math.huge
+      local passedDistance=-math.huge
+      if ownSample then
+        local dx=safeNumber(target.position.x)-ownSample.x
+        local dz=safeNumber(target.position.z)-ownSample.z
+        local worldDistanceSq=dx*dx+dz*dz
+        if worldDistanceSq<=50.0*50.0 then
+          -- Close-range pass completion must use actual world geometry.
+          -- Route progress can wrap at the start/finish and falsely report
+          -- that a bumper-to-bumper blocker is already behind us.
+          local targetLongitudinal=relativeToRoute(target.position,ownSample)
+          passedDistance=targetLongitudinal~=nil and -targetLongitudinal or -math.huge
+        elseif targetProgress and targetDirectionDot>=-0.25 then
+          passedDistance=routeGap(targetProgress,currentProgress or ownProgress)
+        end
       end
-      local ownLength = (car.aabbSize and car.aabbSize.z) or 4.5
-      local otherLength = (target.aabbSize and target.aabbSize.z) or 4.5
-      passedClearance = passedDistance >= ownLength + otherLength
+      local ownLength = math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
+      local otherLength = math.max(3.0,safeNumber(target.aabbSize and target.aabbSize.z,4.5))
+      local requiredClearance=(ownLength+otherLength)*0.5+1.5
+      local reachedPassingLine=math.abs(safeNumber(p.laneOffsetCurrent,p.passLat)-p.passLat)<0.45
+      passedClearance = passedDistance >= requiredClearance and reachedPassingLine
     else
       -- A removed/despawned target is not a reason to cut back blindly:
       -- the full lane occupancy check below is still mandatory.
-      passedClearance = true
+      passedClearance = math.abs(safeNumber(p.laneOffsetCurrent,p.passLat)-p.passLat)<0.45
     end
 
     local returnOffset=p.passFromOffset or p.baseLaneOffset or defaultOffset
@@ -838,10 +865,12 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
     local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
       speed>=(leaderSpeed or 0)-4.0
-    local urgent=canActuallyPass and gap<=urgentGap
+    local immediateBlock=gap<=12.0 and leaderPace<=math.max(2.0,speed*0.15)
+    canActuallyPass=canActuallyPass or immediateBlock
+    local urgent=canActuallyPass and (gap<=urgentGap or immediateBlock)
     local passWindow=math.max(45.0,32.0+speed*1.5)
     p.followTimer=p.followTimer+dt
-    if canActuallyPass and gap<=passWindow and p.overtakeSide==0 and
+    if canActuallyPass and gap>=-1.0 and gap<=passWindow and p.overtakeSide==0 and
        p.overtakeRetryT<=0 then
       p.emergencyPassRequest=urgent
       if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed) then
