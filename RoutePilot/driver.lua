@@ -343,7 +343,9 @@ local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
       math.abs(second)/math.pow(1+slope*slope,1.5)+
       2.0*math.abs(safeNumber(sample.k)*slope)
     maxCurvature=math.max(maxCurvature,curvature)
-    samples[#samples+1]={distance=math.max(0,distance),curvature=curvature}
+    if distance>=0 then
+      samples[#samples+1]={distance=distance,curvature=curvature}
+    end
     distance=distance+2.0
   end
   return samples,nil,minClearance,maxCurvature,maxEnvelope
