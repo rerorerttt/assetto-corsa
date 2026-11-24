@@ -80,6 +80,7 @@ Implemented in source on this branch (not yet runtime-validated):
 - The passing car remains in the right lane until route-progress clearance reaches the sum of both vehicle lengths. Returning left still requires a separate occupancy check over both ahead and behind route distances.
 - Added per-car route-segment locking. A car may use global nearest-segment reacquisition when it first joins the route; after that, its projection stays within the local progress window to avoid jumping to a geometrically close branch at a crossing. Route metrics rebuild when the number of recorded nodes changes.
 - Added an explicit OVERTAKE_DISABLED corridor_too_narrow log for fast cars when the loaded corridor cannot support two lanes. The 3 m profile in the supplied trace remains single-lane; the user must load/record a genuine wide-enough profile (the intended symmetric profile is 7 m).
+- First route acquisition is now a one-time global search biased toward the segment direction that best matches the car's heading (absolute alignment, so reverse-facing spawn orientation is not assumed). After acquisition, each car stores its own segment and uses only the local route window. Lane-change destination reservations are visible to other AI cars immediately, before the vehicle has physically crossed into the target lane, preventing multiple fast cars from claiming the same gap in one update cycle. Clearance windows expand with vehicle speed.
 
 Important remaining limits and validation:
 
