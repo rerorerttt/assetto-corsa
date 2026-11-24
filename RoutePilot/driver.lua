@@ -153,8 +153,7 @@ local function planTargetSpeed(p)
     if not sample then break end
     local curvature=math.abs(sample.k or 0)
     if curvature>CFG.CURVE_MIN then
-      local curveSpeed=math.max(CFG.MIN_APEX_SPEED,
-        math.sqrt(CFG.MAX_LATERAL_ACCEL/curvature))
+      local curveSpeed=math.sqrt(CFG.MAX_LATERAL_ACCEL/curvature)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+2*CFG.BRAKE_ACCEL*distance)
       if safeSpeed<target then target=safeSpeed end
     end
