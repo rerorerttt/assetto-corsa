@@ -108,29 +108,6 @@ local function measureDrivenWheelSlip(car)
   return maximum
 end
 
-local function applyTractionLimiter(car,p,dt)
-  p.wheelSlip=measureDrivenWheelSlip(car)
-  -- Factory TC is forced on above; this second layer catches cars without
-  -- usable factory TC and trims throttle before sustained wheelspin develops.
-  local factor=1.0
-  if p.wheelSlip>0.10 then
-    factor=clamp(1.0-(p.wheelSlip-0.10)*1.75,0.22,1.0)
-  end
-  p.tractionFactor=factor
-  local requested=math.min(p.gas,factor)
-  local rate
-  if p.brake > 0.02 then
-    requested=0
-    rate=GAS_SPIN_CUT_RATE
-  elseif requested<p.gasOutput then
-    rate=(p.wheelSlip>0.14) and GAS_SPIN_CUT_RATE or GAS_RELEASE_RATE
-  else
-    rate=GAS_RISE_RATE
-  end
-  p.gasOutput=p.gasOutput+clamp(requested-p.gasOutput,-rate*dt,rate*dt)
-  p.gas=clamp(p.gasOutput,0,1)
-end
-
 local function laneRoleForOffset(offset, twoLane)
   if not twoLane then return "SINGLE" end
   return offset < 0 and "LEFT" or "RIGHT"
