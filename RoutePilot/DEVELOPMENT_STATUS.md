@@ -183,3 +183,25 @@ Trace inspection found the direct cause in the driver update: `boundaryEmergency
 Removed the boundary-emergency speed reduction. The predictive corridor still clamps the lane target to the safe interval and adds corrective steering based on predicted lateral drift; the body-footprint guard and its deficit telemetry remain. Boundary correction is now handled by steering rather than automatically braking. This change does not remove curvature-based speed planning, leader-following safety, or the projection-loss fail-safe.
 
 Validation: inspected 2,814 AI telemetry rows in the supplied trace; 99 contained `BRAKE=1.000`, and the representative stop sequence matched the boundary-emergency deceleration exactly. The code change was checked against the exact source block and committed on this experimental branch. No Lua compiler or Assetto Corsa/CSP runtime is available here, so the new behavior still requires an in-game test. The best-known-good baseline and PR #6 remain untouched.
+
+
+## 2026-11-25 predictive close-obstacle passing and player detection
+
+Reviewed the latest routepilot_trace.txt from the experimental branch before changing the driver:
+
+- The trace contains 4,464 lines, 2,155 AI telemetry rows, and 431 player telemetry rows. The player stayed at the same world position throughout the capture and all 431 player rows reported LINE_ERROR=999.00; the player therefore never acquired a valid route projection in this session.
+- Existing lane-change logic completed multiple passes, but it only considered a leader after route projection succeeded and waited for the normal follow trigger. Consequently, an unprojected player could not be selected as a leader or reliably block a passing lane.
+- The trace contains 12 OVERTAKE_BEGIN, 10 OVERTAKE_END, and 1,823 repeated OVERTAKE_DENIED right_lane_occupied messages. The repeated denial messages were generated on successive update frames and obscured useful trace information.
+
+Implemented on this experimental branch:
+
+- Added a bounded local world-space fallback for car index 0 only. When the player has no valid spline projection, the AI projects the player's position onto its own current route tangent and can recognize the player as a nearby leader or as an obstruction in the destination lane. Failed projections for other AI cars remain fail-closed to avoid treating a car on another route branch as a same-lane obstacle.
+- Lane occupancy now considers vehicle body widths, reserved AI lane targets, and nearby side-by-side traffic. It checks both front and rear approach windows before a lane change. The same physical player fallback is used when checking the destination lane.
+- Added an urgent pass trigger for fast AI: when a slower leader is within a speed-dependent approach distance and the AI has a meaningful potential speed advantage, it may begin the pass immediately instead of waiting for the normal follow timer. It still requires the passing lane to be clear and the complete vehicle footprint to fit the safe corridor over a 40 m forward preview.
+- During an urgent pass, lateral lane-offset transition and steering response are temporarily faster, while the existing steering limit, stability/traction controls, predictive corridor guard, and normal pass-clearance rules remain active. The steering is deliberately not hard-locked to full input: a permanent full-lock command would undermine control and could cause a spin or boundary departure.
+- The AI continues to hold the passing lane until rear-bumper clearance is established, then checks the return lane before moving back. If the player is the pass target and has no route projection, return clearance is measured in local route-tangent space.
+- Added a one-second retry cooldown and one-shot denial logging so an unavailable passing lane no longer floods the trace every physics update.
+
+Validation performed: fetched the updated file from GitHub after each write; confirmed all expected urgent-pass/player-fallback/clearance code is present; a structural Lua block and delimiter scan reports balanced blocks and delimiters. This is not a Lua compiler test. No Assetto Corsa/CSP runtime test has been performed. The new behavior remains experimental and must be checked in-game for steering response, lane clearance, player avoidance, and return-to-lane behavior. The trace's player was stationary and outside valid route projection, so it does not itself demonstrate that an AI successfully avoided a moving player.
+
+Latest code commit: 4b37ec06f16e43bc7a8326bcbc6e817cc025301f. The best-known-good baseline, PR #6, and main remain untouched.
