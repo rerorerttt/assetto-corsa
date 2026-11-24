@@ -666,12 +666,12 @@ function Driver.telemetryLine(i, car, p)
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
   local gapText=p.trafficGap==math.huge and "INF" or string.format("%.2f",p.trafficGap)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s SECTION=LOCAL STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s PREVIEW=%.1f SECTION=LOCAL STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_VIOLATION=%s LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
-    safeNumber(car.speedMs), targetText, p.steer, p.gas, p.brake,
+    safeNumber(car.speedMs), targetText, p.previewDistance or 0, p.steer, p.gas, p.brake,
     p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx,
     p.latOff, p.laneOffset, p.laneTargetOffset or p.laneOffset, p.laneChangeProgress or 1,
-    p.laneChanges or 0, gapText, tostring(p.trafficBlocked),
+    tostring(p.laneViolation), p.laneChanges or 0, gapText, tostring(p.trafficBlocked),
     p.boundaryError or 0, tostring(p.boundaryHard), left, right)
 end
 
