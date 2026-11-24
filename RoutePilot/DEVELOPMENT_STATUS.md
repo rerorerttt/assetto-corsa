@@ -220,4 +220,6 @@ Implemented on branch `routepilot/coordinated-traffic-player-autopilot-2026-11-2
 
 Static verification after the changes: confirmed there are no remaining `p.slow`, SLOW/FAST class assignments, index-parity personality selection, or 5 m/s pass-advantage threshold; confirmed the native player AI branch is present, manual observation is skipped while the player is AI-controlled, telemetry does not double-log the player, local pass reservation is present, and passing-lane following is active. Lua compiler and Assetto Corsa/CSP runtime are unavailable here; this branch has not been compiled or tested in-game. In-game validation must confirm that Ctrl+8 transfers steering to RoutePilot, that the player follows the recorded line, that cars queue behind one active pass without simultaneous lane changes, and that both lanes' traffic is respected under braking.
 
-Latest driver commit: `f1ff63c3df6c192f34eb0af2395b7b794d9e20ec`. Main script commit: `235fdf797fad25fc69918a6c203cd3b424d9e4ff`. README commit: `a34716a851cfe25ee1f7cb82f48ae6605195fe09`.
+The following-safety speed calculation also reserves 0.5 seconds of the controlled car's current travel distance before computing the permitted speed, making braking begin earlier when closing on a slower vehicle.
+
+Latest driver commit: `374e7d9579f610848bfbe247982ee141e3a4838d`. Main script commit: `235fdf797fad25fc69918a6c203cd3b424d9e4ff`. README commit: `a34716a851cfe25ee1f7cb82f48ae6605195fe09`.
