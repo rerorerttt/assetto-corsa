@@ -625,8 +625,13 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   local slower=(leaderSpeed or 0)<p.cruiseSpeed-1.0
   if slower then
     local speedAdvantage=p.cruiseSpeed-(leaderSpeed or 0)
-    local urgentGap=clamp(12.0+speed*0.55,18.0,40.0)
-    local canActuallyPass=speedAdvantage>=2.5 and
+    local targetCar=ac.getCar(leaderIndex)
+    local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
+    local targetLength=math.max(3.0,safeNumber(targetCar and targetCar.aabbSize and targetCar.aabbSize.z,4.5))
+    local estimatedPassDistance=(ownLength+targetLength+8.0)*
+      math.max(speed, (leaderSpeed or 0)+1.0)/math.max(1.0,speedAdvantage)
+    local urgentGap=clamp(18.0+speed*0.9,25.0,60.0)
+    local canActuallyPass=speedAdvantage>=5.0 and estimatedPassDistance<=130.0 and
       speed>=(leaderSpeed or 0)-3.0
     local urgent=canActuallyPass and gap<=urgentGap
     p.followTimer=p.followTimer+dt
