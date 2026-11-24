@@ -197,20 +197,20 @@ end
 local function planLocalSpeed(p,speed)
   local target=320/3.6
   local preview=clamp(math.max(45.0,speed*2.8+18.0),45.0,125.0)
-  local distance=4.0
+  local distance=3.0
   while distance<=preview do
-    local before=H.walkLine(p.segIdx,p.segT or 0,math.max(0,distance-4.0))
+    local before=H.walkLine(p.segIdx,p.segT or 0,math.max(0,distance-3.0))
     local middle=H.walkLine(p.segIdx,p.segT or 0,distance)
-    local after=H.walkLine(p.segIdx,p.segT or 0,distance+4.0)
+    local after=H.walkLine(p.segIdx,p.segT or 0,distance+3.0)
     if not before or not middle or not after then break end
     local ax,az=normalize2(middle.x-before.x,middle.z-before.z)
     local bx,bz=normalize2(after.x-middle.x,after.z-middle.z)
     local angle=math.abs(signedAngle(ax,az,bx,bz))
-    local curvature=angle/8.0
+    local curvature=angle/6.0
     if curvature>0.0015 then
       local curveSpeed=math.sqrt(CFG.MAX_LATERAL_ACCEL/curvature)
       local brakingSpeed=math.sqrt(curveSpeed*curveSpeed+
-        2*CFG.BRAKE_ACCEL*math.max(0,distance-4.0))
+        2*CFG.BRAKE_ACCEL*math.max(0,distance-3.0))
       if brakingSpeed<target then target=brakingSpeed end
     end
     distance=distance+4.0
@@ -615,12 +615,11 @@ function Driver.telemetryLine(i, car, p)
   local look=car.look
   local headingDot=look.x*tx+look.z*tz
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
-  local section=state.trackMap and state.trackMap[p.segIdx] and state.trackMap[p.segIdx].section or "?"
   local gapText=p.trafficGap==math.huge and "INF" or string.format("%.2f",p.trafficGap)
   return string.format(
     "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s SECTION=LOCAL STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
-    safeNumber(car.speedMs), targetText, section, p.steer, p.gas, p.brake,
+    safeNumber(car.speedMs), targetText, p.steer, p.gas, p.brake,
     p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx,
     p.latOff, p.laneOffset, p.laneTargetOffset or p.laneOffset, p.laneChangeProgress or 1,
     p.laneChanges or 0, gapText, tostring(p.trafficBlocked),
