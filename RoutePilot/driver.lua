@@ -16,13 +16,13 @@ local LANE_HALF_WIDTH = 1.25
 local BOUNDARY_MARGIN = 1.10
 local BOUNDARY_HARD_MARGIN = 0.35
 -- High-speed look-ahead and smooth steering.
-local STEER_LIMIT = 0.74
-local STEER_GAIN = 0.92
+local STEER_LIMIT = 0.68
+local STEER_GAIN = 0.82
 local STEER_FILTER_TIME = 0.16
-local STEER_RATE = 2.2
-local LOOKAHEAD_BASE = 20.0
-local LOOKAHEAD_SPEED = 0.82
-local LOOKAHEAD_MAX = 110.0
+local STEER_RATE = 1.15
+local LOOKAHEAD_BASE = 18.0
+local LOOKAHEAD_SPEED = 0.55
+local LOOKAHEAD_MAX = 30.0
 local LANE_RESCUE_SPEED = 1.5
 local LANE_RESCUE_TIME = 5.0
 local GAS_RISE_RATE = 4.0
@@ -535,57 +535,14 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.boundaryHard=p.latOff<left+BOUNDARY_HARD_MARGIN or
     p.latOff>right-BOUNDARY_HARD_MARGIN
 
-  local requestedLookahead=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
+  -- Match the proven original RoutePilot follower: one stable target 18–30 m
+  -- ahead. Do not shorten the target to 12 m based on a straight-chord test;
+  -- that caused abrupt target changes and steering oscillation.
+  local lookahead=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE,LOOKAHEAD_MAX)
-  local function makeTarget(distance)
-    local center=H.walkLine(seg,t,distance)
-    local before=H.walkLine(seg,t,math.max(0,distance-2.5))
-    local after=H.walkLine(seg,t,distance+2.5)
-    if not center then return nil,nil end
-    if not before then before=center end
-    if not after then after=center end
-    local tx,tz=normalize2(after.x-before.x,after.z-before.z)
-    return center.x-tz*targetOffset,center.z+tx*targetOffset
-  end
-  local function previewPathFits(distance,targetX,targetZ)
-    local dx,dz=targetX-car.position.x,targetZ-car.position.z
-    local total=math.max(0.001,distance)
-    for sample=5.0,distance-1.0,5.0 do
-      local point,pointSeg=H.walkLine(seg,t,sample)
-      local before=H.walkLine(seg,t,math.max(0,sample-2.5))
-      local after=H.walkLine(seg,t,sample+2.5)
-      if not point or not pointSeg or not before or not after then return false end
-      local tangentX,tangentZ=normalize2(after.x-before.x,after.z-before.z)
-      local fraction=sample/total
-      local chordX=car.position.x+dx*fraction
-      local chordZ=car.position.z+dz*fraction
-      local lateral=(chordX-point.x)*-tangentZ+(chordZ-point.z)*tangentX
-      local minOffset,maxOffset=H.safeBoundsAt(pointSeg)
-      local _,sampleTwoLane=H.laneOffset(carIndex,pointSeg)
-      if sampleTwoLane and p.laneChangeProgress>=1.0 and
-          not p.boundaryViolation and
-          (p.laneRole=="LEFT" or p.laneRole=="RIGHT") then
-        if p.laneRole=="LEFT" then
-          maxOffset=math.min(maxOffset,-vehicleMargin)
-        else
-          minOffset=math.max(minOffset,vehicleMargin)
-        end
-      end
-      if lateral<minOffset+0.02 or lateral>maxOffset-0.02 then return false end
-    end
-    return true
-  end
-  -- Prefer one distant, stable target. Shorten it only in meaningful steps
-  -- when the swept chord would leave the assigned lane or recorded corridor.
-  local lookahead=requestedLookahead
-  local targetX,targetZ=nil,nil
-  while lookahead>=12.0 do
-    targetX,targetZ=makeTarget(lookahead)
-    if targetX and previewPathFits(lookahead,targetX,targetZ) then break end
-    lookahead=lookahead-15.0
-  end
-  if not targetX or lookahead<12.0 then
-    lookahead=12.0
+  local targetX,targetZ=makeTarget(lookahead)
+  if not targetX then
+    lookahead=LOOKAHEAD_BASE
     targetX,targetZ=makeTarget(lookahead)
   end
   p.previewDistance=lookahead
@@ -596,14 +553,9 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   if distance < 0.001 then return p.steer end
 
   local angle = signedAngle(fx, fz, dx / distance, dz / distance)
-  local lateralError = targetOffset - p.latOff
-  local lateralGain = p.boundaryViolation and 0.14 or 0.018
-  local lateralLimit = p.boundaryViolation and 0.55 or 0.10
-  -- Keep the same angle sign convention as the original working follower:
-  -- atan2(fx * dirZ - fz * dirX, dot), with positive steer for positive angle.
-  local targetSteer = angle * STEER_GAIN +
-    clamp(lateralError * lateralGain, -lateralLimit, lateralLimit)
-  targetSteer = clamp(targetSteer, -STEER_LIMIT, STEER_LIMIT)
+  -- Pure pursuit heading correction, matching the original working
+  -- controller's angle sign and avoiding a second lateral-error loop.
+  local targetSteer = clamp(angle * STEER_GAIN, -STEER_LIMIT, STEER_LIMIT)
 
   if math.abs(angle) < 0.0015 and math.abs(lateralError) < 0.04 then
     targetSteer = 0
