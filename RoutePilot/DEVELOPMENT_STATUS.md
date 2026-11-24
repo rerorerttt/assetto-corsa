@@ -132,3 +132,12 @@ Do not merge PR #4 until these runtime checks pass.
 - Confirmed by source inspection that the branch's main loop still detects native AI through `car.isAIControlled`, includes car index 0, calls `Driver.update()`, and logs driver exceptions. RoutePilot does not and cannot claim to enable the game's native Ctrl+8 mode itself.
 - Commit: `4ca980e01e96a7783ac318d8ae9d5e010c987e29`.
 - Static source checks confirm exactly one local `makeTarget` definition, no remaining `lateralError` reference, and the expected route-following helper is supplied to the driver. Lua interpreter and Assetto Corsa runtime validation were unavailable during this pass; do not treat the fix as runtime-confirmed until a fresh in-game trace has no `DRIVER_ERROR` and shows steering/throttle telemetry for car 0.
+
+## Physical-geometry lane-change and boundary revision (2026-11-24)
+
+- Added per-car footprint measurement from CSP `car.aabbSize` (width and length), projected onto the route tangent and normal. Traffic clearance uses both vehicles' projected half-widths and half-lengths rather than treating cars as points or using one fixed width.
+- Lane-change admission checks the recorded corridor at 3 m samples using the moving vehicle's actual body width. Destination-lane and swept-transition occupancy checks include physical footprints, relative-speed front/rear windows and other cars' in-progress lane reservations.
+- After a successful pass, a car remains in the new lane. The next obstacle scan begins a fresh decision cycle; there is no automatic immediate return to the previous lane.
+- Steering preview checks intermediate points along the pure-pursuit chord against the recorded boundaries and assigned lane. If the chord cuts across a bend or leaves the legal corridor, preview distance is shortened until a legal target is found. Boundary detection uses the actual vehicle footprint.
+- Removed automatic stuck/off-track teleport recovery from the driver. Startup placement remains separate; a car leaving its lane is treated as a controller failure, not hidden by rescue teleportation.
+- Static source checks are pending after this commit. CSP SDK documents `ac.StateCar.aabbSize` as the vehicle AABB dimensions in meters. No Assetto Corsa runtime test was possible during source editing; physical steering and lane-clearance behavior remain unverified.
