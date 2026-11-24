@@ -393,13 +393,19 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     safeNumber(p.baseLaneOffset,(bl+br)*0.5) or
     safeNumber(p.passLat,p.laneOffset or startOffset)
   local transitionLength=clamp(math.max(18.0,speed*1.5),18.0,48.0)
+  local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+  local brakingDistance=speed*speed/(2*brakeAccel)
+  -- Validate the chosen path beyond steering lookahead, far enough to see
+  -- boundaries and bends that require braking before the next update window.
+  local planningHorizon=math.max(CFG.PLAN_HORIZON,
+    brakingDistance+speed*1.5+35.0,ahead)
 
   -- Candidate range is the union of local usable offsets; each candidate is
   -- subsequently checked at every sample, so this range is not itself treated
   -- as a safe corridor.
   local minOffset,maxOffset=math.huge,-math.huge
   local d=-halfLength
-  while d<=ahead+halfLength+0.001 do
+  while d<=planningHorizon+halfLength+0.001 do
     local sample=Geometry.sample(route,projection.s+d)
     if sample then
       local l,r=routeBoundsAtSample(sample)
@@ -431,7 +437,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   for i=1,#candidates do
     local candidate=candidates[i]
     local samples,reason,clearance,maxCurvature,envelope=evaluateOffsetPath(
-      route,projection.s,startOffset,candidate,transitionLength,ahead,
+      route,projection.s,startOffset,candidate,transitionLength,planningHorizon,
       halfWidth,halfLength,fx,fz)
     if samples then
       local cost=math.abs(candidate-desired)+
