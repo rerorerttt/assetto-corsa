@@ -1,15 +1,25 @@
--- RoutePilot/driver.lua — v0.13.1 LANED RACING, HOTFIX (CSP 0.3.2-preview2)
--- THE ATTACHED TRACE: "driver.lua:138: attempt to call global 'lerp' (a nil
--- value)" repeated forever with CAR_INIT loops — cars were never driven.
--- v0.13.0 declared the helper lerp BELOW its use in railPoint; in Lua that
--- compiles to a call to a nil GLOBAL. Two order bugs fixed:
---   1) lerp moved to the top helpers block (before any use);
---   2) laneClear referenced p.halfW without p as a parameter (next latent
---      nil-error) — it now derives the own half-width via halfDims(car).
--- Everything else from v0.13.0 is unchanged: corner-cutting fix (rail
--- clamped into the bounds of the SEGMENT THE TARGET LANDS ON, lookahead
--- shrinks before corners, speed-scaled edge zone), checkers-style adjacent
--- lane changes with real car dimensions, no immediate return.
+-- RoutePilot/driver.lua — v0.13.2 LANED RACING (CSP 0.3.2-preview2)
+-- HOTFIX CHAIN, full honesty for the trace history:
+--  * v0.13.0: helper `lerp` was declared BELOW its use in railPoint —
+--    compiled to a nil-global call; the attached trace shows the endless
+--    "driver.lua:138: attempt to call global 'lerp'" DRIVER_ERROR loop,
+--    cars were never driven (standing still). Fixed in v0.13.1.
+--  * v0.13.1 itself carried a typo: `RESCUE_speed` (lowercase) instead of
+--    RESCUE_SPEED — a comparison against nil that would throw every frame
+--    in the stuck check. Fixed here.
+--  * laneClear referenced p.halfW without p as a parameter (latent nil) —
+--    now derives the own half-width via halfDims(car). Fixed in v0.13.1.
+-- Everything else is the working LANED RACING driver:
+--  * Rails: pure pursuit; the rail target is CLAMPED INTO THE BOUNDS OF
+--    THE SEGMENT THE TARGET LANDS ON (corner-cutting fix); lookahead
+--    shrinks BEFORE corners and opens after; speed-scaled edge zone;
+--    rails never sit closer than half a real car width to a bound.
+--  * Checkers traffic: strictly ADJACENT lane changes, real dimensions
+--    (car.aabbSize guarded, fallback 1.9x4.4 m), ahead checked by the
+--    dynamic gap and behind by the follower closing speed; no immediate
+--    return - the new lane becomes home, each change is a fresh cycle.
+--  * Speeds: cruise = speedMax(210) * pace (0.88..1.10); dynamic
+--    following gap 5 + 0.45*v; soft launch; wheel-slip burnout control.
 
 local Driver = {}
 local CFG, S, H
@@ -324,7 +334,7 @@ function Driver.update(i,car,dt)
     if physics and physics.preventAIFromRetiring then pcall(physics.preventAIFromRetiring,i) end
   end
   local speed=math.max(0,num(car.speedMs,0))
-  if speed<RESCUE_speed then
+  if speed<RESCUE_SPEED then
     p.stuck=p.stuck+dt
     if p.stuck>RESCUE_TIME and num(S.sessionTime,999)>RESCUE_COOLDOWN then
       p.stuck=0
