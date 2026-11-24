@@ -359,6 +359,13 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 end
 
 local function filterSteering(p, target, dt)
+  if safeNumber(p.emergencySteerBoostT)>0 then
+    p.emergencySteerBoostT=math.max(0,p.emergencySteerBoostT-dt)
+    local fullLock=target>=0 and 1.0 or -1.0
+    p.steer=fullLock
+    p.steerFiltered=fullLock
+    return fullLock
+  end
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
   local steerRate=p.emergencyPass and math.max(CFG.STEER_RATE,CFG.EMERGENCY_STEER_RATE) or CFG.STEER_RATE
@@ -612,6 +619,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed)
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex;p.passT=0;p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
+  p.emergencySteerBoostT=(p.emergencyPass and gap<=8.0) and 0.08 or 0
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
