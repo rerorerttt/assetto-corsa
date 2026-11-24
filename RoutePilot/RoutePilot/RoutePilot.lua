@@ -450,7 +450,10 @@ local function trySpawnTeleport(sim,dt)
   local aiCars={}
   for i=1,sim.carsCount-1 do
     local car=ac.getCar(i)
-    if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
+    if car and car.isActive and car.isAIControlled then
+      aiCars[#aiCars+1]=i
+      break
+    end
   end
   local roster=table.concat(aiCars,",")
   if #aiCars==0 then
@@ -645,16 +648,23 @@ function script.update(dt)
     -- very first frame. Nothing blocks this. (This was the bug: the spawn
     -- gate used to block driving forever — cars stayed on the stock AI.)
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
+      local primaryIndex=nil
       for i=1,sim.carsCount-1 do
         local car=ac.getCar(i)
         if car and car.isActive and car.isAIControlled then
-          local okc,erc=pcall(Driver.update,i,car,dt)
-          if not okc then
-            writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
-            releaseCar(i)
-          end
-        elseif state.p[i] then
-          releaseCar(i)
+          primaryIndex=i
+          break
+        end
+      end
+      for i in pairs(state.p) do
+        if i~=primaryIndex then releaseCar(i) end
+      end
+      if primaryIndex then
+        local car=ac.getCar(primaryIndex)
+        local okc,erc=pcall(Driver.update,primaryIndex,car,dt)
+        if not okc then
+          writeLog("KINEMATIC_ERROR id=%d err=%s",primaryIndex,tostring(erc))
+          releaseCar(primaryIndex)
         end
       end
     else
