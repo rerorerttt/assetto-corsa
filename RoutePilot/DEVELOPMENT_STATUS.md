@@ -88,3 +88,5 @@ Important remaining limits and validation:
 - Route-progress traffic logic assumes vehicles follow the same recorded route direction. Opposing-direction traffic on a shared physical oval still needs a direction-aware conflict rule and must be tested explicitly; do not claim that oncoming negotiation is solved.
 - Static source inspection has not established runtime correctness. No Assetto Corsa/CSP session has been run by the assistant. Check Lua load/errors, line tracking on straights and bends, first-frame route acquisition, traffic gaps, both lane transitions, and recovery before treating this build as usable.
 - Spawn, AI adoption, speed alternation, and teleportHome() were retained. No merge to main was performed.
+
+Source check after this implementation pass: the edited Lua files have balanced block keywords and delimiters, and targeted source assertions confirm that the driver uses route-space leader/pass calculations, lane reservations, smoothed path sampling, first-acquisition route locking, and the existing rescue call. This is only a structural/source check; no Lua compiler was available and no Assetto Corsa/CSP runtime test has been performed.
