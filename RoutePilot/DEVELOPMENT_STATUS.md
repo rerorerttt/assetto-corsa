@@ -69,3 +69,21 @@ Required next implementation work:
 3. Convert front/behind, lane occupancy, and two-body pass clearance to signed route-progress distances. Preserve the fixed sequence: left lane -> right lane -> complete two-body clearance -> verify left lane clear ahead and behind -> left lane.
 4. Keep the physical corridor constraint explicit. The current trace's 3 m bounds cannot support two lanes; test the passing state machine only after loading/recording the intended 7 m bounds profile.
 5. Re-run static checks and update this file after each code change. No Assetto Corsa/CSP runtime test has been performed by the assistant; only a new user trace can validate actual handling.
+
+## 2026-11-24 implementation pass: path tracking and route-space traffic
+
+Implemented in source on this branch (not yet runtime-validated):
+
+- Replaced the raw point-angle steering command with a smooth Catmull–Rom path sample and a Stanley-style feedback controller. Steering now combines future path tangent/heading error, signed cross-track error to the active lane center, a bounded preview correction, and reduced lateral-slip damping. The future lane offset uses the tangent of the smoothed sample, not the raw segment chord.
+- Added an estimated preview-path curvature and telemetry for CROSS, HEAD, CURVE, route progress, lane target, and steering saturation. Curvature is currently diagnostic; no unverified wheelbase or steering-lock property is assumed from the CSP API.
+- Added cached cumulative route distance and per-car route projection. Front/behind gaps, lane occupancy windows, and pass clearance are now calculated along the recorded route rather than by projecting world-space positions onto the car's instantaneous heading.
+- The passing car remains in the right lane until route-progress clearance reaches the sum of both vehicle lengths. Returning left still requires a separate occupancy check over both ahead and behind route distances.
+- Added per-car route-segment locking. A car may use global nearest-segment reacquisition when it first joins the route; after that, its projection stays within the local progress window to avoid jumping to a geometrically close branch at a crossing. Route metrics rebuild when the number of recorded nodes changes.
+- Added an explicit OVERTAKE_DISABLED corridor_too_narrow log for fast cars when the loaded corridor cannot support two lanes. The 3 m profile in the supplied trace remains single-lane; the user must load/record a genuine wide-enough profile (the intended symmetric profile is 7 m).
+
+Important remaining limits and validation:
+
+- The controller is a first implementation of smooth path tracking, not a vehicle-model controller with calibrated wheelbase/steering ratio. Its normalized steering response still needs in-game calibration against the new CROSS, HEAD, CURVE, and SAT telemetry. Do not increase gains blindly.
+- Route-progress traffic logic assumes vehicles follow the same recorded route direction. Opposing-direction traffic on a shared physical oval still needs a direction-aware conflict rule and must be tested explicitly; do not claim that oncoming negotiation is solved.
+- Static source inspection has not established runtime correctness. No Assetto Corsa/CSP session has been run by the assistant. Check Lua load/errors, line tracking on straights and bends, first-frame route acquisition, traffic gaps, both lane transitions, and recovery before treating this build as usable.
+- Spawn, AI adoption, speed alternation, and teleportHome() were retained. No merge to main was performed.
