@@ -355,8 +355,16 @@ local function recordSecondTelemetry(sim)
       any=true
     end
   end
+
+  local player=ac.getCar(0)
+  local playerTelemetry=state.playerTelemetry
+  if player and player.isActive and playerTelemetry and Driver and Driver.telemetryLine then
+    writeLog(Driver.telemetryLine(0,player,playerTelemetry))
+    any=true
+  end
+
   if not any and logger and logger.heartbeat then
-    pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes).." ai=0")
+    pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes).." ai=0 player=0")
   end
   flushLog()
 end
@@ -612,9 +620,27 @@ function script.update(dt)
     if state.enabled and state.loaded and #state.nodes>=2 then
       trySpawnTeleport(sim,dt)
     end
-    -- INSTANT ADOPTION + DRIVING: every active AI car is driven from the
-    -- very first frame. Nothing blocks this. (This was the bug: the spawn
-    -- gate used to block driving forever — cars stayed on the stock AI.)
+    -- Initialize shared route geometry for passive player telemetry too.
+    -- The player is observed only: no overrideCarControls() call is made for car 0.
+    if #state.nodes>=2 and not state.recLine and Driver and ensureDriver() then
+      if player and player.isActive and Driver.observePlayer then
+        local steerInput=0
+        if ac.getControllerSteerValue then
+          local okSteer,value=pcall(ac.getControllerSteerValue)
+          if okSteer then steerInput=value end
+        end
+        local okObserve,observeError=pcall(Driver.observePlayer,player,dt,steerInput)
+        if not okObserve then
+          state.playerTelemetry=nil
+          writeLog("PLAYER_TELEMETRY_ERROR err=%s",tostring(observeError))
+        end
+      end
+    elseif state.recLine then
+      state.playerTelemetry=nil
+    end
+
+    -- INSTANT ADOPTION + DRIVING: AI cars only. The player car (index 0)
+    -- is never passed to Driver.update() or ac.overrideCarControls().
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
       for i=1,sim.carsCount-1 do
         local car=ac.getCar(i)
