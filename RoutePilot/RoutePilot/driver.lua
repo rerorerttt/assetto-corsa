@@ -7,20 +7,17 @@
 local Driver = {}
 local CFG, state, H
 
-local RIGHT_SPEED = 40 / 3.6
--- Conservative, rate-limited steering prevents large snap corrections.
-local STEER_LIMIT = 0.68
-local STEER_GAIN = 0.78
-local STEER_FILTER_TIME = 0.22
-local STEER_RATE = 1.5
-local LOOKAHEAD_BASE = 13.0
-local LOOKAHEAD_SPEED = 0.38
-local LOOKAHEAD_MAX = 30.0
+-- Single-car physical control: AC retains the complete vehicle physics.
+local STEER_LIMIT = 0.92
+local STEER_FILTER_TIME = 0.10
+local STEER_RATE = 4.0
+local LOOKAHEAD_BASE = 9.0
+local LOOKAHEAD_SPEED = 0.45
+local LOOKAHEAD_MAX = 26.0
+local ROAD_WHEEL_LOCK = 0.55
+local DEFAULT_WHEELBASE = 2.70
 local LANE_RESCUE_SPEED = 1.5
 local LANE_RESCUE_TIME = 5.0
-local GAS_RISE_RATE = 1.8
-local GAS_RELEASE_RATE = 5.0
-local GAS_SPIN_CUT_RATE = 10.0
 
 local function clamp(v, lo, hi)
   return math.max(lo, math.min(hi, v))
@@ -54,35 +51,14 @@ function Driver.setup(cfg, st, helpers)
   H = helpers
 end
 
-local function ensureTractionAssist(carIndex,p)
-  if p.tcApplied then return end
-  if physics and type(physics.setAssists)=="function" then
-    local ok,result=pcall(physics.setAssists,
-      {tractionControl="on",editable=false},carIndex)
-    p.tcApplied=true
-    if ok then
-      H.log("TC_ASSIST id=%d applied=%s",carIndex,tostring(result))
-    else
-      H.log("TC_ASSIST_ERROR id=%d err=%s",carIndex,tostring(result))
-    end
-  else
-    p.tcApplied=true
-    H.log("TC_ASSIST_UNAVAILABLE id=%d",carIndex)
-  end
-end
-
 local function measureDrivenWheelSlip(car)
   local wheels=car.wheels
   if not wheels then return 0 end
   local tractionType=safeNumber(car.tractionType,-1)
   local indices
-  if tractionType==0 then
-    indices={2,3}                 -- RWD
-  elseif tractionType==1 then
-    indices={0,1}                 -- FWD
-  else
-    indices={0,1,2,3}             -- AWD or unknown: fail-safe
-  end
+  if tractionType==0 then indices={2,3}
+  elseif tractionType==1 then indices={0,1}
+  else indices={0,1,2,3} end
   local maximum=0
   for i=1,#indices do
     local wheel=wheels[indices[i]]
@@ -94,30 +70,24 @@ local function measureDrivenWheelSlip(car)
   return maximum
 end
 
-local function applyTractionLimiter(car,p,dt)
-  p.wheelSlip=measureDrivenWheelSlip(car)
-  -- Factory TC is forced on above; this second layer catches cars without
-  -- usable factory TC and trims throttle before sustained wheelspin develops.
-  local factor=1.0
-  if p.wheelSlip>0.10 then
-    factor=clamp(1.0-(p.wheelSlip-0.10)*1.75,0.22,1.0)
+local function getWheelbase(car)
+  local wheels=car.wheels
+  if not wheels or not wheels[0] or not wheels[1] or
+      not wheels[2] or not wheels[3] then
+    return DEFAULT_WHEELBASE
   end
-  p.tractionFactor=factor
-  local requested=math.min(p.gas,factor)
-  local rate
-  if requested<p.gasOutput then
-    rate=(p.wheelSlip>0.14) and GAS_SPIN_CUT_RATE or GAS_RELEASE_RATE
-  else
-    rate=GAS_RISE_RATE
-  end
-  p.gasOutput=p.gasOutput+clamp(requested-p.gasOutput,-rate*dt,rate*dt)
-  p.gas=clamp(p.gasOutput,0,1)
+  local frontX=(wheels[0].position.x+wheels[1].position.x)*0.5
+  local frontZ=(wheels[0].position.z+wheels[1].position.z)*0.5
+  local rearX=(wheels[2].position.x+wheels[3].position.x)*0.5
+  local rearZ=(wheels[2].position.z+wheels[3].position.z)*0.5
+  local value=math.sqrt((frontX-rearX)^2+(frontZ-rearZ)^2)
+  if value<1.2 or value>5.0 then return DEFAULT_WHEELBASE end
+  return value
 end
 
 local function newPersonality(carIndex)
   local laneOffset, twoLane = H.laneOffset(carIndex, 1)
-  local laneRole = not twoLane and "SINGLE_40" or
-    (laneOffset > 0 and "LEFT_FAST" or "RIGHT_40")
+  local laneRole = "SINGLE_FAST"
   local p = {
     segIdx = 1,
     laneRole = laneRole,
@@ -131,7 +101,9 @@ local function newPersonality(carIndex)
     speedIntegral = 0,
     wheelSlip = 0,
     tractionFactor = 1.0,
-    tcApplied = false,
+    wheelSlip = 0,
+    tractionFactor = 1.0,
+    wheelbase = DEFAULT_WHEELBASE,
     slipAngle = 0,
     previousFx = nil,
     previousFz = nil,
@@ -229,9 +201,13 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   if distance < 0.001 then return p.steer end
 
   local angle = signedAngle(fx, fz, dx / distance, dz / distance)
-  local lateralError = laneOffset - p.latOff
-  local targetSteer = angle * STEER_GAIN + clamp(lateralError * 0.018, -0.10, 0.10)
-  targetSteer = clamp(targetSteer, -STEER_LIMIT, STEER_LIMIT)
+  -- Pure Pursuit maps the look-ahead point to path curvature and then to a
+  -- road-wheel angle. The old fixed angle gain over-steered at speed.
+  p.wheelbase = getWheelbase(car)
+  local pathCurvature = 2.0 * math.sin(angle) / math.max(distance, 1.0)
+  local roadWheelAngle = math.atan(p.wheelbase * pathCurvature)
+  local targetSteer = clamp(roadWheelAngle / ROAD_WHEEL_LOCK,
+    -STEER_LIMIT, STEER_LIMIT)
 
   if math.abs(angle) < 0.0015 and math.abs(lateralError) < 0.04 then
     targetSteer = 0
@@ -268,7 +244,6 @@ end
 
 function Driver.update(carIndex, car, dt)
   local p = state.p[carIndex] or newPersonality(carIndex)
-  ensureTractionAssist(carIndex,p)
 
   p.retireT = p.retireT + dt
   if p.retireT >= 2.0 then
@@ -293,26 +268,19 @@ function Driver.update(carIndex, car, dt)
 
   local steer = calculateSteering(carIndex, car, p, speed, fx, fz, dt)
 
-  local targetSpeed
-  if not p.twoLane or p.laneOffset < 0 then
-    targetSpeed = RIGHT_SPEED
+  local targetSpeed = planFastLaneSpeed(p)
+  if targetSpeed then
     p.targetSpeed = targetSpeed
     calculateSpeedControls(p, speed, targetSpeed, dt)
   else
-    targetSpeed = planFastLaneSpeed(p)
-    if targetSpeed then
-      p.targetSpeed = targetSpeed
-      calculateSpeedControls(p, speed, targetSpeed, dt)
-    else
-      -- No upcoming corner requires braking: the fast lane has no speed cap.
-      p.targetSpeed = math.huge
-      p.speedIntegral = 0
-      p.gas = 1
-      p.brake = 0
-    end
+    -- No upcoming corner requires braking: no artificial speed ceiling.
+    p.targetSpeed = math.huge
+    p.speedIntegral = 0
+    p.gas = 1
+    p.brake = 0
   end
-
-  applyTractionLimiter(car,p,dt)
+  p.wheelSlip = measureDrivenWheelSlip(car)
+  p.tractionFactor = 1.0
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
@@ -333,10 +301,10 @@ function Driver.telemetryLine(i, car, p)
   local headingDot=look.x*tx+look.z*tz
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f WHEELBASE=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LANE_OFFSET=%.2f BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), targetText, p.steer, p.gas, p.brake,
-    p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx, p.laneOffset, left, right)
+    p.wheelSlip, p.tractionFactor, p.wheelbase, headingDot, p.lineDist, p.segIdx, p.laneOffset, left, right)
 end
 
 return Driver
