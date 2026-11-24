@@ -39,15 +39,16 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
 - 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
 
-## Traffic behavior (alternating left-lane / right-lane passing)
+## Traffic behavior (multi-offset passing)
 
-- All AI cars are assigned to the left lane initially.
-- Every car uses the same configured cruise-speed ceiling and curvature/braking planner; there is no index-based 40 km/h class.
-- Any car can initiate an overtake when its configured pace exceeds the leader's current speed and the passing corridor is safe and clear ahead, behind and alongside.
-- A local passing reservation allows only one nearby car in a convoy to occupy the passing lane at a time; following cars wait for the reservation to clear and then evaluate their own pass.
-- After that clearance, the car checks that the left lane is clear and returns to it. If it is not clear, the car stays in the right lane and retries; it does not cut back across another car.
-- Passing requires a corridor wide enough for two lanes (at least 2.7 m on each side of the corridor midpoint). On narrower routes, cars remain single-file.
-- Lane centers are derived from the saved route bounds. With a symmetric 7 m corridor, the nominal centers are +1.75 m (left) and -1.75 m (right) from the recorded route.
+- Every AI car uses the same configured cruise-speed ceiling and curvature/braking planner. There is no index-based 40 km/h class.
+- Any car may pass a slower vehicle when its pace advantage and estimated pass distance make the manoeuvre feasible.
+- The passing target is selected dynamically from the complete safe lateral corridor, not from a fixed right-lane center. Candidate offsets are checked in both directions and rejected if the vehicle footprint, another car ahead/behind/alongside, or another car's active passing reservation conflicts.
+- Passing reservations are local to the selected offset: a nearby car using the same passing corridor blocks a conflicting pass, while a physically separate free corridor remains available. Same-corridor reservations cover at least 80 m or 3 seconds of travel.
+- The overtaking car stays on its selected offset until the target's rear is cleared, then returns to its original offset only after that offset is clear.
+- When the current lane is blocked and no passing offset is safe, target speed is limited using the nearest leaders across the full safe corridor. The car waits for a free corridor instead of trying to force through occupied space.
+- Urgent passes increase lateral path transition speed to 5 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. Steering still follows the selected safe path; it is not held at a constant full-lock value.
+- Stuck-car rescue is deferred while another vehicle is detected ahead anywhere in the safe corridor within 100 m. A car waiting in traffic is not teleported merely because its speed remains low.
 
 ## Known limitations
 
