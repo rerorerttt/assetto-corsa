@@ -478,9 +478,15 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
           local otherTarget=otherState and otherState.overtakeSide~=0 and
             safeNumber(otherState.laneOffset,actualLateral) or actualLateral
           local reservedGap=math.abs(otherTarget-laneOffset)
+          local currentOffset=own and safeNumber(own.laneOffsetCurrent,
+            own.laneOffset or laneOffset) or laneOffset
+          local sweepMin=math.min(currentOffset,laneOffset)
+          local sweepMax=math.max(currentOffset,laneOffset)
+          local sweepGap=actualLateral<sweepMin and sweepMin-actualLateral or
+            (actualLateral>sweepMax and actualLateral-sweepMax or 0)
 
-          -- Occupancy is based on predicted physical overlap, not a blanket
-          -- 70 m / 28 m reservation around every car in a neighbouring lane.
+          -- Occupancy is based on physical overlap and the complete lateral
+          -- transition, not a blanket reservation around parallel traffic.
           local frontWindow=math.max(14.0,ownSpeed*1.25+6.0)
           local rearWindow=math.max(10.0,otherSpeed*1.0+5.0)
           local longitudinalOverlap=longitudinal>-rearWindow and
@@ -494,11 +500,10 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
             longitudinal>-math.max(12.0,otherSpeed*0.8+5.0) and
             longitudinal<math.max(22.0,ownSpeed*1.2+7.0)
 
-          -- Catch a side-by-side crossing without treating distant parallel
-          -- traffic as an obstacle to this candidate offset.
+          -- Do not let the steering transition cut through another vehicle.
           local crossingWindow=math.max(6.0,(ownSpeed+otherSpeed)*0.18+3.0)
           local sideConflict=math.abs(longitudinal)<crossingWindow and
-            math.min(actualGap,reservedGap)<separation+0.45
+            (sweepGap<separation+0.25 or reservedGap<separation+0.45)
 
           if bodyConflict or reservationConflict or sideConflict then
             return true
