@@ -622,14 +622,18 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.routeLocked = true
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
-  local leftCenter, rightCenter = laneCenters(p.segIdx)
-  local gap, leaderSpeed, leaderIndex = carAheadInLane(
-    carIndex, car, leftCenter or 0)
+  local leftCenter,rightCenter=laneCenters(p.segIdx)
+  local bl,br=H.boundsAt(p.segIdx)
+  local defaultOffset=p.baseLaneOffset or leftCenter or ((bl+br)*0.5)
+  local currentLaneOffset=p.overtakeSide~=0 and (p.passLat or p.laneOffset) or
+    (p.laneOffsetCurrent or p.laneOffset or defaultOffset)
+  local gap,leaderSpeed,leaderIndex,leaderLateral=carAheadInLane(
+    carIndex,car,currentLaneOffset or 0)
 
   if p.overtakeSide ~= 0 then
     p.passT = p.passT + dt
-    local rightGap, rightLeaderSpeed = carAheadInLane(
-      carIndex, car, rightCenter or p.laneOffset or p.passLat or -1.75)
+    local rightGap,rightLeaderSpeed=carAheadInLane(
+      carIndex,car,p.passLat or p.laneOffset or currentLaneOffset or 0)
     local passSafeSpeed = targetSpeed
     if rightGap then
       passSafeSpeed = math.min(passSafeSpeed,
@@ -665,36 +669,34 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       passedClearance = true
     end
 
-    if passedClearance and leftCenter and
-       not laneOccupied(carIndex, car, leftCenter, p.passTargetIndex) then
-      p.overtakeSide = 0
-      p.passTargetIndex = nil
+    local returnOffset=p.passFromOffset or p.baseLaneOffset or defaultOffset
+    if passedClearance and
+       not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
+      p.overtakeSide=0
+      p.passTargetIndex=nil
       p.emergencyPass=false
-      p.laneOffset = leftCenter
-      p.passT = 0
-      p.followTimer = 0
-      p.blockedT = 0
-      H.log("CAR=%d OVERTAKE_END return=LEFT clearance=2_car_lengths", carIndex)
+      p.laneOffset=returnOffset
+      p.baseLaneOffset=returnOffset
+      p.passFromOffset=nil
+      p.passLat=nil
+      p.passT=0
+      p.followTimer=0
+      p.blockedT=0
+      H.log("CAR=%d OVERTAKE_END return=%.2f clearance=2_car_lengths",
+        carIndex,returnOffset)
       return targetSpeed
     end
 
-    -- Stay in the right lane until the complete rear-bumper clearance exists.
-    p.laneOffset = rightCenter or p.passLat
-    p.passLat = p.laneOffset
+    -- Hold the selected free offset until the target is fully behind us.
+    p.laneOffset=p.passLat
     return passSafeSpeed
   end
 
-  if not leftCenter then
-    if not p.overtakeDisabledLogged then
-      local bl, br = H.boundsAt(p.segIdx)
-      H.log("CAR=%d OVERTAKE_DISABLED corridor_too_narrow width=%.2f required=5.40",
-        carIndex, br - bl)
-      p.overtakeDisabledLogged = true
-    end
-    return targetSpeed
+  p.overtakeDisabledLogged=false
+  if p.overtakeSide==0 then
+    p.baseLaneOffset=p.baseLaneOffset or defaultOffset
+    p.laneOffset=p.baseLaneOffset
   end
-  p.overtakeDisabledLogged = false
-  p.laneOffset = leftCenter
 
   if not gap or not leaderIndex then
     p.followTimer = 0
@@ -702,44 +704,31 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
 
-  local slower=(leaderSpeed or 0)<p.cruiseSpeed-1.0
+  local effectivePace=math.max(speed,p.cruiseSpeed)
+  local speedAdvantage=effectivePace-(leaderSpeed or 0)
+  local slower=speedAdvantage>=3.0
   if slower then
-    local speedAdvantage=p.cruiseSpeed-(leaderSpeed or 0)
     local targetCar=ac.getCar(leaderIndex)
     local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
     local targetLength=math.max(3.0,safeNumber(targetCar and targetCar.aabbSize and targetCar.aabbSize.z,4.5))
-    local estimatedPassDistance=(ownLength+targetLength+8.0)*
-      math.max(speed, (leaderSpeed or 0)+1.0)/math.max(1.0,speedAdvantage)
-    local urgentGap=clamp(18.0+speed*0.9,25.0,60.0)
-    local canActuallyPass=speedAdvantage>=5.0 and estimatedPassDistance<=130.0 and
-      speed>=(leaderSpeed or 0)-3.0
+    local estimatedPassDistance=(ownLength+targetLength+6.0)*
+      math.max(speed,(leaderSpeed or 0)+1.0)/math.max(1.0,speedAdvantage)
+    local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
+    local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
+      speed>=(leaderSpeed or 0)-4.0
     local urgent=canActuallyPass and gap<=urgentGap
+    local passWindow=clamp(32.0+speed*1.5,45.0,105.0)
     p.followTimer=p.followTimer+dt
-    if urgent and p.overtakeSide==0 then
-      p.emergencyPassRequest=true
-      if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
+    if canActuallyPass and gap<=passWindow and p.overtakeSide==0 and
+       p.overtakeRetryT<=0 then
+      p.emergencyPassRequest=urgent
+      if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed) then
         return targetSpeed
       end
       p.emergencyPassRequest=false
     end
-    local safe = safeFollowingSpeed(gap, leaderSpeed or 0)
-    -- If the own lane is blocked and there is also a vehicle ahead in the
-    -- passing lane, respect the slower of both lanes instead of accelerating
-    -- into a queue which has no safe escape corridor.
-    if rightCenter then
-      local rightGap, rightLeaderSpeed = carAheadInLane(carIndex,car,rightCenter)
-      if rightGap then
-        safe = math.min(safe,
-          safeFollowingSpeed(rightGap,rightLeaderSpeed or 0))
-      end
-    end
-    if p.followTimer>=TRIGGER_TIME and p.overtakeRetryT<=0 then
-      p.emergencyPassRequest=false
-      if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
-        return targetSpeed
-      end
-    end
-    return math.min(targetSpeed, safe)
+    local safe=safeSpeedAcrossCorridor(carIndex,car,p,gap,leaderSpeed or 0)
+    return math.min(targetSpeed,safe)
   end
 
   p.followTimer = 0
@@ -832,15 +821,27 @@ function Driver.update(carIndex, car, dt)
   calculateStability(p, speed)
   readWheelSlip(car,p)
 
-  if speed < RESCUE_SPEED then
-    p.stuck = p.stuck + dt
-    if p.stuck > RESCUE_TIME then
-      p.stuck = 0
-      if H.teleportHome then H.teleportHome(carIndex, car) end
-      return
+  if speed<RESCUE_SPEED then
+    local blocked,blockedGap,blockedBy=trafficAheadForRescue(carIndex,car,p)
+    if blocked then
+      p.stuck=0
+      if not p.rescueDeferredLogged then
+        H.log("RESCUE_DEFER id=%d reason=traffic_ahead gap=%.1f car=%d",
+          carIndex,blockedGap or -1,blockedBy or -1)
+        p.rescueDeferredLogged=true
+      end
+    else
+      p.rescueDeferredLogged=false
+      p.stuck=p.stuck+dt
+      if p.stuck>RESCUE_TIME then
+        p.stuck=0
+        if H.teleportHome then H.teleportHome(carIndex,car) end
+        return
+      end
     end
   else
-    p.stuck = 0
+    p.stuck=0
+    p.rescueDeferredLogged=false
   end
 
   local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p)
