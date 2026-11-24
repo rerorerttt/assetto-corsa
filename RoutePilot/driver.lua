@@ -311,11 +311,11 @@ end
 -- lateral velocity and acceleration at the start and end of a lane transition.
 local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
     transitionLength, horizon, halfWidth, halfLength, fx, fz)
-  local samples,minClearance,maxCurvature={},math.huge,0
+  local samples,minClearance,maxCurvature,maxEnvelope={},math.huge,0,0
   local distance=-halfLength
   while distance<=horizon+halfLength+0.001 do
     local sample=Geometry.sample(route,progress+distance)
-    if not sample then return nil,"route_end",minClearance,maxCurvature end
+    if not sample then return nil,"route_end",minClearance,maxCurvature,maxEnvelope end
     local u=clamp(distance/math.max(1.0,transitionLength),0,1)
     local u2,u3=u*u,u*u*u
     local blend=6*u3*u2-15*u2*u2+10*u3
@@ -334,10 +334,11 @@ local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
       math.abs(initialAngle)*(1-clamp(math.max(0,distance)/8.0,0,1)))
     local envelope=halfWidth*math.abs(math.cos(angleMagnitude))+
       halfLength*math.abs(math.sin(angleMagnitude))+BOUND_MARGIN
+    maxEnvelope=math.max(maxEnvelope,envelope)
     local bl,br=routeBoundsAtSample(sample)
     local clearance=math.min(offset-bl-envelope,br-envelope-offset)
     minClearance=math.min(minClearance,clearance)
-    if clearance < -0.015 then return nil,"boundary",minClearance,maxCurvature end
+    if clearance < -0.015 then return nil,"boundary",minClearance,maxCurvature,maxEnvelope end
     local curvature=math.abs(safeNumber(sample.k))+
       math.abs(second)/math.pow(1+slope*slope,1.5)+
       2.0*math.abs(safeNumber(sample.k)*slope)
@@ -345,7 +346,7 @@ local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
     samples[#samples+1]={distance=math.max(0,distance),curvature=curvature}
     distance=distance+2.0
   end
-  return samples,nil,minClearance,maxCurvature
+  return samples,nil,minClearance,maxCurvature,maxEnvelope
 end
 
 local function calculateSteering(car, p, speed, fx, fz, dt)
@@ -420,11 +421,11 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   for i=0,12 do addCandidate(minOffset+(maxOffset-minOffset)*i/12) end
 
   local best,bestCost,bestSamples=nil,math.huge,nil
-  local bestClearance,bestCurvature=-math.huge,math.huge
+  local bestClearance,bestCurvature,bestEnvelope=-math.huge,math.huge,0
   local rejectBoundary,rejectOther=0,0
   for i=1,#candidates do
     local candidate=candidates[i]
-    local samples,reason,clearance,maxCurvature=evaluateOffsetPath(
+    local samples,reason,clearance,maxCurvature,envelope=evaluateOffsetPath(
       route,projection.s,startOffset,candidate,transitionLength,ahead,
       halfWidth,halfLength,fx,fz)
     if samples then
@@ -433,7 +434,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
         0.04/math.max(0.10,clearance+0.10)
       if cost<bestCost then
         best,bestCost,bestSamples=candidate,cost,samples
-        bestClearance,bestCurvature=clearance,maxCurvature
+        bestClearance,bestCurvature,bestEnvelope=clearance,maxCurvature,envelope
       end
     elseif reason=="boundary" then rejectBoundary=rejectBoundary+1
     else rejectOther=rejectOther+1 end
@@ -443,7 +444,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.plannerRejectOther=rejectOther
   if best==nil then
     p.boundaryInfeasible=true
-    p.boundarySafeMin=minOffset; p.boundarySafeMax=maxOffset
+    p.boundaryCandidateMin=minOffset; p.boundaryCandidateMax=maxOffset
+    local headingError=signedAngle(current.tx,current.tz,fx,fz)
+    p.boundaryEnvelope=halfWidth*math.abs(math.cos(headingError))+
+      halfLength*math.abs(math.sin(headingError))+BOUND_MARGIN
     p.boundaryDeficit=0
     p.plannerMinClearance=-math.huge
     p.plannedPathSamples=nil
@@ -455,8 +459,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.plannedTargetOffset=best
   p.plannerMinClearance=bestClearance
   p.plannerMaxCurvature=bestCurvature
-  p.boundarySafeMin=minOffset; p.boundarySafeMax=maxOffset
-  p.boundaryEnvelope=halfWidth+BOUND_MARGIN
+  p.boundaryCandidateMin=minOffset; p.boundaryCandidateMax=maxOffset
+  p.boundaryEnvelope=bestEnvelope
   p.boundaryDeficit=0
   local maxStep=(p.emergencyPass and 2.6 or 1.5)*math.max(0,dt or 0)
   p.laneOffsetCurrent=startOffset+clamp(best-startOffset,-maxStep,maxStep)
@@ -1180,7 +1184,7 @@ function Driver.telemetryLine(i, car, p)
   local mode=p.player and " MODE=PLAYER" or
     (p.playerAutopilot and " MODE=AI_AUTOPILOT" or "")
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f PLAN_OFFSET=%.2f PLAN_CLEAR=%.2f PLAN_CURVE=%.4f PLAN_REJECT=%d/%d PLAN_FAIL=%d%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f CANDIDATE_RANGE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f PLAN_OFFSET=%.2f PLAN_CLEAR=%.2f PLAN_CURVE=%.4f PLAN_REJECT=%d/%d PLAN_FAIL=%d%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -1189,7 +1193,7 @@ function Driver.telemetryLine(i, car, p)
     math.abs(p.steer or 0) >= steerLimit and 1 or 0,
     safeNumber(p.wheelSlip), safeNumber(p.tractionScale,1),
     safeNumber(p.steerCurvature), safeNumber(p.boundaryError),
-    safeNumber(p.boundarySafeMin), safeNumber(p.boundarySafeMax),
+    safeNumber(p.boundaryCandidateMin), safeNumber(p.boundaryCandidateMax),
     safeNumber(p.boundaryEnvelope),safeNumber(p.boundaryDeficit),
     safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),
     safeNumber(p.accelEstimate,0),safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),
