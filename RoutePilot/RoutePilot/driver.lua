@@ -1,8 +1,5 @@
--- RoutePilot/driver.lua — deterministic two-lane traffic (CSP 0.3.2-preview2)
--- Cars are assigned once by active roster order: first = left/fast,
--- second = right/40 km/h, then alternating. No car-to-car sensing, following,
--- yielding, overtaking or collision avoidance.
--- Each car follows its own fixed lateral offset from the recorded route.
+-- RoutePilot/driver.lua — single-car physical path controller (CSP 0.3.2-preview2)
+-- RoutePilot computes the path and pedal/steering commands; AC retains vehicle physics.
 
 local Driver = {}
 local CFG, state, H
@@ -166,7 +163,7 @@ local function planFastLaneSpeed(p)
 
   -- No corner in the planning horizon means unrestricted full throttle.
   if target == math.huge then return nil end
-  return math.max(8.0, target)
+  return math.max(5.0, target)
 end
 
 local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
@@ -224,8 +221,8 @@ local function calculateSpeedControls(p, speed, targetSpeed, dt)
   local drive = error * 0.18 + p.speedIntegral * 0.012
   if (drive > -1 and drive < 1) or (drive >= 1 and error < 0) or
       (drive <= -1 and error > 0) then
-    -- A larger integral range is needed to overcome each car's real drag
-    -- at 40 km/h; the old +/-18 clamp caused a permanent 35 km/h plateau.
+    -- Integral range is kept wide enough to overcome vehicle drag without
+    -- leaving a large residual command after the target speed changes.
     p.speedIntegral = clamp(p.speedIntegral + error * dt, -60, 60)
     drive = error * 0.18 + p.speedIntegral * 0.012
   end
