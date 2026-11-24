@@ -109,9 +109,8 @@ local function newPersonality(carIndex)
   -- differences come from the car physics, not an index-based class.
   -- No artificial cruise-speed ceiling: the route planner and vehicle physics
   -- determine speed. Curvature and measured braking capability remain limits.
-  local kmh = 1000000
   local p = {
-    segIdx = 1, cruiseSpeed = kmh / 3.6, brakeAccelEstimate = CFG.BRAKE_ACCEL,
+    segIdx = 1, cruiseSpeed = math.huge, brakeAccelEstimate = CFG.BRAKE_ACCEL,
     previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
@@ -141,8 +140,8 @@ local function newPersonality(carIndex)
     state.spawnHints[carIndex]=nil
   end
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT cruise=%.1fkmh",
-    carIndex, kmh)
+  H.log("CAR_INIT id=%d lane=LEFT cruise=PHYSICS_LIMITED",
+    carIndex)
 end
 
 local function readVehicleDynamics(car, p, dt)
@@ -188,14 +187,18 @@ local function calculateStability(p, speed)
   p.stability = 1 - severity
 end
 
-local function planTargetSpeed(p)
+local function planTargetSpeed(p,speed)
   refreshRouteMetrics()
   local route=state.routeGeometry
-  if not route or not p.routeProgress then return math.min(p.cruiseSpeed, 11.0) end
+  if not route or not p.routeProgress then return 11.0 end
   local target=p.cruiseSpeed
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,16.0)
+  -- At high speed, inspect beyond the braking distance plus response margin.
+  local currentSpeed=math.max(0,safeNumber(speed))
+  local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
+  local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
   local distance=0
-  while distance<=CFG.PLAN_HORIZON do
+  while distance<=horizon do
     local sample=Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
     local curvature=math.abs(sample.k or 0)
@@ -496,8 +499,6 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
             math.min(actualGap,reservedGap)<separation+0.45
 
           if bodyConflict or reservationConflict or sideConflict then
-            H.log("LANE_BLOCK car=%d candidate=%.2f other=%d gap=%.2f lateral=%.2f reserved=%.2f sep=%.2f",
-              carIndex,laneOffset,i,longitudinal,actualGap,reservedGap,separation)
             return true
           end
         end
@@ -547,7 +548,8 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         end
         local halfLengths=(safeNumber(car.aabbSize and car.aabbSize.z,4.5)+
           safeNumber(other.aabbSize and other.aabbSize.z,4.5))*0.5
-        if gap and actualLateral and gap>-halfLengths-2.0 and gap<110 and
+        if gap and actualLateral and gap>-halfLengths-2.0 and
+           gap<math.max(110.0,math.max(0,safeNumber(car.speedMs))*3.0+30.0) and
            math.abs(actualLateral-laneOffset)<3.2 and
            (not bestGap or gap<bestGap) then
           bestGap=gap;bestSpeed=math.max(0,safeNumber(other.speedMs))
@@ -589,7 +591,7 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
   if p.routeProgress==nil or leaderLateral==nil then return nil end
   local fx,fz=normalize2(car.look.x,car.look.z)
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
-    math.max(40.0,CFG.LOOKAHEAD_MAX),car,fx,fz)
+    math.max(45.0,math.max(0,speed)*1.2+20.0),car,fx,fz)
   if not safeMin or not safeMax or safeMax-safeMin<1.15 then return nil end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
@@ -889,7 +891,7 @@ function Driver.update(carIndex, car, dt)
     if rescued then return end
   end
 
-  local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p)
+  local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.targetSpeed = targetSpeed
 
