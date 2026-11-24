@@ -232,6 +232,21 @@ local function planTargetSpeed(p,speed)
     distance=distance+5.0
     if not route.loop and p.routeProgress+distance>=route.total then break end
   end
+  local pathSamples=p.plannedPathSamples
+  if pathSamples then
+    for i=1,#pathSamples do
+      local item=pathSamples[i]
+      local curvature=math.abs(safeNumber(item.curvature))
+      local distance=math.max(0,safeNumber(item.distance))
+      if curvature>CFG.CURVE_MIN then
+        local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
+        local curveSpeed=math.sqrt(lateralLimit/curvature)
+        local available=math.max(0,distance-currentSpeed*0.35)
+        local safeSpeed=math.sqrt(curveSpeed*curveSpeed+2*brakeAccel*available)
+        if safeSpeed<target then target=safeSpeed end
+      end
+    end
+  end
   return math.max(0,target)
 end
 
@@ -287,26 +302,57 @@ local function safeCorridorForPreview(route, progress, ahead, car, fx, fz)
     distance=distance+2.5
   end
   local deficit=math.max(0,safeMin-safeMax)
-  if deficit>0 then
-    -- No single offset fits the complete preview corridor. The midpoint
-    -- minimizes the worst-case boundary violation; speed control handles it.
-    local center=(safeMin+safeMax)*0.5
-    safeMin,safeMax=center,center
+  -- Empty intersection means no constant-offset corridor exists.
+  if deficit>0 then return nil,nil,maxEnvelope,deficit end
+  return safeMin,safeMax,maxEnvelope,0
+end
+
+-- Evaluate one smooth lateral trajectory. Quintic smoothstep gives zero
+-- lateral velocity and acceleration at the start and end of a lane transition.
+local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
+    transitionLength, horizon, halfWidth, halfLength)
+  local samples,minClearance,maxCurvature={},math.huge,0
+  local distance=-halfLength
+  while distance<=horizon+halfLength+0.001 do
+    local sample=Geometry.sample(route,progress+distance)
+    if not sample then return nil,"route_end",minClearance,maxCurvature end
+    local u=clamp(distance/math.max(1.0,transitionLength),0,1)
+    local u2,u3=u*u,u*u*u
+    local blend=6*u3*u2-15*u2*u2+10*u3
+    local dBlend=distance>0 and 30*u2*(u-1)*(u-1)/transitionLength or 0
+    local ddBlend=distance>0 and 60*u*(2*u2-3*u+1)/
+      (transitionLength*transitionLength) or 0
+    local delta=targetOffset-startOffset
+    local offset=startOffset+delta*blend
+    local slope=delta*dBlend
+    local second=delta*ddBlend
+    local pathAngle=math.atan(slope)
+    local envelope=halfWidth*math.abs(math.cos(pathAngle))+
+      halfLength*math.abs(math.sin(pathAngle))+BOUND_MARGIN
+    local bl,br=routeBoundsAtSample(sample)
+    local clearance=math.min(offset-bl-envelope,br-envelope-offset)
+    minClearance=math.min(minClearance,clearance)
+    if clearance < -0.015 then return nil,"boundary",minClearance,maxCurvature end
+    local curvature=math.abs(safeNumber(sample.k))+
+      math.abs(second)/math.pow(1+slope*slope,1.5)+
+      2.0*math.abs(safeNumber(sample.k)*slope)
+    maxCurvature=math.max(maxCurvature,curvature)
+    samples[#samples+1]={distance=math.max(0,distance),curvature=curvature}
+    distance=distance+2.0
   end
-  return safeMin,safeMax,maxEnvelope,deficit
+  return samples,nil,minClearance,maxCurvature
 end
 
 local function calculateSteering(car, p, speed, fx, fz, dt)
   refreshRouteMetrics()
   local route=state.routeGeometry
+  p.plannedPathSamples=nil
+  p.boundaryInfeasible=false
   if not route then
     p.lineDist=0; p.crossTrackError=0; p.headingError=0
     p.pathCurvature=0; p.steerCurvature=0
     return 0
   end
-
-  -- Project onto the continuous spline, then aim at a point measured by
-  -- arc distance. The controller never aims at the next raw recorded node.
   local locked=p.routeLocked and p.routeProgress~=nil
   local projection=Geometry.project(route,car.position,p.routeProgress,car.look,
     speed,dt,locked)
@@ -320,10 +366,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.routeProgress=projection.s; p.segIdx=projection.seg
   p.lineDist=projection.distance; p.latOff=projection.lateral
 
-  -- Preview the complete vehicle footprint through the steering horizon.
-  -- The common safe lateral interval forces the target to remain inside both
-  -- saved boundaries before the car reaches a narrowing or a bend.
-  -- Long preview at racing speeds prevents chasing small local spline bends.
   local ahead=clamp(CFG.LOOKAHEAD_BASE+speed*CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN,CFG.LOOKAHEAD_MAX)
   local current=Geometry.sample(route,projection.s)
@@ -331,25 +373,89 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
   if not current or not future or not curvePreview then return 0 end
 
-  local safeMin,safeMax,bodyEnvelope,boundaryDeficit=safeCorridorForPreview(
-    route,projection.s,ahead,car,fx,fz)
-  local bl,br=H.boundsAt(p.segIdx)
-  local mid,width=(bl+br)*0.5,br-bl
-  local leftCenter=width>=5.4 and ((mid+br)*0.5) or mid
-  if p.overtakeSide==0 then
-    p.baseLaneOffset=p.baseLaneOffset or leftCenter
-    p.laneOffset=p.baseLaneOffset
-  else
-    p.laneOffset=p.passLat
+  local size=car and car.aabbSize
+  local halfWidth=math.max(0.75,safeNumber(size and size.x,2.0)*0.5)
+  local halfLength=math.max(1.5,safeNumber(size and size.z,4.5)*0.5)
+  local startOffset=safeNumber(p.laneOffsetCurrent,projection.lateral)
+  local bl,br=routeBoundsAtSample(current)
+  local desired=p.overtakeSide==0 and
+    safeNumber(p.baseLaneOffset,(bl+br)*0.5) or
+    safeNumber(p.passLat,p.laneOffset or startOffset)
+  local transitionLength=clamp(math.max(18.0,speed*1.5),18.0,48.0)
+
+  -- Candidate range is the union of local usable offsets; each candidate is
+  -- subsequently checked at every sample, so this range is not itself treated
+  -- as a safe corridor.
+  local minOffset,maxOffset=math.huge,-math.huge
+  local d=-halfLength
+  while d<=ahead+halfLength+0.001 do
+    local sample=Geometry.sample(route,projection.s+d)
+    if sample then
+      local l,r=routeBoundsAtSample(sample)
+      minOffset=math.min(minOffset,l+halfWidth+BOUND_MARGIN)
+      maxOffset=math.max(maxOffset,r-halfWidth-BOUND_MARGIN)
+    end
+    d=d+4.0
   end
-  local laneTarget=clamp(p.laneOffset or leftCenter,safeMin,safeMax)
-  local laneChangeRate=p.emergencyPass and 2.6 or 1.5
-  local maxStep=laneChangeRate*math.max(0,dt or 0)
-  local previousOffset=p.laneOffsetCurrent
-  if previousOffset==nil then previousOffset=laneTarget end
-  p.laneOffsetCurrent=previousOffset+
-    clamp(laneTarget-previousOffset,-maxStep,maxStep)
-  if p.returningFromPass and math.abs(p.laneOffsetCurrent-laneTarget)<0.25 then
+  if minOffset==math.huge or maxOffset<minOffset then
+    p.boundaryInfeasible=true; p.gas=0; p.brake=1
+    p.plannerMinClearance=-math.huge
+    return 0
+  end
+
+  local candidates={}
+  local function addCandidate(value)
+    value=clamp(value,minOffset,maxOffset)
+    for i=1,#candidates do
+      if math.abs(candidates[i]-value)<0.12 then return end
+    end
+    candidates[#candidates+1]=value
+  end
+  addCandidate(desired); addCandidate(startOffset)
+  for i=0,12 do addCandidate(minOffset+(maxOffset-minOffset)*i/12) end
+
+  local best,bestCost,bestSamples=nil,math.huge,nil
+  local bestClearance,bestCurvature=-math.huge,math.huge
+  local rejectBoundary,rejectOther=0,0
+  for i=1,#candidates do
+    local candidate=candidates[i]
+    local samples,reason,clearance,maxCurvature=evaluateOffsetPath(
+      route,projection.s,startOffset,candidate,transitionLength,ahead,
+      halfWidth,halfLength)
+    if samples then
+      local cost=math.abs(candidate-desired)+
+        math.abs(candidate-startOffset)*0.10+maxCurvature*2.0+
+        0.04/math.max(0.10,clearance+0.10)
+      if cost<bestCost then
+        best,bestCost,bestSamples=candidate,cost,samples
+        bestClearance,bestCurvature=clearance,maxCurvature
+      end
+    elseif reason=="boundary" then rejectBoundary=rejectBoundary+1
+    else rejectOther=rejectOther+1 end
+  end
+
+  p.plannerRejectBoundary=rejectBoundary
+  p.plannerRejectOther=rejectOther
+  if best==nil then
+    p.boundaryInfeasible=true
+    p.boundarySafeMin=minOffset; p.boundarySafeMax=maxOffset
+    p.boundaryDeficit=0
+    p.plannerMinClearance=-math.huge
+    p.plannedPathSamples=nil
+    p.gas=0; p.brake=1
+    return 0
+  end
+
+  p.plannedPathSamples=bestSamples
+  p.plannedTargetOffset=best
+  p.plannerMinClearance=bestClearance
+  p.plannerMaxCurvature=bestCurvature
+  p.boundarySafeMin=minOffset; p.boundarySafeMax=maxOffset
+  p.boundaryEnvelope=halfWidth+BOUND_MARGIN
+  p.boundaryDeficit=0
+  local maxStep=(p.emergencyPass and 2.6 or 1.5)*math.max(0,dt or 0)
+  p.laneOffsetCurrent=startOffset+clamp(best-startOffset,-maxStep,maxStep)
+  if p.returningFromPass and math.abs(p.laneOffsetCurrent-best)<0.25 then
     p.returningFromPass=false
   end
 
@@ -358,28 +464,19 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local dx,dz=targetX-car.position.x,targetZ-car.position.z
   local targetDist=math.sqrt(dx*dx+dz*dz)
   if targetDist<0.5 then return 0 end
-
-  -- Pure-pursuit curvature from the preview point, plus modest curvature
-  -- feed-forward to begin rotating into the bend before heading error grows.
   local alpha=signedAngle(fx,fz,dx/targetDist,dz/targetDist)
   local pursuitCurvature=2.0*math.sin(alpha)/targetDist
-  local previewCurvature=safeNumber(curvePreview.k)
   local desiredCurvature=pursuitCurvature+
-    previewCurvature*CFG.CURVATURE_FEEDFORWARD
-
-  -- Predict lateral drift over the preview time and steer back before the
-  -- vehicle footprint reaches a saved boundary.
+    safeNumber(curvePreview.k)*CFG.CURVATURE_FEEDFORWARD
   local velocity=car.velocity
   local lateralVelocity=safeNumber(velocity.x)*(-current.tz)+
     safeNumber(velocity.z)*current.tx
   local previewTime=clamp(ahead/math.max(5.0,speed),0.35,1.25)
   local predictedLateral=projection.lateral+lateralVelocity*previewTime
-  local safePredicted=clamp(predictedLateral,safeMin,safeMax)
-  local boundaryError=safePredicted-predictedLateral
+  local boundaryError=best-predictedLateral
   local boundaryDistance=math.max(8.0,ahead*0.65)
-  local boundaryCurvature=clamp(2.5*boundaryError/
-    (boundaryDistance*boundaryDistance),-0.15,0.15)
-  desiredCurvature=desiredCurvature+boundaryCurvature
+  desiredCurvature=desiredCurvature+
+    clamp(2.5*boundaryError/(boundaryDistance*boundaryDistance),-0.15,0.15)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
@@ -387,18 +484,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.steerCurvature=desiredCurvature
   p.projectionProgressDelta=projection.delta or 0
   p.boundaryError=boundaryError
-  p.boundarySafeMin=safeMin
-  p.boundarySafeMax=safeMax
-  p.boundaryEnvelope=bodyEnvelope
-  p.boundaryDeficit=boundaryDeficit
-  p.boundaryEmergency=math.abs(boundaryError)>0.45 or boundaryDeficit>0.15
-
-  -- Small slip-angle damping is secondary; the spline preview is the
-  -- primary steering signal.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
-  -- Emergency passing changes the lateral target, never the road-boundary
-  -- authority or steering range. Keep the same hard steering limit in every mode.
-  return clamp(steer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
+  p.boundaryEmergency=false
+  return clamp(desiredCurvature*CFG.CURVATURE_STEER_GAIN+
+    p.slipAngle*0.18,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
@@ -1000,17 +1088,12 @@ function Driver.update(carIndex, car, dt)
     if rescued then return end
   end
 
-  local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
-  targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  p.targetSpeed = targetSpeed
-
-  p.boundaryEmergency=false
+  local trafficSpeedCap = p.projectionLost and 0 or planTargetSpeed(p,speed)
+  trafficSpeedCap = updateOvertake(carIndex, car, p, speed, trafficSpeedCap, dt)
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
-  if p.projectionLost then targetSpeed=0 end
-  -- Boundary correction is a steering task, not a reason to stop.
-  -- The predictive footprint guard already bends the target path back into
-  -- the corridor. Do not convert lateral correction magnitude into a speed
-  -- cap: that caused repeated full stops even with zero corridor deficit.
+  local pathSpeedCap = p.projectionLost and 0 or planTargetSpeed(p,speed)
+  local targetSpeed = math.min(trafficSpeedCap,pathSpeedCap)
+  if p.projectionLost or p.boundaryInfeasible then targetSpeed=0 end
   p.targetSpeed=targetSpeed
   local steer = filterSteering(p, steerTarget, dt)
 
@@ -1092,7 +1175,7 @@ function Driver.telemetryLine(i, car, p)
   local mode=p.player and " MODE=PLAYER" or
     (p.playerAutopilot and " MODE=AI_AUTOPILOT" or "")
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f PLAN_OFFSET=%.2f PLAN_CLEAR=%.2f PLAN_CURVE=%.4f PLAN_REJECT=%d/%d PLAN_FAIL=%d%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -1105,7 +1188,10 @@ function Driver.telemetryLine(i, car, p)
     safeNumber(p.boundaryEnvelope),safeNumber(p.boundaryDeficit),
     safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),
     safeNumber(p.accelEstimate,0),safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),
-    safeNumber(p.stuck),mode)
+    safeNumber(p.stuck),safeNumber(p.plannedTargetOffset),
+    safeNumber(p.plannerMinClearance),safeNumber(p.plannerMaxCurvature),
+    safeNumber(p.plannerRejectBoundary),safeNumber(p.plannerRejectOther),
+    p.boundaryInfeasible and 1 or 0,mode)
 end
 
 return Driver
