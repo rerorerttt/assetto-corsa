@@ -119,6 +119,23 @@ local function newPersonality(carIndex)
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
   }
+  local spawnHint=state.spawnHints and state.spawnHints[carIndex]
+  if spawnHint and state.routeGeometry then
+    local seededProgress=Geometry.distanceAt(
+      state.routeGeometry,spawnHint.segment,spawnHint.parameter)
+    if seededProgress~=nil then
+      p.routeProgress=seededProgress
+      p.routeLocked=true
+      p.spawnSeeded=true
+      p.segIdx=spawnHint.segment
+      H.log("ROUTE_SEED id=%d seg=%d t=%.3f progress=%.2f",
+        carIndex,spawnHint.segment,spawnHint.parameter,seededProgress)
+    else
+      H.log("ROUTE_SEED_FAILED id=%d seg=%d t=%.3f",
+        carIndex,spawnHint.segment,spawnHint.parameter)
+    end
+    state.spawnHints[carIndex]=nil
+  end
   state.p[carIndex] = p
   H.log("CAR_INIT id=%d lane=LEFT class=%s cruise=%.1fkmh",
     carIndex, slow and "SLOW" or "FAST", kmh)
@@ -205,35 +222,36 @@ local function routeBoundsAtSample(sample)
   return math.min(leftOffset,rightOffset),math.max(leftOffset,rightOffset)
 end
 
-local function safeCorridorForPreview(route, progress, ahead, car, headingAngle)
+local function safeCorridorForPreview(route, progress, ahead, car, fx, fz)
   local size=car and car.aabbSize
   local halfWidth=math.max(0.75,safeNumber(size and size.x,2.0)*0.5)
   local halfLength=math.max(1.5,safeNumber(size and size.z,4.5)*0.5)
-  -- Project the rotated rectangular car footprint onto the route's lateral axis.
-  local envelope=halfWidth*math.abs(math.cos(headingAngle or 0))+
-    halfLength*math.abs(math.sin(headingAngle or 0))+BOUND_MARGIN
   local safeMin,safeMax=-math.huge,math.huge
+  local maxEnvelope=0
   local first=-halfLength
   local last=ahead+halfLength
   local distance=first
   while distance<=last+0.001 do
     local sample=Geometry.sample(route,progress+distance)
     if sample then
+      local angle=signedAngle(fx,fz,sample.tx,sample.tz)
+      local envelope=halfWidth*math.abs(math.cos(angle))+
+        halfLength*math.abs(math.sin(angle))+BOUND_MARGIN
       local bl,br=routeBoundsAtSample(sample)
       safeMin=math.max(safeMin,bl+envelope)
       safeMax=math.min(safeMax,br-envelope)
+      maxEnvelope=math.max(maxEnvelope,envelope)
     end
     distance=distance+2.5
   end
-  if safeMin>safeMax then
-    local sample=Geometry.sample(route,progress+ahead*0.5)
-    local bl,br
-    if sample then bl,br=routeBoundsAtSample(sample)
-    else bl,br=H.boundsAt(1) end
-    local center=(bl+br)*0.5
+  local deficit=math.max(0,safeMin-safeMax)
+  if deficit>0 then
+    -- No single offset fits the complete preview corridor. The midpoint
+    -- minimizes the worst-case boundary violation; speed control handles it.
+    local center=(safeMin+safeMax)*0.5
     safeMin,safeMax=center,center
   end
-  return safeMin,safeMax,envelope
+  return safeMin,safeMax,maxEnvelope,deficit
 end
 
 local function calculateSteering(car, p, speed, fx, fz, dt)
@@ -250,7 +268,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local locked=p.routeLocked and p.routeProgress~=nil
   local projection=Geometry.project(route,car.position,p.routeProgress,car.look,
     speed,dt,locked)
-  if not projection or (not locked and not initialProjectionValid(projection,car.look)) then
+  if not projection or
+     (not locked and not initialProjectionValid(projection,car.look)) or
+     (p.spawnSeeded and projection.distance>8.0) then
     p.projectionLost=true; p.targetSpeed=0; p.gas=0; p.brake=1; p.lineDist=999
     return 0
   end
@@ -268,9 +288,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
   if not current or not future or not curvePreview then return 0 end
 
-  local headingAngle=signedAngle(fx,fz,current.tx,current.tz)
-  local safeMin,safeMax,bodyEnvelope=safeCorridorForPreview(
-    route,projection.s,ahead,car,headingAngle)
+  local safeMin,safeMax,bodyEnvelope,boundaryDeficit=safeCorridorForPreview(
+    route,projection.s,ahead,car,fx,fz)
   local bl,br=H.boundsAt(p.segIdx)
   local mid,width=(bl+br)*0.5,br-bl
   local leftCenter=width>=5.4 and ((mid+br)*0.5) or mid
@@ -319,7 +338,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.boundarySafeMin=safeMin
   p.boundarySafeMax=safeMax
   p.boundaryEnvelope=bodyEnvelope
-  p.boundaryEmergency=math.abs(boundaryError)>0.45
+  p.boundaryDeficit=boundaryDeficit
+  p.boundaryEmergency=math.abs(boundaryError)>0.45 or boundaryDeficit>0.15
 
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
@@ -737,7 +757,7 @@ function Driver.telemetryLine(i, car, p)
   local steerLimit=p.player and 0.99 or (CFG.STEER_LIMIT-0.01)
   local mode=p.player and " MODE=PLAYER" or ""
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -747,7 +767,7 @@ function Driver.telemetryLine(i, car, p)
     safeNumber(p.wheelSlip), safeNumber(p.tractionScale,1),
     safeNumber(p.steerCurvature), safeNumber(p.boundaryError),
     safeNumber(p.boundarySafeMin), safeNumber(p.boundarySafeMax),
-    safeNumber(p.boundaryEnvelope), mode)
+    safeNumber(p.boundaryEnvelope),safeNumber(p.boundaryDeficit),mode)
 end
 
 return Driver
