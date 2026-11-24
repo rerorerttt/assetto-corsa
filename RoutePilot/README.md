@@ -1,4 +1,4 @@
-# RoutePilot 0.9.1 — experimental traffic avoidance
+# RoutePilot 0.9.2 — predictive racing traffic
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
 
