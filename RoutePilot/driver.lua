@@ -22,7 +22,7 @@ local FORCE_TIME   = 2.0
 local PASS_TIMEOUT = 8.0
 local RESCUE_SPEED = 1.5
 local RESCUE_TIME  = 3.5
-local STEER_DEAD   = 0.015  -- rad: below this, hold the wheel still
+local STEER_DEAD   = 0.001  -- only suppress numerical noise; never freeze real cornering input
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -137,12 +137,17 @@ local function clampLat(seg, lat)
 end
 
 local function linePointAtLateral(seg, t, ahead, lat)
-  local pt = H.walkLine(seg, t, ahead)
+  -- walkLine returns the actual future segment: lane offset must use that
+  -- segment's tangent, not the tangent under the car. Using the current
+  -- tangent across a corner shears the offset path and cuts the apex.
+  local pt, targetSeg = H.walkLine(seg, t, ahead)
   if not pt then
+    targetSeg = seg
     pt = H.segEnd(seg)
   end
-  local a = state.nodes[seg]
-  local b = H.segEnd(seg)
+  targetSeg = targetSeg or seg
+  local a = state.nodes[targetSeg]
+  local b = H.segEnd(targetSeg)
   local lx, lz = normalize2(b.x - a.x, b.z - a.z)
   return pt.x - lz * lat, pt.z + lx * lat
 end
@@ -182,11 +187,11 @@ local function calculateSteering(car, p, speed, fx, fz)
 
   -- DEADBAND: a straight needs no steering. Micro-corrections every frame
   -- were the zigzag; below the deadband the wheel simply holds still.
-  if math.abs(angle) < STEER_DEAD then
-    return 0
-  end
+  if math.abs(angle) < STEER_DEAD then return 0 end
 
-  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.62
+  -- Continuous path correction. Do not add a large fixed preview chord:
+  -- the preview is shortened in tight bends by curvature-aware config.
+  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.45
   return clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
 end
 
@@ -228,7 +233,7 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
       if other and other.isActive then
         local seg = select(1, H.findNearestSeg(other.position, state.p[carIndex].segIdx))
         local otherOffset = H.lateralOf(other.position, seg)
-        if math.abs(otherOffset - laneOffset) < 2.2 then
+        if math.abs(otherOffset - laneOffset) < 1.25 then
           local dx = other.position.x - car.position.x
           local dz = other.position.z - car.position.z
           local longitudinal = dx * fx + dz * fz
@@ -396,7 +401,7 @@ function Driver.telemetryLine(i, car, p)
     "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
-    p.lineDist, p.segIdx, p.pace, bl, br, p.latOff, p.overtakeSide)
+    p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide)
 end
 
 return Driver
