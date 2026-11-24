@@ -759,6 +759,28 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
         safeFollowingSpeed(rightGap, rightLeaderSpeed or 0,p.brakeAccelEstimate))
     end
     local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
+    if p.emergencyPass and target and target.isActive then
+      local ownSample=Geometry.sample(state.routeGeometry,ownProgress)
+      if ownSample then
+        local targetLongitudinal,targetLateral=relativeToRoute(target.position,ownSample)
+        local ownHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+        local targetHalfWidth=math.max(0.75,safeNumber(target.aabbSize and target.aabbSize.x,2.0)*0.5)
+        local lateralClearance=ownHalfWidth+targetHalfWidth+0.08
+        local currentOffset=safeNumber(p.laneOffsetCurrent,p.passLat)
+        -- Until the vehicle has moved fully alongside the blocker, control
+        -- closing speed as well as steering. Keep a small rolling speed so
+        -- full-lock steering can actually move the car out of the lane.
+        if targetLongitudinal and targetLongitudinal>0 and targetLateral and
+           math.abs(targetLateral-currentOffset)<lateralClearance then
+          local ownHalfLength=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
+          local targetHalfLength=math.max(1.5,safeNumber(target.aabbSize and target.aabbSize.z,4.5)*0.5)
+          local available=math.max(0,targetLongitudinal-ownHalfLength-targetHalfLength-0.8)
+          local decel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+          local evasionSpeed=math.max(5.0,math.sqrt(2.0*decel*available))
+          passSafeSpeed=math.min(passSafeSpeed,evasionSpeed)
+        end
+      end
+    end
     local passedClearance = false
     if target and target.isActive then
       local targetState = state.p[p.passTargetIndex]
