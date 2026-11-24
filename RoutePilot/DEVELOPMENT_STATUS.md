@@ -90,3 +90,19 @@ Important remaining limits and validation:
 - Spawn, AI adoption, speed alternation, and teleportHome() were retained. No merge to main was performed.
 
 Source check after this implementation pass: the edited Lua files have balanced block keywords and delimiters, and targeted source assertions confirm that the driver uses route-space leader/pass calculations, lane reservations, smoothed path sampling, first-acquisition route locking, and the existing rescue call. This is only a structural/source check; no Lua compiler was available and no Assetto Corsa/CSP runtime test has been performed.
+
+
+## 2026-11-24 first-stage route geometry replacement
+
+Implemented on the PR branch; not yet validated in Assetto Corsa/CSP:
+
+- Added `RoutePilot/route_geometry.lua` as the single route-geometry source for the driver. It samples the recorded Catmull–Rom route, accumulates distance along the sampled curve (arc-length lookup table), and exposes route sampling and projection in that same coordinate frame.
+- Route projection now returns signed lateral offset relative to the projected curve tangent, route progress in meters, segment metadata, and projection distance. The controller uses that projection for its cross-track error and samples its lookahead point by arc distance; it no longer mixes the raw chord-based `findNearestSeg/lateralOf/walkLine` frame with a Catmull–Rom tangent.
+- Curvature is calculated from signed change in neighboring sampled tangents divided by the distance along the sampled route. The speed planner samples this curvature at fixed route-distance intervals ahead instead of using the previous vertex-angle estimate.
+- Once a car acquires the route, projection is restricted to a bounded forward/backward arc-distance window around its previous progress. Closed-loop wrap is handled in signed progress space. If a locked projection cannot be found, the driver fails safe (zero throttle/full brake) rather than silently snapping to a distant branch.
+- Locked projections search only the local arc-length window using binary search into the sample table; full-route scans are reserved for initial acquisition. Sampling uses 8 subdivisions per recorded segment to limit cache size.
+- Loading a route invalidates the cached geometry so a route with the same point count cannot accidentally keep the old spline.
+
+Scope deliberately not claimed as complete: this stage does not calibrate normalized steering against each car's steering ratio/wheelbase, does not add lane-boundary recovery, and does not solve direction-aware opposing traffic. Bounds are still read from the saved per-node corridor and are not expanded or fabricated.
+
+Validation performed: source-level inspection of the changed modules and call sites. No Lua interpreter/compiler and no Assetto Corsa/CSP runtime were available, so syntax/runtime behavior and actual vehicle tracking remain unverified. The next in-game trace must confirm monotonic route progress, stable segment identity through bends and the start/finish seam, consistent signed lateral offset, and finite/non-spiking curvature before this stage is accepted.
