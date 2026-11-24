@@ -28,3 +28,6 @@ RoutePilot overrides steering, throttle and brake. Gear selection and drivetrain
 ## Validation
 
 Source-level checks are recorded in `DEVELOPMENT_STATUS.md`. The implementation still requires live Assetto Corsa testing with several cars, different vehicle dimensions, occupied and free adjacent lanes, narrow corridors and tight corners. Do not treat source-level checks as proof of collision-free in-game behavior.
+
+
+The existing stuck-car rescue is intentionally preserved: after 5 seconds below 1.5 m/s, the driver calls `H.teleportHome()`, which selects a clear recovery position. The spawn update also no longer calls the undefined `alignRouteDirectionToPlayer()` global that previously caused `UPDATE_ERROR` every frame; the recorded route direction is retained.
