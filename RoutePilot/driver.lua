@@ -244,6 +244,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- The correction is speed-aware, so it does not snap the car sideways at
   -- low speed or become too weak as speed rises.
   local headingError = signedAngle(fx, fz, pathTx, pathTz)
+  local _, _, currentTx, currentTz = smoothPathSample(seg, t)
+  p.pathCurvature = signedAngle(currentTx, currentTz, pathTx, pathTz) / math.max(1, ahead)
   local crossTrack = p.laneOffsetCurrent - p.latOff
   local crossTrackAngle = math.atan2(2.0 * crossTrack, math.max(3.0, speed + 2.0))
   local previewAngle = signedAngle(fx, fz, dx / targetDist, dz / targetDist)
@@ -426,7 +428,16 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
 
-  if not leftCenter then return targetSpeed end
+  if not leftCenter then
+    if not p.slow and not p.overtakeDisabledLogged then
+      local bl, br = H.boundsAt(p.segIdx)
+      H.log("CAR=%d OVERTAKE_DISABLED corridor_too_narrow width=%.2f required=5.40",
+        carIndex, br - bl)
+      p.overtakeDisabledLogged = true
+    end
+    return targetSpeed
+  end
+  p.overtakeDisabledLogged = false
   p.laneOffset = leftCenter
 
   if not gap or not leaderIndex then
@@ -526,11 +537,13 @@ end
 function Driver.telemetryLine(i, car, p)
   local bl, br = H.boundsAt(p.segIdx)
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
-    p.crossTrackError or 0, p.headingError or 0)
+    p.crossTrackError or 0, p.headingError or 0, p.pathCurvature or 0,
+    p.routeProgress or 0, p.laneOffsetCurrent or 0,
+    math.abs(p.steer or 0) >= CFG.STEER_LIMIT - 0.01 and 1 or 0)
 end
 
 return Driver
