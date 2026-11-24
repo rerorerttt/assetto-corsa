@@ -1,27 +1,338 @@
-[    5.19s] LOAD_ROUTE points=230 track=nevadadrift
-[    5.19s] BOUNDS_LOADED points=230
-[    5.19s] BOUNDS_LOADED points=230
-[    5.19s] ROUTEPILOT 0.9.0 INITIALIZED track=nevadadrift points=230
-[    6.24s] heartbeat | nodes=230 ai=0
-[    7.24s] heartbeat | nodes=230 ai=0
-[    8.24s] heartbeat | nodes=230 ai=0
-[    9.25s] heartbeat | nodes=230 ai=0
-[   10.25s] heartbeat | nodes=230 ai=0
-[   11.25s] heartbeat | nodes=230 ai=0
-[   12.25s] heartbeat | nodes=230 ai=0
-[   13.25s] heartbeat | nodes=230 ai=0
-[   14.25s] heartbeat | nodes=230 ai=0
-[   15.25s] heartbeat | nodes=230 ai=0
-[   16.25s] heartbeat | nodes=230 ai=0
-[   17.25s] heartbeat | nodes=230 ai=0
-[   18.25s] heartbeat | nodes=1 ai=0
-[   19.25s] heartbeat | nodes=1 ai=0
-[   20.25s] heartbeat | nodes=1 ai=0
-[   21.25s] heartbeat | nodes=4 ai=0
-[   22.25s] heartbeat | nodes=8 ai=0
-[   23.25s] heartbeat | nodes=12 ai=0
-[   24.25s] heartbeat | nodes=15 ai=0
-[   25.25s] heartbeat | nodes=19 ai=0
-[   26.25s] heartbeat | nodes=23 ai=0
-[   27.25s] heartbeat | nodes=24 ai=0
-[   27.27s] SHUTDOWN: RoutePilot released
+[    6.96s] LOAD_ROUTE points=230 track=nevadadrift
+[    6.96s] BOUNDS_LOADED points=230
+[    6.96s] BOUNDS_LOADED points=230
+[    6.96s] ROUTEPILOT 0.9.0 INITIALIZED track=nevadadrift points=230
+[    7.03s] CAR_INIT id=1 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.03s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[    7.03s] CAR_INIT id=3 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.03s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
+[    7.03s] CAR_INIT id=5 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.39s] SPAWN_FINISH moved=5 failed=0 gap=25.00
+[    7.39s] CAR_INIT id=1 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.39s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[    7.39s] CAR_INIT id=3 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.39s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
+[    7.39s] CAR_INIT id=5 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.89s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    7.91s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    7.93s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    7.95s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    7.97s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    7.99s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.01s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.03s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.03s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[    8.05s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.07s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.09s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.11s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.13s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.15s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.17s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.19s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.21s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.23s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.25s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.27s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.29s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.31s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.33s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.35s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.37s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.39s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.41s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.43s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.45s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.47s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.49s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.51s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.53s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.55s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.57s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.59s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.61s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.63s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.65s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.67s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.69s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.71s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.73s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.75s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.77s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.79s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.81s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.83s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.85s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.87s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.89s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.91s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.93s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.95s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.97s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    8.99s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.01s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.03s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.03s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[    9.05s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.07s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.09s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.11s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.13s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.15s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.17s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.19s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.21s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.23s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.25s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.27s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.29s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.31s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.33s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.35s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.37s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.39s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.41s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.43s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.45s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.48s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.49s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.51s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.53s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.55s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.57s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.59s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.61s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.63s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.65s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.67s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.69s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.71s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.73s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.75s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.77s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.80s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.81s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.83s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.85s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.87s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.89s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.91s] CAR=2 OVERTAKE_BEGIN target=3 from=LEFT to=RIGHT gap=21.5
+[    9.91s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.93s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.95s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.97s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[    9.99s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.01s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.01s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   10.03s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.05s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.07s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.09s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.11s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.13s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.15s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.17s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.19s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.21s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.23s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.25s] CAR=4 OVERTAKE_DENIED right_lane_occupied
+[   10.27s] CAR=4 OVERTAKE_BEGIN target=5 from=LEFT to=RIGHT gap=25.7
+[   11.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   12.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   13.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   14.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   14.42s] CAR=2 OVERTAKE_END return=LEFT clearance=2_car_lengths
+[   15.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   16.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   16.36s] CAR=2 OVERTAKE_BEGIN target=5 from=LEFT to=RIGHT gap=15.9
+[   16.58s] WORLD_LINES ON
+[   17.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   17.58s] RESCUE id=4 node=19 offset=0
+[   17.60s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
+[   18.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   18.08s] CAR=4 OVERTAKE_BEGIN target=3 from=LEFT to=RIGHT gap=35.0
+[   19.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   20.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   20.62s] CAR=2 OVERTAKE_END return=LEFT clearance=2_car_lengths
+[   21.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   22.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   23.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   24.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   24.82s] RESCUE id=5 node=52 offset=0
+[   24.84s] CAR_INIT id=5 lane=LEFT class=SLOW cruise=40.0kmh
+[   25.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   26.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   27.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   28.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   29.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   30.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   31.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   32.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   33.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   34.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   34.32s] RESCUE id=2 node=101 offset=0
+[   34.34s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[   35.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   36.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   36.06s] RESCUE id=1 node=52 offset=0
+[   36.08s] CAR_INIT id=1 lane=LEFT class=SLOW cruise=40.0kmh
+[   37.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   38.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   39.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   40.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   40.20s] CAR=4 OVERTAKE_END return=LEFT clearance=2_car_lengths
+[   41.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   42.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   43.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   44.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   45.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   46.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   47.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   48.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   49.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   50.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   51.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   52.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   53.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   54.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   55.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   56.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   57.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   58.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   59.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   60.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   61.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   62.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   63.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   64.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   65.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   66.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   67.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   68.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   69.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   70.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   70.60s] RESCUE id=2 node=52 offset=0
+[   70.62s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[   71.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   72.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   73.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   74.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   75.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   76.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   77.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   78.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   79.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   80.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   81.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   82.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   83.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   84.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   84.90s] RESCUE id=4 node=52 offset=0
+[   84.92s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
+[   85.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   86.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   87.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   88.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   88.44s] RESCUE id=2 node=101 offset=0
+[   88.46s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[   89.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   90.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   91.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   92.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   93.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   94.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   95.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   96.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   97.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   98.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[   99.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  100.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  100.78s] RESCUE id=3 node=53 offset=1
+[  100.80s] CAR_INIT id=3 lane=LEFT class=SLOW cruise=40.0kmh
+[  101.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  102.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  103.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  104.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  105.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  106.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  107.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  108.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  109.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  110.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  111.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  112.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  113.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  114.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  115.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  116.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  117.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  118.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  119.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  120.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  121.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  122.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  123.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  124.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  124.86s] RESCUE id=2 node=52 offset=0
+[  124.88s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[  125.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  126.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  127.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  128.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  129.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  130.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  131.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  132.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  133.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  134.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  135.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  136.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  137.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  138.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  139.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  140.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  141.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  142.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  142.58s] RESCUE id=2 node=101 offset=0
+[  142.60s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[  143.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  144.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  145.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  146.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  147.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  148.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  149.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  150.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  150.64s] CAR=2 OVERTAKE_BEGIN target=1 from=LEFT to=RIGHT gap=70.6
+[  151.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  152.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  153.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  154.02s] RESCUE id=4 node=56 offset=0
+[  154.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  154.04s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
+[  155.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  155.20s] CAR=2 OVERTAKE_END return=LEFT clearance=2_car_lengths
+[  156.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  157.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  158.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  159.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  160.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  161.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  162.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  163.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  164.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  165.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  166.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  166.96s] CAR=2 OVERTAKE_BEGIN target=5 from=LEFT to=RIGHT gap=56.1
+[  167.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  168.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  169.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  170.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  171.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  172.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  173.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  174.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  175.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  176.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  177.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
+[  177.82s] SHUTDOWN: RoutePilot released
