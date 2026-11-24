@@ -96,7 +96,8 @@ local function newPersonality(carIndex)
     steer = 0,
     steerFiltered = 0,
     gas = 0,
-unused gas output    brake = 0,
+-- gas is commanded directly from the speed planner.
+    brake = 0,
     speedIntegral = 0,
     wheelSlip = 0,
     tractionFactor = 1.0,
