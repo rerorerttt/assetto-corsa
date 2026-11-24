@@ -52,6 +52,7 @@ function Driver.setup(cfg, st, helpers)
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
+  state.playerTelemetry = nil
 end
 
 local function refreshRouteMetrics()
@@ -61,6 +62,7 @@ local function refreshRouteMetrics()
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
+  state.playerTelemetry = nil
   for _, p in pairs(state.p) do
     p.routeLocked = false
     p.routeProgress = nil
@@ -532,6 +534,63 @@ function Driver.update(carIndex, car, dt)
     controls.brake = p.brake
     controls.handbrake = 0
   end
+end
+
+-- Observe the human-driven car without touching its controls.
+-- Called every update frame so route progress remains continuous; the shared
+-- one-second logger writes the latest snapshot using the AI telemetry schema.
+function Driver.observePlayer(car, dt, steerInput)
+  if not car or not car.isActive then return nil end
+  refreshRouteMetrics()
+  if not state.routeGeometry then return nil end
+  local p=state.playerTelemetry
+  if not p then
+    p={
+      segIdx=1, routeLocked=false, routeProgress=nil,
+      previousFx=nil, previousFz=nil,
+      steer=0, gas=0, brake=0, targetSpeed=-1,
+      lineDist=0, latOff=0, crossTrackError=0,
+      headingError=0, pathCurvature=0,
+      overtakeSide=0, laneOffsetCurrent=0, pace=0,
+      slipAngle=0, lateralAccel=0, yawRate=0,
+      slipSeverity=0, stability=1
+    }
+    state.playerTelemetry=p
+  end
+
+  local speed,fx,fz=readVehicleDynamics(car,p,dt or 0.016)
+  calculateStability(p,speed)
+  local progress,lateral,seg,_,distance=routeProjection(
+    car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt or 0.016)
+  if progress~=nil then
+    p.routeLocked=true
+    p.routeProgress=progress
+    p.segIdx=seg or p.segIdx
+    p.lineDist=distance or 0
+    p.latOff=lateral or 0
+    p.crossTrackError=-(lateral or 0)
+    local sample=Geometry.sample(state.routeGeometry,progress)
+    if sample then
+      p.headingError=signedAngle(fx,fz,sample.tx,sample.tz)
+      p.pathCurvature=safeNumber(sample.k)
+    end
+  else
+    p.routeLocked=false
+    p.lineDist=999
+    p.crossTrackError=0
+    p.headingError=0
+    p.pathCurvature=0
+  end
+
+  p.steer=safeNumber(steerInput)
+  p.gas=clamp(safeNumber(car.gas),0,1)
+  p.brake=clamp(safeNumber(car.brake),0,1)
+  p.targetSpeed=-1 -- not applicable to a manually driven car
+  p.overtakeSide=0
+  p.laneOffsetCurrent=0
+  p.pace=0
+  p.player=true
+  return p
 end
 
 function Driver.telemetryLine(i, car, p)
