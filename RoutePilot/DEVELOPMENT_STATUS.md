@@ -135,3 +135,5 @@ Implemented on the feature branch; pending in-game validation:
 - Verified the wheel and steering-related field names against the repository's bundled CSP Lua SDK. Static source assertions confirm the pure-pursuit arc target, curvature feed-forward, wheel-slip read, throttle cut/recovery, telemetry fields, and absence of player control override.
 
 Limitations: this is a feedback controller, not a physical guarantee that no tyre can ever spin. Grip, tyre model, drivetrain layout, surface, and physics update timing vary by car. No Assetto Corsa/CSP runtime test or Lua compiler test has been run in this environment. The next in-game trace must be used to verify steering sign, bend entry/exit, lateral error, wheel-slip response, and whether throttle oscillates. Do not treat this implementation as validated until that test is reviewed.
+
+- Corrected the curvature speed cap: removed the old 11 m/s minimum-apex-speed floor, which could override the calculated safe speed in tight bends. The planner now preserves the curvature-derived speed cap instead of forcing the AI to enter a bend too fast.
