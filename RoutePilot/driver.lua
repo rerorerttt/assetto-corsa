@@ -453,7 +453,12 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   local laneOffset = p.laneOffset
 
   local left, right = H.boundsAt(seg)
-  local safeMin, safeMax = left + BOUNDARY_MARGIN, right - BOUNDARY_MARGIN
+  local safeMin, safeMax
+  if H.safeBoundsAt then
+    safeMin,safeMax=H.safeBoundsAt(seg)
+  else
+    safeMin,safeMax=left+BOUNDARY_MARGIN,right-BOUNDARY_MARGIN
+  end
   if safeMin > safeMax then
     safeMin, safeMax = (left + right) * 0.5, (left + right) * 0.5
   end
