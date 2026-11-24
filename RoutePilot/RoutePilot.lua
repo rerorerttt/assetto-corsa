@@ -27,7 +27,7 @@ local state = {
   widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnStable=0, spawnLastRoster="", routeDirectionChecked=false,
-  nodes={}, p={}, laneAssignments={}, trackMap=nil, status="Готов", logAccum=0, loaded=false,
+  nodes={}, p={}, laneAssignments={}, spawnSegments={}, trackMap=nil, status="Готов", logAccum=0, loaded=false,
 }
 local ensureTrackMap
 local logger=nil
@@ -182,7 +182,7 @@ local function loadLine()
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
-    state.nodes=loaded; state.p={}; state.trackMap=nil; state.loaded=true
+    state.nodes=loaded; state.p={}; state.spawnSegments={}; state.trackMap=nil; state.loaded=true
     state.spawnDone=false; state.spawnStable=0; state.spawnLastRoster=""
     state.routeDirectionChecked=false
     state.status=string.format("Загружено: %d точек",#loaded)
@@ -263,7 +263,7 @@ local function findNearestSeg(pos,hintSeg,allowGlobalScan)
     end
     if idx then check(idx) end
   end
-  if allowGlobalScan ~= false and bestDist>15*15 then
+  if allowGlobalScan == true or (allowGlobalScan ~= false and bestDist>15*15) then
     for i=1,segs do check(i) end
   end
   return bestSeg,bestT,math.sqrt(bestDist)
@@ -316,15 +316,19 @@ ensureTrackMap=function()
     local safeL=math.max(left1,left2)+half
     local safeR=math.min(right1,right2)-half
     if safeL>safeR then local mid=(safeL+safeR)*0.5; safeL,safeR=mid,mid end
-    local width=safeR-safeL
-    local twoLane=width>=CFG.MIN_LANE_CENTER_GAP
-    local leftOffset,rightOffset=0,0
+    -- Preserve the established two-lane geometry: on a 7 m corridor
+    -- cars use centres at -1.75 m and +1.75 m. Keep the full vehicle
+    -- footprint inside the recorded safe centre envelope.
+    local laneMagnitude=math.min(1.75,math.max(0,-safeL),math.max(0,safeR))
+    local twoLane=laneMagnitude*2>=CFG.MIN_LANE_CENTER_GAP-0.05
+    local leftOffset,rightOffset
     if twoLane then
-      leftOffset=safeL+width*0.25
-      rightOffset=safeR-width*0.25
-      if rightOffset-leftOffset<CFG.MIN_LANE_CENTER_GAP then twoLane=false end
+      leftOffset=-laneMagnitude
+      rightOffset=laneMagnitude
+    else
+      leftOffset=clamp(0,safeL,safeR)
+      rightOffset=leftOffset
     end
-    if not twoLane then leftOffset=clamp(0,safeL,safeR); rightOffset=leftOffset end
     local prev,cur,nxt=state.nodes[prevIndex],state.nodes[i],segEnd(i)
     local turn=turnMetric(i)
     local curved=turn>=0.12
@@ -336,7 +340,7 @@ ensureTrackMap=function()
     map[i]={safeL=safeL,safeR=safeR,twoLane=twoLane,
       leftOffset=leftOffset,rightOffset=rightOffset,curvature=curvature,
       length=flatDist(cur,nxt),turnAngle=turn,curved=curved,hairpin=hairpin,
-      speedLimit=curved and (70/3.6) or (160/3.6),
+      speedLimit=hairpin and (70/3.6) or (160/3.6),
       section=hairpin and "HAIRPIN" or (curved and "CORNER" or "STRAIGHT")}
   end
   local runs={}
@@ -477,7 +481,7 @@ local function buildSpawnRouteMetrics()
     local a=state.nodes[i]; local b=segEnd(i)
     local length=flatDist(a,b)
     if length>0.05 then
-      segments[#segments+1]={a=a,b=b,start=totalLength,length=length}
+      segments[#segments+1]={a=a,b=b,start=totalLength,length=length,index=i}
       totalLength=totalLength+length
     end
   end
@@ -513,7 +517,7 @@ local function sampleSpawnRoute(metrics,distance)
       local direction=vec3(b.x-a.x,b.y-a.y,b.z-a.z)
       if direction:length()<0.0001 then return nil,nil end
       direction:normalize()
-      return position,direction
+      return position,direction,seg.index
     end
   end
   return nil,nil
@@ -619,9 +623,9 @@ local function trySpawnTeleport(sim,dt)
   local moved,failed=0,0
   for order=1,count do
     local carIndex=aiCars[order]
-    local position,direction=sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
-    if position and direction then
-      local laneSeg=select(1,findNearestSeg(position,1))
+    local position,direction,spawnSeg=sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
+    if position and direction and spawnSeg then
+      local laneSeg=spawnSeg
       local laneOffset,twoLane=laneOffsetForCar(carIndex,laneSeg)
       local lanePosition=vec3(position.x-direction.z*laneOffset,position.y,
         position.z+direction.x*laneOffset)
@@ -633,9 +637,10 @@ local function trySpawnTeleport(sim,dt)
         lanePosition,spawnDirection)
       if ok and result~=false then
         moved=moved+1
-        writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f route_dir=(%.3f,%.3f) spawn_dir=(%.3f,%.3f)",carIndex,
+        writeLog("SPAWN_LANE id=%d lane=%s offset=%.2f segment=%d route_dir=(%.3f,%.3f) spawn_dir=(%.3f,%.3f)",carIndex,
           twoLane and (laneOffset<0 and "LEFT" or "RIGHT") or "SINGLE",
-          laneOffset,direction.x,direction.z,spawnDirection.x,spawnDirection.z)
+          laneOffset,spawnSeg,direction.x,direction.z,spawnDirection.x,spawnDirection.z)
+        state.spawnSegments[carIndex]=spawnSeg
         state.p[carIndex]=nil
       else failed=failed+1 end
     else failed=failed+1 end
@@ -761,6 +766,11 @@ local function ensureDriver()
     laneOffset=laneOffsetForCar,
     getVertexCurvature=getVertexCurvature,
     getSpeedLimit=speedLimitAt,
+    spawnSegment=function(carIndex)
+      local seg=state.spawnSegments[carIndex]
+      state.spawnSegments[carIndex]=nil
+      return seg
+    end,
     teleportHome=teleportHome, log=writeLog,
   })
   driverReady=true
@@ -995,6 +1005,8 @@ function windowMain(dt)
         state.enabled=false
         for idx in pairs(state.p) do releaseCar(idx) end
         state.p={}
+        state.spawnSegments={}
+        state.laneAssignments={}
         state.nodes={}; state.p={}; state.trackMap=nil; state.boundsL={}; state.boundsR={}
         state.loaded=false; state.recBounds=false
         state.routeDirectionChecked=false
@@ -1033,25 +1045,18 @@ function windowMain(dt)
       state.trackMap=nil
       if #state.nodes>=2 then ensureTrackMap() end
     end
-    if ui.button("Рассчитать участки",vec2(150,22)) then rebuildTrackMap() end
-    ui.sameLine(0,4)
     if ui.button("Сохранить",vec2(82,22)) then saveLine() end
     ui.sameLine(0,4)
     if ui.button("Загрузить",vec2(82,22)) then loadLine() end
-    if ui.button(state.enabled and "Остановить ИИ" or "Запустить ИИ",vec2(150,22)) then
-      if state.enabled then
-        state.enabled=false
-        for idx in pairs(state.p) do releaseCar(idx) end
-        state.p={}
-        state.status="Управление ИИ остановлено"
-        writeLog("AI_CONTROL_STOP")
-      elseif #state.nodes>=2 then
-        rebuildTrackMap()
+    if not state.enabled and ui.button("Запустить ИИ",vec2(150,22)) then
+      if #state.nodes>=2 then
+        ensureTrackMap()
         state.enabled=true
         state.spawnDone=false
         state.spawnStable=0
         state.spawnLastRoster=""
         state.p={}
+        state.spawnSegments={}
         state.status="ИИ запущен"
         writeLog("AI_CONTROL_START")
       else
