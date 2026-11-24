@@ -310,7 +310,7 @@ end
 -- Evaluate one smooth lateral trajectory. Quintic smoothstep gives zero
 -- lateral velocity and acceleration at the start and end of a lane transition.
 local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
-    transitionLength, horizon, halfWidth, halfLength)
+    transitionLength, horizon, halfWidth, halfLength, fx, fz)
   local samples,minClearance,maxCurvature={},math.huge,0
   local distance=-halfLength
   while distance<=horizon+halfLength+0.001 do
@@ -327,8 +327,13 @@ local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
     local slope=delta*dBlend
     local second=delta*ddBlend
     local pathAngle=math.atan(slope)
-    local envelope=halfWidth*math.abs(math.cos(pathAngle))+
-      halfLength*math.abs(math.sin(pathAngle))+BOUND_MARGIN
+    local initialAngle=signedAngle(sample.tx,sample.tz,fx,fz)
+    -- Until the vehicle has aligned with the planned path, retain the larger
+    -- of its measured heading error and the planned path angle in the footprint.
+    local angleMagnitude=math.max(math.abs(pathAngle),
+      math.abs(initialAngle)*(1-clamp(math.max(0,distance)/8.0,0,1)))
+    local envelope=halfWidth*math.abs(math.cos(angleMagnitude))+
+      halfLength*math.abs(math.sin(angleMagnitude))+BOUND_MARGIN
     local bl,br=routeBoundsAtSample(sample)
     local clearance=math.min(offset-bl-envelope,br-envelope-offset)
     minClearance=math.min(minClearance,clearance)
@@ -421,7 +426,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     local candidate=candidates[i]
     local samples,reason,clearance,maxCurvature=evaluateOffsetPath(
       route,projection.s,startOffset,candidate,transitionLength,ahead,
-      halfWidth,halfLength)
+      halfWidth,halfLength,fx,fz)
     if samples then
       local cost=math.abs(candidate-desired)+
         math.abs(candidate-startOffset)*0.10+maxCurvature*2.0+
