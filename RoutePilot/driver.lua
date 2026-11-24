@@ -704,6 +704,11 @@ function Driver.update(carIndex, car, dt)
     controls.brake = p.brake
     controls.handbrake = 0
   end
+  if carIndex==0 and not p.overrideLogged then
+    H.log("PLAYER_OVERRIDE_RESULT ok=%s controls=%s steer=%.3f gas=%.3f brake=%.3f",
+      tostring(ok),tostring(controls~=nil),steer,p.gas,p.brake)
+    p.overrideLogged=true
+  end
 end
 
 function Driver.telemetryLine(i, car, p)
