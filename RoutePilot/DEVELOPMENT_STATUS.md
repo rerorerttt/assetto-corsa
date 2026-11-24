@@ -73,3 +73,14 @@ Do not merge PR #4 until these runtime checks pass.
 - The speed map now reserves 70 km/h for detected hairpins only. Ordinary bends retain the 160 km/h target; short straights target 160 km/h and straights of at least 250 m target 320 km/h. Traffic and boundary recovery can still lower the target when necessary.
 - Removed the manual “Рассчитать участки” control. Route-map calculation remains automatic after line/bounds recording or line loading. Removed the “Остановить ИИ” toggle; the one-way “Запустить ИИ” action is shown only when AI control is disabled.
 - These are source-level corrections based on the uploaded trace. Assetto Corsa runtime validation is still required.
+
+
+## Committed overtaking and steering revision (2026-11-24)
+
+- Replaced repeated frame-by-frame merge reconsideration with an explicit overtake state: IDLE -> PASSING -> RETURNING -> IDLE. The driver checks the slower leader, the destination lane ahead and behind, and the recorded lane corridor before committing.
+- A blocked or geometrically unavailable destination lane means the car stays in its lane and follows the leader's safe-speed envelope. It does not force a merge or alternate between lanes.
+- Once a merge starts, it completes as one smooth 2.3-second transition; the destination is not repeatedly re-evaluated in a way that resets or reverses the transition. The car returns only after the overtaken car is at least 14 m behind and the original lane has the required front/rear clearance.
+- Merge clearance uses relative speed over the transition time, with minimum front/rear gaps. The whole transition is checked against the recorded safe corridor at 5 m samples, including vehicle-width clearance; a single-lane section rejects the merge.
+- Steering now prefers one distant target and shortens its preview in 15 m steps only when the target chord would leave the assigned lane or recorded corridor. Removed the accumulated-small-turn threshold that shortened the target at every small heading change.
+- Removed the 320 km/h straight-line software target. With no detected corner constraint, the controller requests full available throttle; corner curvature and the braking envelope remain the speed constraints. Traffic following and boundary recovery can still reduce speed for safety.
+- Source delimiter scan passes after these changes. This is not a Lua runtime or Assetto Corsa validation. The new state machine and target selection still require in-game testing with a multi-car field, both occupied and free adjacent lanes, and narrow/wide recorded corridors.
