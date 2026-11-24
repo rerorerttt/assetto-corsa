@@ -29,8 +29,8 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 - Records player-car world X/Z coordinates and speed.
 - Stores and loads routes per track/layout, with autoload on app start.
-- Uses a smoothed Catmull–Rom route sample with Stanley-style heading/cross-track feedback and a curvature/braking speed planner.
-- Traffic gaps, lane occupancy, and pass clearance are measured along cumulative route progress, not by projecting onto the car's current heading. The controller logs cross-track error, heading error, estimated preview curvature, route progress, lane target, and steering saturation.
+- Uses a shared Catmull–Rom route geometry module with an arc-length lookup table, continuity-constrained route projection, signed cross-track feedback, true sampled-curve curvature, and a curvature/braking speed planner.
+- Traffic gaps, lane occupancy, and pass clearance are measured along cumulative route progress, not by projecting onto the car's current heading. The controller logs cross-track error, heading error, signed local route curvature, route progress, lane target, and steering saturation.
 - Controls only steering, throttle and brake. No gear, clutch, reverse or stock AI spline commands are issued.
 - Applies to active AI-controlled cars with index 1 and above.
 
@@ -51,6 +51,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 ## Known limitations
 
 - Passing is enabled only when the recorded corridor has at least 2.7 m on each side of its midpoint. A symmetric 7 m profile gives lane centers at +1.75 m and -1.75 m; a 3 m profile correctly disables passing.
-- The smooth path follower and route-progress traffic logic are a first implementation and have not yet been validated in Assetto Corsa/CSP. Normalized steering response needs in-game calibration from the trace telemetry.
+- The arc-length route geometry and path follower are source-implemented but have not yet been validated in Assetto Corsa/CSP. Normalized steering response still needs in-game calibration from trace telemetry.
 - Route-progress conflict checks currently assume traffic follows the same recorded route direction. Opposing-direction traffic on a shared oval still requires explicit direction-aware conflict handling.
+- If a locked route projection is lost, the driver currently fails safe by braking rather than attempting an unverified global branch reacquisition.
 - Pit handling and automatic recovery from every spin/off-track situation are outside the current traffic implementation; the existing stuck-car rescue remains in place.
