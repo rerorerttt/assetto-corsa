@@ -24,12 +24,15 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE=14.0, LOOKAHEAD_SPEED=0.8, LOOKAHEAD_MIN=14.0, LOOKAHEAD_MAX=50.0,
-  STEER_GAIN=0.72, STEER_LIMIT=0.75, STEER_RATE=2.0, STEER_FILTER=0.18,
-  MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0, MIN_APEX_SPEED=11.0,
+  LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.35, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=28.0,
+  CURVATURE_STEER_GAIN=4.5, CURVATURE_FEEDFORWARD=0.20,
+  STEER_LIMIT=0.75, STEER_RATE=4.0, STEER_FILTER=0.08,
+  MAX_LATERAL_ACCEL=6.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0,
   CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
   SLIP_START=0.09, SLIP_FULL=0.45, SLIP_DAMP_MIN_SPEED=8.0,
   SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
+  TC_SLIP_START=0.10, TC_SLIP_FULL=0.28, TC_MAX_CUT=0.88,
+  TC_RECOVERY_RATE=1.25, TC_CORNER_CUT=0.45,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
@@ -191,7 +194,7 @@ local function loadLine()
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
-    state.nodes=loaded; state.p={}; state.loaded=true
+    state.nodes=loaded; state.p={}; state.routeGeometry=nil; state.loaded=true
     if not state.spawnPerformed then
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
     end
@@ -223,7 +226,7 @@ local function walkLine(startSeg,startT,distance)
       local room=length*(1-t)
       if room>=remaining then
         local nt=(length*t+remaining)/length
-        return vec3(lerp(a.x,b.x,nt),lerp(a.y,b.y,nt),lerp(a.z,b.z,nt))
+        return vec3(lerp(a.x,b.x,nt),lerp(a.y,b.y,nt),lerp(a.z,b.z,nt)),seg,nt
       end
       remaining=remaining-room; t=0
     end
@@ -254,13 +257,17 @@ local function getVertexCurvature(index)
   if angle<0.02 then return 0 end
   return angle/math.max(0.1,(l1+l2)*0.5)
 end
-local function findNearestSeg(pos,hintSeg)
+local function findNearestSeg(pos,hintSeg,allowGlobal,heading)
   local nodes=state.nodes; local segs=segmentCount()
   if segs<1 then return 1,0,0 end
   local px,pz=pos.x,pos.z
   local base=clamp(hintSeg or 1,1,segs)
   local bestSeg,bestT=base,0
-  local bestDist=math.huge
+  local bestDist,bestScore=math.huge,math.huge
+  local hx,hz=nil,nil
+  if heading and type(heading.x)=="number" and type(heading.z)=="number" then
+    hx,hz=normalize2(heading.x,heading.z)
+  end
   local function check(index)
     local a=nodes[index]; local b=segEnd(index)
     local vx,vz=b.x-a.x,b.z-a.z
@@ -270,7 +277,15 @@ local function findNearestSeg(pos,hintSeg)
     local cx,cz=a.x+vx*t,a.z+vz*t
     local dx,dz=px-cx,pz-cz
     local dSq=dx*dx+dz*dz
-    if dSq<bestDist then bestDist=dSq; bestSeg=index; bestT=t end
+    local score=dSq
+    if hx then
+      local tx,tz=normalize2(vx,vz)
+      local alignment=math.abs(hx*tx+hz*tz)
+      score=score+12*(1-alignment)
+    end
+    if score<bestScore then
+      bestScore=score; bestDist=dSq; bestSeg=index; bestT=t
+    end
   end
   local back=math.min(5,segs-1)
   local ahead=math.min(segs-1,math.max(20,math.floor(segs*0.25)))
@@ -285,7 +300,12 @@ local function findNearestSeg(pos,hintSeg)
     end
     if idx then check(idx) end
   end
-  if bestDist>15*15 then for i=1,segs do check(i) end end
+  -- A new car gets one global acquisition, biased toward the segment whose
+  -- direction best matches its current heading. Locked cars never jump to a
+  -- distant, topologically unrelated branch.
+  if allowGlobal == true or (allowGlobal ~= false and bestDist>15*15) then
+    for i=1,segs do check(i) end
+  end
   return bestSeg,bestT,math.sqrt(bestDist)
 end
 local function lateralOf(pos,seg)
@@ -338,8 +358,16 @@ local function recordSecondTelemetry(sim)
       any=true
     end
   end
+
+  local player=ac.getCar(0)
+  local playerTelemetry=state.playerTelemetry
+  if #state.nodes>=2 and not state.recLine and player and player.isActive and playerTelemetry and Driver and Driver.telemetryLine then
+    writeLog(Driver.telemetryLine(0,player,playerTelemetry))
+    any=true
+  end
+
   if not any and logger and logger.heartbeat then
-    pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes).." ai=0")
+    pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes).." ai=0 player=0")
   end
   flushLog()
 end
@@ -595,9 +623,27 @@ function script.update(dt)
     if state.enabled and state.loaded and #state.nodes>=2 then
       trySpawnTeleport(sim,dt)
     end
-    -- INSTANT ADOPTION + DRIVING: every active AI car is driven from the
-    -- very first frame. Nothing blocks this. (This was the bug: the spawn
-    -- gate used to block driving forever — cars stayed on the stock AI.)
+    -- Initialize shared route geometry for passive player telemetry too.
+    -- The player is observed only: no overrideCarControls() call is made for car 0.
+    if #state.nodes>=2 and not state.recLine and Driver and ensureDriver() then
+      if player and player.isActive and Driver.observePlayer then
+        local steerInput=0
+        if ac.getControllerSteerValue then
+          local okSteer,value=pcall(ac.getControllerSteerValue)
+          if okSteer then steerInput=value end
+        end
+        local okObserve,observeError=pcall(Driver.observePlayer,player,dt,steerInput)
+        if not okObserve then
+          state.playerTelemetry=nil
+          writeLog("PLAYER_TELEMETRY_ERROR err=%s",tostring(observeError))
+        end
+      end
+    elseif state.recLine then
+      state.playerTelemetry=nil
+    end
+
+    -- INSTANT ADOPTION + DRIVING: AI cars only. The player car (index 0)
+    -- is never passed to Driver.update() or ac.overrideCarControls().
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
       for i=1,sim.carsCount-1 do
         local car=ac.getCar(i)
@@ -808,7 +854,7 @@ function windowMain(dt)
     if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
-        state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+        state.nodes={}; state.p={}; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
         state.loaded=false; state.recBounds=false
         state.status="Запись линии и границ..."
       else
