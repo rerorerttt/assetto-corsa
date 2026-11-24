@@ -67,25 +67,36 @@ function Geometry.build(nodes, loopRoute, subdivisions)
     end
   end
   if total<1 then return nil end
-  if loopRoute then
-    for i=1,#samples-1 do
-      local prev=i==1 and samples[#samples-1] or samples[i-1]
-      local nxt=samples[i+1]
-      local prevS=i==1 and (prev.s-total) or prev.s
-      local ds=nxt.s-prevS
-      if ds>1e-5 then
-        samples[i].k=angle(prev.tx,prev.tz,nxt.tx,nxt.tz)/ds
-      end
+
+  -- Estimate curvature over a multi-metre chord, not between adjacent
+  -- sub-samples. Adjacent Catmull-Rom tangents amplify tiny recording noise
+  -- and make long, almost-straight roads look like a sequence of corners.
+  local function tangentAtDistance(distance)
+    local s=loopRoute and wrap(distance,total) or clamp(distance,0,total)
+    local lo,hi=1,#samples
+    while lo<=hi do
+      local mid=math.floor((lo+hi)*0.5)
+      if samples[mid].s<=s then lo=mid+1 else hi=mid-1 end
     end
-    samples[#samples].k=samples[1].k
-  else
-    for i=1,#samples do
-      local prev=samples[math.max(1,i-1)]
-      local nxt=samples[math.min(#samples,i+1)]
-      local ds=nxt.s-prev.s
-      if ds>1e-5 then
-        samples[i].k=angle(prev.tx,prev.tz,nxt.tx,nxt.tz)/ds
-      end
+    local i=clamp(hi,1,#samples-1)
+    local a,b=samples[i],samples[i+1]
+    local span=math.max(1e-8,b.s-a.s)
+    local t=clamp((s-a.s)/span,0,1)
+    return normalize(a.tx+(b.tx-a.tx)*t,a.tz+(b.tz-a.tz)*t)
+  end
+  local curvatureWindow=6.0
+  for i=1,#samples do
+    local center=samples[i].s
+    local beforeS=loopRoute and center-curvatureWindow or math.max(0,center-curvatureWindow)
+    local afterS=loopRoute and center+curvatureWindow or math.min(total,center+curvatureWindow)
+    local px,pz=tangentAtDistance(beforeS)
+    local nx,nz=tangentAtDistance(afterS)
+    local span=afterS-beforeS
+    if loopRoute then span=2.0*curvatureWindow end
+    if span>1e-4 then
+      samples[i].k=angle(px,pz,nx,nz)/span
+    else
+      samples[i].k=0
     end
   end
   return {samples=samples,total=total,loop=loopRoute==true,nodeCount=count,steps=steps}
