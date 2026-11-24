@@ -176,6 +176,35 @@ local function planTargetSpeed(p)
   return math.max(0,target)
 end
 
+local function routeBoundsAtSample(sample)
+  local count=#state.nodes
+  local i=sample and sample.seg or 1
+  if count<2 then return H.boundsAt(i) end
+  if i<1 then i=1 elseif i>count then i=count end
+  local j=i<count and i+1 or (state.loopRoute and 1 or i)
+  local a,b=state.nodes[i],state.nodes[j]
+  local bl0,br0=H.boundsAt(i)
+  local bl1,br1=H.boundsAt(j)
+  if not a or not b or i==j then return bl0,br0 end
+
+  -- Saved bounds were measured against the raw node-to-node chord. Transform
+  -- those boundary points into the smoothed spline's lateral frame before
+  -- using them as a steering constraint.
+  local rawTx,rawTz=normalize2(b.x-a.x,b.z-a.z)
+  local rawNx,rawNz=-rawTz,rawTx
+  local u=clamp(safeNumber(sample.t),0,1)
+  local centerX=lerp(a.x,b.x,u)
+  local centerZ=lerp(a.z,b.z,u)
+  local left=lerp(bl0,bl1,u)
+  local right=lerp(br0,br1,u)
+  local splineNx,splineNz=-sample.tz,sample.tx
+  local leftOffset=(centerX+rawNx*left-sample.x)*splineNx+
+    (centerZ+rawNz*left-sample.z)*splineNz
+  local rightOffset=(centerX+rawNx*right-sample.x)*splineNx+
+    (centerZ+rawNz*right-sample.z)*splineNz
+  return math.min(leftOffset,rightOffset),math.max(leftOffset,rightOffset)
+end
+
 local function safeCorridorForPreview(route, progress, ahead, car, headingAngle)
   local size=car and car.aabbSize
   local halfWidth=math.max(0.75,safeNumber(size and size.x,2.0)*0.5)
@@ -190,7 +219,7 @@ local function safeCorridorForPreview(route, progress, ahead, car, headingAngle)
   while distance<=last+0.001 do
     local sample=Geometry.sample(route,progress+distance)
     if sample then
-      local bl,br=H.boundsAt(sample.seg)
+      local bl,br=routeBoundsAtSample(sample)
       safeMin=math.max(safeMin,bl+envelope)
       safeMax=math.min(safeMax,br-envelope)
     end
@@ -198,7 +227,7 @@ local function safeCorridorForPreview(route, progress, ahead, car, headingAngle)
   end
   if safeMin>safeMax then
     local sample=Geometry.sample(route,progress+ahead*0.5)
-    local bl,br=H.boundsAt(sample and sample.seg or 1)
+    local bl,br=sample and routeBoundsAtSample(sample) or H.boundsAt(1)
     local center=(bl+br)*0.5
     safeMin,safeMax=center,center
   end
