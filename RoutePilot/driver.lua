@@ -845,7 +845,8 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   -- Predict one second of available acceleration rather than treating an
   -- unbounded cruise target as an instantaneous speed advantage.
   local speedAdvantage=speed-leaderPace+acceleration
-  local slower=speedAdvantage>=3.0
+  local immediateBlock=gap<=12.0 and leaderPace<=math.max(2.0,speed*0.15)
+  local slower=speedAdvantage>=3.0 or immediateBlock
   if slower then
     local targetCar=ac.getCar(leaderIndex)
     local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
@@ -863,7 +864,6 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
     local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
       speed>=(leaderSpeed or 0)-4.0
-    local immediateBlock=gap<=12.0 and leaderPace<=math.max(2.0,speed*0.15)
     canActuallyPass=canActuallyPass or immediateBlock
     local urgent=canActuallyPass and (gap<=urgentGap or immediateBlock)
     local passWindow=math.max(45.0,32.0+speed*1.5)
