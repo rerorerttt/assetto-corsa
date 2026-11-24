@@ -11,7 +11,6 @@ if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = ni
 local CFG = {
   -- Aggressive race pace: late braking and high sustained lateral grip.
   MAX_LATERAL_ACCEL=17.5, BRAKE_ACCEL=14.0,
-  SINGLE_CAR_TEST=true,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
@@ -23,17 +22,13 @@ local CFG = {
 local WIDTH_PRESETS = {3, 7, 11, 15}
 
 local state = {
-  enabled=false, playerAutopilot=false, recLine=false, recBounds=false, loopRoute=true,
+  enabled=true, recLine=false, recBounds=false, loopRoute=true,
   widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnStable=0, spawnLastRoster="", routeDirectionChecked=false,
   nodes={}, p={}, laneAssignments={}, spawnSegments={}, trackMap=nil, status="Готов", logAccum=0, loaded=false,
 }
 local ensureTrackMap
--- Ctrl+8 transfers the player car to RoutePilot control for a one-car line-following test.
-local playerAutopilotHotkey = ac.ControlButton('RoutePilot/PlayerAutopilot', {
-  keyboard = { key = ac.KeyIndex.D8, ctrl = true }
-})
 local logger=nil
 if Logger and type(Logger.new)=="function" then
   local ok, result = pcall(function()
@@ -373,7 +368,7 @@ local function laneOffsetForCar(carIndex,seg)
 end
 local function assignLaneRoster(sim)
   local leftCount,rightCount=0,0
-  for i=1,sim.carsCount-1 do
+  for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     if car and car.isActive and car.isAIControlled then
       local side=state.laneAssignments[i]
@@ -381,7 +376,7 @@ local function assignLaneRoster(sim)
       elseif side==-1 then rightCount=rightCount+1 end
     end
   end
-  for i=1,sim.carsCount-1 do
+  for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     if car and car.isActive and car.isAIControlled and not state.laneAssignments[i] then
       local side=(leftCount<=rightCount) and 1 or -1
@@ -397,7 +392,7 @@ local function recordSecondTelemetry(sim)
     local car=ac.getCar(i)
     local p=state.p[i]
     if car and car.isActive and p and
-        (car.isAIControlled or (i==0 and state.playerAutopilot)) then
+        car.isAIControlled then
       if Driver and Driver.telemetryLine then writeLog(Driver.telemetryLine(i,car,p)) end
       any=true
     end
@@ -475,48 +470,6 @@ local function spotIsClear(pos, exceptIndex)
   end
   return true
 end
--- Align the recorded point order with the player's actual forward direction.
--- This also keeps the signed left/right lane axis consistent with travel.
-local function alignRouteDirectionToPlayer(metrics,player)
-  if state.routeDirectionChecked or not player or not player.look then
-    return metrics
-  end
-  local routeDistance,routeError=findRouteDistanceAtPosition(player.position,metrics)
-  if routeError>15.0 then
-    writeLog("ROUTE_DIRECTION_AMBIGUOUS route_error=%.2f",routeError)
-    state.routeDirectionChecked=true
-    return metrics
-  end
-  local _,routeDirection=sampleSpawnRoute(metrics,routeDistance)
-  if not routeDirection then
-    writeLog("ROUTE_DIRECTION_CHECK_FAILED")
-    state.routeDirectionChecked=true
-    return metrics
-  end
-  local dot=player.look.x*routeDirection.x+player.look.z*routeDirection.z
-  if dot < -0.15 then
-    local oldL,oldR=state.boundsL,state.boundsR
-    local n=#state.nodes
-    local reversedNodes,reversedL,reversedR={},{},{}
-    for i=1,n do
-      local source=n-i+1
-      reversedNodes[i]=state.nodes[source]
-      -- Reversing travel direction also reverses the signed left/right axis.
-      reversedL[i]=-safeNumber(oldR[source],1.5)
-      reversedR[i]=-safeNumber(oldL[source],-1.5)
-    end
-    state.nodes=reversedNodes
-    state.boundsL,state.boundsR=reversedL,reversedR
-    state.p={}
-    metrics=buildSpawnRouteMetrics()
-    writeLog("ROUTE_DIRECTION_REVERSED dot=%.3f player_route_error=%.2f",dot,routeError)
-  else
-    writeLog("ROUTE_DIRECTION_OK dot=%.3f player_route_error=%.2f",dot,routeError)
-  end
-  state.routeDirectionChecked=true
-  return metrics
-end
-
 -- Spawn teleport runs when the roster is stable; it NEVER blocks driving.
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone then return end
@@ -710,16 +663,6 @@ local function ensureDriver()
   driverReady=true
   return true
 end
-local function preparePlayerRoute()
-  local player=ac.getCar(0)
-  local metrics=buildSpawnRouteMetrics()
-  if player and metrics then
-    alignRouteDirectionToPlayer(metrics,player)
-  end
-  -- Direction alignment can reverse nodes and boundary arrays.
-  state.trackMap=nil
-  ensureTrackMap()
-end
 function script.update(dt)
   if not dt or dt<=0 then return end
   dt=math.min(dt,0.05)
@@ -730,49 +673,25 @@ function script.update(dt)
     local player=ac.getCar(0)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
-    if playerAutopilotHotkey:pressed() then
-      if not state.playerAutopilot then
-        if state.loaded and #state.nodes>=2 and Driver and ensureDriver() then
-          preparePlayerRoute()
-          state.playerAutopilot=true
-          state.enabled=true
-          state.laneAssignments[0]=1 -- fixed LEFT recorded lane for this test
-          state.p[0]=nil
-          state.status="Автопилот игрока: LEFT / одна машина"
-          writeLog("PLAYER_AUTOPILOT_START car=0 lane=LEFT")
-        else
-          state.status="Нет загруженной линии или driver.lua"
-          writeLog("PLAYER_AUTOPILOT_START_FAILED loaded=%s points=%d",
-            tostring(state.loaded),#state.nodes)
+    -- RoutePilot controls every active car that Assetto Corsa currently
+    -- reports as AI, including car 0 after the game's Ctrl+8 AI takeover.
+    if state.loaded and not state.recLine and #state.nodes>=2 and
+        Driver and ensureDriver() then
+      trySpawnTeleport(sim,dt)
+      for i=0,sim.carsCount-1 do
+        local car=ac.getCar(i)
+        if car and car.isActive and car.isAIControlled then
+          local okc,erc=pcall(Driver.update,i,car,dt)
+          if not okc then
+            writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
+            releaseCar(i)
+          end
+        elseif state.p[i] then
+          releaseCar(i)
         end
-      else
-        state.playerAutopilot=false
-        state.enabled=false
-        releaseCar(0)
-        state.status="Автопилот игрока остановлен"
-        writeLog("PLAYER_AUTOPILOT_STOP car=0")
       end
-      flushLog()
-    end
-
-    -- Isolated test mode: only the user's car (index 0) receives RoutePilot
-    -- controls. AI traffic is neither repositioned nor driven by this test.
-    if state.playerAutopilot and #state.nodes>=2 and Driver and ensureDriver() then
-      local car=ac.getCar(0)
-      if car and car.isActive then
-        local okc,erc=pcall(Driver.update,0,car,dt)
-        if not okc then
-          writeLog("DRIVER_ERROR id=0 err=%s",tostring(erc))
-          releaseCar(0)
-          state.playerAutopilot=false
-          state.enabled=false
-          state.status="Ошибка автопилота игрока"
-        end
-      else
-        releaseCar(0)
-      end
-    elseif state.p[0] then
-      releaseCar(0)
+    else
+      for idx in pairs(state.p) do releaseCar(idx) end
     end
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
@@ -1014,31 +933,6 @@ function windowMain(dt)
     if ui.button("Сохранить",vec2(82,22)) then saveLine() end
     ui.sameLine(0,4)
     if ui.button("Загрузить",vec2(82,22)) then loadLine() end
-    local autopilotLabel=state.playerAutopilot and
-      "Остановить автопилот (Ctrl+8)" or "Тест одной машины (Ctrl+8)"
-    if ui.button(autopilotLabel,vec2(220,22)) then
-      if not state.playerAutopilot then
-        if state.loaded and #state.nodes>=2 and Driver and ensureDriver() then
-          preparePlayerRoute()
-          state.playerAutopilot=true
-          state.enabled=true
-          state.laneAssignments[0]=1
-          state.p[0]=nil
-          state.status="Автопилот игрока: LEFT / одна машина"
-          writeLog("PLAYER_AUTOPILOT_START car=0 lane=LEFT source=UI")
-        else
-          state.status="Нет загруженной линии"
-        end
-      else
-        state.playerAutopilot=false
-        state.enabled=false
-        releaseCar(0)
-        state.status="Автопилот игрока остановлен"
-        writeLog("PLAYER_AUTOPILOT_STOP car=0 source=UI")
-      end
-      flushLog()
-    end
-    ui.sameLine(0,4)
     if ui.button("Очистить",vec2(82,22)) then
       state.nodes={}; state.p={}; state.trackMap=nil; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
