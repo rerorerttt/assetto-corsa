@@ -53,7 +53,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 ## Experimental 0.9.1 changes (2026-11-25)
 
 - Removed the fixed 170 km/h cruise setting. RoutePilot uses an unbounded cruise target; speed is limited by upcoming route curvature and braking distance.
-- Braking deceleration is estimated from measured speed loss while braking, then filtered and used by curve planning and car-following.
+- Braking deceleration and usable lateral grip are estimated from measured vehicle response, then filtered and used by curve planning and car-following. Acceleration is also learned to estimate whether a pass can be completed.
 - The forward planning horizon expands with speed and estimated stopping distance, including a reaction-time margin.
 - Lane occupancy checks physical vehicle-width overlap, active passing reservations, and the swept lateral transition. The former broad front/rear reservation is removed.
 - Following speed is evaluated in the current corridor rather than taking the minimum speed across every lateral offset.
