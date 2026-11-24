@@ -60,3 +60,9 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 ### Manual driver telemetry test
 
 When a saved or completed route with at least two points is available, RoutePilot also records the manually driven player car (index 0) to `routepilot_trace.txt` once per second. Its row uses the same fields as AI telemetry and is marked `CAR=0` and `MODE=PLAYER`. Steering is the normalized live controller input; throttle and brake are the actual car input values. The player is observed passively every update frame to keep route progress continuous. No AI controls are applied to the player car. `TARGET_SPEED=-1.00` means not applicable to manual driving.
+
+### Predictive arc steering and traction control
+
+The AI path follower now uses a pure-pursuit curvature command aimed at a Catmull–Rom spline sample selected by arc distance ahead, with a small sampled-curvature feed-forward term. It no longer uses the next recorded point as its steering target. Preview distance scales with speed (10–28 m), so steering is initiated before the bend.
+
+Throttle is limited by positive wheel slip reported by CSP wheel telemetry and by lateral acceleration in corners. Wheelspin causes an immediate torque reduction with slower throttle recovery. The trace includes WHEEL_SLIP, TC_SCALE, and STEER_CURV for diagnosis. This is a feedback limiter, not a guarantee of zero slip; in-game testing across the target cars is still required.
