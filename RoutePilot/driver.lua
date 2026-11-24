@@ -137,7 +137,8 @@ local function laneCenterForRole(carIndex, seg, role)
 end
 
 local function newPersonality(carIndex, car)
-  local initialSeg = select(1, H.findNearestSeg(car.position, 1))
+  local initialSeg = (H.spawnSegment and H.spawnSegment(carIndex)) or
+    select(1,H.findNearestSeg(car.position,nil,true))
   local laneOffset, twoLane = H.laneOffset(carIndex, initialSeg)
   local p = {
     segIdx = initialSeg,
@@ -470,7 +471,8 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.boundaryHard = p.latOff < left + BOUNDARY_HARD_MARGIN or
     p.latOff > right - BOUNDARY_HARD_MARGIN
 
-  local lookahead = clamp(6.0 + speed * 0.14, 6.0, 18.0)
+  local lookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
+    LOOKAHEAD_BASE, LOOKAHEAD_MAX)
 
   local center = H.walkLine(seg, t, lookahead)
   local centerAhead = H.walkLine(seg, t, lookahead + 2.0)
