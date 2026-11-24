@@ -546,8 +546,9 @@ function Driver.update(carIndex, car, dt)
     p.stuck = 0
   end
 
-  local seg = select(1, H.findNearestSeg(car.position, p.segIdx, false))
+  local seg, segT = H.findNearestSeg(car.position, p.segIdx, false)
   p.segIdx = seg
+  p.segT = segT
   local a = state.nodes[seg]
   local b = H.segEnd(seg)
   local tx, tz = normalize2(b.x - a.x, b.z - a.z)
