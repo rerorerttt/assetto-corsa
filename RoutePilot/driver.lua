@@ -273,7 +273,8 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
         local otherState = state.p[i]
         local progress, lateral, otherSeg = routeProjection(other,
           otherState and otherState.segIdx or own.segIdx,
-          not (otherState and otherState.routeLocked))
+          not (otherState and otherState.routeLocked),
+          otherState and otherState.routeProgress, other.speedMs, 0.05)
         if otherState then
           otherState.routeLocked = true
           if otherSeg then otherState.segIdx = otherSeg end
@@ -305,7 +306,7 @@ local function carAheadInLane(carIndex, car, laneOffset)
   if not sim or not own then return nil, nil, nil end
   local ownProgress = own.routeProgress
   if ownProgress == nil then
-    ownProgress = routeProjection(car, own.segIdx)
+    ownProgress = routeProjection(car, own.segIdx, not own.routeLocked, own.routeProgress, car.speedMs, 0.05)
     own.routeProgress = ownProgress
   end
   if ownProgress == nil then return nil, nil, nil end
@@ -376,7 +377,8 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       local targetState = state.p[p.passTargetIndex]
       local targetProgress, _, targetSeg = routeProjection(target,
         targetState and targetState.segIdx or p.segIdx,
-        not (targetState and targetState.routeLocked))
+        not (targetState and targetState.routeLocked),
+        targetState and targetState.routeProgress, target.speedMs, 0.05)
       if targetState then
         targetState.routeLocked = true
         if targetSeg then targetState.segIdx = targetSeg end
@@ -482,9 +484,14 @@ function Driver.update(carIndex, car, dt)
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   local progress, _, projectedSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
-  p.routeLocked = true
-  if projectedSeg then p.segIdx = projectedSeg end
-  if progress ~= nil then p.routeProgress = progress else p.projectionLost = true end
+  if progress ~= nil then
+    p.routeLocked = true
+    p.routeProgress = progress
+    p.projectionLost = false
+    if projectedSeg then p.segIdx = projectedSeg end
+  else
+    p.projectionLost = true
+  end
   calculateStability(p, speed)
 
   if speed < RESCUE_SPEED then
