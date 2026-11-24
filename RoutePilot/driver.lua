@@ -281,13 +281,16 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
           math.max(0, otherSpeed - ownSpeed) * LANE_CHANGE_TIME + 4.0)
         local sweepMin = math.min(p.laneOffset, targetOffset) - LANE_HALF_WIDTH
         local sweepMax = math.max(p.laneOffset, targetOffset) + LANE_HALF_WIDTH
-        local inTransitionSweep = math.abs(longitudinal) < 5.0 and
-          actualOffset >= sweepMin and actualOffset <= sweepMax
+        local insideSweptCorridor = actualOffset >= sweepMin and
+          actualOffset <= sweepMax and
+          longitudinal >= -rearClear and longitudinal <= frontClear
         if (inTargetLane or reservingTarget) and
           longitudinal >= -rearClear and longitudinal <= frontClear then
           return false, i, longitudinal
         end
-        if inTransitionSweep then return false, i, longitudinal end
+        -- Protect the entire swept lateral path, not just a 5 m bubble
+        -- around the car. A nearby car in either lane blocks the merge.
+        if insideSweptCorridor then return false, i, longitudinal end
       end
     end
   end
