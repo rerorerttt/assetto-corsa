@@ -118,6 +118,7 @@ local function newPersonality(carIndex)
     slipSeverity = 0, stability = 1,
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
+    overtakeRetryT = 0, emergencyPass = false,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -296,7 +297,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local rightCenter=(bl+mid)*0.5
   p.laneOffset=p.overtakeSide==0 and leftCenter or rightCenter
   local laneTarget=clamp(p.laneOffset or leftCenter,safeMin,safeMax)
-  local maxStep=1.5*math.max(0,dt or 0)
+  local laneChangeRate=p.emergencyPass and 2.6 or 1.5
+  local maxStep=laneChangeRate*math.max(0,dt or 0)
   local previousOffset=p.laneOffsetCurrent
   if previousOffset==nil then previousOffset=laneTarget end
   p.laneOffsetCurrent=previousOffset+
@@ -351,7 +353,8 @@ end
 local function filterSteering(p, target, dt)
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  local maxChange = CFG.STEER_RATE * dt
+  local steerRate=p.emergencyPass and math.max(CFG.STEER_RATE,5.5) or CFG.STEER_RATE
+  local maxChange=steerRate*dt
   p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
     -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
   return p.steer
@@ -376,6 +379,15 @@ end
 
 -- Checks traffic in a specified lane, both ahead and behind. This is used
 -- before entering the passing lane and before returning to the left lane.
+local function relativeToRoute(position, sample)
+  if not position or not sample then return nil, nil end
+  local dx=safeNumber(position.x)-sample.x
+  local dz=safeNumber(position.z)-sample.z
+  local longitudinal=dx*sample.tx+dz*sample.tz
+  local lateral=dx*(-sample.tz)+dz*sample.tx
+  return longitudinal,lateral
+end
+
 local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
   local sim = ac.getSim()
   if not sim then return true end
@@ -385,6 +397,8 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
     ownProgress = routeProjection(car, own and own.segIdx or 1, not (own and own.routeLocked), own and own.routeProgress, car.speedMs, 0.05)
   end
   if ownProgress == nil then return true end
+  local ownSample=Geometry.sample(state.routeGeometry,ownProgress)
+  if not ownSample then return true end
   for i = 0, sim.carsCount - 1 do
     if i ~= carIndex and i ~= ignoreIndex then
       local other = ac.getCar(i)
@@ -399,18 +413,34 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
           otherState.routeLocked = progress ~= nil
           if otherSeg then otherState.segIdx = otherSeg end
         end
+        local longitudinal,actualLateral
         if progress ~= nil then
-          local longitudinal = routeGap(ownProgress, progress)
-          local targetOffset = otherState and
-            (otherState.laneOffset or otherState.laneOffsetCurrent) or lateral
-          local reserved = math.abs(targetOffset - laneOffset) < 1.35
-          local actual = math.abs(lateral - laneOffset) < 1.35
-          local otherSpeed = math.max(0, safeNumber(other.speedMs))
-          local ownSpeed = math.max(0, safeNumber(car.speedMs))
-          local rearWindow = math.max(18, (ownSpeed + otherSpeed) * 0.375 + 8)
-          local frontWindow = math.max(48, math.max(ownSpeed, otherSpeed) * 1.2 + 10)
-          if (actual or reserved) and
-             longitudinal > -rearWindow and longitudinal < frontWindow then
+          longitudinal=routeGap(ownProgress,progress)
+          actualLateral=lateral
+        else
+          -- A car without a valid spline projection (especially the player)
+          -- still occupies physical space and must block a lane change.
+          longitudinal,actualLateral=relativeToRoute(other.position,ownSample)
+        end
+        if longitudinal~=nil and actualLateral~=nil then
+          local targetOffset=actualLateral
+          local reserved=false
+          if progress~=nil and otherState and otherState.laneOffset~=nil then
+            targetOffset=otherState.laneOffset
+            reserved=math.abs(targetOffset-laneOffset)<1.35
+          end
+          local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
+          local otherWidth=math.max(1.5,safeNumber(other.aabbSize and other.aabbSize.x,2.0))
+          local lateralGap=math.abs(actualLateral-laneOffset)
+          local bodyOverlap=lateralGap<(ownWidth+otherWidth)*0.5+0.55
+          local sideWindow=math.max(8,math.max(0,safeNumber(car.speedMs))*0.30+4)
+          local sideConflict=math.abs(longitudinal)<sideWindow and lateralGap<4.5
+          local otherSpeed=math.max(0,safeNumber(other.speedMs))
+          local ownSpeed=math.max(0,safeNumber(car.speedMs))
+          local rearWindow=math.max(22,(ownSpeed+otherSpeed)*0.45+10)
+          local frontWindow=math.max(55,math.max(ownSpeed,otherSpeed)*1.25+12)
+          if (bodyOverlap or reserved or sideConflict) and
+             longitudinal>-rearWindow and longitudinal<frontWindow then
             return true
           end
         end
@@ -430,6 +460,8 @@ local function carAheadInLane(carIndex, car, laneOffset)
     own.routeProgress = ownProgress
   end
   if ownProgress == nil then return nil, nil, nil end
+  local ownSample=Geometry.sample(state.routeGeometry,ownProgress)
+  if not ownSample then return nil,nil,nil end
   local bestGap, bestSpeed, bestIndex = nil, nil, nil
   for i = 0, sim.carsCount - 1 do
     if i ~= carIndex then
@@ -445,17 +477,19 @@ local function carAheadInLane(carIndex, car, laneOffset)
           otherState.routeLocked = progress ~= nil
           if otherSeg then otherState.segIdx = otherSeg end
         end
-        local targetOffset = otherState and
-          (otherState.laneOffset or otherState.laneOffsetCurrent) or lateral
-        if progress ~= nil and
-           (math.abs(lateral - laneOffset) < 1.35 or
-            math.abs(targetOffset - laneOffset) < 1.35) then
-          local gap = routeGap(ownProgress, progress)
-          if gap > 0.5 and gap < 90 and (not bestGap or gap < bestGap) then
-            bestGap = gap
-            bestSpeed = math.max(0, safeNumber(other.speedMs))
-            bestIndex = i
-          end
+        local gap,actualLateral
+        if progress~=nil then
+          gap=routeGap(ownProgress,progress)
+          actualLateral=lateral
+        else
+          gap,actualLateral=relativeToRoute(other.position,ownSample)
+        end
+        if gap and actualLateral and gap>0.5 and gap<90 and
+           math.abs(actualLateral-laneOffset)<2.6 and
+           (not bestGap or gap<bestGap) then
+          bestGap=gap
+          bestSpeed=math.max(0,safeNumber(other.speedMs))
+          bestIndex=i
         end
       end
     end
@@ -466,10 +500,16 @@ end
 local function beginOvertake(carIndex, car, p, gap, leaderIndex)
   local leftCenter, rightCenter = laneCenters(p.segIdx)
   if not leftCenter or p.slow then return false end
+  if p.overtakeRetryT>0 then return false end
   if laneOccupied(carIndex, car, rightCenter, nil) then
-    H.log("CAR=%d OVERTAKE_DENIED right_lane_occupied", carIndex)
+    p.overtakeRetryT=1.0
+    if not p.overtakeDeniedLogged then
+      H.log("CAR=%d OVERTAKE_DENIED right_lane_occupied",carIndex)
+      p.overtakeDeniedLogged=true
+    end
     return false
   end
+  p.overtakeDeniedLogged=false
   p.overtakeSide = -1
   p.passLat = rightCenter
   p.laneOffset = rightCenter
@@ -477,12 +517,15 @@ local function beginOvertake(carIndex, car, p, gap, leaderIndex)
   p.passT = 0
   p.followTimer = 0
   p.blockedT = 0
-  H.log("CAR=%d OVERTAKE_BEGIN target=%d from=LEFT to=RIGHT gap=%.1f",
-    carIndex, leaderIndex or -1, gap or -1)
+  p.emergencyPass = p.emergencyPassRequest==true
+  p.emergencyPassRequest=false
+  H.log("CAR=%d OVERTAKE_BEGIN target=%d from=LEFT to=RIGHT gap=%.1f mode=%s",
+    carIndex,leaderIndex or -1,gap or -1,p.emergencyPass and "URGENT" or "NORMAL")
   return true
 end
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
+  p.overtakeRetryT=math.max(0,safeNumber(p.overtakeRetryT)-dt)
   local ownProgress, _, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
   if ownProgress == nil then
     p.projectionLost = true
@@ -526,6 +569,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
        not laneOccupied(carIndex, car, leftCenter, p.passTargetIndex) then
       p.overtakeSide = 0
       p.passTargetIndex = nil
+      p.emergencyPass=false
       p.laneOffset = leftCenter
       p.passT = 0
       p.followTimer = 0
@@ -558,14 +602,27 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
 
-  local slower = (leaderSpeed or 0) < p.cruiseSpeed - 1.0
+  local slower=(leaderSpeed or 0)<p.cruiseSpeed-1.0
   if slower then
-    p.followTimer = p.followTimer + dt
+    local speedAdvantage=p.cruiseSpeed-(leaderSpeed or 0)
+    local urgentGap=clamp(12.0+speed*0.55,18.0,40.0)
+    local canActuallyPass=speedAdvantage>=2.5 and
+      speed>=(leaderSpeed or 0)-3.0
+    local urgent=canActuallyPass and gap<=urgentGap
+    p.followTimer=p.followTimer+dt
+    if not p.slow and urgent and p.overtakeSide==0 then
+      p.emergencyPassRequest=true
+      if beginOvertake(carIndex,car,p,gap,leaderIndex) then
+        return targetSpeed
+      end
+      p.emergencyPassRequest=false
+    end
     local safe = math.sqrt(math.max(0,
       (leaderSpeed or 0) * (leaderSpeed or 0) +
       2 * CFG.BRAKE_ACCEL * math.max(0, gap - safeNumber(state.followGap, 8))))
-    if not p.slow and p.followTimer >= TRIGGER_TIME then
-      if beginOvertake(carIndex, car, p, gap, leaderIndex) then
+    if not p.slow and p.followTimer>=TRIGGER_TIME and p.overtakeRetryT<=0 then
+      p.emergencyPassRequest=false
+      if beginOvertake(carIndex,car,p,gap,leaderIndex) then
         return targetSpeed
       end
     end
