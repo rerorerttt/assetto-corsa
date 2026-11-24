@@ -29,8 +29,8 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 - Records player-car world X/Z coordinates and speed.
 - Stores and loads routes per track/layout, with autoload on app start.
-- Uses a Pure Pursuit-style steering controller and a curvature/braking speed planner.
-- Car-following collision avoidance (v0.2.0): each AI car checks for the nearest car ahead in its own lane (lateral offset within 2.4 m) and limits its target speed to a safe value based on the gap and the leader's speed. Below the minimum gap (adjustable, 3–15 m) the car stops completely.
+- Uses a smoothed Catmull–Rom route sample with Stanley-style heading/cross-track feedback and a curvature/braking speed planner.
+- Traffic gaps, lane occupancy, and pass clearance are measured along cumulative route progress, not by projecting onto the car's current heading. The controller logs cross-track error, heading error, estimated preview curvature, route progress, lane target, and steering saturation.
 - Controls only steering, throttle and brake. No gear, clutch, reverse or stock AI spline commands are issued.
 - Applies to active AI-controlled cars with index 1 and above.
 
@@ -50,5 +50,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 ## Known limitations
 
-- Car-following only prevents rear-ending the car directly ahead in the same lane; side-by-side contact during overtakes is not handled (no overtaking logic yet).
-- This is an initial controller implementation. It must be tested in-game on a clear track before use in traffic. The controller does not yet perform overtaking, pit handling, or automatic recovery from a spin/off-track situation.
+- Passing is enabled only when the recorded corridor has at least 2.7 m on each side of its midpoint. A symmetric 7 m profile gives lane centers at +1.75 m and -1.75 m; a 3 m profile correctly disables passing.
+- The smooth path follower and route-progress traffic logic are a first implementation and have not yet been validated in Assetto Corsa/CSP. Normalized steering response needs in-game calibration from the trace telemetry.
+- Route-progress conflict checks currently assume traffic follows the same recorded route direction. Opposing-direction traffic on a shared oval still requires explicit direction-aware conflict handling.
+- Pit handling and automatic recovery from every spin/off-track situation are outside the current traffic implementation; the existing stuck-car rescue remains in place.
