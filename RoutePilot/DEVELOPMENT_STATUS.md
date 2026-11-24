@@ -205,3 +205,25 @@ Implemented on this experimental branch:
 Validation performed: fetched the updated file from GitHub after each write; confirmed all expected urgent-pass/player-fallback/clearance code is present; a structural Lua block and delimiter scan reports balanced blocks and delimiters. This is not a Lua compiler test. No Assetto Corsa/CSP runtime test has been performed. The new behavior remains experimental and must be checked in-game for steering response, lane clearance, player avoidance, and return-to-lane behavior. The trace's player was stationary and outside valid route projection, so it does not itself demonstrate that an AI successfully avoided a moving player.
 
 Latest code commit: 34a2430d11481a9c6431490778667610f7a94f0d. The urgent trigger now uses a 25–60 m speed-dependent lead window, requires at least 5 m/s potential speed advantage, and rejects passes whose estimated relative-distance-to-clear exceeds 130 m. The best-known-good baseline, PR #6, and main remain untouched.
+
+
+## 2026-11-25 unified traffic and native player autopilot (experimental)
+
+Reviewed the latest supplied `RoutePilot/routepilot_trace.txt` from the predictive-boundary branch:
+
+- The log contains 1,460 lines and 234 player telemetry rows. All player rows are still marked `MODE=PLAYER`; the player's measured speed ranges from 0 to 34.12 m/s. Therefore this capture demonstrates that AI cars can detect and pass the player, but it does not contain a test of the player's native Ctrl+8 AI state.
+- The trace still initializes cars 1, 3 and 5 as `SLOW cruise=40.0kmh` and cars 2 and 4 as `FAST cruise=170.0kmh`. Source inspection confirmed that the 40 km/h class was created in `newPersonality()` and that `p.slow` also blocked those cars from initiating overtakes.
+- The same log records six overtake starts, five completions and six denials. Existing player avoidance was retained.
+
+Implemented on the new experimental branch `routepilot/unified-traffic-player-autopilot-2026-11-25`:
+
+- The app now checks the existing `car.isAIControlled` state for car index 0. When the native Assetto Corsa Ctrl+8 autopilot activates that state, car 0 is passed through the same `Driver.update()` controller as every other AI car. It receives the recorded route follower, speed planner, lane logic, traffic checks, steering, throttle and braking. No RoutePilot button or custom hotkey was added.
+- When the player is not in native AI mode, car 0 remains passive telemetry only; RoutePilot does not override manual steering, throttle or brake. Telemetry distinguishes `MODE=PLAYER` from `MODE=AI_AUTOPILOT`, and avoids writing duplicate rows.
+- Removed the alternating index-based SLOW/FAST personality. Every controlled car now uses the same configured `speedMax` ceiling (default 170 km/h) and curve/braking planner; the artificial 40 km/h limit and the fast-only overtake gate are gone. Actual acceleration and attainable speed remain dependent on each car's physics.
+- Added a local passing-lane reservation: while an AI car is in an overtake, another car within `max(140 m, speed × 4.5 s)` cannot start a competing pass. This serializes overtakes in a nearby convoy while allowing separated groups to pass independently.
+- During an overtake, the controller also checks the vehicle ahead in the passing lane and applies the same safe-following-speed calculation. When the car's own lane is blocked and a vehicle is also ahead in the passing lane, its target speed is limited by the safer of the two lane leaders. If the passing lane is unavailable, the car follows the leader in its own lane instead of attempting a conflicting move.
+- Existing front/rear/side occupancy checks, vehicle footprint checks, safe corridor checks, rear-bumper clearance before returning, player fallback detection, projection-loss braking and traction control remain in place.
+
+Source-level validation: the edited app and driver were fetched back from GitHub; no old SLOW/FAST/40 km/h class references remain in the driver; player index 0 is included only when the game reports it as AI-controlled; the new pass reservation and both-lane following-speed paths are present; Lua block and delimiter scans are balanced. This is not a Lua compiler test. No Assetto Corsa/CSP runtime is available here, so Ctrl+8 adoption, player line tracking, convoy serialization and braking behavior still require an in-game test. In particular, the next trace should show `PLAYER_AUTOPILOT_ADOPT`, `CAR_INIT id=0`, and `MODE=AI_AUTOPILOT` while Ctrl+8 is active.
+
+Code commits: app `ff37a0aa3f1c8bb94666beecece632cf39868f98`; driver `8a1466cfdf15a066d8aebd1e2af6874f1fa48381`; two-lane braking follow-up `40c9e2a3345b2104ebaf9e1a7e9291bdffdd78ab`. The best-known-good baseline, PR #6, the previous predictive-boundary branch, and `main` remain untouched.
