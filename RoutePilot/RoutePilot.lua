@@ -191,7 +191,7 @@ local function loadLine()
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
-    state.nodes=loaded; state.p={}; state.loaded=true
+    state.nodes=loaded; state.p={}; state.routeGeometry=nil; state.loaded=true
     if not state.spawnPerformed then
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
     end
