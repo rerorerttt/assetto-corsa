@@ -218,9 +218,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.routeLocked = true
   p.segIdx, p.lineDist = seg, lineDist
   p.latOff = H.lateralOf(car.position, seg)
-  local progress = routeProjection(car, seg, not p.routeLocked)
-  p.routeLocked = true
-  p.routeProgress = progress
+  refreshRouteMetrics()
+  p.routeProgress = state.routeCum[seg] + state.routeSegLength[seg] * t
 
   local ahead = clamp(CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN, CFG.LOOKAHEAD_MAX)
@@ -299,10 +298,13 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
       local other = ac.getCar(i)
       if other and other.isActive then
         local otherState = state.p[i]
-        local progress, lateral = routeProjection(other,
+        local progress, lateral, otherSeg = routeProjection(other,
           otherState and otherState.segIdx or own.segIdx,
           not (otherState and otherState.routeLocked))
-        if otherState then otherState.routeLocked = true end
+        if otherState then
+          otherState.routeLocked = true
+          if otherSeg then otherState.segIdx = otherSeg end
+        end
         if progress ~= nil then
           local longitudinal = routeGap(ownProgress, progress)
           if math.abs(lateral - laneOffset) < 1.35 and
@@ -332,10 +334,13 @@ local function carAheadInLane(carIndex, car, laneOffset)
       local other = ac.getCar(i)
       if other and other.isActive then
         local otherState = state.p[i]
-        local progress, lateral = routeProjection(other,
+        local progress, lateral, otherSeg = routeProjection(other,
           otherState and otherState.segIdx or own.segIdx,
           not (otherState and otherState.routeLocked))
-        if otherState then otherState.routeLocked = true end
+        if otherState then
+          otherState.routeLocked = true
+          if otherSeg then otherState.segIdx = otherSeg end
+        end
         if progress ~= nil and math.abs(lateral - laneOffset) < 1.35 then
           local gap = routeGap(ownProgress, progress)
           if gap > 0.5 and gap < 90 and (not bestGap or gap < bestGap) then
@@ -370,8 +375,9 @@ local function beginOvertake(carIndex, car, p, gap, leaderIndex)
 end
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  local ownProgress = routeProjection(car, p.segIdx, not p.routeLocked)
+  local ownProgress, _, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked)
   p.routeLocked = true
+  if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
   local leftCenter, rightCenter = laneCenters(p.segIdx)
   local gap, leaderSpeed, leaderIndex = carAheadInLane(
@@ -383,10 +389,13 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local passedClearance = false
     if target and target.isActive then
       local targetState = state.p[p.passTargetIndex]
-      local targetProgress = routeProjection(target,
+      local targetProgress, _, targetSeg = routeProjection(target,
         targetState and targetState.segIdx or p.segIdx,
         not (targetState and targetState.routeLocked))
-      if targetState then targetState.routeLocked = true end
+      if targetState then
+        targetState.routeLocked = true
+        if targetSeg then targetState.segIdx = targetSeg end
+      end
       local currentProgress = ownProgress or routeProjection(car, p.segIdx, false)
       local passedDistance = (currentProgress and targetProgress)
         and routeGap(targetProgress, currentProgress) or -math.huge
@@ -478,8 +487,9 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  local progress = routeProjection(car, p.segIdx, not p.routeLocked)
+  local progress, _, projectedSeg = routeProjection(car, p.segIdx, not p.routeLocked)
   p.routeLocked = true
+  if projectedSeg then p.segIdx = projectedSeg end
   if progress ~= nil then p.routeProgress = progress end
   calculateStability(p, speed)
 
