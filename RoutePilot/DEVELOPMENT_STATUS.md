@@ -149,3 +149,13 @@ Do not merge PR #4 until these runtime checks pass.
 
 - The checked-in `line_nevadadrift_bounds.txt` contains 230 identical `-3.50 3.50` rows. In the current source, `addPoint()` initializes bounds from the selected width preset; this file therefore represents the configured 7 m corridor, not independently measured mesh edges. The visible red debug lines are drawn from these saved values.
 - `updateBoundsRecording()` is a separate recording mode in this branch and the UI stops line recording when it starts. Do not interpret the current uniform bounds file as proof that both physical track edges were sampled. The new guard enforces the saved corridor as authored; it cannot compensate for incorrect corridor data.
+
+
+## Trace review and second controller correction (2026-11-24)
+
+- Reviewed the new 90-row trace from the rail-following branch. Logged speed is in m/s: peak observed was 27.82 m/s (100.15 km/h); this trace does not establish a sustained 160 km/h straight-line run.
+- Found a deterministic artificial speed cap: `Driver.update()` reduced target speed to 22 m/s whenever `boundaryViolation` was true. That flag represents leaving the assigned lane envelope, not necessarily leaving the physical track. The cap was therefore active 26/90 samples and could hold the car near 79 km/h even while it remained inside the road boundaries. Removed this lane-violation speed cap; lane position remains a steering target and lane envelope used by preview selection.
+- Found that the previous predictor used the assigned-lane envelope both for lane discipline and emergency braking. When the car was outside its assigned lane but still physically on the track, a predicted lane crossing could produce `TARGET=0` and full braking. Split prediction into two checks: lane-envelope violations reject a preview and trigger a shorter preview, while emergency braking is reserved for predicted departure from the physical safe road corridor.
+- Found a second throttle reduction layered on top of CSP's already-enabled native traction control. The custom limiter assumed `slipRatio > 0.10` was a calibrated wheelspin threshold and could cut throttle to 22–60% in the trace. The SDK exposes `slipRatio` but does not document its scale or a universal threshold. Removed the uncalibrated second limiter; wheel slip remains logged and native CSP traction control remains enabled.
+- Added telemetry fields `ROAD_GUARD_BLOCKED` and `LANE_RISK` to distinguish physical edge danger from an assigned-lane preview rejection.
+- These corrections are source-level changes only. The updated app has not yet been run in Assetto Corsa; next trace should confirm lane discipline through bends, no false `TARGET=0` braking from lane-only risk, and improved acceleration on straights.
