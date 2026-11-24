@@ -192,31 +192,32 @@ local function readVehicleDynamics(car, p, dt)
   return math.max(0, safeNumber(car.speedMs, longitudinal)), fx, fz
 end
 
-local function planRaceSpeed(p,speed)
-  local nodes=state.nodes
-  local segments=H.segmentCount()
-  if segments<1 then return 320/3.6 end
-  local horizon=math.max(CFG.PLAN_HORIZON,
-    speed*speed/(2*CFG.BRAKE_ACCEL)+45.0)
-  horizon=math.min(horizon,3000.0)
+-- Local preview only: inspect the road directly ahead on every update.
+-- Curvature is measured from route samples, never from a prebuilt track speed map.
+local function planLocalSpeed(p,speed)
   local target=320/3.6
-  local distance=0
-  local current=p.segIdx
-  local steps=0
-  while distance<=horizon and steps<2400 do
-    steps=steps+1
-    local sectionSpeed=H.getSpeedLimit(current) or (160/3.6)
-    local brakingSpeed=math.sqrt(sectionSpeed*sectionSpeed+
-      2*CFG.BRAKE_ACCEL*math.max(0,distance-3.0))
-    if brakingSpeed<target then target=brakingSpeed end
-    local a,b=nodes[current],H.segEnd(current)
-    distance=distance+math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)
-    if state.loopRoute then current=(current%segments)+1
-    elseif current<segments then current=current+1
-    else break end
+  local preview=clamp(math.max(45.0,speed*2.8+18.0),45.0,125.0)
+  local distance=4.0
+  while distance<=preview do
+    local before=H.walkLine(p.segIdx,p.segT or 0,math.max(0,distance-4.0))
+    local middle=H.walkLine(p.segIdx,p.segT or 0,distance)
+    local after=H.walkLine(p.segIdx,p.segT or 0,distance+4.0)
+    if not before or not middle or not after then break end
+    local ax,az=normalize2(middle.x-before.x,middle.z-before.z)
+    local bx,bz=normalize2(after.x-middle.x,after.z-middle.z)
+    local angle=math.abs(signedAngle(ax,az,bx,bz))
+    local curvature=angle/8.0
+    if curvature>0.0015 then
+      local curveSpeed=math.sqrt(CFG.MAX_LATERAL_ACCEL/curvature)
+      local brakingSpeed=math.sqrt(curveSpeed*curveSpeed+
+        2*CFG.BRAKE_ACCEL*math.max(0,distance-4.0))
+      if brakingSpeed<target then target=brakingSpeed end
+    end
+    distance=distance+4.0
   end
   return target
 end
+
 local function scanTraffic(carIndex, car, p, speed, tx, tz)
   local sim = ac.getSim()
   if not sim then return nil end
@@ -229,19 +230,9 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
         local dz = other.position.z - car.position.z
         local longitudinal = dx * tx + dz * tz
         local otherP = state.p[i]
-        local otherSeg = otherP and otherP.segIdx or
-          select(1, H.findNearestSeg(other.position, p.segIdx))
-        local actualOffset = H.lateralOf(other.position, otherSeg)
+        local actualOffset = H.lateralOf(other.position, p.segIdx)
         local sameLane = math.abs(actualOffset - p.laneOffset) <= LANE_HALF_WIDTH
-        if otherP then
-          sameLane = sameLane or
-            math.abs(otherP.laneTargetOffset - p.laneOffset) <= LANE_HALF_WIDTH
-          if otherP.laneChangeProgress < 1.0 then
-            sameLane = sameLane or
-              math.abs(otherP.laneStartOffset - p.laneOffset) <= LANE_HALF_WIDTH or
-              math.abs(otherP.laneTargetOffset - p.laneOffset) <= LANE_HALF_WIDTH
-          end
-        end
+        -- Physical position determines lane occupancy; target offsets alone do not.
         if p.laneChangeProgress < 1.0 then
           sameLane = sameLane or
             math.abs(actualOffset - p.laneStartOffset) <= LANE_HALF_WIDTH or
@@ -275,9 +266,7 @@ local function adjacentLaneIsClear(carIndex, car, p, targetOffset, tx, tz)
         local dz = other.position.z - car.position.z
         local longitudinal = dx * tx + dz * tz
         local otherP = state.p[i]
-        local otherSeg = otherP and otherP.segIdx or
-          select(1, H.findNearestSeg(other.position, p.segIdx))
-        local actualOffset = H.lateralOf(other.position, otherSeg)
+        local actualOffset = H.lateralOf(other.position, p.segIdx)
         local otherSpeed = math.max(0, safeNumber(other.speedMs, 0))
         local reservedOffset = otherP and otherP.laneTargetOffset or actualOffset
         local inTargetLane = math.abs(actualOffset - targetOffset) <= LANE_HALF_WIDTH
@@ -471,17 +460,36 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   p.boundaryHard = p.latOff < left + BOUNDARY_HARD_MARGIN or
     p.latOff > right - BOUNDARY_HARD_MARGIN
 
-  local lookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
+  local requestedLookahead = clamp(LOOKAHEAD_BASE + speed * LOOKAHEAD_SPEED,
     LOOKAHEAD_BASE, LOOKAHEAD_MAX)
-
-  local center = H.walkLine(seg, t, lookahead)
-  local centerAhead = H.walkLine(seg, t, lookahead + 2.0)
-  if not center then center = H.segEnd(seg) end
-  if not centerAhead then centerAhead = center end
-
-  local tx, tz = normalize2(centerAhead.x - center.x, centerAhead.z - center.z)
-  local targetX = center.x - tz * targetOffset
-  local targetZ = center.z + tx * targetOffset
+  local lookahead = requestedLookahead
+  local previousX,previousZ=nil,nil
+  local accumulatedTurn=0
+  local scan=3.0
+  while scan<=requestedLookahead do
+    local q0=H.walkLine(seg,t,math.max(0,scan-1.5))
+    local q1=H.walkLine(seg,t,scan+1.5)
+    if not q0 or not q1 then break end
+    local hx,hz=normalize2(q1.x-q0.x,q1.z-q0.z)
+    if previousX then
+      accumulatedTurn=accumulatedTurn+math.abs(signedAngle(previousX,previousZ,hx,hz))
+      if accumulatedTurn>=0.10 then
+        lookahead=math.max(7.0,scan-3.0)
+        break
+      end
+    end
+    previousX,previousZ=hx,hz
+    scan=scan+3.0
+  end
+  local center=H.walkLine(seg,t,lookahead)
+  local before=H.walkLine(seg,t,math.max(0,lookahead-2.0))
+  local after=H.walkLine(seg,t,lookahead+2.0)
+  if not center then center=H.segEnd(seg) end
+  if not before then before=center end
+  if not after then after=center end
+  local tx,tz=normalize2(after.x-before.x,after.z-before.z)
+  local targetX=center.x-tz*targetOffset
+  local targetZ=center.z+tx*targetOffset
 
   local dx = targetX - car.position.x
   local dz = targetZ - car.position.z
@@ -564,7 +572,7 @@ function Driver.update(carIndex, car, dt)
     carIndex, car, p, speed, tx, tz, dt)
 
   local steer = calculateSteering(carIndex, car, p, speed, fx, fz, dt)
-  local cornerSpeed = planRaceSpeed(p, speed)
+  local cornerSpeed = planLocalSpeed(p, speed)
   local targetSpeed = cornerSpeed
   if trafficSpeed then
     targetSpeed = targetSpeed and math.min(targetSpeed, trafficSpeed) or trafficSpeed
@@ -607,13 +615,12 @@ function Driver.telemetryLine(i, car, p)
   local look=car.look
   local headingDot=look.x*tx+look.z*tz
   local targetText=p.targetSpeed==math.huge and "OPEN" or string.format("%.2f",p.targetSpeed)
-  local speedLimit=H.getSpeedLimit and H.getSpeedLimit(p.segIdx) or 0
   local section=state.trackMap and state.trackMap[p.segIdx] and state.trackMap[p.segIdx].section or "?"
   local gapText=p.trafficGap==math.huge and "INF" or string.format("%.2f",p.trafficGap)
   return string.format(
-    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s SECTION=%s LIMIT=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s BOUNDS=[%.1f,%.1f]",
+    "CAR=%d LANE=%s POS=(%.2f,%.2f,%.2f) SPEED=%.2f TARGET=%s SECTION=LOCAL STEER=%.3f GAS=%.3f BRAKE=%.3f WHEEL_SLIP=%.3f TC_FACTOR=%.2f HEADING_DOT=%.3f LINE_ERROR=%.2f SEGMENT=%d LAT_OFF=%.2f LANE_OFFSET=%.2f LANE_TARGET=%.2f LANE_PROGRESS=%.2f LANE_CHANGES=%d TRAFFIC_GAP=%s TRAFFIC_BLOCKED=%s BOUNDARY_ERROR=%.2f BOUNDARY_HARD=%s BOUNDS=[%.1f,%.1f]",
     i, p.laneRole, car.position.x, car.position.y, car.position.z,
-    safeNumber(car.speedMs), targetText, section, speedLimit, p.steer, p.gas, p.brake,
+    safeNumber(car.speedMs), targetText, section, p.steer, p.gas, p.brake,
     p.wheelSlip, p.tractionFactor, headingDot, p.lineDist, p.segIdx,
     p.latOff, p.laneOffset, p.laneTargetOffset or p.laneOffset, p.laneChangeProgress or 1,
     p.laneChanges or 0, gapText, tostring(p.trafficBlocked),
