@@ -328,7 +328,7 @@ Implemented on `routepilot/multi-lane-emergency-evasion-2026-11-25` after review
 ### Changes
 
 - Replaced the single common-offset steering clamp with a candidate trajectory planner. Candidate terminal offsets cover the union of the locally usable road offsets, but this union is only a candidate-generation range and is never treated as a safe corridor.
-- Each candidate uses a quintic smoothstep transition from the current lateral offset to a terminal offset over a speed-dependent 18–48 m transition length. The profile has zero lateral velocity and acceleration at its endpoints.
+- Each candidate uses a quintic smoothstep transition from the current lateral offset to a terminal offset over a speed-dependent 18–48 m transition length. The profile preserves measured initial lateral velocity and reaches zero lateral velocity and acceleration at its terminal offset.
 - Every candidate is sampled at 2 m intervals from the rear of the vehicle through the forward steering horizon. At each sample, the driver transforms saved road bounds into spline coordinates, computes the oriented rectangular vehicle footprint using width, length, path angle, measured current heading error and the 0.4 m margin, then rejects the candidate if either side has less than -0.015 m clearance.
 - The planner scores feasible candidates by requested-offset error, lateral transition magnitude, estimated offset-path curvature, and minimum boundary clearance. It publishes the selected offset and diagnostics to telemetry.
 - The selected offset-path curvature samples are fed into the existing forward speed planner. Each sample contributes a curvature speed limit and a braking-distance constraint; the centerline curvature planner remains active as an additional constraint.
