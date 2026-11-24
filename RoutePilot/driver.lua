@@ -613,7 +613,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     elseif p.latOff>startMax then startError=p.latOff-startMax end
     local previousError=startError
     local firstUnsafe=preview
-    local samples=math.max(1,math.ceil(arcLength/2.0))
+    local samples=math.max(1,math.ceil(arcLength/1.0))
     for sampleIndex=1,samples do
       local fraction=sampleIndex/samples
       local sample=arcLength*fraction
