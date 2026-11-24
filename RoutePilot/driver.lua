@@ -57,7 +57,7 @@ end
 local function refreshRouteMetrics()
   if state.routeGeometry and state.routeMetricCount == #state.nodes and
      state.routeMetricLoop == state.loopRoute then return end
-  state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 16)
+  state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
