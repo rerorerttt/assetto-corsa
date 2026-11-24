@@ -142,3 +142,16 @@ Limitations: this is a feedback controller, not a physical guarantee that no tyr
 ## 2026-11-24 BEST-KNOWN-GOOD BASELINE
 
 The user tested this build in Assetto Corsa and explicitly confirmed it as the best-performing RoutePilot version so far: cars hold their assigned lanes accurately, faster cars change lanes and overtake cleanly. Treat this exact revision as the known-good baseline. Do not replace its lane assignment, lane-following, overtaking coordination, or steering/throttle behavior during future experiments without first creating a separate experimental branch from this baseline. Preserve this branch and compare future changes against it. User's in-game confirmation is the validation evidence for lane discipline and overtaking; it does not imply every possible car/track combination has been tested.
+
+
+## 2026-11-24 experimental: spawn direction and predictive boundary guard
+
+Created experimental branch `routepilot/predictive-boundary-guard-2026-11-24` from the user-confirmed best-known-good commit `15b65f3b9be588f210e7b4490eb8c63ba9ad8864`. The baseline branch remains untouched.
+
+The fresh `nevadadrift` trace exposed an initial route-tracking failure: immediately after `SPAWN_FINISH`, AI rows reported 70–81 m line error and heading errors close to 180 degrees. Source inspection found that spawn passed the negated recorded-route direction to `physics.setAICarPosition()`. The experimental branch now passes the recorded forward vector. Spawn reference projection also scores candidate route segments using the player's heading, reducing wrong-branch selection at crossings, and logs the selected reference and each spawned car's position/direction.
+
+The driver now rejects first-time route acquisition when the nearest route sample is more than 8 m away or points substantially against the car's heading. Rejected acquisition fails safe instead of commanding the AI to drive toward a distant, topologically unrelated section.
+
+A predictive corridor guard was added to steering. It samples saved bounds across the full lookahead horizon, includes the vehicle's rotated AABB footprint (width and length) plus a safety margin, and constrains the lane target to the common safe lateral interval. It predicts lateral drift from current velocity and adds corrective steering before the projected footprint reaches a boundary. If predicted boundary error exceeds 0.45 m, the speed target is reduced. Trace rows now include `BOUNDARY`, `SAFE`, and `BODY` diagnostics.
+
+Validation performed so far: source-level inspection and targeted static assertions only. This branch has not been run in Assetto Corsa/CSP. In-game verification is required for spawn heading, first route acquisition, corner cutting, full-body boundary clearance, and lane-change/overtake preservation. Do not merge this branch or alter the best-known-good baseline until the user tests it.
