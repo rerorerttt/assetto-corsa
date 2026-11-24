@@ -204,7 +204,9 @@ local function planTargetSpeed(p,speed)
     local curvature=math.abs(sample.k or 0)
     if curvature>CFG.CURVE_MIN then
       local curveSpeed=math.sqrt(CFG.MAX_LATERAL_ACCEL/curvature)
-      local safeSpeed=math.sqrt(curveSpeed*curveSpeed+2*brakeAccel*distance)
+      local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.35)
+      local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
+        2*brakeAccel*brakingDistanceAvailable)
       if safeSpeed<target then target=safeSpeed end
     end
     distance=distance+5.0
@@ -548,9 +550,11 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         end
         local halfLengths=(safeNumber(car.aabbSize and car.aabbSize.z,4.5)+
           safeNumber(other.aabbSize and other.aabbSize.z,4.5))*0.5
+        local lateralSeparation=(math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))+
+          math.max(1.5,safeNumber(other.aabbSize and other.aabbSize.x,2.0)))*0.5+0.4
         if gap and actualLateral and gap>-halfLengths-2.0 and
            gap<math.max(110.0,math.max(0,safeNumber(car.speedMs))*3.0+30.0) and
-           math.abs(actualLateral-laneOffset)<3.2 and
+           math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or gap<bestGap) then
           bestGap=gap;bestSpeed=math.max(0,safeNumber(other.speedMs))
           bestIndex=i;bestLateral=actualLateral
@@ -564,7 +568,9 @@ end
 local function passingReservationBlocked(carIndex,p,targetOffset,speed)
   if p.routeProgress==nil then return true end
   local range=math.max(16.0,math.max(0,speed)*1.0+8.0)
-  local ownWidth=math.max(1.5,safeNumber(ac.getCar(carIndex).aabbSize and ac.getCar(carIndex).aabbSize.x,2.0))
+  local ownCar=ac.getCar(carIndex)
+  if not ownCar then return true end
+  local ownWidth=math.max(1.5,safeNumber(ownCar.aabbSize and ownCar.aabbSize.x,2.0))
   for otherIndex,other in pairs(state.p) do
     if otherIndex~=carIndex and other.overtakeSide~=0 and
        other.routeProgress~=nil and other.laneOffset~=nil then
