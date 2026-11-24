@@ -1,4 +1,4 @@
-# RoutePilot 0.2.1
+# RoutePilot 0.9.1 — experimental traffic avoidance
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
 
@@ -41,14 +41,24 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 ## Traffic behavior (multi-offset passing)
 
-- Every AI car uses the same configured cruise-speed ceiling and curvature/braking planner. There is no index-based 40 km/h class.
+- No configured 170 km/h cruise ceiling: straight-line speed is not capped by RoutePilot. The planner limits speed from upcoming route curvature and the car's measured braking response; vehicle physics determines attainable top speed.
 - Any car may pass a slower vehicle when its pace advantage and estimated pass distance make the manoeuvre feasible.
-- The passing target is selected dynamically from the complete safe lateral corridor, not from a fixed right-lane center. Candidate offsets are checked in both directions and rejected if the vehicle footprint, another car ahead/behind/alongside, or another car's active passing reservation conflicts.
-- Passing reservations are local to the selected offset: a nearby car using the same passing corridor blocks a conflicting pass, while a physically separate free corridor remains available. Same-corridor reservations cover at least 80 m or 3 seconds of travel.
+- The passing target is selected dynamically from the complete safe lateral corridor, not from a fixed lane. Candidate offsets are checked using vehicle widths, longitudinal separation, active passing reservations, and the complete lateral transition path; distant parallel traffic does not reserve an entire neighbouring lane.
+- Passing reservations are local to the selected offset and limited to nearby time/space conflicts, so a physically separate free corridor remains available. Cars entering the same narrow corridor are serialized by active reservations.
 - The overtaking car stays on its selected offset until the target's rear is cleared, then returns to its original offset only after that offset is clear.
-- When the current lane is blocked and no passing offset is safe, target speed is limited using the nearest leaders across the full safe corridor. The car waits for a free corridor instead of trying to force through occupied space.
-- Urgent passes increase lateral path transition speed to 5 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (8 m or less), the controller adds a brief 80 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
-- Stuck-car rescue is deferred while another vehicle is detected ahead anywhere in the safe corridor within 100 m. A car waiting in traffic is not teleported merely because its speed remains low.
+- When the current lane is blocked and no passing offset is safe, following speed is limited by the leader in the car's current corridor only. A slow vehicle in a separate lane cannot globally throttle traffic using another free corridor.
+- Urgent passes increase lateral path transition speed to 10 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (8 m or less), the controller adds a brief 80 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
+- Stuck detection is not reset merely because another car exists ahead. After ten seconds without movement, the app attempts a respawn only at a point whose actual spawn position is clear of other vehicles.
+
+## Experimental 0.9.1 changes (2026-11-25)
+
+- Removed the fixed 170 km/h cruise setting. RoutePilot uses an unbounded cruise target; speed is limited by upcoming route curvature and braking distance.
+- Braking deceleration is estimated from measured speed loss while braking, then filtered and used by curve planning and car-following.
+- The forward planning horizon expands with speed and estimated stopping distance, including a reaction-time margin.
+- Lane occupancy checks physical vehicle-width overlap, active passing reservations, and the swept lateral transition. The former broad front/rear reservation is removed.
+- Following speed is evaluated in the current corridor rather than taking the minimum speed across every lateral offset.
+- A stationary queue no longer disables stuck recovery. Rescue is attempted after ten seconds and validates the actual spawn position.
+- This source revision is experimental and has not yet been validated in Assetto Corsa/CSP. Test each blocked lane, a bumper-distance stationary obstacle, and multiple AI cars passing one at a time.
 
 ## Known limitations
 
@@ -56,7 +66,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - The arc-length route geometry and path follower are source-implemented but have not yet been validated in Assetto Corsa/CSP. Normalized steering response still needs in-game calibration from trace telemetry.
 - Route-progress conflict checks currently assume traffic follows the same recorded route direction. Opposing-direction traffic on a shared oval still requires explicit direction-aware conflict handling.
 - If a locked route projection is lost, the driver currently fails safe by braking rather than attempting an unverified global branch reacquisition.
-- Pit handling and automatic recovery from every spin/off-track situation remain outside the current traffic implementation. Stuck-car rescue is deferred when traffic is detected ahead within the safe corridor.
+- Pit handling and automatic recovery from every spin/off-track situation remain outside the current traffic implementation.
 
 
 ### Player driving and native autopilot
