@@ -517,8 +517,12 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
 
           -- Occupancy is based on physical overlap and the complete lateral
           -- transition, not a blanket reservation around parallel traffic.
-          local frontWindow=math.max(14.0,ownSpeed*1.25+6.0)
-          local rearWindow=math.max(10.0,otherSpeed*1.0+5.0)
+          local closingSpeed=directionDot < -0.25 and
+            (ownSpeed+otherSpeed) or math.max(0,ownSpeed-otherSpeed)
+          local rearClosingSpeed=directionDot < -0.25 and 0 or
+            math.max(0,otherSpeed-ownSpeed)
+          local frontWindow=math.max(14.0,closingSpeed*1.0+6.0)
+          local rearWindow=math.max(10.0,rearClosingSpeed*1.0+5.0)
           local longitudinalOverlap=longitudinal>-rearWindow and
             longitudinal<frontWindow
           local bodyConflict=actualGap<separation and longitudinalOverlap
@@ -560,6 +564,7 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   local ownSample=Geometry.sample(state.routeGeometry,ownProgress)
   if not ownSample then return nil,nil,nil,nil end
   local bestGap,bestSpeed,bestIndex,bestLateral=nil,nil,nil,nil
+  local ownSpeed=math.max(0,safeNumber(car.speedMs))
   for i=0,sim.carsCount-1 do
     if i~=carIndex and i~=ignoreIndex then
       local other=ac.getCar(i)
@@ -592,8 +597,11 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
           safeNumber(other.aabbSize and other.aabbSize.z,4.5))*0.5
         local lateralSeparation=(math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))+
           math.max(1.5,safeNumber(other.aabbSize and other.aabbSize.x,2.0)))*0.5+0.4
+        local otherSpeed=math.max(0,safeNumber(other.speedMs))
+        local detectionHorizon=directionDot < -0.25 and
+          (ownSpeed+otherSpeed)*2.0+30.0 or ownSpeed*3.0+30.0
         if gap and actualLateral and gap>-halfLengths-2.0 and
-           gap<math.max(110.0,math.max(0,safeNumber(car.speedMs))*3.0+30.0) and
+           gap<math.max(110.0,detectionHorizon) and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or gap<bestGap) then
           bestGap=gap
