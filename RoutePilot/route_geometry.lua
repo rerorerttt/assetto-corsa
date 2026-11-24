@@ -108,42 +108,73 @@ function Geometry.project(route, position, hintS, heading, speed, dt, locked)
   local best,bestScore=nil,math.huge
   local maxForward=math.max(12,(speed or 0)*(dt or 0)*4+6)
   local back=3.5
-  for i=1,#samples-1 do
+  local function scanEdge(i)
+    if i<1 or i>=#samples then return end
     local a,b=samples[i],samples[i+1]
     local vx,vz=b.x-a.x,b.z-a.z
     local lenSq=vx*vx+vz*vz
-    if lenSq>1e-10 then
-      local t=clamp(((position.x-a.x)*vx+(position.z-a.z)*vz)/lenSq,0,1)
-      local px,pz=a.x+vx*t,a.z+vz*t
-      local dx,dz=position.x-px,position.z-pz
-      local dSq=dx*dx+dz*dz
-      local s=a.s+(b.s-a.s)*t
-      local delta=0
-      local allowed=true
-      if locked and hintS~=nil then
-        delta=s-hintS
-        if route.loop then
-          if delta>total*0.5 then delta=delta-total end
-          if delta< -total*0.5 then delta=delta+total end
-        end
-        allowed=delta>=-back and delta<=maxForward
+    if lenSq<=1e-10 then return end
+    local t=clamp(((position.x-a.x)*vx+(position.z-a.z)*vz)/lenSq,0,1)
+    local px,pz=a.x+vx*t,a.z+vz*t
+    local dx,dz=position.x-px,position.z-pz
+    local dSq=dx*dx+dz*dz
+    local s=a.s+(b.s-a.s)*t
+    local delta=0
+    if locked and hintS~=nil then
+      delta=s-hintS
+      if route.loop then
+        if delta>total*0.5 then delta=delta-total end
+        if delta< -total*0.5 then delta=delta+total end
       end
-      if allowed then
-        local tx,tz=normalize(vx,vz)
-        local score=dSq
-        if heading then
-          local hx,hz=normalize(heading.x,heading.z)
-          local alignment=hx*tx+hz*tz
-          score=score+2.0*(1-alignment)*(1-alignment)
-        end
-        if score<bestScore then
-          bestScore=score
-          best={s=s,distance=math.sqrt(dSq),
-            lateral=dx*(-tz)+dz*tx,seg=t<0.5 and a.seg or b.seg,
-            t=t<0.5 and a.t or b.t,tx=tx,tz=tz}
-        end
-      end
+      if delta < -back or delta > maxForward then return end
     end
+    local tx,tz=normalize(vx,vz)
+    local score=dSq
+    if heading then
+      local hx,hz=normalize(heading.x,heading.z)
+      local alignment=hx*tx+hz*tz
+      score=score+2.0*(1-alignment)*(1-alignment)
+    end
+    if score<bestScore then
+      bestScore=score
+      best={s=s,distance=math.sqrt(dSq),lateral=dx*(-tz)+dz*tx,
+        seg=t<0.5 and a.seg or b.seg,t=t<0.5 and a.t or b.t,
+        tx=tx,tz=tz}
+    end
+  end
+  local function lowerBound(value)
+    local lo,hi=1,#samples
+    while lo<hi do
+      local mid=math.floor((lo+hi)*0.5)
+      if samples[mid].s<value then lo=mid+1 else hi=mid end
+    end
+    return lo
+  end
+  local function scanDistanceRange(low,high)
+    local first=math.max(1,lowerBound(low)-1)
+    local last=math.min(#samples-1,lowerBound(high))
+    for i=first,last do scanEdge(i) end
+  end
+  if locked and hintS~=nil then
+    if route.loop then
+      local center=wrap(hintS,total)
+      local low,high=center-back,center+maxForward
+      if high-low>=total then
+        for i=1,#samples-1 do scanEdge(i) end
+      elseif low<0 then
+        scanDistanceRange(0,high)
+        scanDistanceRange(total+low,total)
+      elseif high>total then
+        scanDistanceRange(low,total)
+        scanDistanceRange(0,high-total)
+      else
+        scanDistanceRange(low,high)
+      end
+    else
+      scanDistanceRange(math.max(0,hintS-back),math.min(total,hintS+maxForward))
+    end
+  else
+    for i=1,#samples-1 do scanEdge(i) end
   end
   if not best then return nil end
   if route.loop and hintS~=nil and locked then
@@ -155,4 +186,5 @@ function Geometry.project(route, position, hintS, heading, speed, dt, locked)
   else best.delta=0 end
   return best
 end
+
 return Geometry
