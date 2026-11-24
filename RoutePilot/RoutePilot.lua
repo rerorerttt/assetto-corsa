@@ -388,8 +388,10 @@ local function buildSpawnRouteMetrics()
   if #segments<2 or totalLength<CFG.SPAWN_MIN_GAP*2 then return nil end
   return {segments=segments,length=totalLength,loop=state.loopRoute}
 end
-local function findRouteDistanceAtPosition(position,metrics)
-  local bestDistSq,bestRoute=math.huge,0
+local function findRouteDistanceAtPosition(position,metrics,heading)
+  local bestScore,bestDistSq,bestRoute=math.huge,math.huge,0
+  local hx,hz=nil,nil
+  if heading then hx,hz=normalize2(heading.x,heading.z) end
   for i=1,#metrics.segments do
     local seg=metrics.segments[i]
     local a,b=seg.a,seg.b
@@ -400,7 +402,15 @@ local function findRouteDistanceAtPosition(position,metrics)
       local px,pz=a.x+vx*t,a.z+vz*t
       local dx,dz=position.x-px,position.z-pz
       local dSq=dx*dx+dz*dz
-      if dSq<bestDistSq then bestDistSq=dSq; bestRoute=seg.start+seg.length*t end
+      local score=dSq
+      if hx then
+        local inv=1/math.sqrt(lenSq)
+        local alignment=hx*vx*inv+hz*vz*inv
+        score=score+100*(1-alignment)*(1-alignment)
+      end
+      if score<bestScore then
+        bestScore=score; bestDistSq=dSq; bestRoute=seg.start+seg.length*t
+      end
     end
   end
   return bestRoute,math.sqrt(bestDistSq)
@@ -476,7 +486,11 @@ local function trySpawnTeleport(sim,dt)
   if metrics.loop then
     local player=ac.getCar(0)
     if player then
-      startDistance=findRouteDistanceAtPosition(player.position,metrics)+gap
+      local routeDistance,routeError=findRouteDistanceAtPosition(
+        player.position,metrics,player.look)
+      startDistance=routeDistance+gap
+      writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f)",
+        routeDistance,routeError,player.look.x,player.look.z)
     else startDistance=gap end
   end
   local moved,failed=0,0
@@ -484,11 +498,15 @@ local function trySpawnTeleport(sim,dt)
     local carIndex=aiCars[order]
     local position,direction=sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
     if position and direction then
+      -- The recorded route direction is the car's forward direction.
+      -- Negating this vector placed every spawned AI facing against the route.
       local ok,result=pcall(physics.setAICarPosition,carIndex,
-        position,vec3(-direction.x,-direction.y,-direction.z))
+        position,vec3(direction.x,direction.y,direction.z))
       if ok and result~=false then
         moved=moved+1
         state.p[carIndex]=nil  -- reset personality for the new position
+        writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f)",
+          carIndex,position.x,position.y,position.z,direction.x,direction.z)
       else failed=failed+1 end
     else failed=failed+1 end
   end
