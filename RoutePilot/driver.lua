@@ -307,25 +307,36 @@ local function safeCorridorForPreview(route, progress, ahead, car, fx, fz)
   return safeMin,safeMax,maxEnvelope,0
 end
 
+-- Quintic profile with the measured initial lateral velocity and zero
+-- terminal lateral velocity/acceleration. Using the same function for
+-- validation and steering prevents the controller from following a different
+-- path than the one the boundary checker approved.
+local function offsetProfile(startOffset,targetOffset,transitionLength,initialSlope,distance)
+  local length=math.max(1.0,transitionLength)
+  local u=clamp(distance/length,0,1)
+  local m=clamp(initialSlope,-0.45,0.45)*length
+  local d=targetOffset-startOffset-m
+  local a=10*d+4*m
+  local b=-15*d-7*m
+  local c=6*d+3*m
+  local u2,u3,u4,u5=u*u,u*u*u,u*u*u*u,u*u*u*u*u
+  local offset=startOffset+m*u+a*u3+b*u4+c*u5
+  local slope=(m+3*a*u2+4*b*u3+5*c*u4)/length
+  local second=(6*a*u+12*b*u2+20*c*u3)/(length*length)
+  return offset,slope,second
+end
+
 -- Evaluate one smooth lateral trajectory. Quintic smoothstep gives zero
 -- lateral velocity and acceleration at the start and end of a lane transition.
 local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
-    transitionLength, horizon, halfWidth, halfLength, fx, fz)
+    transitionLength, horizon, halfWidth, halfLength, fx, fz, initialSlope)
   local samples,minClearance,maxCurvature,maxEnvelope={},math.huge,0,0
   local distance=-halfLength
   while distance<=horizon+halfLength+0.001 do
     local sample=Geometry.sample(route,progress+distance)
     if not sample then return nil,"route_end",minClearance,maxCurvature,maxEnvelope end
-    local u=clamp(distance/math.max(1.0,transitionLength),0,1)
-    local u2,u3=u*u,u*u*u
-    local blend=6*u3*u2-15*u2*u2+10*u3
-    local dBlend=distance>0 and 30*u2*(u-1)*(u-1)/transitionLength or 0
-    local ddBlend=distance>0 and 60*u*(2*u2-3*u+1)/
-      (transitionLength*transitionLength) or 0
-    local delta=targetOffset-startOffset
-    local offset=startOffset+delta*blend
-    local slope=delta*dBlend
-    local second=delta*ddBlend
+    local offset,slope,second=offsetProfile(
+      startOffset,targetOffset,transitionLength,initialSlope,distance)
     local pathAngle=math.atan(slope)
     local initialAngle=signedAngle(sample.tx,sample.tz,fx,fz)
     -- Until the vehicle has aligned with the planned path, retain the larger
@@ -388,6 +399,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- The future steering target is sampled from the selected quintic profile.
   local startOffset=projection.lateral
   p.laneOffsetCurrent=startOffset
+  local velocity=car.velocity
+  local lateralVelocity=safeNumber(velocity.x)*(-current.tz)+
+    safeNumber(velocity.z)*current.tx
+  local initialSlope=clamp(lateralVelocity/math.max(5.0,speed),-0.45,0.45)
   local bl,br=routeBoundsAtSample(current)
   local desired=p.overtakeSide==0 and
     safeNumber(p.baseLaneOffset,(bl+br)*0.5) or
@@ -438,7 +453,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     local candidate=candidates[i]
     local samples,reason,clearance,maxCurvature,envelope=evaluateOffsetPath(
       route,projection.s,startOffset,candidate,transitionLength,planningHorizon,
-      halfWidth,halfLength,fx,fz)
+      halfWidth,halfLength,fx,fz,initialSlope)
     if samples then
       local cost=math.abs(candidate-desired)+
         math.abs(candidate-startOffset)*0.10+maxCurvature*2.0+
@@ -473,10 +488,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.boundaryCandidateMin=minOffset; p.boundaryCandidateMax=maxOffset
   p.boundaryEnvelope=bestEnvelope
   p.boundaryDeficit=0
-  local previewU=clamp(ahead/transitionLength,0,1)
-  local previewU2,previewU3=previewU*previewU,previewU*previewU*previewU
-  local previewBlend=6*previewU3*previewU2-15*previewU2*previewU2+10*previewU3
-  local previewOffset=startOffset+(best-startOffset)*previewBlend
+  local previewOffset=offsetProfile(
+    startOffset,best,transitionLength,initialSlope,ahead)
   if p.returningFromPass and math.abs(previewOffset-best)<0.25 then
     p.returningFromPass=false
   end
@@ -490,9 +503,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local pursuitCurvature=2.0*math.sin(alpha)/targetDist
   local desiredCurvature=pursuitCurvature+
     safeNumber(curvePreview.k)*CFG.CURVATURE_FEEDFORWARD
-  local velocity=car.velocity
-  local lateralVelocity=safeNumber(velocity.x)*(-current.tz)+
-    safeNumber(velocity.z)*current.tx
   local previewTime=clamp(ahead/math.max(5.0,speed),0.35,1.25)
   local predictedLateral=projection.lateral+lateralVelocity*previewTime
   local boundaryError=best-predictedLateral
