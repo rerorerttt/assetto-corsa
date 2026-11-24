@@ -124,3 +124,11 @@ Do not merge PR #4 until these runtime checks pass.
 - Restored the original follower's steering parameters (`gain=0.82`, `limit=0.68`, `rate=1.15`) and pure heading-angle correction. Removed the added lateral-error steering loop, which could fight the heading controller.
 - Removed the swept-chord lookahead shortening that repeatedly dropped the target to 12 m. The follower now uses one stable 18–30 m lookahead, matching the old working controller. Lane-offset target generation remains, so assigned left/right lanes are still followed.
 - Commit: `693e2e7c8fd4b19aefcc26f53716889cf9454162`. Requires in-game validation.
+
+## Missing steering target regression fix (2026-11-24)
+
+- A source audit found that `driver.lua` called `makeTarget()` twice in `calculateSteering()`, but no local or module-level definition existed. This raised a nil-function error on every AI update. The main loop caught the exception, logged `DRIVER_ERROR`, called `releaseCar()`, and therefore removed the steering/throttle override each frame. This explains why the car did not follow the route after native AI takeover.
+- Restored target construction using `H.walkLine()` from the current projected route segment. The target is offset along the segment's left normal using the assigned lane centre; lane-transition offsets remain continuous, and the target is clamped to the recorded safe corridor.
+- Confirmed by source inspection that the branch's main loop still detects native AI through `car.isAIControlled`, includes car index 0, calls `Driver.update()`, and logs driver exceptions. RoutePilot does not and cannot claim to enable the game's native Ctrl+8 mode itself.
+- Commit: `4ca980e01e96a7783ac318d8ae9d5e010c987e29`.
+- Static source checks confirm exactly one local `makeTarget` definition, no remaining `lateralError` reference, and the expected route-following helper is supplied to the driver. Lua interpreter and Assetto Corsa runtime validation were unavailable during this pass; do not treat the fix as runtime-confirmed until a fresh in-game trace has no `DRIVER_ERROR` and shows steering/throttle telemetry for car 0.
