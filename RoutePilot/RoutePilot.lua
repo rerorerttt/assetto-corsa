@@ -17,6 +17,8 @@ local CFG = {
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
   MAP_TOP=175.0, MAP_PAD=6.0, MAP_MIN_OFFSET=10.0,
+  VEHICLE_HALF_WIDTH=1.05, BOUNDARY_CLEARANCE=0.10,
+  MIN_LANE_CENTER_GAP=2.35,
 }
 local WIDTH_PRESETS = {3, 7, 11, 15}
 
@@ -25,7 +27,7 @@ local state = {
   widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnStable=0, spawnLastRoster="", routeDirectionChecked=false,
-  nodes={}, p={}, laneAssignments={}, status="Готов", logAccum=0, loaded=false,
+  nodes={}, p={}, laneAssignments={}, trackMap=nil, status="Готов", logAccum=0, loaded=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -177,7 +179,7 @@ local function loadLine()
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
-    state.nodes=loaded; state.p={}; state.loaded=true
+    state.nodes=loaded; state.p={}; state.trackMap=nil; state.loaded=true
     state.spawnDone=false; state.spawnStable=0; state.spawnLastRoster=""
     state.routeDirectionChecked=false
     state.status=string.format("Загружено: %d точек",#loaded)
@@ -208,7 +210,7 @@ local function walkLine(startSeg,startT,distance)
       local room=length*(1-t)
       if room>=remaining then
         local nt=(length*t+remaining)/length
-        return vec3(lerp(a.x,b.x,nt),lerp(a.y,b.y,nt),lerp(a.z,b.z,nt))
+        return vec3(lerp(a.x,b.x,nt),lerp(a.y,b.y,nt),lerp(a.z,b.z,nt)),seg,nt
       end
       remaining=remaining-room; t=0
     end
@@ -218,26 +220,11 @@ local function walkLine(startSeg,startT,distance)
   end
   return nil
 end
+local ensureTrackMap
 local function getVertexCurvature(index)
-  local nodes=state.nodes; local count=#nodes
-  if count<5 then return 0 end
-  local W=4
-  local i0,i1,i2=index-W,index,index+W
-  if state.loopRoute then
-    i0=((i0-1)%count)+1; i1=((i1-1)%count)+1; i2=((i2-1)%count)+1
-  else
-    if i0<1 or i2>count then return 0 end
-  end
-  local a,b,c=nodes[i0],nodes[i1],nodes[i2]
-  local v1x,v1z=b.x-a.x,b.z-a.z
-  local v2x,v2z=c.x-b.x,c.z-b.z
-  local l1=math.sqrt(v1x*v1x+v1z*v1z)
-  local l2=math.sqrt(v2x*v2x+v2z*v2z)
-  if l1<0.5 or l2<0.5 then return 0 end
-  local dot=clamp((v1x*v2x+v1z*v2z)/(l1*l2),-1,1)
-  local angle=math.acos(dot)
-  if angle<0.02 then return 0 end
-  return angle/math.max(0.1,(l1+l2)*0.5)
+  if ensureTrackMap then ensureTrackMap() end
+  local entry=state.trackMap and state.trackMap[index]
+  return entry and entry.curvature or 0
 end
 local function findNearestSeg(pos,hintSeg,allowGlobalScan)
   local nodes=state.nodes; local segs=segmentCount()
@@ -290,19 +277,92 @@ local function boundsAt(index)
   elseif i<1 or i>n then i=clamp(i,1,n) end
   return safeNumber(state.boundsL[i],-1.5),safeNumber(state.boundsR[i],1.5)
 end
+ensureTrackMap=function()
+  local n=#state.nodes
+  local expected=segmentCount()
+  if state.trackMap and state.trackMap.count==expected and state.trackMap.loop==state.loopRoute then return end
+  local map={count=expected,loop=state.loopRoute}
+  local half=CFG.VEHICLE_HALF_WIDTH+CFG.BOUNDARY_CLEARANCE
+  local function curvature(a,b,c)
+    local ab=flatDist(a,b); local bc=flatDist(b,c); local ca=flatDist(c,a)
+    if ab<0.05 or bc<0.05 or ca<0.05 then return 0 end
+    local cross=math.abs((b.x-a.x)*(c.z-a.z)-(b.z-a.z)*(c.x-a.x))
+    return (cross>0.0001) and (2*cross/(ab*bc*ca)) or 0
+  end
+  for i=1,expected do
+    local nextIndex=(i%expected)+1
+    local prevIndex=i-1
+    if state.loopRoute then prevIndex=((prevIndex-1)%n)+1
+    else prevIndex=math.max(1,prevIndex) end
+    local left1,right1=boundsAt(i)
+    local left2,right2=boundsAt(nextIndex)
+    -- Use the tighter boundary at either end of this segment. The vehicle
+    -- centre must remain one half-width plus clearance inside both edges.
+    local safeL=math.max(left1,left2)+half
+    local safeR=math.min(right1,right2)-half
+    if safeL>safeR then
+      local mid=(safeL+safeR)*0.5
+      safeL,safeR=mid,mid
+    end
+    local width=safeR-safeL
+    local twoLane=width>=CFG.MIN_LANE_CENTER_GAP
+    local leftOffset,rightOffset=0,0
+    if twoLane then
+      leftOffset=safeL+width*0.25
+      rightOffset=safeR-width*0.25
+      if rightOffset-leftOffset<CFG.MIN_LANE_CENTER_GAP then twoLane=false end
+    end
+    if not twoLane then leftOffset=clamp(0,safeL,safeR); rightOffset=leftOffset end
+    local prev=state.nodes[prevIndex]
+    local cur=state.nodes[i]
+    local nxt=segEnd(i)
+    map[i]={safeL=safeL,safeR=safeR,twoLane=twoLane,
+      leftOffset=leftOffset,rightOffset=rightOffset,
+      curvature=curvature(prev,cur,nxt),length=flatDist(cur,nxt)}
+  end
+  state.trackMap=map
+  writeLog("TRACK_MAP_BUILT segments=%d two_lane=%d single_lane=%d half_width=%.2f clearance=%.2f",
+    expected,(function() local c=0 for i=1,expected do if map[i].twoLane then c=c+1 end end return c end)(),
+    (function() local c=0 for i=1,expected do if not map[i].twoLane then c=c+1 end end return c end)(),
+    CFG.VEHICLE_HALF_WIDTH,CFG.BOUNDARY_CLEARANCE)
+end
+local function safeBoundsAt(index)
+  ensureTrackMap()
+  local e=state.trackMap and state.trackMap[index]
+  if e then return e.safeL,e.safeR end
+  return -1.5,1.5
+end
+local function offsetSafeAhead(startSeg,startT,offset,distance)
+  local remaining=math.max(0,distance or 0)
+  local seg=startSeg
+  local t=startT
+  local checked=0
+  while remaining>=0 and checked<600 do
+    checked=checked+1
+    local l,r=safeBoundsAt(seg)
+    if offset<l-0.001 or offset>r+0.001 then return false,seg,l,r end
+    local a=state.nodes[seg]
+    local b=segEnd(seg)
+    local len=flatDist(a,b)
+    if len<0.001 then return false,seg,l,r end
+    local available=len*(1-t)
+    if remaining<=available then break end
+    remaining=remaining-available
+    if state.loopRoute then seg=(seg%segmentCount())+1
+    elseif seg<segmentCount() then seg=seg+1
+    else break end
+    t=0
+  end
+  return true
+end
 local function laneOffsetForCar(carIndex,seg)
-  local left,right=boundsAt(seg)
-  local width=right-left
-  -- A narrow recorded corridor remains single-file, but has no 40 km/h cap.
-  if width<6.0 then return 0.0,false end
-  -- Two lane centers stay 0.65 m inside the recorded boundaries.
-  local offset=math.min(1.75,right-0.65,-left-0.65)
-  if offset<1.0 then return 0.0,false end
+  ensureTrackMap()
+  local entry=state.trackMap and state.trackMap[seg]
+  if not entry then return 0,false end
+  if not entry.twoLane then return entry.leftOffset,false end
   local side=state.laneAssignments and state.laneAssignments[carIndex]
   if side==nil then side=(carIndex%2==1) and 1 or -1 end
-  -- The recorded route basis is opposite to the physical car-left/right
-  -- basis in the current CSP spawn setup: negative offset is physical LEFT.
-  return (side>0) and -offset or offset,true
+  return (side>0) and entry.leftOffset or entry.rightOffset,true
 end
 local function assignLaneRoster(sim)
   local leftCount,rightCount=0,0
@@ -594,6 +654,7 @@ local function updateBoundsRecording(player)
   if state.loopRoute then idx=((seg-1)%n)+1 end
   if idx>=1 and idx<=n then
     state.boundsL[idx]=newL; state.boundsR[idx]=newR
+    state.trackMap=nil
   end
   if state.recBoundsSeg and seg~=state.recBoundsSeg then
     state.boundsL[state.recBoundsSeg]=newL
@@ -603,6 +664,7 @@ local function updateBoundsRecording(player)
 end
 local function applyWidthPreset(preset)
   state.widthPreset=preset
+  state.trackMap=nil
   local n=#state.nodes
   if n<2 then return end
   local half=WIDTH_PRESETS[preset]/2
@@ -627,6 +689,7 @@ local function ensureDriver()
   Driver.setup(CFG,state,{
     segmentCount=segmentCount, segEnd=segEnd, walkLine=walkLine,
     findNearestSeg=findNearestSeg, lateralOf=lateralOf, boundsAt=boundsAt,
+    safeBoundsAt=safeBoundsAt, offsetSafeAhead=offsetSafeAhead,
     laneOffset=laneOffsetForCar,
     getVertexCurvature=getVertexCurvature,
     teleportHome=teleportHome, log=writeLog,
@@ -860,7 +923,7 @@ function windowMain(dt)
     if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
-        state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+        state.nodes={}; state.p={}; state.trackMap=nil; state.boundsL={}; state.boundsR={}
         state.loaded=false; state.recBounds=false
         state.routeDirectionChecked=false
         state.status="Запись линии и границ..."
@@ -894,7 +957,7 @@ function windowMain(dt)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
-      state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+      state.nodes={}; state.p={}; state.trackMap=nil; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
     end
     ui.separator()
