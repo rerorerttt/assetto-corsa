@@ -497,8 +497,9 @@ local function trySpawnTeleport(sim,dt)
   end
   local metrics=buildSpawnRouteMetrics()
   if not metrics then state.spawnDone=true; return end
+  -- Keep the recorded route direction. The former alignment call referenced
+  -- an undefined global and aborted the entire update loop before AI control.
   local player=ac.getCar(0)
-  if player then metrics=alignRouteDirectionToPlayer(metrics,player) end
   if not metrics then state.spawnDone=true; return end
   local count=#aiCars
   local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
