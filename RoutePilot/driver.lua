@@ -107,7 +107,7 @@ end
 local function newPersonality(carIndex)
   -- Every AI-controlled car uses the same configured route speed ceiling.
   -- Actual passing decisions use its current curvature-limited target speed.
-  local kmh = clamp(safeNumber(state.speedMax, 170), 40, 300)
+  local kmh = clamp(safeNumber(state.speedMax, 170), 0, 300)
   local p = {
     segIdx = 1, cruiseSpeed = kmh / 3.6,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
