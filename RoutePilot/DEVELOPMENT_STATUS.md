@@ -19,9 +19,9 @@ Last updated: 2026-11-24
 
 ## Lane changes and traffic safety
 
-- Traffic occupancy is measured from each active car's actual position projected onto its nearest route segment; the controller no longer substitutes another car's stored desired offset for its real position.
+- Traffic occupancy is measured in the observing car's current route-segment coordinate frame, so two cars are compared against the same local lateral axis. Desired offsets are used only as merge reservations, never as physical positions.
 - A closing car requests a lane change at approximately 10 m or earlier when time-to-collision falls below 3 seconds. Forward and rear clearance scale with relative speed and the 2.3-second transition time.
-- A lane change is permitted only when the adjacent lane's forward and rear clearance windows and the swept transition corridor are clear. Other AI cars' current and target lane centres count as reservations, preventing simultaneous conflicting merges.
+- A lane change is permitted only when the adjacent lane's forward and rear clearance windows are clear and the intermediate swept path between lane centres is unoccupied. Other AI cars' current and target lane centres count as reservations, preventing simultaneous conflicting merges.
 - If the destination becomes occupied during a merge, the car starts one return transition to its original lane. Return progress is not reset every frame; the controller continues safe following-speed control while returning. After completion, the lane centre is snapped to the canonical centre for the selected lane.
 - If the adjacent lane is occupied, the car remains in its current lane and reduces speed using the leader's speed, available gap and configured braking deceleration. It retries on later updates instead of forcing a merge.
 - The target car centre is clamped at least 1.10 m inside recorded bounds. If the actual centre leaves this safety envelope, the controller applies stronger inward steering and reduces speed; a stronger reduction is applied near the recorded edge. Telemetry records `LAT_OFF`, `BOUNDARY_ERROR` and `BOUNDARY_HARD`.
