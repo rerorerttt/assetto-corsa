@@ -117,3 +117,10 @@ Do not merge PR #4 until these runtime checks pass.
 - The supplied Nevada runtime trace showed the car repeatedly crossing the recorded line while steering alternated toward the wrong side. In the route coordinate frame, `signedAngle()` is positive for a target to the vehicle's left, whereas Assetto Corsa's normalized steering input is negative for a left turn. The controller had passed the geometric angle and lateral correction to `controls.steer` without converting that sign convention.
 - `driver.lua` now negates the combined heading-angle and lateral-error correction before applying the existing steering clamp/filter. Preview distance, route projection, lane assignment, speed planning, and traffic logic are unchanged.
 - Commit: `491f18b4c865122e60d9bb95c0cb02d019b7cda4`. Runtime validation is still required; the next trace should show `LINE_ERROR` converging rather than alternating across the corridor, with `STEER` sign corresponding to the required turn.
+
+## Restore stable line-following controller (2026-11-24)
+
+- The previous steering-sign inversion was incorrect: the original RoutePilot controller used `atan2(fx * dirZ - fz * dirX, dot)` directly as positive steering, and the current `signedAngle()` uses the same cross-product convention. The inversion is removed.
+- Restored the original follower's steering parameters (`gain=0.82`, `limit=0.68`, `rate=1.15`) and pure heading-angle correction. Removed the added lateral-error steering loop, which could fight the heading controller.
+- Removed the swept-chord lookahead shortening that repeatedly dropped the target to 12 m. The follower now uses one stable 18–30 m lookahead, matching the old working controller. Lane-offset target generation remains, so assigned left/right lanes are still followed.
+- Commit: `693e2e7c8fd4b19aefcc26f53716889cf9454162`. Requires in-game validation.
