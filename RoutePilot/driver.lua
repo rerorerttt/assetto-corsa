@@ -159,7 +159,10 @@ local function calculateSteering(car, p, speed, fx, fz)
 
   local bl, br = H.boundsAt(seg)
   local mid = (bl + br) * 0.5
-  local leftCenter = (mid + br) * 0.5
+  local corridorWidth = br - bl
+  -- A narrow single-lane corridor stays centered; only a real two-lane
+  -- corridor shifts traffic into its left half.
+  local leftCenter = corridorWidth >= 5.4 and ((mid + br) * 0.5) or mid
   local rightCenter = (bl + mid) * 0.5
   if p.overtakeSide == 0 then
     p.laneOffset = leftCenter
