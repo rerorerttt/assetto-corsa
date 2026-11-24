@@ -648,25 +648,10 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
   return nil
 end
 
-local function safeSpeedAcrossCorridor(carIndex,car,p,currentGap,currentSpeed)
+local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
   -- Follow only the leader in the car's current corridor. A vehicle in a
   -- separate usable lane must never reduce this car's target speed.
   return safeFollowingSpeed(currentGap,currentSpeed,p.brakeAccelEstimate)
-end
-
-local function trafficAheadForRescue(carIndex,car,p)
-  if p.routeProgress==nil then return false end
-  local fx,fz=normalize2(car.look.x,car.look.z)
-  local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
-    28.0,car,fx,fz)
-  if not safeMin or not safeMax then return false end
-  local offset=safeMin
-  while offset<=safeMax+0.001 do
-    local gap,_,index=carAheadInLane(carIndex,car,offset)
-    if gap and gap>-8.0 and gap<100.0 then return true,gap,index end
-    offset=offset+0.75
-  end
-  return false
 end
 
 local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed)
@@ -823,7 +808,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       end
       p.emergencyPassRequest=false
     end
-    local safe=safeSpeedAcrossCorridor(carIndex,car,p,gap,leaderSpeed or 0)
+    local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
     return math.min(targetSpeed,safe)
   end
 
