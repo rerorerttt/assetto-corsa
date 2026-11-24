@@ -233,6 +233,11 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
         local lateral=H.lateralOf(other.position,p.segIdx)
         local otherP=state.p[i]
         local inCurrent=math.abs(lateral-laneCenter)<=LANE_HALF_WIDTH
+        if p.laneChangeProgress<1.0 then
+          inCurrent=inCurrent or
+            math.abs(lateral-p.laneStartOffset)<=LANE_HALF_WIDTH or
+            math.abs(lateral-p.laneTargetOffset)<=LANE_HALF_WIDTH
+        end
         if otherP and otherP.laneChangeProgress<1.0 then
           inCurrent=inCurrent or
             math.abs(lateral-otherP.laneStartOffset)<=LANE_HALF_WIDTH or
@@ -398,6 +403,7 @@ local function updateLaneChange(carIndex,car,p,speed,tx,tz,dt)
         p.trafficBlocked=true
         p.blockedBy=blockedBy
         p.blockedGap=blockedGap
+        p.laneCooldown=1.0
         H.log("OVERTAKE_WAIT id=%d leader=%d reason=%s blocked_by=%d gap=%.2f",
           carIndex,front.index,fits and "OCCUPIED" or "BOUNDARY",
           blockedBy or -1,blockedGap or -1)
