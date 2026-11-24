@@ -47,16 +47,16 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Passing reservations are local to the selected offset: a nearby car using the same passing corridor blocks a conflicting pass, while a physically separate free corridor remains available. Same-corridor reservations cover at least 80 m or 3 seconds of travel.
 - The overtaking car stays on its selected offset until the target's rear is cleared, then returns to its original offset only after that offset is clear.
 - When the current lane is blocked and no passing offset is safe, target speed is limited using the nearest leaders across the full safe corridor. The car waits for a free corridor instead of trying to force through occupied space.
-- Urgent passes increase lateral path transition speed to 5 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. Steering still follows the selected safe path; it is not held at a constant full-lock value.
+- Urgent passes increase lateral path transition speed to 5 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (8 m or less), the controller adds a brief 80 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
 - Stuck-car rescue is deferred while another vehicle is detected ahead anywhere in the safe corridor within 100 m. A car waiting in traffic is not teleported merely because its speed remains low.
 
 ## Known limitations
 
-- Passing is enabled only when the recorded corridor has at least 2.7 m on each side of its midpoint. A symmetric 7 m profile gives lane centers at +1.75 m and -1.75 m; a 3 m profile correctly disables passing.
+- Passing still requires enough physical width for the complete vehicle footprints plus a safety margin; the controller searches the available safe corridor rather than requiring two pre-defined 2.7 m lanes.
 - The arc-length route geometry and path follower are source-implemented but have not yet been validated in Assetto Corsa/CSP. Normalized steering response still needs in-game calibration from trace telemetry.
 - Route-progress conflict checks currently assume traffic follows the same recorded route direction. Opposing-direction traffic on a shared oval still requires explicit direction-aware conflict handling.
 - If a locked route projection is lost, the driver currently fails safe by braking rather than attempting an unverified global branch reacquisition.
-- Pit handling and automatic recovery from every spin/off-track situation are outside the current traffic implementation; the existing stuck-car rescue remains in place.
+- Pit handling and automatic recovery from every spin/off-track situation remain outside the current traffic implementation. Stuck-car rescue is deferred when traffic is detected ahead within the safe corridor.
 
 
 ### Player driving and native autopilot
