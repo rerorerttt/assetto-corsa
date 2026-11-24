@@ -668,9 +668,13 @@ function Driver.update(carIndex, car, dt)
     targetSpeed = targetSpeed and math.min(targetSpeed, trafficSpeed) or trafficSpeed
   end
 
-  if p.boundaryHard then
+  if p.previewBlocked then
+    -- No legal preview chord exists even at minimum look-ahead: stop rather
+    -- than continue toward an unverified boundary-crossing trajectory.
+    targetSpeed = math.min(targetSpeed or 0.0, 0.0)
+  elseif p.boundaryHard then
     targetSpeed = math.min(targetSpeed or 8.0, 8.0)
-  elseif p.boundaryViolation or p.previewBlocked then
+  elseif p.boundaryViolation then
     targetSpeed = math.min(targetSpeed or 14.0, 14.0)
   end
 
