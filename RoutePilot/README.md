@@ -55,7 +55,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Removed the fixed 170 km/h cruise setting. RoutePilot uses an unbounded cruise target; speed is limited by upcoming route curvature and braking distance.
 - Braking deceleration and usable lateral grip are estimated from measured vehicle response, then filtered and used by curve planning and car-following. Acceleration is also learned to estimate whether a pass can be completed.
 - The forward planning horizon expands with speed and estimated stopping distance, including a reaction-time margin.
-- Lane occupancy checks physical vehicle-width overlap, active passing reservations, and the swept lateral transition. The former broad front/rear reservation is removed.
+- Lane occupancy checks physical vehicle-width overlap, active passing reservations, the swept lateral transition, and opposing-direction traffic using local heading geometry.
 - Following speed is evaluated in the current corridor rather than taking the minimum speed across every lateral offset.
 - A stationary queue no longer disables stuck recovery. Rescue is attempted after ten seconds and validates the actual spawn position.
 - This source revision is experimental and has not yet been validated in Assetto Corsa/CSP. Test each blocked lane, a bumper-distance stationary obstacle, and multiple AI cars passing one at a time.
@@ -64,7 +64,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 - Passing still requires enough physical width for the complete vehicle footprints plus a safety margin; the controller searches the available safe corridor rather than requiring two pre-defined 2.7 m lanes.
 - The arc-length route geometry and path follower are source-implemented but have not yet been validated in Assetto Corsa/CSP. Normalized steering response still needs in-game calibration from trace telemetry.
-- Route-progress conflict checks currently assume traffic follows the same recorded route direction. Opposing-direction traffic on a shared oval still requires explicit direction-aware conflict handling.
+- Near-field occupancy and leader detection classify each car against its own route tangent. Opposing-direction vehicles use local geometry and closing-speed braking; long-range reservations still need in-game validation on shared ovals and hairpins.
 - If a locked route projection is lost, the driver currently fails safe by braking rather than attempting an unverified global branch reacquisition.
 - Pit handling and automatic recovery from every spin/off-track situation remain outside the current traffic implementation.
 
