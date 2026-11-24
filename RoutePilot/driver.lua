@@ -603,19 +603,26 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     if distance<0.001 then return false,0 end
     local angle=signedAngle(fx,fz,dx/distance,dz/distance)
     local curvature=2.0*math.sin(angle)/distance
+    local arcLength=distance
+    if math.abs(curvature)>0.0001 then
+      arcLength=math.abs(2.0*math.asin(clamp(curvature*distance*0.5,-1,1))/curvature)
+    end
     local startMin,startMax=laneBoundsAt(seg)
     local startError=0
     if p.latOff<startMin then startError=startMin-p.latOff
     elseif p.latOff>startMax then startError=p.latOff-startMax end
     local previousError=startError
-    local firstUnsafe=distance
-    local sample=2.0
-    while sample<=distance do
-      local routePoint,routeSeg=H.walkLine(p.segIdx,p.segT or 0,sample)
-      if not routePoint or not routeSeg then return false,sample end
-      local before=H.walkLine(p.segIdx,p.segT or 0,math.max(0,sample-1.0))
-      local after=H.walkLine(p.segIdx,p.segT or 0,sample+1.0)
-      if not before or not after then return false,sample end
+    local firstUnsafe=preview
+    local samples=math.max(1,math.ceil(arcLength/2.0))
+    for sampleIndex=1,samples do
+      local fraction=sampleIndex/samples
+      local sample=arcLength*fraction
+      local routeDistance=preview*fraction
+      local routePoint,routeSeg=H.walkLine(p.segIdx,p.segT or 0,routeDistance)
+      if not routePoint or not routeSeg then return false,routeDistance end
+      local before=H.walkLine(p.segIdx,p.segT or 0,math.max(0,routeDistance-1.0))
+      local after=H.walkLine(p.segIdx,p.segT or 0,routeDistance+1.0)
+      if not before or not after then return false,routeDistance end
       local rtx,rtz=normalize2(after.x-before.x,after.z-before.z)
       local px,pz
       if math.abs(curvature)<0.0001 then
@@ -635,24 +642,23 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
       elseif routeLateral>hi then error=routeLateral-hi end
       if startError<=0 then
         if error>0.08 then
-          firstUnsafe=sample
+          firstUnsafe=routeDistance
           return false,firstUnsafe
         end
       else
         -- If activation starts outside the corridor, only allow a preview
         -- which moves monotonically back toward the safe region.
         if error>previousError+0.10 then
-          firstUnsafe=sample
+          firstUnsafe=routeDistance
           return false,firstUnsafe
         end
         previousError=error
       end
-      sample=sample+2.0
     end
     if startError>0 and previousError>=startError-0.10 then
       return false,firstUnsafe
     end
-    return true,distance
+    return true,preview
   end
 
   local nominal=clamp(LOOKAHEAD_BASE+speed*LOOKAHEAD_SPEED,
