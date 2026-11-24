@@ -557,7 +557,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
   -- controller's angle sign and avoiding a second lateral-error loop.
   local targetSteer = clamp(angle * STEER_GAIN, -STEER_LIMIT, STEER_LIMIT)
 
-  if math.abs(angle) < 0.0015 and math.abs(lateralError) < 0.04 then
+  if math.abs(angle) < 0.0015 then
     targetSteer = 0
   end
 
