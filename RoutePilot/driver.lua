@@ -382,7 +382,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local size=car and car.aabbSize
   local halfWidth=math.max(0.75,safeNumber(size and size.x,2.0)*0.5)
   local halfLength=math.max(1.5,safeNumber(size and size.z,4.5)*0.5)
-  local startOffset=safeNumber(p.laneOffsetCurrent,projection.lateral)
+  -- Track the measured car offset for occupancy/pass-clearance checks.
+  -- The future steering target is sampled from the selected quintic profile.
+  local startOffset=projection.lateral
+  p.laneOffsetCurrent=startOffset
   local bl,br=routeBoundsAtSample(current)
   local desired=p.overtakeSide==0 and
     safeNumber(p.baseLaneOffset,(bl+br)*0.5) or
@@ -462,14 +465,16 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.boundaryCandidateMin=minOffset; p.boundaryCandidateMax=maxOffset
   p.boundaryEnvelope=bestEnvelope
   p.boundaryDeficit=0
-  local maxStep=(p.emergencyPass and 2.6 or 1.5)*math.max(0,dt or 0)
-  p.laneOffsetCurrent=startOffset+clamp(best-startOffset,-maxStep,maxStep)
-  if p.returningFromPass and math.abs(p.laneOffsetCurrent-best)<0.25 then
+  local previewU=clamp(ahead/transitionLength,0,1)
+  local previewU2,previewU3=previewU*previewU,previewU*previewU*previewU
+  local previewBlend=6*previewU3*previewU2-15*previewU2*previewU2+10*previewU3
+  local previewOffset=startOffset+(best-startOffset)*previewBlend
+  if p.returningFromPass and math.abs(previewOffset-best)<0.25 then
     p.returningFromPass=false
   end
 
-  local targetX=future.x-future.tz*p.laneOffsetCurrent
-  local targetZ=future.z+future.tx*p.laneOffsetCurrent
+  local targetX=future.x-future.tz*previewOffset
+  local targetZ=future.z+future.tx*previewOffset
   local dx,dz=targetX-car.position.x,targetZ-car.position.z
   local targetDist=math.sqrt(dx*dx+dz*dz)
   if targetDist<0.5 then return 0 end
@@ -488,7 +493,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     clamp(2.5*boundaryError/(boundaryDistance*boundaryDistance),-0.15,0.15)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
-  p.crossTrackError=p.laneOffsetCurrent-projection.lateral
+  p.crossTrackError=previewOffset-projection.lateral
   p.pathCurvature=safeNumber(current.k)
   p.steerCurvature=desiredCurvature
   p.projectionProgressDelta=projection.delta or 0
