@@ -48,7 +48,7 @@ end
 
 function Driver.setup(cfg, st, helpers)
   CFG, state, H = cfg, st, helpers
-  state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 16)
+  state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
