@@ -505,7 +505,6 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     return center.x-tz*targetOffset,center.z+tx*targetOffset
   end
   local function previewPathFits(distance,targetX,targetZ)
-    if p.boundaryViolation then return true end
     local dx,dz=targetX-car.position.x,targetZ-car.position.z
     local total=math.max(0.001,distance)
     local sample=3.0
@@ -521,7 +520,8 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
       local lateral=(chordX-point.x)*-tz+(chordZ-point.z)*tx
       local minOffset,maxOffset=H.safeBoundsAt(pointSeg)
       local _,sampleTwoLane=H.laneOffset(carIndex,pointSeg)
-      if sampleTwoLane and p.laneChangeProgress>=1.0 then
+      if sampleTwoLane and p.laneChangeProgress>=1.0 and not p.boundaryViolation and
+          (p.laneRole=="LEFT" or p.laneRole=="RIGHT") then
         if p.laneRole=="LEFT" then
           maxOffset=math.min(maxOffset,-vehicleMargin)
         else
