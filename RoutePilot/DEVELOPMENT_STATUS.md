@@ -61,7 +61,7 @@ Do not merge PR #4 until these runtime checks pass.
 - Replaced speed planning with a live forward scan of the recorded route at 3 m intervals. Curvature determines the local corner speed; the same preview applies a braking envelope based on distance to the detected bend.
 - Steering checks every 3 m in its speed-adaptive preview. Once accumulated heading change reaches 0.10 rad, it shortens the target to the bend entry so the car does not aim at a distant point through a curved section.
 - Traffic occupancy now measures every other car's actual lateral position in the current car's route-segment coordinate frame. It no longer compares lateral offsets calculated from unrelated per-car segments. Desired lane offsets remain reservations for merge-conflict checks, not substitutes for physical position.
-- These changes are committed to the working branch only. Runtime behavior still requires an Assetto Corsa/CSP test; the current GitHub trace blob is empty, so the newly supplied URL did not provide readable trace lines in this inspection.
+- These changes are committed to the working branch only. Runtime behavior still requires an Assetto Corsa/CSP test; GitHub comparison confirms the trace file is present and contains roughly 4,326 added lines, but the file-content connector returned an empty payload even for line-range requests; individual runtime events therefore could not be inspected in this pass.
 
 ## Regression diagnosis and corrective changes (2026-11-24)
 
