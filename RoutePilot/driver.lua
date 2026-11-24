@@ -1,4 +1,4 @@
--- RoutePilot/driver.lua — v0.9.2 (CSP 0.3.2-preview2)
+-- RoutePilot/driver.lua — v0.9.3 (CSP 0.3.2-preview2)
 -- FUNDAMENTAL RETHINK:
 --  * The user trace showed ZERO CAR_INIT lines: the main script never adopted
 --    the cars (spawn gate blocked driving forever), so the cars drove on the
