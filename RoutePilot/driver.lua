@@ -227,7 +227,9 @@ local function safeCorridorForPreview(route, progress, ahead, car, headingAngle)
   end
   if safeMin>safeMax then
     local sample=Geometry.sample(route,progress+ahead*0.5)
-    local bl,br=sample and routeBoundsAtSample(sample) or H.boundsAt(1)
+    local bl,br
+    if sample then bl,br=routeBoundsAtSample(sample)
+    else bl,br=H.boundsAt(1) end
     local center=(bl+br)*0.5
     safeMin,safeMax=center,center
   end
