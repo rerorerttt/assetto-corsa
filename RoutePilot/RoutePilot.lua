@@ -1,4 +1,4 @@
--- RoutePilot.lua — v0.9.2 (CSP 0.3.2-preview2)
+-- RoutePilot.lua — v0.9.3 (CSP 0.3.2-preview2)
 -- THE TRACE SAID IT ALL: 184 s of session, ZERO CAR_INIT/CAR= lines — the
 -- cars were never adopted (the spawn gate blocked driving forever) and drove
 -- on the STOCK game AI: that is where the zigzags, burnouts, wall-hunting
@@ -24,14 +24,13 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  -- F1-style predictive line following: longer preview at speed, stronger
-  -- curvature feed-forward, and a tyre-load target learned from each car.
-  LOOKAHEAD_BASE=18.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=16.0, LOOKAHEAD_MAX=45.0,
-  CURVATURE_STEER_GAIN=5.0, CURVATURE_FEEDFORWARD=0.65,
-  STEER_LIMIT=0.85, STEER_RATE=5.5, STEER_FILTER=0.06,
-  EMERGENCY_STEER_GAIN=2.6, EMERGENCY_STEER_RATE=12.0,
-  MAX_LATERAL_ACCEL=14.5, BRAKE_ACCEL=8.5, PLAN_HORIZON=240.0,
-  CURVE_MIN=0.001, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
+  -- Boundary-safe calibration restored from the 2026-11-24 predictive guard.
+  -- Racing-speed increases are suspended until boundary containment is verified.
+  LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.35, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=28.0,
+  CURVATURE_STEER_GAIN=4.5, CURVATURE_FEEDFORWARD=0.20,
+  STEER_LIMIT=0.75, STEER_RATE=4.0, STEER_FILTER=0.08,
+  MAX_LATERAL_ACCEL=6.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0,
+  CURVE_MIN=0.002, GAS_GAIN=0.45, BRAKE_GAIN=0.60, MAX_GAS=1.0, MAX_BRAKE=1.0,
   SLIP_START=0.09, SLIP_FULL=0.45, SLIP_DAMP_MIN_SPEED=8.0,
   SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
   TC_SLIP_START=0.10, TC_SLIP_FULL=0.28, TC_MAX_CUT=0.88,
@@ -971,5 +970,5 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.9.2 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.9.3 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
