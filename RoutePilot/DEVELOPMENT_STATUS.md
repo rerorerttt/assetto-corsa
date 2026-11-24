@@ -257,3 +257,58 @@ Code commits in this branch: dynamic passing offsets `44ac2f8e2cc40e52b279110ec4
 Emergency full-lock refinement: for a validated urgent pass where the leader is within 8 m center-to-center, `filterSteering()` now applies a brief 80 ms full-range (`-1` or `+1`) steering pulse in the sign of the computed safe-path steering request, then returns to the path-following controller. The pulse is not applied if the steering request is effectively zero. The normal emergency steering gain/rate and 5 m/s lateral transition remain active after the pulse. This is the explicit bumper-distance escape response requested; it still depends on `findPassingOffset()` finding a physically clear corridor first.
 
 Latest driver commits: bumper-distance pulse `09bb989e0207fb0613353bc6d71fb43c1a5edba9`; zero-request guard `1397fbf0ccf1ecbadff4a393a41b0ce19943026a`. These final refinements also remain untested in the game.
+
+
+## 2026-11-25 release-blocking regression: RoutePilot 0.9.2 leaves recorded road bounds
+
+User report: version 0.9.2 is broken; AI cars collide and leave the track. The user explicitly states that previous versions had the road-boundary prohibition correctly configured. Treat this as a release-blocking regression. Do not ask the user to accept off-track behavior as a trade-off for overtaking or speed.
+
+### Evidence from the supplied 0.9.2 trace
+
+Source: `RoutePilot/routepilot_trace.txt` on `routepilot/multi-lane-emergency-evasion-2026-11-25` (155 lines in the captured file).
+
+- The route reports `BOUNDS=[-3.5,3.5]`.
+- AI telemetry progresses from small offsets to clear boundary departures: e.g. CAR 4 reaches `OFF=-5.6` at 24.05 s and CAR 5 reaches `OFF=-7.9` at 25.05 s.
+- At 25.05 s CAR 5 reports `LINE_ERROR=999`, `BOUNDARY=22.61`, `SPEED=10.91`, `GAS=0.000`, `BRAKE=1.000`; this is already a severe route-projection loss after the vehicle has departed far beyond the recorded corridor.
+- Earlier rows show large lateral offsets and continued throttle. The user's collision/off-track report is therefore consistent with the trace.
+
+### Root cause found by source comparison
+
+Compared the 0.9.2 driver with `routepilot/predictive-boundary-guard-2026-11-24`, which contains the earlier predictive footprint guard. The 0.9.2 emergency path had introduced several simultaneous overrides:
+
+- 220 ms blind full-lock steering pulse, sign chosen only from `overtakeSide`.
+- Emergency path multiplied steering by 2.6 and returned with a +/-1.0 limit instead of the configured steering limit.
+- `filterSteering()` also forced +/-1.0 during the pulse and allowed a 12/s steering rate.
+- Emergency lateral target transition increased to 12 m/s instead of the earlier 2.6 m/s.
+- The general calibration was also made much more aggressive: 45 m preview, 0.85 steering limit, 14.5 m/s² initial lateral target and weaker curvature thresholding. These changes were not validated in the simulator.
+
+This allowed the emergency overtake command to overwhelm the bounded route-following response. A full-lock pulse must never be used as a substitute for a trajectory that has been checked against the vehicle footprint and the saved road boundaries.
+
+### 0.9.3 source-level containment changes already committed
+
+The current branch remains `routepilot/multi-lane-emergency-evasion-2026-11-25`. The following changes were written to GitHub:
+
+- `RoutePilot/driver.lua`: disabled the blind full-lock pulse; removed the emergency steering gain and steering-limit bypass; restored the normal hard steering limit in every mode; restored 5.5/s as the maximum emergency steering response; restored emergency lateral target transition to 2.6 m/s.
+- `RoutePilot/RoutePilot.lua`: version 0.9.3; restored the conservative calibration from the earlier predictive-boundary build: 10–28 m preview, 0.75 steering limit, 4/s normal steering response, 6.0 m/s² initial lateral target, 0.20 curvature feed-forward and the prior 170 m planning horizon.
+- `RoutePilot/manifest.ini`: version 0.9.3.
+- `RoutePilot/README.md`: documented the failure, source comparison, hard safety invariant and validation requirements.
+
+### Non-negotiable design constraints for the next developer/chat
+
+1. The saved left/right bounds are a hard physical envelope, not a lane preference. Every commanded path must keep the complete vehicle footprint inside them, including during transitions and emergency passes.
+2. Boundary containment has higher priority than overtaking, traffic reservations, speed planning, recovery and all other objectives. No feature may bypass the boundary controller.
+3. If no feasible passing corridor exists for the complete vehicle footprint over the planned manoeuvre, reject the pass. Do not choose a midpoint of an infeasible interval and continue accelerating.
+4. Do not use blind full-lock steering, +/-1.0 emergency steering, or high-rate lateral transitions. Steering must remain a bounded path-following response toward a verified feasible target.
+5. If projection is lost or the vehicle footprint is outside the verified corridor, throttle must be zero and the controller must enter a conservative recovery/braking state. Do not continue normal racing control using stale route data.
+6. Do not raise grip targets, speed, preview distance or steering authority until boundary containment has been demonstrated in-game. First restore the previous verified boundary behavior; only then reintroduce multi-lane passing one change at a time.
+7. Keep the user's 2026-11-24 known-good revision intact as a rollback reference. Never rewrite that baseline. The 0.9.2 branch is experimental and must not be called safe.
+
+### Validation still required
+
+The 0.9.3 modifications are source-level containment, not a proven fix. No Assetto Corsa/CSP runtime was available to this development session. The user must test the new build before it is called safe. Review telemetry for actual vehicle footprint versus both saved bounds, projection-loss handling, steering saturation, wheel slip, collisions and off-track departures. A row with `OFF` inside the centerline bounds is not sufficient by itself: the body envelope must also fit. Do not claim the track-boundary invariant is restored until the user supplies a clean in-game trace.
+
+Current recovery commit sequence:
+- Driver emergency steering containment: `1bc86c70f4105659874765552cc12059bab3bd36`
+- Conservative boundary-safe calibration / version 0.9.3: `c280742fd74c428a0612aa08b2be82515ed127e5`
+- Manifest version bump: `822e59a8220581e198957511774791d7ae9702d0`
+- README regression documentation: `e9e2bbfd9420500734533346a784b0c9abee4a1a`
