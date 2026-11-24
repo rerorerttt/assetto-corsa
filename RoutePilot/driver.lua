@@ -683,6 +683,16 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       p.emergencyPassRequest=false
     end
     local safe = safeFollowingSpeed(gap, leaderSpeed or 0)
+    -- If the own lane is blocked and there is also a vehicle ahead in the
+    -- passing lane, respect the slower of both lanes instead of accelerating
+    -- into a queue which has no safe escape corridor.
+    if rightCenter then
+      local rightGap, rightLeaderSpeed = carAheadInLane(carIndex,car,rightCenter)
+      if rightGap then
+        safe = math.min(safe,
+          safeFollowingSpeed(rightGap,rightLeaderSpeed or 0))
+      end
+    end
     if p.followTimer>=TRIGGER_TIME and p.overtakeRetryT<=0 then
       p.emergencyPassRequest=false
       if beginOvertake(carIndex,car,p,gap,leaderIndex,speed) then
