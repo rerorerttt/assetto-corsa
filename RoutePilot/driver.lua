@@ -13,6 +13,7 @@
 --  * Route planned tens of meters ahead (lookahead 14 + 0.8*speed, max 50).
 
 local Driver = {}
+local Geometry = require("route_geometry")
 local CFG, state, H
 
 local BOUND_MARGIN = 0.4
@@ -46,44 +47,35 @@ local function carRand(i, s)
 end
 
 function Driver.setup(cfg, st, helpers)
-  CFG = cfg
-  state = st
-  H = helpers
-  -- Cache route arc length once: traffic gaps are measured along the route,
-  -- not against each car's instantaneous world-space heading.
-  local count = H.segmentCount()
-  state.routeLength, state.routeCum, state.routeSegLength = 0, {}, {}
-  for i = 1, count do
-    state.routeCum[i] = state.routeLength
-    local a, b = state.nodes[i], H.segEnd(i)
-    local length = math.sqrt((b.x-a.x)^2 + (b.z-a.z)^2)
-    state.routeSegLength[i] = length
-    state.routeLength = state.routeLength + length
-  end
+  CFG, state, H = cfg, st, helpers
+  state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 16)
+  state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
+  state.routeMetricCount = #state.nodes
+  state.routeMetricLoop = state.loopRoute
 end
 
 local function refreshRouteMetrics()
-  local count = H.segmentCount()
-  if state.routeMetricCount == count and state.routeLength and state.routeLength > 0 then return end
-  state.routeMetricCount = count
-  state.routeLength, state.routeCum, state.routeSegLength = 0, {}, {}
-  for i = 1, count do
-    state.routeCum[i] = state.routeLength
-    local a, b = state.nodes[i], H.segEnd(i)
-    local length = math.sqrt((b.x-a.x)^2 + (b.z-a.z)^2)
-    state.routeSegLength[i] = length
-    state.routeLength = state.routeLength + length
+  if state.routeGeometry and state.routeMetricCount == #state.nodes and
+     state.routeMetricLoop == state.loopRoute then return end
+  state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 16)
+  state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
+  state.routeMetricCount = #state.nodes
+  state.routeMetricLoop = state.loopRoute
+  for _, p in pairs(state.p) do
+    p.routeLocked = false
+    p.routeProgress = nil
   end
 end
 
-local function routeProjection(car, hintSeg, allowGlobal)
+local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, dt)
   refreshRouteMetrics()
-  local seg, t, distance = H.findNearestSeg(car.position, hintSeg or 1, allowGlobal == true, car.look)
-  local lengths, cumulative = state.routeSegLength, state.routeCum
-  if not lengths or not lengths[seg] then return nil end
-  local progress = cumulative[seg] + lengths[seg] * t
-  local lateral = H.lateralOf(car.position, seg)
-  return progress, lateral, seg, t, distance
+  if not state.routeGeometry then return nil end
+  local result = Geometry.project(state.routeGeometry, car.position,
+    hintProgress, car.look, speed or safeNumber(car.speedMs), dt or 0.05,
+    allowGlobal ~= true and hintProgress ~= nil)
+  if not result then return nil end
+  return result.s, result.lateral, result.seg, result.t, result.distance,
+    result.tx, result.tz
 end
 
 -- Signed distance from own progress to another car. Positive means ahead.
@@ -149,32 +141,25 @@ local function calculateStability(p, speed)
 end
 
 local function planTargetSpeed(p)
-  local nodes = state.nodes
-  local segs = H.segmentCount()
-  local target = p.cruiseSpeed
-  local distance = 0
-  local current = p.segIdx
-  local steps = 0
-  while distance <= CFG.PLAN_HORIZON and steps < 200 do
-    steps = steps + 1
-    local curvature = H.getVertexCurvature(current)
-    if curvature > CFG.CURVE_MIN then
-      local cs = math.max(CFG.MIN_APEX_SPEED, math.sqrt(CFG.MAX_LATERAL_ACCEL / curvature))
-      local ss = math.sqrt(cs * cs + 2 * CFG.BRAKE_ACCEL * distance)
-      if ss < target then target = ss end
+  refreshRouteMetrics()
+  local route=state.routeGeometry
+  if not route or not p.routeProgress then return math.min(p.cruiseSpeed, 11.0) end
+  local target=p.cruiseSpeed
+  local distance=0
+  while distance<=CFG.PLAN_HORIZON do
+    local sample=Geometry.sample(route,p.routeProgress+distance)
+    if not sample then break end
+    local curvature=math.abs(sample.k or 0)
+    if curvature>CFG.CURVE_MIN then
+      local curveSpeed=math.max(CFG.MIN_APEX_SPEED,
+        math.sqrt(CFG.MAX_LATERAL_ACCEL/curvature))
+      local safeSpeed=math.sqrt(curveSpeed*curveSpeed+2*CFG.BRAKE_ACCEL*distance)
+      if safeSpeed<target then target=safeSpeed end
     end
-    local a = nodes[current]
-    local b = H.segEnd(current)
-    distance = distance + math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
-    if state.loopRoute then
-      current = (current % segs) + 1
-    elseif current < segs then
-      current = current + 1
-    else
-      break
-    end
+    distance=distance+5.0
+    if not route.loop and p.routeProgress+distance>=route.total then break end
   end
-  return math.max(0, target)
+  return math.max(0,target)
 end
 
 local function clampLat(seg, lat)
@@ -182,80 +167,66 @@ local function clampLat(seg, lat)
   return clamp(lat, bl + BOUND_MARGIN, br - BOUND_MARGIN)
 end
 
-local function smoothPathSample(seg, t)
-  local count = #state.nodes
-  local function nodeAt(i)
-    if state.loopRoute then
-      return state.nodes[((i - 1) % count) + 1]
-    end
-    return state.nodes[clamp(i, 1, count)]
-  end
-  local p0, p1, p2, p3 = nodeAt(seg - 1), nodeAt(seg), nodeAt(seg + 1), nodeAt(seg + 2)
-  local u, u2, u3 = t, t*t, t*t*t
-  local function catmull(a, b, c, d)
-    return 0.5 * ((2*b) + (-a+c)*u + (2*a-5*b+4*c-d)*u2 + (-a+3*b-3*c+d)*u3)
-  end
-  local function derivative(a, b, c, d)
-    return 0.5 * ((-a+c) + 2*(2*a-5*b+4*c-d)*u + 3*(-a+3*b-3*c+d)*u2)
-  end
-  local x = catmull(p0.x,p1.x,p2.x,p3.x)
-  local z = catmull(p0.z,p1.z,p2.z,p3.z)
-  local tx, tz = normalize2(
-    derivative(p0.x,p1.x,p2.x,p3.x),
-    derivative(p0.z,p1.z,p2.z,p3.z))
-  return x, z, tx, tz
-end
-
-local function linePointAtLateral(seg, t, ahead, lat)
-  local _, targetSeg, targetT = H.walkLine(seg, t, ahead)
-  if not targetSeg then targetSeg, targetT = seg, 1 end
-  local x, z, tx, tz = smoothPathSample(targetSeg, targetT or 0)
-  return x - tz * lat, z + tx * lat, tx, tz
-end
-
 local function calculateSteering(car, p, speed, fx, fz, dt)
-  local seg, t, lineDist = H.findNearestSeg(car.position, p.segIdx, not p.routeLocked)
-  p.routeLocked = true
-  p.segIdx, p.lineDist = seg, lineDist
-  p.latOff = H.lateralOf(car.position, seg)
   refreshRouteMetrics()
-  p.routeProgress = state.routeCum[seg] + state.routeSegLength[seg] * t
+  local route=state.routeGeometry
+  if not route then
+    p.lineDist=0
+    p.crossTrackError=0
+    p.headingError=0
+    return 0
+  end
+  local projection=Geometry.project(route,car.position,p.routeProgress,car.look,
+    speed,dt,p.routeLocked and p.routeProgress~=nil)
+  if not projection then
+    p.projectionLost=true
+    p.targetSpeed=0
+    p.gas=0
+    p.brake=1
+    p.lineDist=999
+    return 0
+  end
+  p.projectionLost=false
+  p.routeLocked=true
+  p.routeProgress=projection.s
+  p.segIdx=projection.seg
+  p.lineDist=projection.distance
+  p.latOff=projection.lateral
 
-  local ahead = clamp(CFG.LOOKAHEAD_BASE + speed * CFG.LOOKAHEAD_SPEED,
-    CFG.LOOKAHEAD_MIN, CFG.LOOKAHEAD_MAX)
-  local bl, br = H.boundsAt(seg)
-  local mid, width = (bl + br) * 0.5, br - bl
-  local leftCenter = width >= 5.4 and ((mid + br) * 0.5) or mid
-  local rightCenter = (bl + mid) * 0.5
-  p.laneOffset = p.overtakeSide == 0 and leftCenter or rightCenter
-  local laneTarget = clampLat(seg, p.laneOffset or leftCenter)
-  p.laneOffsetCurrent = p.laneOffsetCurrent or laneTarget
-  local maxStep = 1.5 * math.max(0, dt or 0)
-  p.laneOffsetCurrent = p.laneOffsetCurrent +
-    clamp(laneTarget - p.laneOffsetCurrent, -maxStep, maxStep)
+  local ahead=clamp(CFG.LOOKAHEAD_BASE+speed*CFG.LOOKAHEAD_SPEED,
+    CFG.LOOKAHEAD_MIN,CFG.LOOKAHEAD_MAX)
+  local bl,br=H.boundsAt(p.segIdx)
+  local mid,width=(bl+br)*0.5,br-bl
+  local leftCenter=width>=5.4 and ((mid+br)*0.5) or mid
+  local rightCenter=(bl+mid)*0.5
+  p.laneOffset=p.overtakeSide==0 and leftCenter or rightCenter
+  local laneTarget=clampLat(p.segIdx,p.laneOffset or leftCenter)
+  p.laneOffsetCurrent=p.laneOffsetCurrent or laneTarget
+  local maxStep=1.5*math.max(0,dt or 0)
+  p.laneOffsetCurrent=p.laneOffsetCurrent+
+    clamp(laneTarget-p.laneOffsetCurrent,-maxStep,maxStep)
 
-  local tx, tz, pathTx, pathTz = linePointAtLateral(
-    seg, t, ahead, p.laneOffsetCurrent)
-  local dx, dz = tx - car.position.x, tz - car.position.z
-  local targetDist = math.sqrt(dx*dx + dz*dz)
-  if targetDist < 0.01 then return 0 end
+  local current=Geometry.sample(route,p.routeProgress)
+  local future=Geometry.sample(route,p.routeProgress+ahead)
+  if not current or not future then return 0 end
+  local targetX=future.x-future.tz*p.laneOffsetCurrent
+  local targetZ=future.z+future.tx*p.laneOffsetCurrent
+  local dx,dz=targetX-car.position.x,targetZ-car.position.z
+  local targetDist=math.sqrt(dx*dx+dz*dz)
+  if targetDist<0.01 then return 0 end
 
-  -- Stanley-style feedback: path heading plus signed cross-track correction.
-  -- The correction is speed-aware, so it does not snap the car sideways at
-  -- low speed or become too weak as speed rises.
-  local headingError = signedAngle(fx, fz, pathTx, pathTz)
-  local _, _, currentTx, currentTz = smoothPathSample(seg, t)
-  p.pathCurvature = signedAngle(currentTx, currentTz, pathTx, pathTz) / math.max(1, ahead)
-  local crossTrack = p.laneOffsetCurrent - p.latOff
-  local crossTrackAngle = math.atan2(2.0 * crossTrack, math.max(3.0, speed + 2.0))
-  local previewAngle = signedAngle(fx, fz, dx / targetDist, dz / targetDist)
-  local angle = headingError * 0.35 + crossTrackAngle * 0.65
-  -- Preview is a bounded anticipatory term; it prevents corner-entry delay
-  -- without allowing a single distant vertex to dominate steering.
-  angle = angle + clamp(previewAngle - angle, -0.12, 0.12) * 0.35
-  p.headingError, p.crossTrackError = headingError, crossTrack
-  local steer = angle * CFG.STEER_GAIN + p.slipAngle * 0.30
-  return clamp(steer, -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
+  local headingError=signedAngle(fx,fz,future.tx,future.tz)
+  local crossTrack=p.laneOffsetCurrent-projection.lateral
+  local crossTrackAngle=math.atan2(2.0*crossTrack,math.max(3.0,speed+2.0))
+  local previewAngle=signedAngle(fx,fz,dx/targetDist,dz/targetDist)
+  local angle=headingError*0.35+crossTrackAngle*0.65
+  angle=angle+clamp(previewAngle-angle,-0.12,0.12)*0.35
+  p.headingError=headingError
+  p.crossTrackError=crossTrack
+  p.pathCurvature=current.k or 0
+  p.projectionProgressDelta=projection.delta or 0
+  local steer=angle*CFG.STEER_GAIN+p.slipAngle*0.30
+  return clamp(steer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
@@ -292,7 +263,7 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
   local own = state.p[carIndex]
   local ownProgress = own and own.routeProgress
   if ownProgress == nil then
-    ownProgress = routeProjection(car, own and own.segIdx or 1)
+    ownProgress = routeProjection(car, own and own.segIdx or 1, not (own and own.routeLocked), own and own.routeProgress, car.speedMs, 0.05)
   end
   if ownProgress == nil then return true end
   for i = 0, sim.carsCount - 1 do
@@ -389,7 +360,7 @@ local function beginOvertake(carIndex, car, p, gap, leaderIndex)
 end
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  local ownProgress, _, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked)
+  local ownProgress, _, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
   p.routeLocked = true
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
@@ -410,7 +381,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
         targetState.routeLocked = true
         if targetSeg then targetState.segIdx = targetSeg end
       end
-      local currentProgress = ownProgress or routeProjection(car, p.segIdx, false)
+      local currentProgress = ownProgress or routeProjection(car, p.segIdx, false, p.routeProgress, speed, dt)
       local passedDistance = (currentProgress and targetProgress)
         and routeGap(targetProgress, currentProgress) or -math.huge
       local ownLength = (car.aabbSize and car.aabbSize.z) or 4.5
@@ -510,10 +481,10 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  local progress, _, projectedSeg = routeProjection(car, p.segIdx, not p.routeLocked)
+  local progress, _, projectedSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
   p.routeLocked = true
   if projectedSeg then p.segIdx = projectedSeg end
-  if progress ~= nil then p.routeProgress = progress end
+  if progress ~= nil then p.routeProgress = progress else p.projectionLost = true end
   calculateStability(p, speed)
 
   if speed < RESCUE_SPEED then
@@ -527,14 +498,16 @@ function Driver.update(carIndex, car, dt)
     p.stuck = 0
   end
 
-  local targetSpeed = planTargetSpeed(p)
+  local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.targetSpeed = targetSpeed
 
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
+  if p.projectionLost then targetSpeed=0 end
   local steer = filterSteering(p, steerTarget, dt)
 
   calculateThrottle(p, speed, targetSpeed)
+  if p.projectionLost then p.gas=0; p.brake=1 end
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
