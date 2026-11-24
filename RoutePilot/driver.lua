@@ -562,7 +562,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
       local lateral=(chordX-point.x)*-tangentZ+(chordZ-point.z)*tangentX
       local minOffset,maxOffset=H.safeBoundsAt(pointSeg)
       local _,sampleTwoLane=H.laneOffset(carIndex,pointSeg)
-      if not CFG.SINGLE_CAR_TEST and sampleTwoLane and p.laneChangeProgress>=1.0 and
+      if sampleTwoLane and p.laneChangeProgress>=1.0 and
           not p.boundaryViolation and
           (p.laneRole=="LEFT" or p.laneRole=="RIGHT") then
         if p.laneRole=="LEFT" then
