@@ -10,7 +10,7 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  MAX_LATERAL_ACCEL=9.0, BRAKE_ACCEL=8.5, PLAN_HORIZON=170.0,
+  MAX_LATERAL_ACCEL=8.0, BRAKE_ACCEL=6.5, PLAN_HORIZON=220.0,
   CURVE_MIN=0.002,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
@@ -25,6 +25,7 @@ local state = {
   widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnStable=0, spawnLastRoster="", routeDirectionChecked=false,
+  controlledCarIndex=nil,
   nodes={}, p={}, laneAssignments={}, status="Готов", logAccum=0, loaded=false,
 }
 local logger=nil
@@ -221,23 +222,27 @@ end
 local function getVertexCurvature(index)
   local nodes=state.nodes; local count=#nodes
   if count<5 then return 0 end
+  -- Use a 12 m chord on either side and the exact three-point circumcircle
+  -- curvature. This is less sensitive to unequal point spacing than angle
+  -- divided by average chord length.
   local W=4
   local i0,i1,i2=index-W,index,index+W
   if state.loopRoute then
     i0=((i0-1)%count)+1; i1=((i1-1)%count)+1; i2=((i2-1)%count)+1
-  else
-    if i0<1 or i2>count then return 0 end
+  elseif i0<1 or i2>count then
+    return 0
   end
   local a,b,c=nodes[i0],nodes[i1],nodes[i2]
-  local v1x,v1z=b.x-a.x,b.z-a.z
-  local v2x,v2z=c.x-b.x,c.z-b.z
-  local l1=math.sqrt(v1x*v1x+v1z*v1z)
-  local l2=math.sqrt(v2x*v2x+v2z*v2z)
-  if l1<0.5 or l2<0.5 then return 0 end
-  local dot=clamp((v1x*v2x+v1z*v2z)/(l1*l2),-1,1)
-  local angle=math.acos(dot)
-  if angle<0.02 then return 0 end
-  return angle/math.max(0.1,(l1+l2)*0.5)
+  local abx,abz=b.x-a.x,b.z-a.z
+  local bcx,bcz=c.x-b.x,c.z-b.z
+  local cax,caz=a.x-c.x,a.z-c.z
+  local ab=math.sqrt(abx*abx+abz*abz)
+  local bc=math.sqrt(bcx*bcx+bcz*bcz)
+  local ca=math.sqrt(cax*cax+caz*caz)
+  if ab<0.5 or bc<0.5 or ca<0.5 then return 0 end
+  local cross=math.abs(abx*bcz-abz*bcx)
+  if cross<0.01 then return 0 end
+  return (2.0*cross)/(ab*bc*ca)
 end
 local function findNearestSeg(pos,hintSeg)
   local nodes=state.nodes; local segs=segmentCount()
@@ -287,16 +292,9 @@ local function boundsAt(index)
   return safeNumber(state.boundsL[i],-1.5),safeNumber(state.boundsR[i],1.5)
 end
 local function laneOffsetForCar(carIndex,seg)
-  local left,right=boundsAt(seg)
-  local width=right-left
-  -- A 3 m boundary is a single lane: no passing and all cars hold 40 km/h.
-  if width<6.0 then return 0.0,false end
-  -- Keep two fixed 3.5 m lanes inside the recorded 7 m corridor.
-  local offset=math.min(1.75,right-0.65,-left-0.65)
-  if offset<1.0 then return 0.0,false end
-  local side=state.laneAssignments and state.laneAssignments[carIndex]
-  if side==nil then side=(carIndex%2==1) and 1 or -1 end
-  return (side>0) and offset or -offset,true
+  -- This branch controls exactly one car on the recorded reference line.
+  -- Recorded boundaries remain available for diagnostics and recovery checks.
+  return 0.0,false
 end
 local function assignLaneRoster(sim)
   local leftCount,rightCount=0,0
@@ -450,7 +448,10 @@ local function trySpawnTeleport(sim,dt)
   local aiCars={}
   for i=1,sim.carsCount-1 do
     local car=ac.getCar(i)
-    if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
+    if car and car.isActive and car.isAIControlled then
+      aiCars[1]=i
+      break
+    end
   end
   local roster=table.concat(aiCars,",")
   if #aiCars==0 then
@@ -609,8 +610,11 @@ end
 local function releaseCar(carIndex)
   local ok,controls=pcall(ac.overrideCarControls,carIndex)
   if ok and controls then
-    controls.combineAxis=false
-    controls.steer=0; controls.gas=0; controls.brake=0; controls.handbrake=0
+    -- Return pedal inputs to the original AI instead of leaving it pinned
+    -- at zero when RoutePilot is disabled or the selected car disappears.
+    controls.combineAxis=true
+    controls.steer=math.huge
+    controls.gas=0; controls.brake=0; controls.handbrake=0
   end
   state.p[carIndex]=nil
 end
@@ -634,28 +638,36 @@ function script.update(dt)
   local ok,err=pcall(function()
     local sim=ac.getSim()
     if not sim then return end
-    assignLaneRoster(sim)
     local player=ac.getCar(0)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
+    local selectedIndex,selectedCar=nil,nil
+    for i=1,sim.carsCount-1 do
+      local car=ac.getCar(i)
+      if car and car.isActive and car.isAIControlled then
+        selectedIndex,selectedCar=i,car
+        break
+      end
+    end
+    if selectedIndex~=state.controlledCarIndex then
+      state.controlledCarIndex=selectedIndex
+      state.spawnDone=false
+      state.spawnStable=0
+      state.spawnLastRoster=""
+      state.p={}
+      writeLog("SINGLE_CAR_SELECT id=%s",tostring(selectedIndex))
+    end
     if state.enabled and state.loaded and #state.nodes>=2 then
       trySpawnTeleport(sim,dt)
     end
-    -- INSTANT ADOPTION + DRIVING: every active AI car is driven from the
-    -- very first frame. Nothing blocks this. (This was the bug: the spawn
-    -- gate used to block driving forever — cars stayed on the stock AI.)
-    if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
-      for i=1,sim.carsCount-1 do
-        local car=ac.getCar(i)
-        if car and car.isActive and car.isAIControlled then
-          local okc,erc=pcall(Driver.update,i,car,dt)
-          if not okc then
-            writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
-            releaseCar(i)
-          end
-        elseif state.p[i] then
-          releaseCar(i)
-        end
+    -- Only the first active AI is controlled. Every other AI remains under
+    -- the game's original AI controller and receives no RoutePilot inputs.
+    if state.enabled and selectedIndex and selectedCar and #state.nodes>=2 and
+        Driver and ensureDriver() then
+      local okc,erc=pcall(Driver.update,selectedIndex,selectedCar,dt)
+      if not okc then
+        writeLog("DRIVER_ERROR id=%d err=%s",selectedIndex,tostring(erc))
+        releaseCar(selectedIndex)
       end
     else
       for idx in pairs(state.p) do releaseCar(idx) end
