@@ -1,338 +1,352 @@
-[    6.96s] LOAD_ROUTE points=230 track=nevadadrift
-[    6.96s] BOUNDS_LOADED points=230
-[    6.96s] BOUNDS_LOADED points=230
-[    6.96s] ROUTEPILOT 0.9.0 INITIALIZED track=nevadadrift points=230
-[    7.03s] CAR_INIT id=1 lane=LEFT class=SLOW cruise=40.0kmh
-[    7.03s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
-[    7.03s] CAR_INIT id=3 lane=LEFT class=SLOW cruise=40.0kmh
-[    7.03s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
-[    7.03s] CAR_INIT id=5 lane=LEFT class=SLOW cruise=40.0kmh
-[    7.39s] SPAWN_FINISH moved=5 failed=0 gap=25.00
-[    7.39s] CAR_INIT id=1 lane=LEFT class=SLOW cruise=40.0kmh
-[    7.39s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
-[    7.39s] CAR_INIT id=3 lane=LEFT class=SLOW cruise=40.0kmh
-[    7.39s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
-[    7.39s] CAR_INIT id=5 lane=LEFT class=SLOW cruise=40.0kmh
-[    7.89s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    7.91s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    7.93s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    7.95s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    7.97s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    7.99s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.01s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.03s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.03s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[    8.05s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.07s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.09s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.11s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.13s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.15s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.17s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.19s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.21s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.23s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.25s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.27s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.29s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.31s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.33s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.35s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.37s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.39s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.41s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.43s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.45s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.47s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.49s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.51s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.53s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.55s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.57s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.59s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.61s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.63s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.65s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.67s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.69s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.71s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.73s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.75s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.77s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.79s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.81s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.83s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.85s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.87s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.89s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.91s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.93s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.95s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.97s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    8.99s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.01s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.03s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.03s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[    9.05s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.07s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.09s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.11s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.13s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.15s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.17s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.19s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.21s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.23s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.25s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.27s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.29s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.31s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.33s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.35s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.37s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.39s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.41s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.43s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.45s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.48s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.49s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.51s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.53s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.55s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.57s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.59s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.61s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.63s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.65s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.67s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.69s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.71s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.73s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.75s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.77s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.80s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.81s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.83s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.85s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.87s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.89s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.91s] CAR=2 OVERTAKE_BEGIN target=3 from=LEFT to=RIGHT gap=21.5
-[    9.91s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.93s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.95s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.97s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[    9.99s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.01s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.01s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   10.03s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.05s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.07s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.09s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.11s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.13s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.15s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.17s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.19s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.21s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.23s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.25s] CAR=4 OVERTAKE_DENIED right_lane_occupied
-[   10.27s] CAR=4 OVERTAKE_BEGIN target=5 from=LEFT to=RIGHT gap=25.7
-[   11.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   12.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   13.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   14.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   14.42s] CAR=2 OVERTAKE_END return=LEFT clearance=2_car_lengths
-[   15.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   16.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   16.36s] CAR=2 OVERTAKE_BEGIN target=5 from=LEFT to=RIGHT gap=15.9
-[   16.58s] WORLD_LINES ON
-[   17.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   17.58s] RESCUE id=4 node=19 offset=0
-[   17.60s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
-[   18.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   18.08s] CAR=4 OVERTAKE_BEGIN target=3 from=LEFT to=RIGHT gap=35.0
-[   19.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   20.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   20.62s] CAR=2 OVERTAKE_END return=LEFT clearance=2_car_lengths
-[   21.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   22.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   23.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   24.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   24.82s] RESCUE id=5 node=52 offset=0
-[   24.84s] CAR_INIT id=5 lane=LEFT class=SLOW cruise=40.0kmh
-[   25.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   26.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   27.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   28.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   29.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   30.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   31.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   32.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   33.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   34.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   34.32s] RESCUE id=2 node=101 offset=0
-[   34.34s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
-[   35.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   36.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   36.06s] RESCUE id=1 node=52 offset=0
-[   36.08s] CAR_INIT id=1 lane=LEFT class=SLOW cruise=40.0kmh
-[   37.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   38.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   39.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   40.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   40.20s] CAR=4 OVERTAKE_END return=LEFT clearance=2_car_lengths
-[   41.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   42.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   43.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   44.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   45.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   46.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   47.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   48.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   49.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   50.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   51.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   52.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   53.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   54.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   55.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   56.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   57.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   58.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   59.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   60.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   61.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   62.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   63.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   64.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   65.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   66.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   67.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   68.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   69.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   70.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   70.60s] RESCUE id=2 node=52 offset=0
-[   70.62s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
-[   71.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   72.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   73.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   74.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   75.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   76.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   77.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   78.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   79.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   80.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   81.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   82.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   83.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   84.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   84.90s] RESCUE id=4 node=52 offset=0
-[   84.92s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
-[   85.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   86.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   87.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   88.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   88.44s] RESCUE id=2 node=101 offset=0
-[   88.46s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
-[   89.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   90.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   91.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   92.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   93.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   94.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   95.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   96.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   97.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   98.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[   99.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  100.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  100.78s] RESCUE id=3 node=53 offset=1
-[  100.80s] CAR_INIT id=3 lane=LEFT class=SLOW cruise=40.0kmh
-[  101.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  102.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  103.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  104.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  105.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  106.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  107.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  108.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  109.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  110.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  111.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  112.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  113.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  114.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  115.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  116.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  117.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  118.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  119.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  120.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  121.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  122.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  123.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  124.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  124.86s] RESCUE id=2 node=52 offset=0
-[  124.88s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
-[  125.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  126.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  127.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  128.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  129.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  130.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  131.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  132.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  133.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  134.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  135.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  136.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  137.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  138.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  139.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  140.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  141.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  142.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  142.58s] RESCUE id=2 node=101 offset=0
-[  142.60s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
-[  143.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  144.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  145.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  146.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  147.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  148.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  149.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  150.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  150.64s] CAR=2 OVERTAKE_BEGIN target=1 from=LEFT to=RIGHT gap=70.6
-[  151.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  152.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  153.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  154.02s] RESCUE id=4 node=56 offset=0
-[  154.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  154.04s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
-[  155.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  155.20s] CAR=2 OVERTAKE_END return=LEFT clearance=2_car_lengths
-[  156.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  157.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  158.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  159.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  160.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  161.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  162.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  163.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  164.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  165.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  166.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  166.96s] CAR=2 OVERTAKE_BEGIN target=5 from=LEFT to=RIGHT gap=56.1
-[  167.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  168.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  169.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  170.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  171.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  172.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  173.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  174.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  175.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  176.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  177.02s] UPDATE_ERROR err=E:\Assetto Corsa\apps\lua\RoutePilot\RoutePilot.lua:337: bad argument #13 to 'telemetryLine' (number expected, got nil)
-[  177.82s] SHUTDOWN: RoutePilot released
+[    6.82s] LOAD_ROUTE points=78 track=skidpad05_skidpad
+[    6.82s] BOUNDS_LOADED points=78
+[    6.82s] BOUNDS_LOADED points=78
+[    6.82s] ROUTEPILOT 0.9.0 INITIALIZED track=skidpad05_skidpad points=78
+[    6.89s] CAR_INIT id=1 lane=LEFT class=SLOW cruise=40.0kmh
+[    6.89s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[    6.89s] CAR_INIT id=3 lane=LEFT class=SLOW cruise=40.0kmh
+[    6.89s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
+[    6.89s] CAR_INIT id=5 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.25s] SPAWN_FINISH moved=5 failed=0 gap=25.00
+[    7.25s] CAR_INIT id=1 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.25s] CAR_INIT id=2 lane=LEFT class=FAST cruise=170.0kmh
+[    7.25s] CAR_INIT id=3 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.25s] CAR_INIT id=4 lane=LEFT class=FAST cruise=170.0kmh
+[    7.25s] CAR_INIT id=5 lane=LEFT class=SLOW cruise=40.0kmh
+[    7.87s] CAR=1 POS=(38.98,-1.00,238.33) SPEED=0.88 STEER=-0.001 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[    7.87s] CAR=2 POS=(52.71,-1.01,259.71) SPEED=1.59 STEER=0.024 GAS=0.600 BRAKE=0.000 TARGET_SPEED=20.29 LINE_ERROR=0.01 SEGMENT=5 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[    7.87s] CAR=3 POS=(60.18,-1.01,282.05) SPEED=0.38 STEER=0.139 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.03 SEGMENT=13 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[    7.87s] CAR=4 POS=(48.18,-1.00,301.17) SPEED=2.36 STEER=0.284 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.09 SEGMENT=20 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[    7.87s] CAR=5 POS=(24.06,-1.02,298.75) SPEED=2.21 STEER=0.168 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.07 SEGMENT=28 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[    8.87s] CAR=1 POS=(41.37,-1.00,242.43) SPEED=8.69 STEER=-0.008 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[    8.87s] CAR=2 POS=(55.75,-1.00,264.42) SPEED=10.41 STEER=0.101 GAS=1.000 BRAKE=0.000 TARGET_SPEED=17.58 LINE_ERROR=0.01 SEGMENT=7 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[    8.87s] CAR=3 POS=(59.91,-1.00,284.39) SPEED=6.01 STEER=0.145 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.05 SEGMENT=14 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[    8.87s] CAR=4 POS=(50.31,-1.00,300.31) SPEED=2.23 STEER=0.440 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.34 SEGMENT=20 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[    8.87s] CAR=5 POS=(25.90,-1.02,299.87) SPEED=2.09 STEER=0.299 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.19 SEGMENT=28 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[    9.87s] CAR=1 POS=(47.04,-1.01,251.48) SPEED=10.88 STEER=-0.018 GAS=0.106 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=2 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[    9.87s] CAR=2 POS=(60.01,-1.02,277.07) SPEED=13.45 STEER=0.100 GAS=0.008 BRAKE=0.000 TARGET_SPEED=13.47 LINE_ERROR=0.02 SEGMENT=11 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[    9.87s] CAR=3 POS=(56.46,-1.00,292.96) SPEED=11.02 STEER=-0.008 GAS=0.041 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.44 SEGMENT=17 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.4 OT_SIDE=0
+[    9.87s] CAR=4 POS=(50.35,-1.00,300.36) SPEED=2.53 STEER=0.239 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.41 SEGMENT=20 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[    9.87s] CAR=5 POS=(27.73,-1.02,300.73) SPEED=1.81 STEER=0.525 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.23 SEGMENT=27 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   10.88s] CAR=1 POS=(53.20,-1.01,260.51) SPEED=10.85 STEER=0.033 GAS=0.119 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=5 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   10.88s] CAR=2 POS=(59.39,-1.01,289.90) SPEED=12.08 STEER=0.358 GAS=0.022 BRAKE=0.000 TARGET_SPEED=12.12 LINE_ERROR=0.87 SEGMENT=15 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.9 OT_SIDE=0
+[   10.88s] CAR=3 POS=(49.55,-1.01,299.63) SPEED=7.43 STEER=0.203 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.61 SEGMENT=20 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.6 OT_SIDE=0
+[   10.88s] CAR=4 POS=(45.94,-0.99,302.79) SPEED=9.12 STEER=0.366 GAS=0.845 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.85 SEGMENT=21 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.8 OT_SIDE=0
+[   10.88s] CAR=5 POS=(26.67,-1.02,300.43) SPEED=2.96 STEER=0.252 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.36 SEGMENT=27 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   11.88s] CAR=1 POS=(58.27,-1.00,270.05) SPEED=10.83 STEER=0.111 GAS=0.127 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.15 SEGMENT=9 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   11.88s] CAR=2 POS=(53.59,-1.01,299.62) SPEED=11.01 STEER=0.443 GAS=0.000 BRAKE=0.006 TARGET_SPEED=11.00 LINE_ERROR=1.70 SEGMENT=19 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.7 OT_SIDE=0
+[   11.88s] CAR=3 POS=(40.26,-1.01,303.03) SPEED=10.83 STEER=0.138 GAS=0.129 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.12 SEGMENT=23 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   11.88s] CAR=4 POS=(35.84,-0.99,303.61) SPEED=11.01 STEER=0.195 GAS=0.520 BRAKE=0.000 TARGET_SPEED=12.16 LINE_ERROR=0.85 SEGMENT=24 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.8 OT_SIDE=0
+[   11.88s] CAR=5 POS=(23.18,-1.02,298.81) SPEED=4.73 STEER=0.186 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.54 SEGMENT=29 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   12.88s] CAR=1 POS=(60.06,-1.01,280.68) SPEED=10.82 STEER=0.123 GAS=0.129 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.17 SEGMENT=12 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   12.88s] CAR=2 POS=(43.92,-1.01,304.45) SPEED=11.06 STEER=0.400 GAS=0.094 BRAKE=0.000 TARGET_SPEED=11.27 LINE_ERROR=1.98 SEGMENT=22 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.0 OT_SIDE=0
+[   12.88s] CAR=3 POS=(29.59,-1.01,301.44) SPEED=10.81 STEER=0.183 GAS=0.136 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.19 SEGMENT=26 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   12.88s] CAR=4 POS=(24.75,-0.99,299.52) SPEED=12.88 STEER=0.135 GAS=0.728 BRAKE=0.000 TARGET_SPEED=14.50 LINE_ERROR=0.42 SEGMENT=28 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   12.88s] CAR=5 POS=(17.99,-1.02,294.98) SPEED=9.22 STEER=0.095 GAS=0.853 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.40 SEGMENT=30 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   13.88s] CAR=1 POS=(57.70,-1.00,291.14) SPEED=10.81 STEER=0.151 GAS=0.133 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.17 SEGMENT=16 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   13.88s] CAR=2 POS=(32.37,-1.01,303.88) SPEED=12.50 STEER=0.307 GAS=0.085 BRAKE=0.000 TARGET_SPEED=12.69 LINE_ERROR=1.74 SEGMENT=25 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.7 OT_SIDE=0
+[   13.88s] CAR=3 POS=(20.11,-1.01,296.61) SPEED=10.43 STEER=0.145 GAS=0.305 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.41 SEGMENT=30 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   13.88s] CAR=4 POS=(14.29,-0.99,291.29) SPEED=13.70 STEER=0.031 GAS=1.000 BRAKE=0.000 TARGET_SPEED=17.71 LINE_ERROR=0.19 SEGMENT=32 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   13.88s] CAR=5 POS=(11.03,-1.02,287.37) SPEED=10.30 STEER=0.019 GAS=0.365 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=34 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   14.88s] CAR=1 POS=(50.81,-1.00,299.31) SPEED=10.73 STEER=0.183 GAS=0.122 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.24 SEGMENT=19 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   14.88s] CAR=2 POS=(20.42,-1.01,297.95) SPEED=14.11 STEER=0.218 GAS=0.465 BRAKE=0.000 TARGET_SPEED=15.14 LINE_ERROR=1.32 SEGMENT=29 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.3 OT_SIDE=0
+[   14.88s] CAR=3 POS=(12.47,-1.01,289.54) SPEED=10.41 STEER=0.088 GAS=0.317 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.32 SEGMENT=33 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   14.88s] CAR=4 POS=(6.89,-0.99,281.99) SPEED=11.12 STEER=0.015 GAS=1.000 BRAKE=0.000 TARGET_SPEED=23.98 LINE_ERROR=0.15 SEGMENT=36 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   14.88s] CAR=5 POS=(4.08,-1.02,278.72) SPEED=11.15 STEER=0.042 GAS=0.000 BRAKE=0.024 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=37 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   15.88s] CAR=1 POS=(40.79,-1.00,302.72) SPEED=10.79 STEER=0.146 GAS=0.144 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.16 SEGMENT=23 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   15.88s] CAR=2 POS=(9.53,-1.00,286.84) SPEED=17.82 STEER=0.076 GAS=1.000 BRAKE=0.000 TARGET_SPEED=22.68 LINE_ERROR=0.83 SEGMENT=34 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.8 OT_SIDE=0
+[   15.88s] CAR=3 POS=(5.99,-1.01,281.41) SPEED=10.41 STEER=0.027 GAS=0.313 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.19 SEGMENT=36 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   15.88s] CAR=4 POS=(0.39,-0.99,273.29) SPEED=10.73 STEER=0.072 GAS=1.000 BRAKE=0.000 TARGET_SPEED=20.34 LINE_ERROR=0.05 SEGMENT=39 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   15.88s] CAR=5 POS=(-1.73,-1.02,269.54) SPEED=10.68 STEER=0.064 GAS=0.195 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.12 SEGMENT=41 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   16.88s] CAR=1 POS=(30.14,-1.00,301.27) SPEED=10.83 STEER=0.108 GAS=0.126 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.13 SEGMENT=26 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   16.88s] CAR=2 POS=(2.89,-1.00,274.22) SPEED=13.68 STEER=-0.301 GAS=1.000 BRAKE=0.000 TARGET_SPEED=21.62 LINE_ERROR=1.63 SEGMENT=39 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.6 OT_SIDE=0
+[   16.88s] CAR=3 POS=(-0.73,-1.01,272.18) SPEED=10.60 STEER=0.159 GAS=0.231 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.31 SEGMENT=40 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   16.88s] CAR=4 POS=(-4.51,-0.99,263.87) SPEED=10.55 STEER=0.105 GAS=1.000 BRAKE=0.000 TARGET_SPEED=18.52 LINE_ERROR=0.18 SEGMENT=43 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   16.88s] CAR=5 POS=(-5.64,-1.02,259.74) SPEED=10.51 STEER=0.045 GAS=0.269 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=44 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   17.88s] CAR=1 POS=(20.60,-1.00,296.34) SPEED=10.65 STEER=0.081 GAS=0.207 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.10 SEGMENT=30 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   17.88s] CAR=2 POS=(-3.28,-1.00,263.31) SPEED=10.39 STEER=0.170 GAS=0.748 BRAKE=0.000 TARGET_SPEED=18.52 LINE_ERROR=1.17 SEGMENT=43 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.2 OT_SIDE=0
+[   17.88s] CAR=3 POS=(-6.11,-1.01,262.63) SPEED=10.88 STEER=0.299 GAS=0.102 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=1.29 SEGMENT=43 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.3 OT_SIDE=0
+[   17.88s] CAR=4 POS=(-7.50,-0.99,253.82) SPEED=10.46 STEER=0.046 GAS=1.000 BRAKE=0.000 TARGET_SPEED=30.56 LINE_ERROR=0.31 SEGMENT=46 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   17.88s] CAR=5 POS=(-8.25,-1.02,249.58) SPEED=10.46 STEER=0.014 GAS=0.295 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=47 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   18.88s] CAR=1 POS=(12.70,-1.00,289.23) SPEED=10.64 STEER=0.051 GAS=0.211 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=33 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   18.88s] CAR=2 POS=(-6.53,-1.01,251.31) SPEED=14.99 STEER=-0.280 GAS=1.000 BRAKE=0.000 TARGET_SPEED=30.22 LINE_ERROR=1.22 SEGMENT=47 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.2 OT_SIDE=0
+[   18.88s] CAR=3 POS=(-8.46,-1.01,252.19) SPEED=10.84 STEER=-0.036 GAS=0.120 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.86 SEGMENT=47 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.9 OT_SIDE=0
+[   18.88s] CAR=4 POS=(-9.74,-0.99,243.63) SPEED=10.43 STEER=0.004 GAS=1.000 BRAKE=0.000 TARGET_SPEED=28.28 LINE_ERROR=0.16 SEGMENT=49 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   18.88s] CAR=5 POS=(-10.63,-1.02,239.41) SPEED=10.43 STEER=0.007 GAS=0.305 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=51 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   19.42s] WORLD_LINES ON
+[   19.88s] CAR=1 POS=(5.92,-1.00,281.03) SPEED=10.64 STEER=0.021 GAS=0.210 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=36 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   19.88s] CAR=2 POS=(-10.51,-1.02,237.34) SPEED=9.56 STEER=0.507 GAS=0.150 BRAKE=0.000 TARGET_SPEED=26.27 LINE_ERROR=0.52 SEGMENT=51 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.5 OT_SIDE=0
+[   19.88s] CAR=3 POS=(-9.86,-1.01,241.60) SPEED=10.66 STEER=-0.064 GAS=0.203 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.19 SEGMENT=50 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   19.88s] CAR=4 POS=(-12.22,-1.00,232.95) SPEED=11.44 STEER=0.000 GAS=1.000 BRAKE=0.000 TARGET_SPEED=24.12 LINE_ERROR=0.14 SEGMENT=53 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   19.88s] CAR=5 POS=(-13.08,-1.03,228.73) SPEED=11.46 STEER=-0.016 GAS=0.000 BRAKE=0.207 TARGET_SPEED=11.11 LINE_ERROR=0.02 SEGMENT=54 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   20.88s] CAR=1 POS=(-0.18,-1.00,272.32) SPEED=10.64 STEER=0.063 GAS=0.212 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.09 SEGMENT=40 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   20.88s] CAR=2 POS=(-14.96,-1.01,233.34) SPEED=2.68 STEER=-0.130 GAS=0.600 BRAKE=0.000 TARGET_SPEED=24.12 LINE_ERROR=2.90 SEGMENT=53 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.9 OT_SIDE=0
+[   20.88s] CAR=3 POS=(-12.34,-1.01,231.88) SPEED=10.97 STEER=0.035 GAS=0.064 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=53 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   20.88s] CAR=4 POS=(-14.53,-0.99,222.16) SPEED=10.80 STEER=-0.008 GAS=1.000 BRAKE=0.000 TARGET_SPEED=20.56 LINE_ERROR=0.06 SEGMENT=56 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   20.88s] CAR=5 POS=(-15.46,-1.02,217.95) SPEED=10.80 STEER=0.035 GAS=0.141 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.12 SEGMENT=58 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   21.88s] CAR=1 POS=(-4.66,-1.00,262.69) SPEED=10.66 STEER=0.058 GAS=0.204 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=43 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   21.88s] CAR=2 POS=(-14.22,-1.01,234.29) SPEED=3.77 STEER=-0.750 GAS=0.600 BRAKE=0.000 TARGET_SPEED=24.12 LINE_ERROR=2.40 SEGMENT=53 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.4 OT_SIDE=0
+[   21.88s] CAR=3 POS=(-14.89,-1.01,221.33) SPEED=10.83 STEER=0.019 GAS=0.125 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.09 SEGMENT=57 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   21.88s] CAR=4 POS=(-16.51,-0.99,211.68) SPEED=10.58 STEER=0.155 GAS=1.000 BRAKE=0.000 TARGET_SPEED=14.49 LINE_ERROR=0.14 SEGMENT=60 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   21.88s] CAR=5 POS=(-16.40,-1.02,207.41) SPEED=10.49 STEER=0.142 GAS=0.278 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.13 SEGMENT=61 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   22.88s] CAR=1 POS=(-7.55,-1.00,252.37) SPEED=10.74 STEER=0.012 GAS=0.168 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.02 SEGMENT=47 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   22.88s] CAR=2 POS=(-7.72,-1.00,236.53) SPEED=10.49 STEER=-0.750 GAS=0.150 BRAKE=0.000 TARGET_SPEED=26.27 LINE_ERROR=3.42 SEGMENT=51 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=3.4 OT_SIDE=0
+[   22.88s] CAR=3 POS=(-16.62,-1.01,210.66) SPEED=10.81 STEER=0.169 GAS=0.137 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.07 SEGMENT=60 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   22.88s] CAR=4 POS=(-15.54,-0.99,201.27) SPEED=10.49 STEER=0.170 GAS=1.000 BRAKE=0.000 TARGET_SPEED=13.33 LINE_ERROR=0.40 SEGMENT=63 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   22.88s] CAR=5 POS=(-13.68,-1.02,197.43) SPEED=10.35 STEER=0.153 GAS=0.341 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=64 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   23.88s] CAR=1 POS=(-9.98,-1.00,241.95) SPEED=10.45 STEER=-0.000 GAS=0.297 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=50 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   23.88s] CAR=2 POS=(0.59,-1.00,232.14) SPEED=10.48 STEER=-0.750 GAS=0.150 BRAKE=0.000 TARGET_SPEED=25.20 LINE_ERROR=12.51 SEGMENT=52 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=12.5 OT_SIDE=0
+[   23.88s] CAR=3 POS=(-15.18,-1.01,200.02) SPEED=10.80 STEER=0.205 GAS=0.141 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.43 SEGMENT=64 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   23.88s] CAR=4 POS=(-10.73,-0.99,192.25) SPEED=9.52 STEER=0.262 GAS=0.683 BRAKE=0.000 TARGET_SPEED=11.04 LINE_ERROR=0.20 SEGMENT=66 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   23.88s] CAR=5 POS=(-7.19,-1.02,189.68) SPEED=9.99 STEER=0.219 GAS=0.455 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.08 SEGMENT=68 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   24.88s] CAR=1 POS=(-12.34,-1.00,231.81) SPEED=10.40 STEER=-0.000 GAS=0.321 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=53 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   24.88s] CAR=2 POS=(0.06,-1.00,221.88) SPEED=11.89 STEER=-0.704 GAS=1.000 BRAKE=0.000 TARGET_SPEED=21.82 LINE_ERROR=14.34 SEGMENT=55 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=14.3 OT_SIDE=0
+[   24.88s] CAR=3 POS=(-9.55,-1.01,190.96) SPEED=10.70 STEER=0.292 GAS=0.135 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.32 SEGMENT=67 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   24.88s] CAR=4 POS=(-2.77,-0.99,186.97) SPEED=10.70 STEER=0.250 GAS=0.135 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.54 SEGMENT=69 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   24.88s] CAR=5 POS=(2.06,-1.02,186.60) SPEED=9.81 STEER=0.293 GAS=0.535 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.07 SEGMENT=71 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   25.88s] CAR=1 POS=(-14.75,-1.00,221.47) SPEED=10.74 STEER=0.009 GAS=0.168 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=57 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   25.88s] CAR=2 POS=(-10.01,-1.00,215.90) SPEED=11.88 STEER=0.618 GAS=0.763 BRAKE=0.000 TARGET_SPEED=17.77 LINE_ERROR=5.89 SEGMENT=58 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=5.9 OT_SIDE=0
+[   25.88s] CAR=3 POS=(-0.10,-1.01,186.31) SPEED=10.66 STEER=0.316 GAS=0.152 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.55 SEGMENT=70 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.6 OT_SIDE=0
+[   25.88s] CAR=4 POS=(7.20,-0.99,187.16) SPEED=9.56 STEER=0.401 GAS=0.647 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.10 SEGMENT=73 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   25.88s] CAR=5 POS=(10.57,-1.02,190.08) SPEED=9.57 STEER=0.232 GAS=0.644 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.05 SEGMENT=74 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   26.88s] CAR=1 POS=(-19.33,-0.99,213.67) SPEED=8.52 STEER=0.746 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=2.86 SEGMENT=59 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.9 OT_SIDE=0
+[   26.88s] CAR=2 POS=(-19.03,-1.01,210.84) SPEED=10.80 STEER=0.749 GAS=1.000 BRAKE=0.000 TARGET_SPEED=14.49 LINE_ERROR=2.34 SEGMENT=60 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.3 OT_SIDE=0
+[   26.88s] CAR=3 POS=(9.94,-1.01,188.57) SPEED=10.47 STEER=0.421 GAS=0.240 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.63 SEGMENT=74 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.6 OT_SIDE=0
+[   26.88s] CAR=4 POS=(13.90,-0.99,193.69) SPEED=10.24 STEER=0.125 GAS=1.000 BRAKE=0.000 TARGET_SPEED=25.64 LINE_ERROR=0.82 SEGMENT=76 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.8 OT_SIDE=0
+[   26.88s] CAR=5 POS=(15.80,-1.02,198.20) SPEED=9.61 STEER=0.015 GAS=0.675 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.23 SEGMENT=77 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   27.88s] CAR=1 POS=(-21.34,-0.99,205.39) SPEED=9.30 STEER=0.623 GAS=0.814 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=5.02 SEGMENT=61 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-5.0 OT_SIDE=0
+[   27.88s] CAR=2 POS=(-19.63,-1.00,199.28) SPEED=11.33 STEER=0.456 GAS=0.135 BRAKE=0.000 TARGET_SPEED=13.33 LINE_ERROR=4.89 SEGMENT=63 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-4.9 OT_SIDE=0
+[   27.88s] CAR=3 POS=(15.85,-1.01,196.90) SPEED=10.41 STEER=0.072 GAS=0.315 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.91 SEGMENT=77 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.9 OT_SIDE=0
+[   27.88s] CAR=4 POS=(18.45,-1.00,203.62) SPEED=10.94 STEER=-0.119 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.21 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   27.88s] CAR=5 POS=(20.86,-1.02,207.15) SPEED=10.99 STEER=0.019 GAS=0.053 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.09 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   28.88s] CAR=1 POS=(-14.66,-1.01,197.61) SPEED=10.73 STEER=-0.175 GAS=0.173 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.80 SEGMENT=64 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.8 OT_SIDE=0
+[   28.88s] CAR=2 POS=(-11.06,-1.01,194.69) SPEED=11.28 STEER=-0.587 GAS=0.000 BRAKE=0.144 TARGET_SPEED=11.04 LINE_ERROR=1.05 SEGMENT=66 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.0 OT_SIDE=0
+[   28.88s] CAR=3 POS=(20.48,-1.01,206.45) SPEED=10.66 STEER=-0.039 GAS=0.203 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   28.88s] CAR=4 POS=(23.88,-0.99,213.01) SPEED=11.23 STEER=0.016 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.26 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.3 OT_SIDE=0
+[   28.88s] CAR=5 POS=(26.28,-1.02,216.59) SPEED=11.25 STEER=-0.039 GAS=0.000 BRAKE=0.086 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   29.88s] CAR=1 POS=(-7.28,-1.00,190.24) SPEED=10.20 STEER=0.191 GAS=0.361 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.52 SEGMENT=68 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.5 OT_SIDE=0
+[   29.88s] CAR=2 POS=(-1.45,-1.01,189.46) SPEED=10.80 STEER=0.118 GAS=0.090 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=2.23 SEGMENT=70 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=2.2 OT_SIDE=0
+[   29.88s] CAR=3 POS=(25.66,-1.01,215.77) SPEED=10.77 STEER=-0.016 GAS=0.155 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   29.88s] CAR=4 POS=(29.76,-0.98,222.82) SPEED=11.57 STEER=-0.027 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.13 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   29.88s] CAR=5 POS=(31.74,-1.03,226.63) SPEED=11.58 STEER=-0.058 GAS=0.000 BRAKE=0.279 TARGET_SPEED=11.11 LINE_ERROR=0.34 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.3 OT_SIDE=0
+[   30.88s] CAR=1 POS=(2.50,-1.00,186.78) SPEED=10.57 STEER=0.294 GAS=0.193 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.31 SEGMENT=71 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.3 OT_SIDE=0
+[   30.88s] CAR=2 POS=(8.66,-1.01,186.46) SPEED=10.76 STEER=0.748 GAS=0.035 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=1.53 SEGMENT=73 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.5 OT_SIDE=0
+[   30.88s] CAR=3 POS=(31.19,-1.01,225.07) SPEED=10.84 STEER=0.003 GAS=0.123 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.03 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   30.88s] CAR=4 POS=(35.56,-0.98,232.85) SPEED=11.60 STEER=-0.011 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.18 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   30.88s] CAR=5 POS=(37.72,-1.03,236.56) SPEED=11.61 STEER=-0.001 GAS=0.000 BRAKE=0.297 TARGET_SPEED=11.11 LINE_ERROR=0.19 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   31.88s] CAR=1 POS=(11.51,-1.00,191.45) SPEED=10.35 STEER=0.175 GAS=0.340 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.16 SEGMENT=75 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   31.88s] CAR=2 POS=(17.19,-1.01,192.37) SPEED=11.44 STEER=0.571 GAS=1.000 BRAKE=0.000 TARGET_SPEED=25.64 LINE_ERROR=4.33 SEGMENT=76 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-4.3 OT_SIDE=0
+[   31.88s] CAR=3 POS=(36.70,-1.01,234.41) SPEED=10.84 STEER=0.003 GAS=0.123 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   31.88s] CAR=4 POS=(41.63,-0.98,242.75) SPEED=11.61 STEER=0.009 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.06 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   31.88s] CAR=5 POS=(43.79,-1.03,246.46) SPEED=11.61 STEER=-0.023 GAS=0.000 BRAKE=0.302 TARGET_SPEED=11.11 LINE_ERROR=0.05 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   32.88s] CAR=1 POS=(16.90,-1.00,200.32) SPEED=10.40 STEER=-0.002 GAS=0.321 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   32.88s] CAR=2 POS=(20.02,-1.00,205.15) SPEED=13.03 STEER=-0.556 GAS=0.420 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.37 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   32.88s] CAR=3 POS=(42.17,-1.01,243.77) SPEED=10.84 STEER=-0.018 GAS=0.123 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   32.88s] CAR=4 POS=(47.86,-0.98,252.54) SPEED=11.60 STEER=-0.002 GAS=1.000 BRAKE=0.000 TARGET_SPEED=23.94 LINE_ERROR=0.07 SEGMENT=2 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   32.88s] CAR=5 POS=(50.24,-1.03,256.12) SPEED=11.61 STEER=0.012 GAS=0.000 BRAKE=0.298 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=4 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   33.88s] CAR=1 POS=(22.13,-1.00,209.51) SPEED=10.74 STEER=-0.005 GAS=0.168 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   33.88s] CAR=2 POS=(17.57,-1.00,218.75) SPEED=14.44 STEER=-0.750 GAS=0.150 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=8.61 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=8.6 OT_SIDE=0
+[   33.88s] CAR=3 POS=(47.95,-1.01,252.93) SPEED=10.84 STEER=-0.026 GAS=0.124 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.08 SEGMENT=3 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   33.88s] CAR=4 POS=(54.46,-0.98,262.09) SPEED=11.63 STEER=0.082 GAS=1.000 BRAKE=0.000 TARGET_SPEED=18.99 LINE_ERROR=0.11 SEGMENT=6 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   33.88s] CAR=5 POS=(56.58,-1.03,265.82) SPEED=11.58 STEER=0.111 GAS=0.000 BRAKE=0.283 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=7 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   34.88s] CAR=1 POS=(27.57,-1.00,218.82) SPEED=10.84 STEER=-0.000 GAS=0.123 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   34.88s] CAR=2 POS=(23.54,-1.00,229.30) SPEED=13.09 STEER=-0.458 GAS=0.150 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=8.78 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=8.8 OT_SIDE=0
+[   34.88s] CAR=3 POS=(54.05,-1.01,261.88) SPEED=10.83 STEER=0.051 GAS=0.124 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=6 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   34.88s] CAR=4 POS=(59.44,-0.98,272.57) SPEED=11.69 STEER=0.159 GAS=0.949 BRAKE=0.000 TARGET_SPEED=13.80 LINE_ERROR=0.22 SEGMENT=10 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   34.88s] CAR=5 POS=(59.82,-1.03,276.81) SPEED=11.51 STEER=0.078 GAS=0.000 BRAKE=0.242 TARGET_SPEED=11.11 LINE_ERROR=0.18 SEGMENT=11 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   35.88s] CAR=1 POS=(33.05,-1.01,228.17) SPEED=10.85 STEER=0.001 GAS=0.119 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   35.88s] CAR=2 POS=(36.44,-1.00,233.54) SPEED=16.51 STEER=0.585 GAS=0.150 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.23 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   35.88s] CAR=3 POS=(59.04,-1.01,271.45) SPEED=10.80 STEER=0.189 GAS=0.139 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=9 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   35.88s] CAR=4 POS=(60.18,-0.98,284.04) SPEED=11.39 STEER=0.177 GAS=0.691 BRAKE=0.000 TARGET_SPEED=12.92 LINE_ERROR=0.15 SEGMENT=13 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   35.88s] CAR=5 POS=(58.86,-1.03,288.09) SPEED=11.20 STEER=0.143 GAS=0.000 BRAKE=0.051 TARGET_SPEED=11.11 LINE_ERROR=0.22 SEGMENT=15 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   36.88s] CAR=1 POS=(38.52,-1.01,237.54) SPEED=10.85 STEER=0.000 GAS=0.119 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   36.88s] CAR=2 POS=(49.02,-1.00,244.58) SPEED=17.71 STEER=0.418 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=5.52 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-5.5 OT_SIDE=0
+[   36.88s] CAR=3 POS=(60.61,-1.01,282.07) SPEED=10.79 STEER=0.219 GAS=0.143 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.45 SEGMENT=13 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   36.88s] CAR=4 POS=(56.49,-0.99,294.40) SPEED=10.80 STEER=0.236 GAS=0.274 BRAKE=0.000 TARGET_SPEED=11.41 LINE_ERROR=0.39 SEGMENT=17 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   36.88s] CAR=5 POS=(53.44,-1.02,297.41) SPEED=10.57 STEER=0.211 GAS=0.245 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.05 SEGMENT=18 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   37.88s] CAR=1 POS=(44.05,-1.01,246.87) SPEED=10.85 STEER=-0.026 GAS=0.120 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.08 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   37.88s] CAR=2 POS=(52.99,-1.02,263.86) SPEED=19.12 STEER=-0.574 GAS=0.000 BRAKE=0.080 TARGET_SPEED=18.99 LINE_ERROR=2.09 SEGMENT=6 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=2.1 OT_SIDE=0
+[   37.88s] CAR=3 POS=(57.76,-1.01,292.39) SPEED=10.80 STEER=0.234 GAS=0.142 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.43 SEGMENT=16 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   37.88s] CAR=4 POS=(48.76,-0.99,301.35) SPEED=10.32 STEER=0.262 GAS=0.305 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.53 SEGMENT=20 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   37.88s] CAR=5 POS=(44.60,-1.02,302.40) SPEED=10.08 STEER=0.191 GAS=0.465 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.09 SEGMENT=22 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   38.88s] CAR=1 POS=(50.06,-1.01,255.90) SPEED=10.85 STEER=-0.002 GAS=0.119 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.03 SEGMENT=4 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   38.88s] CAR=2 POS=(58.63,-1.02,278.73) SPEED=13.33 STEER=0.320 GAS=0.000 BRAKE=0.054 TARGET_SPEED=13.24 LINE_ERROR=1.53 SEGMENT=12 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.5 OT_SIDE=0
+[   38.88s] CAR=3 POS=(50.57,-1.01,300.27) SPEED=10.69 STEER=0.277 GAS=0.142 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.42 SEGMENT=20 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   38.88s] CAR=4 POS=(38.77,-0.99,303.47) SPEED=10.43 STEER=0.206 GAS=0.569 BRAKE=0.000 TARGET_SPEED=11.69 LINE_ERROR=0.50 SEGMENT=23 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   38.88s] CAR=5 POS=(34.58,-1.02,302.60) SPEED=10.24 STEER=0.137 GAS=0.392 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=25 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   39.88s] CAR=1 POS=(55.96,-1.01,265.00) SPEED=10.84 STEER=0.080 GAS=0.123 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.12 SEGMENT=7 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   39.88s] CAR=2 POS=(60.66,-1.01,290.93) SPEED=12.03 STEER=0.581 GAS=0.043 BRAKE=0.000 TARGET_SPEED=12.12 LINE_ERROR=2.41 SEGMENT=15 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.4 OT_SIDE=0
+[   39.88s] CAR=3 POS=(40.47,-1.01,303.45) SPEED=10.79 STEER=0.232 GAS=0.146 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.55 SEGMENT=23 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.6 OT_SIDE=0
+[   39.88s] CAR=4 POS=(28.20,-0.99,301.29) SPEED=11.34 STEER=0.178 GAS=1.000 BRAKE=0.000 TARGET_SPEED=13.89 LINE_ERROR=0.56 SEGMENT=27 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.6 OT_SIDE=0
+[   39.88s] CAR=5 POS=(24.58,-1.02,299.03) SPEED=11.17 STEER=0.110 GAS=0.000 BRAKE=0.035 TARGET_SPEED=11.11 LINE_ERROR=0.07 SEGMENT=28 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   40.88s] CAR=1 POS=(59.62,-1.01,275.13) SPEED=10.83 STEER=0.114 GAS=0.127 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.17 SEGMENT=11 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   40.88s] CAR=2 POS=(54.16,-1.01,300.10) SPEED=11.04 STEER=0.426 GAS=0.000 BRAKE=0.023 TARGET_SPEED=11.00 LINE_ERROR=2.43 SEGMENT=19 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.4 OT_SIDE=0
+[   40.88s] CAR=3 POS=(29.87,-1.01,301.78) SPEED=10.81 STEER=0.170 GAS=0.135 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.44 SEGMENT=26 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   40.88s] CAR=4 POS=(18.64,-1.00,295.65) SPEED=10.81 STEER=0.134 GAS=1.000 BRAKE=0.000 TARGET_SPEED=15.78 LINE_ERROR=0.54 SEGMENT=30 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   40.88s] CAR=5 POS=(15.70,-1.02,292.54) SPEED=10.74 STEER=0.103 GAS=0.166 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.08 SEGMENT=32 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   41.88s] CAR=1 POS=(59.49,-1.00,285.89) SPEED=10.82 STEER=0.140 GAS=0.133 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.17 SEGMENT=14 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   41.88s] CAR=2 POS=(44.15,-1.01,304.25) SPEED=11.03 STEER=0.344 GAS=0.108 BRAKE=0.000 TARGET_SPEED=11.27 LINE_ERROR=1.83 SEGMENT=22 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.8 OT_SIDE=0
+[   41.88s] CAR=3 POS=(20.42,-1.01,296.77) SPEED=10.57 STEER=0.133 GAS=0.241 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.35 SEGMENT=30 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   41.88s] CAR=4 POS=(11.10,-1.00,288.26) SPEED=10.40 STEER=0.095 GAS=1.000 BRAKE=0.000 TARGET_SPEED=19.54 LINE_ERROR=0.50 SEGMENT=33 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   41.88s] CAR=5 POS=(8.59,-1.02,284.77) SPEED=10.41 STEER=0.052 GAS=0.316 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.26 SEGMENT=35 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   42.88s] CAR=1 POS=(54.89,-1.00,295.56) SPEED=10.81 STEER=0.170 GAS=0.136 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.25 SEGMENT=18 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   42.88s] CAR=2 POS=(32.61,-1.01,303.71) SPEED=12.47 STEER=0.294 GAS=0.100 BRAKE=0.000 TARGET_SPEED=12.69 LINE_ERROR=1.52 SEGMENT=25 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.5 OT_SIDE=0
+[   42.88s] CAR=3 POS=(12.62,-1.01,289.68) SPEED=10.56 STEER=0.092 GAS=0.247 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.30 SEGMENT=33 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   42.88s] CAR=4 POS=(4.71,-1.00,280.15) SPEED=10.27 STEER=0.063 GAS=1.000 BRAKE=0.000 TARGET_SPEED=22.83 LINE_ERROR=0.42 SEGMENT=37 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   42.88s] CAR=5 POS=(2.36,-1.02,276.54) SPEED=10.25 STEER=0.063 GAS=0.388 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.15 SEGMENT=38 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   43.88s] CAR=1 POS=(46.16,-1.00,301.60) SPEED=10.70 STEER=0.166 GAS=0.134 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.20 SEGMENT=21 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   43.88s] CAR=2 POS=(20.55,-1.01,298.09) SPEED=14.06 STEER=0.237 GAS=0.487 BRAKE=0.000 TARGET_SPEED=15.14 LINE_ERROR=1.37 SEGMENT=29 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.4 OT_SIDE=0
+[   43.88s] CAR=3 POS=(6.00,-1.01,281.44) SPEED=10.57 STEER=0.029 GAS=0.243 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.21 SEGMENT=36 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   43.88s] CAR=4 POS=(-0.97,-0.99,271.62) SPEED=10.25 STEER=0.099 GAS=1.000 BRAKE=0.000 TARGET_SPEED=18.99 LINE_ERROR=0.24 SEGMENT=40 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   43.88s] CAR=5 POS=(-2.78,-1.02,267.73) SPEED=10.20 STEER=0.081 GAS=0.411 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.02 SEGMENT=41 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   44.88s] CAR=1 POS=(35.53,-1.00,302.54) SPEED=10.82 STEER=0.127 GAS=0.132 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.18 SEGMENT=25 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   44.88s] CAR=2 POS=(9.66,-1.00,287.18) SPEED=17.48 STEER=0.089 GAS=1.000 BRAKE=0.000 TARGET_SPEED=22.68 LINE_ERROR=0.94 SEGMENT=34 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.9 OT_SIDE=0
+[   44.88s] CAR=3 POS=(-0.02,-1.01,272.76) SPEED=10.57 STEER=0.076 GAS=0.245 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=39 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   44.88s] CAR=4 POS=(-5.09,-0.99,262.27) SPEED=10.22 STEER=0.078 GAS=1.000 BRAKE=0.000 TARGET_SPEED=18.52 LINE_ERROR=0.21 SEGMENT=43 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   44.88s] CAR=5 POS=(-6.06,-1.02,258.09) SPEED=10.20 STEER=0.012 GAS=0.410 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.04 SEGMENT=45 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   45.88s] CAR=1 POS=(25.28,-1.01,299.22) SPEED=10.83 STEER=0.096 GAS=0.126 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.09 SEGMENT=28 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   45.88s] CAR=2 POS=(0.55,-1.00,270.92) SPEED=20.29 STEER=-0.046 GAS=0.000 BRAKE=0.780 TARGET_SPEED=18.99 LINE_ERROR=1.43 SEGMENT=40 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.4 OT_SIDE=0
+[   45.88s] CAR=3 POS=(-4.71,-1.01,263.32) SPEED=10.56 STEER=0.110 GAS=0.249 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.19 SEGMENT=43 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   45.88s] CAR=4 POS=(-7.70,-0.99,252.41) SPEED=10.21 STEER=0.023 GAS=1.000 BRAKE=0.000 TARGET_SPEED=30.22 LINE_ERROR=0.18 SEGMENT=47 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   45.88s] CAR=5 POS=(-8.44,-1.02,248.16) SPEED=10.22 STEER=-0.006 GAS=0.402 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.08 SEGMENT=48 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   46.88s] CAR=1 POS=(16.61,-1.00,293.15) SPEED=10.54 STEER=0.073 GAS=0.256 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.08 SEGMENT=31 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   46.88s] CAR=2 POS=(-9.78,-1.00,256.52) SPEED=17.95 STEER=0.447 GAS=0.150 BRAKE=0.000 TARGET_SPEED=24.27 LINE_ERROR=3.17 SEGMENT=46 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-3.2 OT_SIDE=0
+[   46.88s] CAR=3 POS=(-7.63,-1.01,253.17) SPEED=10.57 STEER=0.039 GAS=0.243 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.29 SEGMENT=46 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   46.88s] CAR=4 POS=(-10.02,-0.99,242.47) SPEED=10.21 STEER=0.020 GAS=1.000 BRAKE=0.000 TARGET_SPEED=27.28 LINE_ERROR=0.17 SEGMENT=50 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   46.88s] CAR=5 POS=(-10.87,-1.02,238.24) SPEED=10.21 STEER=0.017 GAS=0.406 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.03 SEGMENT=51 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   47.88s] CAR=1 POS=(9.43,-1.00,285.44) SPEED=10.55 STEER=0.025 GAS=0.254 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.02 SEGMENT=34 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   47.88s] CAR=2 POS=(-11.26,-1.00,240.07) SPEED=16.01 STEER=-0.211 GAS=0.906 BRAKE=0.000 TARGET_SPEED=27.28 LINE_ERROR=0.83 SEGMENT=51 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.8 OT_SIDE=0
+[   47.88s] CAR=3 POS=(-9.49,-1.02,242.84) SPEED=10.38 STEER=-0.126 GAS=0.329 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.27 SEGMENT=50 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.3 OT_SIDE=0
+[   47.88s] CAR=4 POS=(-12.35,-0.99,232.53) SPEED=10.20 STEER=0.020 GAS=1.000 BRAKE=0.000 TARGET_SPEED=24.12 LINE_ERROR=0.17 SEGMENT=53 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   47.88s] CAR=5 POS=(-13.27,-1.02,228.32) SPEED=10.20 STEER=0.019 GAS=0.408 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=54 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   48.88s] CAR=1 POS=(2.98,-1.00,277.10) SPEED=10.55 STEER=0.037 GAS=0.254 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.03 SEGMENT=38 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   48.88s] CAR=2 POS=(-8.09,-1.00,223.75) SPEED=17.36 STEER=-0.749 GAS=0.150 BRAKE=0.000 TARGET_SPEED=21.82 LINE_ERROR=5.98 SEGMENT=55 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=6.0 OT_SIDE=0
+[   48.88s] CAR=3 POS=(-11.39,-1.01,232.54) SPEED=10.63 STEER=-0.061 GAS=0.216 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.76 SEGMENT=53 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.8 OT_SIDE=0
+[   48.88s] CAR=4 POS=(-14.68,-0.99,222.52) SPEED=10.54 STEER=0.024 GAS=1.000 BRAKE=0.000 TARGET_SPEED=20.56 LINE_ERROR=0.17 SEGMENT=56 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   48.88s] CAR=5 POS=(-15.58,-1.02,218.30) SPEED=10.53 STEER=0.055 GAS=0.262 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.08 SEGMENT=58 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   49.88s] CAR=1 POS=(-2.46,-1.00,268.09) SPEED=10.54 STEER=0.073 GAS=0.256 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=41 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   49.88s] CAR=2 POS=(-11.78,-1.00,209.55) SPEED=13.45 STEER=0.148 GAS=0.471 BRAKE=0.000 TARGET_SPEED=14.49 LINE_ERROR=4.95 SEGMENT=61 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=4.9 OT_SIDE=0
+[   49.88s] CAR=3 POS=(-14.45,-1.01,222.34) SPEED=10.65 STEER=0.036 GAS=0.206 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.10 SEGMENT=56 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   49.88s] CAR=4 POS=(-16.61,-0.99,211.91) SPEED=10.92 STEER=0.147 GAS=1.000 BRAKE=0.000 TARGET_SPEED=14.49 LINE_ERROR=0.03 SEGMENT=60 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   49.88s] CAR=5 POS=(-16.47,-1.02,207.64) SPEED=10.84 STEER=0.123 GAS=0.122 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.09 SEGMENT=61 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   50.88s] CAR=1 POS=(-6.06,-1.00,258.19) SPEED=10.55 STEER=0.036 GAS=0.255 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=45 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   50.88s] CAR=2 POS=(-14.39,-1.02,200.34) SPEED=8.55 STEER=0.261 GAS=1.000 BRAKE=0.000 TARGET_SPEED=13.33 LINE_ERROR=0.43 SEGMENT=64 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.4 OT_SIDE=0
+[   50.88s] CAR=3 POS=(-16.61,-1.01,211.93) SPEED=10.63 STEER=0.169 GAS=0.217 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.03 SEGMENT=60 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   50.88s] CAR=4 POS=(-16.29,-1.00,200.96) SPEED=9.48 STEER=0.396 GAS=1.000 BRAKE=0.000 TARGET_SPEED=13.33 LINE_ERROR=1.21 SEGMENT=63 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.2 OT_SIDE=0
+[   50.88s] CAR=5 POS=(-16.11,-1.01,197.71) SPEED=9.30 STEER=0.085 GAS=0.123 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=2.11 SEGMENT=64 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.1 OT_SIDE=0
+[   51.88s] CAR=1 POS=(-8.60,-1.00,247.95) SPEED=10.55 STEER=0.004 GAS=0.254 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.03 SEGMENT=48 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   51.88s] CAR=2 POS=(-11.51,-1.01,191.33) SPEED=11.39 STEER=0.623 GAS=0.000 BRAKE=0.207 TARGET_SPEED=11.04 LINE_ERROR=1.38 SEGMENT=66 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.4 OT_SIDE=0
+[   51.88s] CAR=3 POS=(-15.64,-1.01,201.41) SPEED=10.62 STEER=0.195 GAS=0.219 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.45 SEGMENT=63 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   51.88s] CAR=4 POS=(-14.01,-0.98,192.76) SPEED=8.24 STEER=0.635 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.04 LINE_ERROR=2.46 SEGMENT=66 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.5 OT_SIDE=0
+[   51.88s] CAR=5 POS=(-15.36,-1.02,190.29) SPEED=5.13 STEER=0.607 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.04 LINE_ERROR=5.05 SEGMENT=66 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-5.1 OT_SIDE=0
+[   52.88s] CAR=1 POS=(-10.97,-1.00,237.68) SPEED=10.55 STEER=-0.001 GAS=0.254 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=51 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   52.88s] CAR=2 POS=(-4.40,-1.01,184.21) SPEED=9.84 STEER=0.668 GAS=0.468 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=3.69 SEGMENT=69 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-3.7 OT_SIDE=0
+[   52.88s] CAR=3 POS=(-10.69,-1.01,192.13) SPEED=10.56 STEER=0.280 GAS=0.217 BRAKE=0.000 TARGET_SPEED=11.04 LINE_ERROR=0.24 SEGMENT=66 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   52.88s] CAR=4 POS=(-9.13,-0.99,186.74) SPEED=8.81 STEER=0.514 GAS=0.986 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=3.44 SEGMENT=68 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-3.4 OT_SIDE=0
+[   52.88s] CAR=5 POS=(-11.44,-1.03,185.97) SPEED=7.25 STEER=0.677 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=5.36 SEGMENT=67 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-5.4 OT_SIDE=0
+[   53.88s] CAR=1 POS=(-13.37,-1.00,227.41) SPEED=10.55 STEER=-0.001 GAS=0.254 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=55 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   53.88s] CAR=2 POS=(5.72,-1.01,183.68) SPEED=10.63 STEER=0.606 GAS=0.168 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=2.99 SEGMENT=72 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-3.0 OT_SIDE=0
+[   53.88s] CAR=3 POS=(-2.34,-0.99,187.30) SPEED=9.02 STEER=0.142 GAS=0.893 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.09 SEGMENT=69 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   53.88s] CAR=4 POS=(0.21,-0.98,185.37) SPEED=8.83 STEER=0.111 GAS=0.147 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=1.41 SEGMENT=70 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.4 OT_SIDE=0
+[   53.88s] CAR=5 POS=(-4.65,-1.02,183.68) SPEED=7.07 STEER=-0.056 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=4.28 SEGMENT=69 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-4.3 OT_SIDE=0
+[   54.88s] CAR=1 POS=(-15.70,-1.00,217.12) SPEED=10.54 STEER=0.052 GAS=0.255 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=58 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   54.88s] CAR=2 POS=(13.93,-1.01,189.87) SPEED=10.60 STEER=0.449 GAS=0.182 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=2.71 SEGMENT=75 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.7 OT_SIDE=0
+[   54.88s] CAR=3 POS=(5.31,-1.01,187.12) SPEED=6.73 STEER=0.633 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.44 SEGMENT=72 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.4 OT_SIDE=0
+[   54.88s] CAR=4 POS=(8.22,-0.97,185.59) SPEED=6.98 STEER=0.255 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=1.96 SEGMENT=73 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.0 OT_SIDE=0
+[   54.88s] CAR=5 POS=(-0.81,-1.02,186.89) SPEED=4.05 STEER=-0.749 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.14 SEGMENT=70 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   55.88s] CAR=1 POS=(-16.24,-1.00,206.65) SPEED=10.53 STEER=0.122 GAS=0.260 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.21 SEGMENT=61 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   55.88s] CAR=2 POS=(18.88,-1.00,201.51) SPEED=14.87 STEER=-0.150 GAS=0.150 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=1.21 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.2 OT_SIDE=0
+[   55.88s] CAR=3 POS=(11.78,-1.00,188.27) SPEED=7.56 STEER=0.678 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=2.17 SEGMENT=74 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.2 OT_SIDE=0
+[   55.88s] CAR=4 POS=(14.59,-0.99,187.75) SPEED=6.18 STEER=0.459 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=4.56 SEGMENT=74 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-4.6 OT_SIDE=0
+[   55.88s] CAR=5 POS=(1.14,-1.03,187.33) SPEED=0.80 STEER=0.748 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.69 SEGMENT=71 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.7 OT_SIDE=0
+[   56.88s] CAR=1 POS=(-13.08,-1.00,196.52) SPEED=10.71 STEER=0.156 GAS=0.183 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.18 SEGMENT=65 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   56.88s] CAR=2 POS=(18.67,-1.00,215.98) SPEED=15.08 STEER=-0.750 GAS=0.150 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=6.26 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=6.3 OT_SIDE=0
+[   56.88s] CAR=3 POS=(13.19,-1.01,193.66) SPEED=6.65 STEER=-0.730 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.21 SEGMENT=75 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   56.88s] CAR=4 POS=(17.02,-0.99,193.41) SPEED=6.12 STEER=-0.423 GAS=1.000 BRAKE=0.000 TARGET_SPEED=25.64 LINE_ERROR=3.67 SEGMENT=76 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-3.7 OT_SIDE=0
+[   56.88s] CAR=5 POS=(0.80,-1.02,186.75) SPEED=1.06 STEER=0.750 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.07 SEGMENT=70 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   57.88s] CAR=1 POS=(-5.74,-1.00,189.02) SPEED=10.50 STEER=0.187 GAS=0.227 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.24 SEGMENT=68 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   57.88s] CAR=2 POS=(25.44,-1.00,227.17) SPEED=13.67 STEER=-0.215 GAS=0.168 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=6.05 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=6.1 OT_SIDE=0
+[   57.88s] CAR=3 POS=(9.85,-1.00,201.29) SPEED=8.19 STEER=-0.750 GAS=0.150 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=6.48 SEGMENT=77 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=6.5 OT_SIDE=0
+[   57.88s] CAR=4 POS=(12.86,-0.99,196.89) SPEED=5.94 STEER=-0.430 GAS=1.000 BRAKE=0.000 TARGET_SPEED=25.64 LINE_ERROR=1.68 SEGMENT=76 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.7 OT_SIDE=0
+[   57.88s] CAR=5 POS=(0.22,-1.02,185.12) SPEED=2.39 STEER=0.750 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=1.64 SEGMENT=70 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.6 OT_SIDE=0
+[   58.88s] CAR=1 POS=(3.57,-1.00,186.78) SPEED=10.11 STEER=0.333 GAS=0.400 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.44 SEGMENT=71 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.4 OT_SIDE=0
+[   58.88s] CAR=2 POS=(40.28,-1.00,232.30) SPEED=17.79 STEER=0.746 GAS=0.150 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=4.17 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-4.2 OT_SIDE=0
+[   58.88s] CAR=3 POS=(14.55,-1.00,206.74) SPEED=8.95 STEER=0.056 GAS=0.558 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=5.16 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=5.2 OT_SIDE=0
+[   58.88s] CAR=4 POS=(10.17,-0.98,194.35) SPEED=1.74 STEER=0.750 GAS=0.600 BRAKE=0.000 TARGET_SPEED=18.87 LINE_ERROR=2.76 SEGMENT=75 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=2.8 OT_SIDE=0
+[   58.88s] CAR=5 POS=(0.82,-1.02,181.82) SPEED=3.18 STEER=0.590 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=4.82 SEGMENT=71 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-4.8 OT_SIDE=0
+[   59.88s] CAR=1 POS=(12.12,-1.00,192.05) SPEED=10.63 STEER=0.154 GAS=0.215 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.07 SEGMENT=75 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   59.88s] CAR=2 POS=(53.66,-1.00,244.02) SPEED=18.97 STEER=0.679 GAS=0.622 BRAKE=0.000 TARGET_SPEED=24.99 LINE_ERROR=9.68 SEGMENT=1 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-9.7 OT_SIDE=0
+[   59.88s] CAR=3 POS=(23.67,-1.00,209.97) SPEED=10.18 STEER=0.489 GAS=0.419 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=1.09 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.1 OT_SIDE=0
+[   59.88s] CAR=4 POS=(12.31,-1.00,195.45) SPEED=4.11 STEER=0.032 GAS=0.600 BRAKE=0.000 TARGET_SPEED=25.64 LINE_ERROR=1.44 SEGMENT=76 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.4 OT_SIDE=0
+[   59.88s] CAR=5 POS=(-2.49,-1.02,180.20) SPEED=4.43 STEER=-0.749 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=7.03 SEGMENT=70 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-7.0 OT_SIDE=0
+[   60.88s] CAR=1 POS=(18.27,-1.00,200.34) SPEED=10.48 STEER=0.166 GAS=0.284 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=1.28 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.3 OT_SIDE=0
+[   60.88s] CAR=2 POS=(57.84,-1.02,263.24) SPEED=18.31 STEER=-0.111 GAS=0.000 BRAKE=0.433 TARGET_SPEED=17.58 LINE_ERROR=2.39 SEGMENT=7 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.4 OT_SIDE=0
+[   60.88s] CAR=3 POS=(28.33,-1.01,219.32) SPEED=10.82 STEER=-0.096 GAS=0.131 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.40 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   60.88s] CAR=4 POS=(16.37,-0.96,200.87) SPEED=9.88 STEER=-0.005 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.63 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.6 OT_SIDE=0
+[   60.88s] CAR=5 POS=(-6.83,-1.02,182.31) SPEED=6.01 STEER=-0.750 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=6.30 SEGMENT=69 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-6.3 OT_SIDE=0
+[   61.88s] CAR=1 POS=(23.34,-1.01,209.92) SPEED=10.89 STEER=0.044 GAS=0.099 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.83 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.8 OT_SIDE=0
+[   61.88s] CAR=2 POS=(59.14,-1.01,278.36) SPEED=13.40 STEER=0.059 GAS=0.000 BRAKE=0.098 TARGET_SPEED=13.24 LINE_ERROR=1.00 SEGMENT=12 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.0 OT_SIDE=0
+[   61.88s] CAR=3 POS=(33.14,-1.01,229.00) SPEED=10.83 STEER=-0.051 GAS=0.126 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.33 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.3 OT_SIDE=0
+[   61.88s] CAR=4 POS=(21.64,-0.97,210.83) SPEED=11.93 STEER=-0.138 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=1.10 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.1 OT_SIDE=0
+[   61.88s] CAR=5 POS=(-7.32,-1.02,188.07) SPEED=5.31 STEER=-0.750 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=1.38 SEGMENT=68 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.4 OT_SIDE=0
+[   62.88s] CAR=1 POS=(28.91,-1.00,219.33) SPEED=10.87 STEER=0.119 GAS=0.106 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.89 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.9 OT_SIDE=0
+[   62.88s] CAR=2 POS=(59.22,-1.01,290.97) SPEED=12.04 STEER=0.443 GAS=0.000 BRAKE=0.177 TARGET_SPEED=11.75 LINE_ERROR=1.11 SEGMENT=16 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.1 OT_SIDE=0
+[   62.88s] CAR=3 POS=(38.80,-1.01,238.24) SPEED=10.84 STEER=0.008 GAS=0.124 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.10 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   62.88s] CAR=4 POS=(28.53,-0.99,222.03) SPEED=14.70 STEER=0.043 GAS=0.150 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=0.80 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.8 OT_SIDE=0
+[   62.88s] CAR=5 POS=(-3.80,-1.02,189.01) SPEED=3.68 STEER=0.570 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=1.03 SEGMENT=69 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.0 OT_SIDE=0
+[   63.88s] CAR=1 POS=(35.08,-1.00,228.10) SPEED=10.58 STEER=0.226 GAS=0.241 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=1.80 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.8 OT_SIDE=0
+[   63.88s] CAR=2 POS=(53.21,-1.01,300.42) SPEED=10.95 STEER=0.471 GAS=0.021 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=2.10 SEGMENT=19 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.1 OT_SIDE=0
+[   63.88s] CAR=3 POS=(44.45,-1.01,247.48) SPEED=10.83 STEER=-0.025 GAS=0.124 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   63.88s] CAR=4 POS=(38.59,-0.99,230.86) SPEED=11.89 STEER=0.743 GAS=0.150 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=3.44 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-3.4 OT_SIDE=0
+[   63.88s] CAR=5 POS=(-3.10,-1.02,185.13) SPEED=4.82 STEER=0.750 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=2.39 SEGMENT=69 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.4 OT_SIDE=0
+[   64.88s] CAR=1 POS=(39.11,-1.01,238.09) SPEED=10.84 STEER=-0.068 GAS=0.124 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.23 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   64.88s] CAR=2 POS=(43.28,-1.01,304.69) SPEED=11.14 STEER=0.391 GAS=0.057 BRAKE=0.000 TARGET_SPEED=11.27 LINE_ERROR=2.11 SEGMENT=22 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.1 OT_SIDE=0
+[   64.88s] CAR=3 POS=(50.42,-1.01,256.52) SPEED=10.84 STEER=-0.010 GAS=0.124 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.08 SEGMENT=4 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   64.88s] CAR=4 POS=(48.44,-0.98,234.37) SPEED=9.50 STEER=0.750 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=10.17 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-10.2 OT_SIDE=0
+[   64.88s] CAR=5 POS=(0.35,-1.02,180.51) SPEED=7.26 STEER=0.750 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=6.18 SEGMENT=71 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-6.2 OT_SIDE=0
+[   65.88s] CAR=1 POS=(44.42,-1.01,247.53) SPEED=10.84 STEER=-0.029 GAS=0.120 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   65.88s] CAR=2 POS=(31.67,-1.01,303.67) SPEED=12.56 STEER=0.295 GAS=0.320 BRAKE=0.000 TARGET_SPEED=13.27 LINE_ERROR=1.70 SEGMENT=26 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.7 OT_SIDE=0
+[   65.88s] CAR=3 POS=(56.33,-1.01,265.60) SPEED=10.82 STEER=0.111 GAS=0.129 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.11 SEGMENT=7 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.1 OT_SIDE=0
+[   65.88s] CAR=4 POS=(51.38,-0.98,242.75) SPEED=9.18 STEER=0.114 GAS=1.000 BRAKE=0.000 TARGET_SPEED=39.77 LINE_ERROR=8.48 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-8.5 OT_SIDE=0
+[   65.88s] CAR=5 POS=(7.70,-1.02,180.47) SPEED=8.39 STEER=0.674 GAS=0.886 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=6.59 SEGMENT=72 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-6.6 OT_SIDE=0
+[   66.88s] CAR=1 POS=(50.34,-0.99,256.75) SPEED=10.61 STEER=0.116 GAS=0.034 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.28 SEGMENT=4 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.3 OT_SIDE=0
+[   66.88s] CAR=2 POS=(19.80,-1.01,297.48) SPEED=14.23 STEER=0.217 GAS=0.698 BRAKE=0.000 TARGET_SPEED=15.78 LINE_ERROR=1.29 SEGMENT=30 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.3 OT_SIDE=0
+[   66.88s] CAR=3 POS=(60.14,-1.01,275.67) SPEED=10.79 STEER=0.203 GAS=0.142 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.28 SEGMENT=11 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   66.88s] CAR=4 POS=(49.58,-1.00,253.05) SPEED=10.60 STEER=-0.303 GAS=1.000 BRAKE=0.000 TARGET_SPEED=22.81 LINE_ERROR=1.19 SEGMENT=3 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.2 OT_SIDE=0
+[   66.88s] CAR=5 POS=(13.66,-1.02,186.80) SPEED=9.72 STEER=0.195 GAS=0.086 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=4.55 SEGMENT=74 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-4.5 OT_SIDE=0
+[   67.88s] CAR=1 POS=(56.47,-1.01,261.79) SPEED=5.70 STEER=0.589 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=1.96 SEGMENT=6 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.0 OT_SIDE=0
+[   67.88s] CAR=2 POS=(8.92,-1.00,286.13) SPEED=17.88 STEER=0.065 GAS=0.150 BRAKE=0.000 TARGET_SPEED=22.68 LINE_ERROR=0.86 SEGMENT=34 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.9 OT_SIDE=0
+[   67.88s] CAR=3 POS=(60.03,-1.01,286.39) SPEED=10.79 STEER=0.230 GAS=0.146 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.46 SEGMENT=14 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   67.88s] CAR=4 POS=(53.60,-0.98,261.49) SPEED=7.96 STEER=0.168 GAS=1.000 BRAKE=0.000 TARGET_SPEED=18.99 LINE_ERROR=0.27 SEGMENT=6 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.3 OT_SIDE=0
+[   67.88s] CAR=5 POS=(14.03,-1.02,195.92) SPEED=9.29 STEER=-0.336 GAS=0.818 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.17 SEGMENT=76 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.2 OT_SIDE=0
+[   68.88s] CAR=1 POS=(58.19,-1.00,263.27) SPEED=0.19 STEER=-0.750 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=2.68 SEGMENT=7 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.7 OT_SIDE=0
+[   68.88s] CAR=2 POS=(-0.30,-1.00,269.64) SPEED=20.02 STEER=0.017 GAS=0.000 BRAKE=0.619 TARGET_SPEED=18.99 LINE_ERROR=1.34 SEGMENT=40 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=1.3 OT_SIDE=0
+[   68.88s] CAR=3 POS=(55.36,-1.01,296.00) SPEED=10.79 STEER=0.253 GAS=0.146 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.39 SEGMENT=18 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   68.88s] CAR=4 POS=(58.64,-0.99,268.26) SPEED=10.79 STEER=0.243 GAS=1.000 BRAKE=0.000 TARGET_SPEED=15.92 LINE_ERROR=0.81 SEGMENT=8 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.8 OT_SIDE=0
+[   68.88s] CAR=5 POS=(18.74,-1.02,204.47) SPEED=10.14 STEER=0.000 GAS=0.439 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.40 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.4 OT_SIDE=0
+[   69.88s] CAR=1 POS=(56.57,-1.00,262.15) SPEED=3.62 STEER=-0.750 GAS=0.600 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=1.84 SEGMENT=7 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-1.8 OT_SIDE=0
+[   69.88s] CAR=2 POS=(-10.07,-1.00,254.97) SPEED=18.24 STEER=0.380 GAS=0.150 BRAKE=0.000 TARGET_SPEED=30.56 LINE_ERROR=3.08 SEGMENT=46 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-3.1 OT_SIDE=0
+[   69.88s] CAR=3 POS=(46.76,-1.01,302.20) SPEED=10.67 STEER=0.271 GAS=0.150 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.55 SEGMENT=21 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.6 OT_SIDE=0
+[   69.88s] CAR=4 POS=(59.39,-1.00,279.53) SPEED=12.40 STEER=-0.080 GAS=0.375 BRAKE=0.000 TARGET_SPEED=13.24 LINE_ERROR=0.80 SEGMENT=12 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.8 OT_SIDE=0
+[   69.88s] CAR=5 POS=(24.25,-1.02,213.10) SPEED=10.30 STEER=0.017 GAS=0.365 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   70.88s] CAR=1 POS=(51.17,-0.99,262.97) SPEED=7.82 STEER=-0.750 GAS=1.000 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=3.11 SEGMENT=6 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=3.1 OT_SIDE=0
+[   70.88s] CAR=2 POS=(-9.84,-1.01,238.42) SPEED=17.19 STEER=-0.512 GAS=1.000 BRAKE=0.000 TARGET_SPEED=26.27 LINE_ERROR=0.93 SEGMENT=51 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.9 OT_SIDE=0
+[   70.88s] CAR=3 POS=(36.16,-1.01,303.30) SPEED=10.80 STEER=0.203 GAS=0.140 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.51 SEGMENT=24 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   70.88s] CAR=4 POS=(57.90,-1.00,291.56) SPEED=11.64 STEER=0.289 GAS=0.046 BRAKE=0.000 TARGET_SPEED=11.75 LINE_ERROR=0.19 SEGMENT=16 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.2 OT_SIDE=0
+[   70.88s] CAR=5 POS=(29.47,-1.02,222.01) SPEED=10.36 STEER=0.000 GAS=0.337 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.02 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.0 OT_SIDE=0
+[   71.88s] CAR=1 POS=(48.77,-0.99,270.67) SPEED=9.53 STEER=-0.750 GAS=0.712 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=9.15 SEGMENT=8 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=9.1 OT_SIDE=0
+[   71.88s] CAR=2 POS=(-10.07,-1.00,221.36) SPEED=15.86 STEER=-0.301 GAS=0.888 BRAKE=0.000 TARGET_SPEED=20.56 LINE_ERROR=4.59 SEGMENT=56 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=4.6 OT_SIDE=0
+[   71.88s] CAR=3 POS=(25.89,-1.01,300.12) SPEED=10.81 STEER=0.159 GAS=0.135 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.41 SEGMENT=28 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   71.88s] CAR=4 POS=(51.16,-1.00,300.00) SPEED=10.53 STEER=0.246 GAS=0.210 BRAKE=0.000 TARGET_SPEED=11.00 LINE_ERROR=0.52 SEGMENT=19 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.5 OT_SIDE=0
+[   71.88s] CAR=5 POS=(34.68,-1.02,230.98) SPEED=10.38 STEER=-0.001 GAS=0.330 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.00 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   72.88s] CAR=1 POS=(54.81,-1.01,279.17) SPEED=10.81 STEER=0.187 GAS=0.134 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=5.36 SEGMENT=12 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=5.4 OT_SIDE=0
+[   72.88s] CAR=2 POS=(-18.71,-1.00,208.16) SPEED=13.59 STEER=0.739 GAS=0.000 BRAKE=0.056 TARGET_SPEED=13.50 LINE_ERROR=2.08 SEGMENT=61 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-2.1 OT_SIDE=0
+[   72.88s] CAR=3 POS=(17.19,-1.01,294.21) SPEED=10.38 STEER=0.121 GAS=0.327 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.34 SEGMENT=31 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   72.88s] CAR=4 POS=(41.36,-1.00,303.20) SPEED=10.46 STEER=0.194 GAS=0.557 BRAKE=0.000 TARGET_SPEED=11.69 LINE_ERROR=0.35 SEGMENT=23 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   72.88s] CAR=5 POS=(39.91,-1.02,239.95) SPEED=10.38 STEER=-0.001 GAS=0.328 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.01 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.0 OT_SIDE=0
+[   73.88s] CAR=1 POS=(58.65,-1.00,286.13) SPEED=10.63 STEER=0.386 GAS=0.216 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.94 SEGMENT=14 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=0.9 OT_SIDE=0
+[   73.88s] CAR=2 POS=(-18.78,-1.00,198.59) SPEED=12.82 STEER=0.560 GAS=0.033 BRAKE=0.000 TARGET_SPEED=12.89 LINE_ERROR=4.30 SEGMENT=64 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-4.3 OT_SIDE=0
+[   73.88s] CAR=3 POS=(11.67,-1.01,288.59) SPEED=10.39 STEER=0.071 GAS=0.326 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.29 SEGMENT=33 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.3 OT_SIDE=0
+[   73.88s] CAR=4 POS=(33.18,-1.00,302.66) SPEED=11.40 STEER=0.176 GAS=0.583 BRAKE=0.000 TARGET_SPEED=12.69 LINE_ERROR=0.38 SEGMENT=25 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.4 OT_SIDE=0
+[   73.88s] CAR=5 POS=(43.95,-1.02,246.73) SPEED=10.38 STEER=-0.027 GAS=0.329 BRAKE=0.000 TARGET_SPEED=11.11 LINE_ERROR=0.06 SEGMENT=78 PACE=0.00 BOUNDS=[-1.5,1.5] OFF=-0.1 OT_SIDE=0
+[   74.16s] SHUTDOWN: RoutePilot released
