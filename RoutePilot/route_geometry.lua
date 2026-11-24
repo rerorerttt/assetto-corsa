@@ -105,12 +105,37 @@ function Geometry.sample(route, distance)
   local span=math.max(1e-8,b.s-a.s)
   local t=clamp((s-a.s)/span,0,1)
   local tx,tz=normalize(a.tx+(b.tx-a.tx)*t,a.tz+(b.tz-a.tz)*t)
+  local seg,segT
+  if a.seg==b.seg then
+    seg,segT=a.seg,a.t+(b.t-a.t)*t
+  elseif t<0.5 then
+    seg,segT=a.seg,a.t
+  else
+    seg,segT=b.seg,b.t
+  end
   return {
     x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t,z=a.z+(b.z-a.z)*t,
     tx=tx,tz=tz,k=a.k+(b.k-a.k)*t,
-    s=s,seg=t<0.5 and a.seg or b.seg,
-    t=t<0.5 and a.t or b.t
+    s=s,seg=seg,t=segT
   }
+end
+function Geometry.distanceAt(route, segment, parameter)
+  if not route or not segment then return nil end
+  local samples=route.samples
+  local u=clamp(parameter or 0,0,1)
+  local before,after
+  for i=1,#samples do
+    local sample=samples[i]
+    if sample.seg==segment then
+      if sample.t<=u then before=sample end
+      if sample.t>=u then after=sample; break end
+    end
+  end
+  if not before then return after and after.s or nil end
+  if not after then return before.s end
+  local span=after.t-before.t
+  local t=span>1e-8 and clamp((u-before.t)/span,0,1) or 0
+  return before.s+(after.s-before.s)*t
 end
 function Geometry.project(route, position, hintS, heading, speed, dt, locked)
   if not route then return nil end
@@ -147,9 +172,16 @@ function Geometry.project(route, position, hintS, heading, speed, dt, locked)
     end
     if score<bestScore then
       bestScore=score
+      local seg,segT
+      if a.seg==b.seg then
+        seg,segT=a.seg,a.t+(b.t-a.t)*t
+      elseif t<0.5 then
+        seg,segT=a.seg,a.t
+      else
+        seg,segT=b.seg,b.t
+      end
       best={s=s,distance=math.sqrt(dSq),lateral=dx*(-tz)+dz*tx,
-        seg=t<0.5 and a.seg or b.seg,t=t<0.5 and a.t or b.t,
-        tx=tx,tz=tz}
+        seg=seg,t=segT,tx=tx,tz=tz}
     end
   end
   local function lowerBound(value)
