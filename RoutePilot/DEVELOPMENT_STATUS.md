@@ -92,3 +92,12 @@ Do not merge PR #4 until these runtime checks pass.
 - The exception occurs during steering setup before normal control can run. The main loop calls releaseCar() after each exception, clears the per-car state, and initializes the same AI again on the next update. This explains the repeated CAR_INIT messages and cars remaining stationary; it is not evidence of a traffic deadlock.
 - Driver.setup() now normalizes the configuration and supplies defaults for MAX_LATERAL_ACCEL, BRAKE_ACCEL, VEHICLE_HALF_WIDTH, and BOUNDARY_CLEARANCE. The driver therefore no longer depends on the caller having the newest configuration table.
 - The fix is source-level only. Verify in the next runtime trace that DRIVER_ERROR is absent and cars begin producing normal steering/throttle telemetry before evaluating overtaking behavior.
+
+
+## Isolated player-car line test (2026-11-24)
+
+- Replaced the multi-AI launch action with an isolated player-car autopilot test. Ctrl+8 toggles RoutePilot control of car index 0 using the documented CSP ac.ControlButton binding; the UI button provides the same action.
+- The player car is assigned the recorded LEFT lane once. The test does not spawn, teleport, steer, or otherwise take control of AI opponents.
+- Driver single-car test mode bypasses traffic scanning, overtaking, and lane changes. The car follows the saved route with the existing speed-adaptive lookahead and local corner braking; the existing recorded-corridor preview check remains active, but the lane-specific half-road clamp is disabled so the distant route target is not rejected solely for belonging to the opposite side of the local lane classification.
+- The control override is applied to player index 0 with ac.overrideCarControls. This is a CSP input override; it does not change Assetto Corsa's internal car.isAIControlled flag. No unsupported API is claimed to convert the player entity into an engine AI.
+- Runtime validation is pending. Confirm Ctrl+8 acquisition/release, steering/throttle, lane selection, and fresh telemetry in-game.
