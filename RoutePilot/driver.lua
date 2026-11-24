@@ -321,6 +321,7 @@ local function updateLaneChange(carIndex, car, p, speed, tx, tz, dt)
     p.laneChangeProgress = 1.0
     p.laneChangeAborting = false
   elseif p.laneChangeProgress >= 1.0 then
+    if p.laneRole=="SINGLE" then p.laneRole=laneRoleForOffset(baseOffset,true) end
     local canonical = laneCenterForRole(carIndex, p.segIdx, p.laneRole)
     p.laneOffset, p.laneStartOffset, p.laneTargetOffset = canonical, canonical, canonical
   end
@@ -442,6 +443,7 @@ local function calculateSteering(carIndex, car, p, speed, fx, fz, dt)
     p.laneStartOffset = baseOffset
     p.laneRole = "SINGLE"
   elseif p.laneChangeProgress >= 1.0 then
+    if p.laneRole=="SINGLE" then p.laneRole=laneRoleForOffset(baseOffset,true) end
     local canonical = laneCenterForRole(carIndex, seg, p.laneRole)
     p.laneOffset, p.laneTargetOffset, p.laneStartOffset =
       canonical, canonical, canonical
