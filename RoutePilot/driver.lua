@@ -417,9 +417,9 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
         if progress ~= nil then
           longitudinal=routeGap(ownProgress,progress)
           actualLateral=lateral
-        else
-          -- A car without a valid spline projection (especially the player)
-          -- still occupies physical space and must block a lane change.
+        elseif i==0 then
+          -- The player may be outside the route-projection gate. Use physical
+          -- position only for car 0; failed AI projections remain fail-closed.
           longitudinal,actualLateral=relativeToRoute(other.position,ownSample)
         end
         if longitudinal~=nil and actualLateral~=nil then
@@ -481,7 +481,9 @@ local function carAheadInLane(carIndex, car, laneOffset)
         if progress~=nil then
           gap=routeGap(ownProgress,progress)
           actualLateral=lateral
-        else
+        elseif i==0 then
+          -- Include the human car as a leader even when its spline projection
+          -- is invalid; the route-tangent spatial test is local and bounded.
           gap,actualLateral=relativeToRoute(other.position,ownSample)
         end
         if gap and actualLateral and gap>0.5 and gap<90 and
@@ -554,8 +556,13 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
         if targetSeg then targetState.segIdx = targetSeg end
       end
       local currentProgress = ownProgress or routeProjection(car, p.segIdx, false, p.routeProgress, speed, dt)
-      local passedDistance = (currentProgress and targetProgress)
-        and routeGap(targetProgress, currentProgress) or -math.huge
+      local passedDistance=(currentProgress and targetProgress)
+        and routeGap(targetProgress,currentProgress) or -math.huge
+      if passedDistance==-math.huge and p.passTargetIndex==0 then
+        local ownSample=Geometry.sample(state.routeGeometry,currentProgress or ownProgress)
+        local playerLongitudinal=relativeToRoute(target.position,ownSample)
+        if playerLongitudinal~=nil then passedDistance=-playerLongitudinal end
+      end
       local ownLength = (car.aabbSize and car.aabbSize.z) or 4.5
       local otherLength = (target.aabbSize and target.aabbSize.z) or 4.5
       passedClearance = passedDistance >= ownLength + otherLength
