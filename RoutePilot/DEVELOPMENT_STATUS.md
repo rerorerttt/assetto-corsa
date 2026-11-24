@@ -64,3 +64,13 @@ Do not merge PR #4 until these runtime checks pass.
 - UI controls start/stop RoutePilot driving during the current session. Stopping line recording makes the in-memory route immediately usable; saving remains optional.
 - Car index 0 is driven by the same controller when CSP reports isAIControlled=true. The player car is not repositioned or sent through AI recovery teleports.
 - Static source inspection only. Assetto Corsa/CSP runtime testing has not been performed; verify speed classification and Ctrl+8 autopilot detection in-session.
+
+
+## Regression diagnosis and corrective changes (2026-11-24)
+
+- The live trace confirmed every car was forced to SINGLE with zero lane offset. The new corridor formula placed the two candidate centres exactly at the 2.35 m threshold; floating-point rounding made the strict comparison fail. The map now uses the established symmetric centres (up to ±1.75 m) and a tolerance when deciding whether two lanes fit.
+- The trace also showed route-projection mismatches: for example, car 2 was reported on segment 158 while its logged world position was closest to segment 224 in the committed route file; cars 3–5 showed the same opposite-side projection pattern. Spawn now carries the exact source segment through the placement operation and seeds the driver's first projection from that segment. Unspawned cars, including the Ctrl+8 player, use an explicit global nearest-segment search once at initialization.
+- The 6–18 m steering lookahead introduced in the previous change has been reverted to the established speed-adaptive 20–110 m lookahead to remove the short-horizon steering oscillation.
+- The speed map now reserves 70 km/h for detected hairpins only. Ordinary bends retain the 160 km/h target; short straights target 160 km/h and straights of at least 250 m target 320 km/h. Traffic and boundary recovery can still lower the target when necessary.
+- Removed the manual “Рассчитать участки” control. Route-map calculation remains automatic after line/bounds recording or line loading. Removed the “Остановить ИИ” toggle; the one-way “Запустить ИИ” action is shown only when AI control is disabled.
+- These are source-level corrections based on the uploaded trace. Assetto Corsa runtime validation is still required.
