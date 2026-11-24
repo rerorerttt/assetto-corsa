@@ -591,7 +591,9 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
            gap<math.max(110.0,math.max(0,safeNumber(car.speedMs))*3.0+30.0) and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or gap<bestGap) then
-          bestGap=gap;bestSpeed=math.max(0,safeNumber(other.speedMs))
+          bestGap=gap
+          local measuredOtherSpeed=math.max(0,safeNumber(other.speedMs))
+          bestSpeed=directionDot < -0.25 and -measuredOtherSpeed or measuredOtherSpeed
           bestIndex=i;bestLateral=actualLateral
         end
       end
@@ -624,8 +626,15 @@ end
 local function safeFollowingSpeed(gap,leaderSpeed,brakeAccel)
   local available=math.max(0,gap-math.max(0,safeNumber(state.followGap,8)))
   local decel=clamp(safeNumber(brakeAccel,CFG.BRAKE_ACCEL),2.5,22.0)
-  return math.sqrt(math.max(0,leaderSpeed*leaderSpeed+
-    2*decel*available))
+  local leader= safeNumber(leaderSpeed)
+  if leader<0 then
+    -- Negative leader speed marks an oncoming vehicle. Its velocity adds to
+    -- closing speed, so compute the own speed that can stop before impact.
+    local opposingSpeed=-leader
+    return math.max(0,math.sqrt(opposingSpeed*opposingSpeed+
+      2*decel*available)-opposingSpeed)
+  end
+  return math.sqrt(math.max(0,leader*leader+2*decel*available))
 end
 
 local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
@@ -790,7 +799,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
 
-  local leaderPace=leaderSpeed or 0
+  local leaderPace=math.max(0,leaderSpeed or 0)
   local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
   -- Predict one second of available acceleration rather than treating an
   -- unbounded cruise target as an instantaneous speed advantage.
