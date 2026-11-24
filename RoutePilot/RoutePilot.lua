@@ -254,7 +254,7 @@ local function getVertexCurvature(index)
   if angle<0.02 then return 0 end
   return angle/math.max(0.1,(l1+l2)*0.5)
 end
-local function findNearestSeg(pos,hintSeg)
+local function findNearestSeg(pos,hintSeg,allowGlobal)
   local nodes=state.nodes; local segs=segmentCount()
   if segs<1 then return 1,0,0 end
   local px,pz=pos.x,pos.z
@@ -285,7 +285,12 @@ local function findNearestSeg(pos,hintSeg)
     end
     if idx then check(idx) end
   end
-  if bestDist>15*15 then for i=1,segs do check(i) end end
+  -- Global reacquisition is allowed only when a driver has no route lock.
+  -- Once locked, stay in the local progress window to avoid jumping to a
+  -- geometrically close but topologically unrelated branch at crossings.
+  if allowGlobal ~= false and bestDist>15*15 then
+    for i=1,segs do check(i) end
+  end
   return bestSeg,bestT,math.sqrt(bestDist)
 end
 local function lateralOf(pos,seg)
