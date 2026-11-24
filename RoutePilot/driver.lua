@@ -213,7 +213,7 @@ local function planLocalSpeed(p,speed)
         2*CFG.BRAKE_ACCEL*math.max(0,distance-3.0))
       if brakingSpeed<target then target=brakingSpeed end
     end
-    distance=distance+4.0
+    distance=distance+3.0
   end
   return target
 end
@@ -229,7 +229,6 @@ local function scanTraffic(carIndex, car, p, speed, tx, tz)
         local dx = other.position.x - car.position.x
         local dz = other.position.z - car.position.z
         local longitudinal = dx * tx + dz * tz
-        local otherP = state.p[i]
         local actualOffset = H.lateralOf(other.position, p.segIdx)
         local sameLane = math.abs(actualOffset - p.laneOffset) <= LANE_HALF_WIDTH
         -- Physical position determines lane occupancy; target offsets alone do not.
