@@ -78,7 +78,7 @@ local function makeSpeedProfile(plan, lateralAccel, brakeAccel, accel)
   end
   for i=1,n do
     local k=speedCurvature(i)
-    speeds[i]=k>0.00035 and math.min(110.0,math.sqrt(lateralAccel/k)) or 110.0
+    speeds[i]=k>0.00035 and math.min(110.0,math.sqrt(lateralAccel/k)*0.95) or 110.0
   end
   if plan.loop then
     -- Sweep two complete laps in both directions so a slow corner constrains
