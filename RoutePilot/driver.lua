@@ -138,9 +138,22 @@ local function newPersonality(carIndex)
     end
     state.spawnHints[carIndex]=nil
   end
+  -- Start the field split across both usable halves of the recorded road.
+  -- This prevents every AI from queueing on the same centreline and then
+  -- requesting simultaneous passes into the same reserved corridor.
+  local laneLeft,laneRight=H.boundsAt(p.segIdx or 1)
+  local laneMid=(laneLeft+laneRight)*0.5
+  local laneOffset=laneMid
+  if laneMid-laneLeft>=2.7 and laneRight-laneMid>=2.7 then
+    laneOffset=(carIndex%2==1) and
+      ((laneMid+laneRight)*0.5) or ((laneLeft+laneMid)*0.5)
+  end
+  p.baseLaneOffset=laneOffset
+  p.laneOffset=laneOffset
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT cruise=PHYSICS_LIMITED",
-    carIndex)
+  H.log("CAR_INIT id=%d lane=%s offset=%.2f cruise=PHYSICS_LIMITED",
+    carIndex,laneOffset>laneMid and "LEFT" or
+      (laneOffset<laneMid and "RIGHT" or "CENTRE"),laneOffset)
 end
 
 local function readVehicleDynamics(car, p, dt)
@@ -349,7 +362,10 @@ local function evaluateOffsetPath(route, progress, startOffset, targetOffset,
     local bl,br=routeBoundsAtSample(sample)
     local clearance=math.min(offset-bl-envelope,br-envelope-offset)
     minClearance=math.min(minClearance,clearance)
-    if clearance < -0.015 then return nil,"boundary",minClearance,maxCurvature,maxEnvelope end
+    if clearance < -0.015 then
+      return nil,"boundary",minClearance,maxCurvature,maxEnvelope,
+        distance,offset,bl,br,envelope
+    end
     local baseCurvature=math.abs(safeNumber(sample.k))
     -- A lateral offset changes the radius of the road-relative path. Account
     -- for the normal-offset scale so an inside-line path is not assigned the
@@ -408,7 +424,14 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local velocity=car.velocity
   local lateralVelocity=safeNumber(velocity.x)*(-current.tz)+
     safeNumber(velocity.z)*current.tx
-  local initialSlope=clamp(lateralVelocity/math.max(5.0,speed),-0.45,0.45)
+  -- Do not extrapolate lateral velocity into a large synthetic path slope
+  -- while launching or recovering at low speed. The previous 0.45 clamp,
+  -- multiplied by an 18–48 m quintic transition, could create multi-metre
+  -- lateral overshoot and reject every otherwise-safe candidate.
+  local initialSlope=0
+  if speed>8.0 then
+    initialSlope=clamp(lateralVelocity/math.max(8.0,speed),-0.12,0.12)
+  end
   local bl,br=routeBoundsAtSample(current)
   local desired=p.overtakeSide==0 and
     safeNumber(p.baseLaneOffset,(bl+br)*0.5) or
@@ -472,7 +495,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     local horizonClearance,horizonCurvature,horizonEnvelope=-math.huge,math.huge,0
     for i=1,#candidates do
       local candidate=candidates[i]
-      local samples,reason,clearance,maxCurvature,envelope=evaluateOffsetPath(
+      local samples,reason,clearance,maxCurvature,envelope,failDistance,
+        failOffset,failLeft,failRight,failEnvelope=evaluateOffsetPath(
         route,projection.s,startOffset,candidate,transitionLength,horizon,
         halfWidth,halfLength,fx,fz,initialSlope)
       if samples then
@@ -484,7 +508,12 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
           horizonClearance,horizonCurvature,horizonEnvelope=
             clearance,maxCurvature,envelope
         end
-      elseif reason=="boundary" then rejectBoundary=rejectBoundary+1
+      elseif reason=="boundary" then
+        rejectBoundary=rejectBoundary+1
+        if not p.plannerFirstBoundaryFailure then
+          p.plannerFirstBoundaryFailure={distance=failDistance,offset=failOffset,
+            left=failLeft,right=failRight,envelope=failEnvelope,clearance=clearance}
+        end
       else rejectOther=rejectOther+1 end
     end
     if horizonBest~=nil then
@@ -496,10 +525,35 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     end
   end
 
+  -- Guaranteed recovery attempts before declaring the car blocked. First
+  -- hold the present lateral corridor with zero synthetic lateral velocity;
+  -- if that corridor narrows ahead, make one smooth move toward the route
+  -- centre. Both fallbacks retain the same full-footprint boundary test.
+  if best==nil then
+    local samples,reason,clearance,maxCurvature,envelope=
+      evaluateOffsetPath(route,projection.s,startOffset,startOffset,1.0,12.0,
+        halfWidth,halfLength,fx,fz,0)
+    if samples then
+      best=startOffset;bestSamples=samples;bestClearance=clearance
+      bestCurvature=maxCurvature;bestEnvelope=envelope;bestHorizon=12.0
+      p.plannerFallback="hold_current_offset"
+    else
+      samples,reason,clearance,maxCurvature,envelope=
+        evaluateOffsetPath(route,projection.s,startOffset,0.0,12.0,12.0,
+          halfWidth,halfLength,fx,fz,0)
+      if samples then
+        best=0.0;bestSamples=samples;bestClearance=clearance
+        bestCurvature=maxCurvature;bestEnvelope=envelope;bestHorizon=12.0
+        p.plannerFallback="recover_to_route_centre"
+      end
+    end
+  end
+
   p.plannerRejectBoundary=rejectBoundary
   p.plannerRejectOther=rejectOther
   p.plannerHorizon=bestHorizon
   p.plannerFailureReason=nil
+  p.plannerFirstBoundaryFailure=nil
   if best==nil then
     p.boundaryInfeasible=true
     p.boundaryCandidateMin=minOffset; p.boundaryCandidateMax=maxOffset
@@ -510,15 +564,20 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.plannerFailureReason="no_boundary_safe_local_trajectory"
     p.gas=0; p.brake=1
     if not p.plannerFailureLogged then
-      H.log("PLAN_BLOCK id=%d reason=%s speed=%.2f bounds=[%.2f,%.2f] reject=%d/%d",
+      local failure=p.plannerFirstBoundaryFailure or {}
+      H.log("PLAN_BLOCK id=%d reason=%s speed=%.2f bounds=[%.2f,%.2f] reject=%d/%d first=d%.1f off=%.2f road=[%.2f,%.2f] env=%.2f clear=%.2f",
         p.carIndex or -1,p.plannerFailureReason,speed,minOffset,maxOffset,
-        rejectBoundary,rejectOther)
+        rejectBoundary,rejectOther,safeNumber(failure.distance,-1),
+        safeNumber(failure.offset),safeNumber(failure.left),
+        safeNumber(failure.right),safeNumber(failure.envelope),
+        safeNumber(failure.clearance))
       p.plannerFailureLogged=true
     end
     return 0
   end
 
   p.plannerFailureLogged=false
+  p.plannerFailureReason=nil
   p.plannedPathSamples=bestSamples
   p.plannedTargetOffset=best
   p.plannerHorizon=bestHorizon
