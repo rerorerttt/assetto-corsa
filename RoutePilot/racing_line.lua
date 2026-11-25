@@ -61,7 +61,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local size = car and car.aabbSize
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
   local margin = halfWidth + 0.42
-  local step = math.max(6.0, spacing or 7.5)
+  -- Dense arc-length stations are essential for linked left-right bends: a 7.5 m\n  -- grid can skip the transition and make two corners look like unrelated turns.\n  local step = math.max(4.5, spacing or 4.5)
   local length = math.min(135.0, math.max(35.0, horizon or 95.0))
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
@@ -161,7 +161,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local cost=(off1-off0)^2*0.02+
         0.00008/math.max(0.12,clearance+0.12)+
         0
-      firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
+      local maxStep=math.max(1.0,step*0.48)\n      if math.abs(off1-off0)<=maxStep then\n        firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil,k=0}\n      end
     end
     local layer=firstLayer
     for station=2,n-1 do
