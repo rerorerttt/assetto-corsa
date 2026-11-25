@@ -337,7 +337,8 @@ function Driver.rebuildTrajectory()
   local key=trajectorySizeKey(car)
   local plan,reason=TrajectoryOptimizer.build(state.routeGeometry,Geometry.sample,
     state.nodes,state.loopRoute,H.boundsAt,car,{
-      spacing=4.5,lateralAccel=10.0,brakeAccel=8.0,accel=4.0
+      spacing=math.max(4.5,state.routeGeometry.total/1800),
+      lateralAccel=10.0,brakeAccel=8.0,accel=4.0
     })
   state.globalTrajectory=plan
   state.globalTrajectoryBuildFailed=plan and nil or reason
