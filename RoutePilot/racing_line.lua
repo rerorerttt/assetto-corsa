@@ -56,9 +56,26 @@ local function footprintClearance(sampleA, sampleB, offsetA, offsetB,
     return math.min(offset - (bounds[1] + envelope),
       (bounds[2] - envelope) - offset)
   end
-  return math.min(
-    atSample(sampleA, offsetA, boundsA),
-    atSample(sampleB, offsetB, boundsB))
+  local function sweptAt(t)
+    local tx,tz=normalize(
+      sampleA.tx+(sampleB.tx-sampleA.tx)*t,
+      sampleA.tz+(sampleB.tz-sampleA.tz)*t)
+    local sample={
+      x=sampleA.x+(sampleB.x-sampleA.x)*t,
+      z=sampleA.z+(sampleB.z-sampleA.z)*t,
+      tx=tx,tz=tz
+    }
+    local bounds={
+      boundsA[1]+(boundsB[1]-boundsA[1])*t,
+      boundsA[2]+(boundsB[2]-boundsA[2])*t
+    }
+    local offset=offsetA+(offsetB-offsetA)*t
+    return atSample(sample,offset,bounds)
+  end
+  -- Check the complete swept centre path, not only its endpoints. Quarter
+  -- samples catch a boundary pinch between route stations for a long body.
+  return math.min(sweptAt(0),sweptAt(0.25),sweptAt(0.5),
+    sweptAt(0.75),sweptAt(1))
 end
 
 local function trafficCost(offset, forbidden)
@@ -239,7 +256,15 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
             -- lap-time minimization: it prefers long straight chords through
             -- small boundary wiggles and opens consecutive bends as one line.
             local k2 = k * k
-            local cost = node.cost + k2 * 300.0 + k2 * k2 * 110000.0 +
+            -- With lateral acceleration limited to 12 m/s², ds*sqrt(|k|/a)
+            -- is proportional to the time spent on this segment. This makes
+            -- the optimizer prefer the fastest multi-bend chord, not merely
+            -- the path with the smallest pointwise offset error.
+            local segmentLength=math.sqrt(
+              (pointC.x-pointB.x)^2+(pointC.z-pointB.z)^2)
+            local timeCost=segmentLength*math.sqrt(math.abs(k)/12.0)*30.0
+            local cost = node.cost + timeCost +
+              k2 * 300.0 + k2 * k2 * 110000.0 +
               second * second * 0.65 + slope * slope * 0.12 +
               continuity + edgeCost(clearance) +
               trafficCost(offC, forbiddenAt[station + 1])
@@ -308,7 +333,7 @@ end
 function RacingLine.sample(plan, distance)
   if not plan or not plan.points or plan.count < 2 then return nil end
   local usableDistance = plan.blockedDistance and
-    math.max(0, plan.blockedDistance - 10.0) or distance
+    math.min(distance, math.max(0, plan.blockedDistance - 10.0)) or distance
   local position = clamp(usableDistance / plan.spacing, 0, plan.count - 1)
   local index = math.floor(position) + 1
   local nextIndex = math.min(plan.count, index + 1)
