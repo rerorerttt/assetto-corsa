@@ -14,6 +14,7 @@
 
 local Driver = {}
 local Geometry = require("route_geometry")
+local Racing = require("racing_controller")
 local CFG, state, H
 
 local BOUND_MARGIN = 0.4
@@ -50,6 +51,8 @@ function Driver.setup(cfg, st, helpers)
   CFG, state, H = cfg, st, helpers
   state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
+  state.racingLine = state.routeGeometry and
+    Racing.build(state.routeGeometry,state.nodes,H.boundsAt,state.loopRoute) or nil
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
@@ -60,6 +63,8 @@ local function refreshRouteMetrics()
      state.routeMetricLoop == state.loopRoute then return end
   state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
+  state.racingLine = state.routeGeometry and
+    Racing.build(state.routeGeometry,state.nodes,H.boundsAt,state.loopRoute) or nil
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
@@ -220,7 +225,9 @@ local function planTargetSpeed(p,speed)
   while distance<=horizon do
     local sample=Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
-    local curvature=math.abs(sample.k or 0)
+    local passOffset=p.overtakeSide~=0 and safeNumber(p.passLat) or nil
+    local curvature=math.abs(Racing.curvatureAt(state.racingLine,
+      p.routeProgress+distance,passOffset))
     if curvature>CFG.CURVE_MIN then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
       local curveSpeed=math.sqrt(lateralLimit/curvature)
@@ -330,19 +337,34 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
   if not current or not future or not curvePreview then return 0 end
 
-  local safeMin,safeMax,bodyEnvelope,boundaryDeficit=safeCorridorForPreview(
-    route,projection.s,ahead,car,fx,fz)
-  local bl,br=H.boundsAt(p.segIdx)
-  local mid,width=(bl+br)*0.5,br-bl
-  local leftCenter=width>=5.4 and ((mid+br)*0.5) or mid
-  if p.overtakeSide==0 then
-    p.baseLaneOffset=p.baseLaneOffset or leftCenter
-    p.laneOffset=p.baseLaneOffset
-  else
-    p.laneOffset=p.passLat
+  -- The racing line is a varying path, not one constant lateral offset.
+  -- Clamp only at the target station; intersecting the entire preview corridor
+  -- here would collapse the racing line toward the center in every bend.
+  local futureBl,futureBr=routeBoundsAtSample(future)
+  local futureAngle=signedAngle(fx,fz,future.tx,future.tz)
+  local halfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+  local halfLength=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
+  local bodyEnvelope=halfWidth*math.abs(math.cos(futureAngle))+
+    halfLength*math.abs(math.sin(futureAngle))+BOUND_MARGIN
+  local safeMin,safeMax=futureBl+bodyEnvelope,futureBr-bodyEnvelope
+  local boundaryDeficit=math.max(0,safeMin-safeMax)
+  if boundaryDeficit>0 then
+    local center=(safeMin+safeMax)*0.5
+    safeMin,safeMax=center,center
   end
-  local laneTarget=clamp(p.laneOffset or leftCenter,safeMin,safeMax)
-  local laneChangeRate=p.emergencyPass and 12.0 or 1.8
+  local raceOffset=Racing.offsetAt(state.racingLine,projection.s+ahead)
+  local desiredOffset
+  if p.overtakeSide==0 then
+    desiredOffset=raceOffset
+    p.baseLaneOffset=Racing.offsetAt(state.racingLine,projection.s)
+    p.laneOffset=desiredOffset
+  else
+    desiredOffset=p.passLat
+    p.laneOffset=desiredOffset
+  end
+  local laneTarget=clamp(safeNumber(desiredOffset),safeMin,safeMax)
+  local laneChangeRate=p.emergencyPass and 12.0 or
+    (p.overtakeSide~=0 and 3.5 or 3.5)
   local maxStep=laneChangeRate*math.max(0,dt or 0)
   local previousOffset=p.laneOffsetCurrent
   if previousOffset==nil then previousOffset=laneTarget end
@@ -373,7 +395,16 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     safeNumber(velocity.z)*current.tx
   local previewTime=clamp(ahead/math.max(5.0,speed),0.35,1.25)
   local predictedLateral=projection.lateral+lateralVelocity*previewTime
-  local safePredicted=clamp(predictedLateral,safeMin,safeMax)
+  local currentBl,currentBr=routeBoundsAtSample(current)
+  local currentAngle=signedAngle(fx,fz,current.tx,current.tz)
+  local currentEnvelope=halfWidth*math.abs(math.cos(currentAngle))+
+    halfLength*math.abs(math.sin(currentAngle))+BOUND_MARGIN
+  local localSafeMin,localSafeMax=currentBl+currentEnvelope,currentBr-currentEnvelope
+  if localSafeMax<localSafeMin then
+    local center=(localSafeMin+localSafeMax)*0.5
+    localSafeMin,localSafeMax=center,center
+  end
+  local safePredicted=clamp(predictedLateral,localSafeMin,localSafeMax)
   local boundaryError=safePredicted-predictedLateral
   local boundaryDistance=math.max(8.0,ahead*0.65)
   local boundaryCurvature=clamp(2.5*boundaryError/
@@ -382,12 +413,12 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
-  p.pathCurvature=safeNumber(current.k)
+  p.pathCurvature=Racing.curvatureAt(state.racingLine,projection.s)
   p.steerCurvature=desiredCurvature
   p.projectionProgressDelta=projection.delta or 0
   p.boundaryError=boundaryError
-  p.boundarySafeMin=safeMin
-  p.boundarySafeMax=safeMax
+  p.boundarySafeMin=localSafeMin
+  p.boundarySafeMax=localSafeMax
   p.boundaryEnvelope=bodyEnvelope
   p.boundaryDeficit=boundaryDeficit
   p.boundaryEmergency=math.abs(boundaryError)>0.45 or boundaryDeficit>0.15
