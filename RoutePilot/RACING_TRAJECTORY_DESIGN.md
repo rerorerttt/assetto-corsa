@@ -95,3 +95,18 @@ The first runtime-code correction is committed in `driver.lua`.
 - Reordered the update pipeline so steering/path validation happens before path-speed calculation, and overtake logic consumes the current frame's lane offset rather than the previous frame's value.
 
 This is a targeted deadlock correction, not yet the complete multi-knot space-time racing planner described above. Moving-vehicle trajectory prediction, coordinated time-space reservations, multi-knot lateral beam search and calibrated grip/speed optimization remain outstanding. The Lua code has been committed, but no Assetto Corsa/CSP runtime test has been performed in this environment. The release gates above remain mandatory.
+
+
+## Second correction after the 38 s trace — 2026-11-25
+
+The newly supplied trace is a different, shorter run (250 lines, about 38 s), and it disproves the assumption that the first receding-horizon change fixed the stalls. In that run all five AI cars were initialized as `lane=LEFT`. There were 22 `PLAN_BLOCK` events, 31 telemetry samples with `PLAN_FAIL=1`, and repeated `OVERTAKE_DENIED` events. The planner's first rejection category was always boundary (`reject=N/0`), not another-car collision. Cars 1, 2 and 4 averaged only about 4–5 m/s over the recorded samples, with repeated zero-speed samples.
+
+Changes now committed:
+- AI cars are initialized in alternating left/right corridors using the recorded boundary widths, instead of all targeting the centreline and immediately competing for the same passing space.
+- The initial lateral path slope is no longer allowed to reach 0.45 at launch. Below 8 m/s it is zero; above that it is limited to 0.12. The old slope was multiplied by an 18–48 m transition length and could create a large synthetic lateral excursion.
+- If the full candidate search fails, the planner now tries a boundary-checked constant-current-offset path, then a boundary-checked smooth recovery to the route centre, both over a short 12 m horizon. The full-footprint boundary check remains enabled.
+- Planner failure logs now include the first rejected sample distance, candidate offset, local road bounds, body envelope and clearance. Telemetry includes which fallback was selected.
+- The speed planner's baseline lateral-acceleration target was raised from 6 to 9 m/s² and its static preview from 170 to 90 m; braking-distance expansion remains dynamic.
+- Wheel speed-difference normalization no longer divides by a near-zero launch speed. Traction-control cut and the low-speed throttle cap were softened so false launch-slip readings cannot reduce engine torque to roughly 12%.
+
+These changes address the specific failure signatures in the supplied trace, but they are not a substitute for the next in-game trace. No Assetto Corsa runtime validation has been performed here. The next run must be checked for `PLAN_FAIL`, `PLAN_FALLBACK`, lane distribution, speed and overtake completion before increasing grip or removing any boundary safeguards further.
