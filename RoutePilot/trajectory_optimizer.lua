@@ -325,6 +325,26 @@ function Optimizer.retime(plan,lateralAccel,brakeAccel,accel)
   return makeSpeedProfile(plan,lateralAccel,brakeAccel,accel)
 end
 
+-- Re-evaluate all precomputed line variants using this car's measured grip,
+-- braking and acceleration. The selected line minimizes its predicted lap time.
+function Optimizer.select(bundle,lateralAccel,brakeAccel,accel)
+  if not bundle then return nil,nil,nil end
+  local alternatives=bundle.alternatives or {bundle}
+  local best,bestSpeeds,bestTime=nil,nil,math.huge
+  for i=1,#alternatives do
+    local candidate=alternatives[i]
+    local speeds=makeSpeedProfile(candidate,lateralAccel,brakeAccel,accel)
+    if speeds then
+      local time=estimateTime(candidate,speeds)
+      if time<bestTime then
+        best,bestSpeeds,bestTime=candidate,speeds,time
+      end
+    end
+  end
+  if not best then return bundle,makeSpeedProfile(bundle,lateralAccel,brakeAccel,accel),nil end
+  return best,bestSpeeds,bestTime
+end
+
 function Optimizer.sample(plan,distance,speeds)
   if not plan or not plan.points or #plan.points<2 then return nil end
   local n=#plan.points
