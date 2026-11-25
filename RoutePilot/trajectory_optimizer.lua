@@ -142,7 +142,7 @@ local function solveVariant(samples, bounds, loopRoute, halfWidth, halfLength,
   local anchor=nil
   for i=1,stationCount do
     local lo,hi=bounds[i][1],bounds[i][2]
-    local margin=halfWidth+0.38+math.min(0.85,halfLength*math.abs(samples[i].k or 0))
+    local margin=halfWidth+0.38
     lo,hi=lo+margin,hi-margin
     if lo>hi then return nil end
     local list={}
