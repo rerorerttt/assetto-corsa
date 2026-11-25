@@ -24,9 +24,9 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  -- Use a moderate preview and shorten it further when an S-bend reverses
-  -- curvature, so the target does not jump beyond the next corner.
-  LOOKAHEAD_BASE=8.0, LOOKAHEAD_SPEED=0.65, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=28.0,
+  -- Keep approximately one second of preview at high speed to prevent
+  -- reactive left-right steering corrections on straights and fast bends.
+  LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.90, LOOKAHEAD_MIN=16.0, LOOKAHEAD_MAX=70.0,
   CURVATURE_STEER_GAIN=4.5, CURVATURE_FEEDFORWARD=0.20,
   STEER_LIMIT=1.0, STEER_RATE=4.5, STEER_FILTER=0.08,
   EMERGENCY_STEER_GAIN=2.6, EMERGENCY_STEER_RATE=10.0,
