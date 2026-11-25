@@ -289,8 +289,16 @@ local function laneOccupied(carIndex, car, laneOffset, ignoreIndex)
           local longitudinal = routeGap(ownProgress, progress)
           local targetOffset = otherState and
             (otherState.laneOffset or otherState.laneOffsetCurrent) or lateral
-          local reserved = math.abs(targetOffset - laneOffset) < 1.35
-          local actual = math.abs(lateral - laneOffset) < 1.35
+          -- Occupancy is based on physical body overlap, not a narrow
+          -- centreline threshold. This also detects the player on the route
+          -- centre when the AI's nominal lane centre is offset to the left.
+          local ownHalfWidth = math.max(0.75,
+            safeNumber(car.aabbSize and car.aabbSize.x, 2.0) * 0.5)
+          local otherHalfWidth = math.max(0.75,
+            safeNumber(other.aabbSize and other.aabbSize.x, 2.0) * 0.5)
+          local lateralClearance = ownHalfWidth + otherHalfWidth + 0.25
+          local reserved = math.abs(targetOffset - laneOffset) < lateralClearance
+          local actual = math.abs(lateral - laneOffset) < lateralClearance
           local otherSpeed = math.max(0, safeNumber(other.speedMs))
           local ownSpeed = math.max(0, safeNumber(car.speedMs))
           local rearWindow = math.max(18, (ownSpeed + otherSpeed) * 0.375 + 8)
@@ -333,9 +341,14 @@ local function carAheadInLane(carIndex, car, laneOffset)
         end
         local targetOffset = otherState and
           (otherState.laneOffset or otherState.laneOffsetCurrent) or lateral
+        local ownHalfWidth = math.max(0.75,
+          safeNumber(car.aabbSize and car.aabbSize.x, 2.0) * 0.5)
+        local otherHalfWidth = math.max(0.75,
+          safeNumber(other.aabbSize and other.aabbSize.x, 2.0) * 0.5)
+        local lateralClearance = ownHalfWidth + otherHalfWidth + 0.25
         if progress ~= nil and
-           (math.abs(lateral - laneOffset) < 1.35 or
-            math.abs(targetOffset - laneOffset) < 1.35) then
+           (math.abs(lateral - laneOffset) < lateralClearance or
+            math.abs(targetOffset - laneOffset) < lateralClearance) then
           local gap = routeGap(ownProgress, progress)
           if gap > 0.5 and gap < 90 and (not bestGap or gap < bestGap) then
             bestGap = gap
