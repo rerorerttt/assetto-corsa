@@ -56,7 +56,7 @@ end
 -- boundsAt(sample) returns left/right offsets in the spline's local frame.
 -- fixedOffset is used while passing: it disables racing-line optimization and
 -- follows the reserved passing corridor instead.
-function RacingLine.plan(route, progress, car, boundsAt, startOffset, baseOffset,
+function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, baseOffset,
     fixedOffset, horizon, spacing)
   if not route or not progress or not boundsAt then return nil end
   local size = car and car.aabbSize
@@ -71,7 +71,7 @@ function RacingLine.plan(route, progress, car, boundsAt, startOffset, baseOffset
 
   for i = 0, count do
     local d = i * step
-    local sample = route.sample and route.sample(route, progress + d) or nil
+    local sample = sampleFn and sampleFn(route, progress + d) or nil
     if not sample then break end
     local left, right = boundsAt(sample)
     left, right = safe(left, -2.0), safe(right, 2.0)
