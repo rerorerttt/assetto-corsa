@@ -623,7 +623,7 @@ end
 local function laneLayout(seg)
   local bl,br=H.boundsAt(seg)
   local width=math.max(0,br-bl)
-  local count=clamp(math.floor((width+1.0)/4.0),1,4)
+  local count=clamp(math.floor((width+0.5)/3.5),1,4)
   local centers={}
   local laneWidth=3.5
   local mid=(bl+br)*0.5
