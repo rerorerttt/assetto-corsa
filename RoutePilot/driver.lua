@@ -717,7 +717,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local v=math.max(0,speed)
   local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+45.0),CFG.PLAN_HORIZON,500.0)
   local planFailure=nil
-  p.racingPlan,p.racingPlanFailureDistance,planFailure=RacingLine.plan(
+  p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0)
   p.racingPlanBlocked=planFailure=="NO_FIT"
