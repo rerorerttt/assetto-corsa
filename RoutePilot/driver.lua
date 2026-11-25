@@ -206,6 +206,8 @@ local function calculateStability(p, speed)
   p.stability = 1 - severity
 end
 
+local routeBoundsAtSample
+
 local function racingOffsetLimit(sample,car,fx,fz)
   if not sample then return 0 end
   local bl,br=routeBoundsAtSample(sample)
@@ -262,7 +264,7 @@ local function planTargetSpeed(p,speed)
   return math.max(0,target)
 end
 
-local function routeBoundsAtSample(sample)
+routeBoundsAtSample=function(sample)
   local count=#state.nodes
   local i=sample and sample.seg or 1
   if count<2 then return H.boundsAt(i) end
