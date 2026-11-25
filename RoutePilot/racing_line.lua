@@ -62,7 +62,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
   local margin = halfWidth + 0.42
   local step = math.max(6.0, spacing or 7.5)
-  local length = math.min(135.0, math.max(35.0, horizon or 95.0))
+  local length = math.min(150.0, math.max(35.0, horizon or 95.0))
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
   local blockedDistance=nil
@@ -176,14 +176,18 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local offC=candidateSets[station+1][c]
           local pointC=pointAt(samples[station+1],offC)
           local k=curvature(pointA,pointB,pointC)
-          local reference=math.abs(safe(samples[station].k))
-          local excess=math.max(0,math.abs(k)-math.max(reference*1.05,0.003))
+          -- Minimize estimated traversal time over the complete preview,
+          -- rather than penalizing curvature that exceeds the recorded route.
+          -- With a lateral-acceleration model, local time per distance is
+          -- proportional to sqrt(abs(curvature)); this rewards a genuine
+          -- outside-in racing line and lets linked bends share one trajectory.
+          local timeCost=step*math.sqrt(math.abs(k)/10.0)
           local second=offA-2.0*offB+offC
           local slope=offC-offB
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
-          local cost=node.cost+k*k*180.0+excess*excess*200000.0+
-            second*second*0.18+slope*slope*0.075+
+          local cost=node.cost+timeCost+k*k*18.0+
+            second*second*0.12+slope*slope*0.045+
             0.00008/math.max(0.12,clearance+0.12)+
             0
           local key=node.b*100+c
