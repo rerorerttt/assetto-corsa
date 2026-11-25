@@ -783,7 +783,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,4.5,
     fixedOffset==nil and obstacleAt or nil)
   p.racingPlanStartProgress=p.routeProgress
   p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
