@@ -112,7 +112,7 @@ local function newPersonality(carIndex)
     accelEstimate = 4.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
     previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
-    slipAngle = 0, lateralAccel = 0, yawRate = 0,
+    slipAngle = 0, lateralAccel = 0, yawRate = 0, tireSlipAngle = 0,
     previousFx = nil, previousFz = nil,
     stuck = 0, blockedT = 0, passT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0,
@@ -243,28 +243,40 @@ local function planTargetSpeed(p,speed)
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2.0*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
-  local step=4.0
+  local reactionDistance=currentSpeed*0.20
+  local step=2.5
   local profile={}
   local distance=0
 
-  -- First pass: build a spatial speed-cap profile from filtered multi-scale
-  -- curvature. This deliberately does not use the spline's point-local k,
-  -- which can overreact to a single noisy sample or road-edge kink.
+  -- Current-position curvature is a hard local cap: the reaction allowance
+  -- must never make an already-entered bend disappear from the speed plan.
+  local currentCurvature=speedPlanningCurvature(route,p.routeProgress)
+  local currentCap=math.huge
+  if currentCurvature>CFG.CURVE_MIN then
+    currentCap=math.sqrt(lateralLimit/currentCurvature)
+  end
+
+  -- Build the forward profile from the end of the short actuator allowance.
+  -- Multi-scale curvature is sampled every 2.5 m; the maximum of the 5/10/18 m
+  -- windows preserves linked bends while rejecting isolated spline spikes.
   while distance<=horizon do
-    local curvature=speedPlanningCurvature(route,p.routeProgress+distance)
+    local curvature=speedPlanningCurvature(
+      route,p.routeProgress+reactionDistance+distance)
     local cap=math.huge
     if curvature>CFG.CURVE_MIN then
       cap=math.sqrt(lateralLimit/curvature)
     end
-    profile[#profile+1]={distance=distance,cap=cap,speed=cap}
+    profile[#profile+1]={distance=distance,speed=cap}
     distance=distance+step
-    if not route.loop and p.routeProgress+distance>=route.total then break end
+    if not route.loop and
+       p.routeProgress+reactionDistance+distance>=route.total then break end
   end
-  if #profile==0 then return p.cruiseSpeed end
+  if #profile==0 then return math.min(p.cruiseSpeed,currentCap) end
 
-  -- Second pass: propagate braking constraints backwards over the complete
-  -- profile. Every small bend remains represented; linked bends cannot hide
-  -- behind a long-window average because the most restrictive scale wins.
+  -- Backward pass: each point is limited by the next point's speed and the
+  -- measured braking capability. The first value is the safe speed to have
+  -- when the reaction interval ends, so the controller begins decelerating
+  -- early enough to arrive there without an abrupt late brake.
   for i=#profile-1,1,-1 do
     local ds=profile[i+1].distance-profile[i].distance
     local reachable=math.sqrt(profile[i+1].speed*profile[i+1].speed+
@@ -272,22 +284,13 @@ local function planTargetSpeed(p,speed)
     if reachable<profile[i].speed then profile[i].speed=reachable end
   end
 
-  -- Apply a short actuator/reaction allowance before accepting future speed
-  -- reductions, then choose the strictest reachable target in the horizon.
-  local target=p.cruiseSpeed
-  local reactionDistance=currentSpeed*0.25
-  for i=1,#profile do
-    local point=profile[i]
-    local available=math.max(0,point.distance-reactionDistance)
-    local safe=math.sqrt(point.speed*point.speed+2.0*brakeAccel*available)
-    if safe<target then target=safe end
-  end
-  p.speedPlanCurvature=speedPlanningCurvature(route,p.routeProgress)
+  local target=math.min(p.cruiseSpeed,currentCap,profile[1].speed)
+  p.speedPlanCurvature=currentCurvature
   p.speedPlanGrip=lateralLimit
   p.speedPlanHorizon=horizon
+  p.speedPlanReaction=reactionDistance
   return math.max(0,target)
 end
-
 local function routeBoundsAtSample(sample)
   local count=#state.nodes
   local i=sample and sample.seg or 1
@@ -1059,7 +1062,7 @@ function Driver.observePlayer(car, dt, steerInput)
       lineDist=0, latOff=0, crossTrackError=0,
       headingError=0, pathCurvature=0,
       overtakeSide=0, laneOffsetCurrent=0, pace=0,
-      slipAngle=0, lateralAccel=0, yawRate=0,
+      slipAngle=0, lateralAccel=0, yawRate=0, tireSlipAngle=0,
       slipSeverity=0, stability=1, wheelSlip=0, tractionScale=1,
       steerCurvature=0
     }
@@ -1108,7 +1111,7 @@ function Driver.telemetryLine(i, car, p)
   local mode=p.player and " MODE=PLAYER" or
     (p.playerAutopilot and " MODE=AI_AUTOPILOT" or "")
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f PLAN_CURVE=%.4f PLAN_GRIP=%.2f PLAN_HORIZON=%.1f PLAN_REACTION=%.2f TIRE_SLIP=%.2f STUCK=%.1f%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -1121,7 +1124,9 @@ function Driver.telemetryLine(i, car, p)
     safeNumber(p.boundaryEnvelope),safeNumber(p.boundaryDeficit),
     safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),
     safeNumber(p.accelEstimate,0),safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),
-    safeNumber(p.stuck),mode)
+    safeNumber(p.speedPlanCurvature),safeNumber(p.speedPlanGrip),
+    safeNumber(p.speedPlanHorizon),safeNumber(p.speedPlanReaction),
+    safeNumber(p.tireSlipAngle),safeNumber(p.stuck),mode)
 end
 
 return Driver
