@@ -980,9 +980,12 @@ function windowMain(dt)
       else
         state.status="Записано точек: "..#state.nodes
         if ensureDriver() and Driver.rebuildTrajectory then
-          local okPlan,planError=pcall(Driver.rebuildTrajectory)
-          if okPlan then state.status=state.status.." | траектория рассчитана"
-          else writeLog("GLOBAL_TRAJECTORY_ERROR err=%s",tostring(planError)) end
+          local okCall,planReady,planError=pcall(Driver.rebuildTrajectory)
+          if okCall and planReady then state.status=state.status.." | траектория рассчитана"
+          else
+            writeLog("GLOBAL_TRAJECTORY_ERROR err=%s",tostring(okCall and planError or planReady))
+            state.status="Оптимизация не удалась: "..tostring(okCall and planError or planReady)
+          end
         end
       end
     end
