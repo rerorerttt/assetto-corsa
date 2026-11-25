@@ -489,9 +489,8 @@ local function trySpawnTeleport(sim,dt)
   -- Form a compact starting grid instead of placing every car 25 m behind
   -- the previous one. The lane count follows the saved physical road width:
   -- 3/7/11/15 m corridors accommodate 1/2/3/4 cars per row.
-  local firstPosition,firstDirection,firstSegment=
-    sampleSpawnRoute(metrics,0)
-  local left,right=boundsAt(firstSegment or 1)
+  local firstSegment=metrics.segments[1].index
+  local left,right=boundsAt(firstSegment)
   local roadWidth=math.max(0.1,right-left)
   local lanes=clamp(math.floor((roadWidth+0.5)/CFG.SPAWN_LANE_WIDTH),1,4)
   local rows=math.ceil(count/lanes)
@@ -530,7 +529,8 @@ local function trySpawnTeleport(sim,dt)
       if ok and result~=false then
         moved=moved+1
         state.p[carIndex]=nil
-        state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
+        state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter,
+          lateralOffset=lateralOffset}
         writeLog("SPAWN_CAR id=%d row=%d lane=%d offset=%.2f pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
           carIndex,row+1,lane+1,lateralOffset,position.x,position.y,position.z,
           direction.x,direction.z,routeSegment,routeParameter)
