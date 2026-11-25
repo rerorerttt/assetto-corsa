@@ -711,9 +711,14 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
   local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+45.0),CFG.PLAN_HORIZON,500.0)
-  p.racingPlan=RacingLine.plan(state.routeGeometry,Geometry.sample,
+  local planFailure=nil
+  p.racingPlan,planFailure=RacingLine.plan(state.routeGeometry,Geometry.sample,
     p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0)
+  p.racingPlanBlocked=planFailure=="NO_FIT"
+  if p.racingPlanBlocked then
+    H.log("RACE_LINE_BLOCKED id=%d reason=VEHICLE_DOES_NOT_FIT_BOUNDS",carIndex)
+  end
   if p.racingPlanMode~=mode then
     H.log("RACE_LINE id=%d mode=%s base=%.2f target=%.2f curve=%.4f horizon=%.1f",
       carIndex,mode,base,safeNumber(p.racingPlan and p.racingPlan.points[2] and
@@ -1073,8 +1078,9 @@ function Driver.update(carIndex, car, dt)
   end
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
-  local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
+  local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
+  if p.racingPlanBlocked then targetSpeed=0 end
   -- Overtake state can change in this frame; rebuild the steering path before
   -- issuing controls so the first lateral movement follows the reserved side.
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
