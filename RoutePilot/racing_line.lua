@@ -48,9 +48,8 @@ local function localCost(samples, bounds, offsets, index, baseOffset)
   local clearance = math.min(offsets[index] - bounds[index][1],
     bounds[index][2] - offsets[index])
   local edgePenalty = 0.00008 / math.max(0.12, clearance + 0.12)
-  local laneBias = (offsets[index] - baseOffset) ^ 2 * 0.0002
-  return k * k * 180.0 + second * second * 0.055 +
-    edgePenalty + laneBias
+  return k * k * 180.0 + second * second * 0.075 +
+    edgePenalty
 end
 
 -- boundsAt(sample) returns left/right offsets in the spline's local frame.
@@ -116,7 +115,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     for i=2,n do
       local lo,hi=bounds[i][1],bounds[i][2]
       local list={}
-      for c=0,8 do addCandidate(list,lo+(hi-lo)*c/8,lo,hi) end
+      for c=0,12 do addCandidate(list,lo+(hi-lo)*c/12,lo,hi) end
       addCandidate(list,preferred,lo,hi)
       local d=(i-1)*step
       local previous=sampleFn(route,progress+math.max(0,d-step))
@@ -136,7 +135,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
       local cost=(off1-off0)^2*0.02+
         0.00008/math.max(0.12,clearance+0.12)+
-        (off1-preferred)^2*0.0002
+        0
       firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
     end
     local layer=firstLayer
@@ -161,7 +160,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local cost=node.cost+k*k*180.0+excess*excess*200000.0+
             second*second*0.055+slope*slope*0.02+
             0.00008/math.max(0.12,clearance+0.12)+
-            (offC-preferred)^2*0.0002
+            0
           local key=node.b*100+c
           local existing=bestByPair[key]
           if not existing or cost<existing.cost then
