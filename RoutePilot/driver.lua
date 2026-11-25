@@ -53,6 +53,12 @@ function Driver.setup(cfg, st, helpers)
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
   state.racingLine = state.routeGeometry and
     Racing.build(state.routeGeometry,state.nodes,H.boundsAt,state.loopRoute) or nil
+  if state.racingLine then
+    H.log("RACING_LINE_READY points=%d max_offset=%.2f",
+      #state.racingLine.points,state.racingLine.maxAbsOffset or 0)
+  else
+    H.log("RACING_LINE_UNAVAILABLE")
+  end
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
@@ -226,8 +232,9 @@ local function planTargetSpeed(p,speed)
     local sample=Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
     local passOffset=p.overtakeSide~=0 and safeNumber(p.passLat) or nil
-    local curvature=math.abs(Racing.curvatureAt(state.racingLine,
-      p.routeProgress+distance,passOffset))
+    local curvature=state.racingLine and
+      math.abs(Racing.curvatureAt(state.racingLine,
+        p.routeProgress+distance,passOffset)) or math.abs(sample.k or 0)
     if curvature>CFG.CURVE_MIN then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
       local curveSpeed=math.sqrt(lateralLimit/curvature)
@@ -384,7 +391,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- feed-forward to begin rotating into the bend before heading error grows.
   local alpha=signedAngle(fx,fz,dx/targetDist,dz/targetDist)
   local pursuitCurvature=2.0*math.sin(alpha)/targetDist
-  local previewCurvature=safeNumber(curvePreview.k)
+  local passOffset=p.overtakeSide~=0 and safeNumber(p.passLat) or nil
+  local previewCurvature=Racing.curvatureAt(state.racingLine,
+    projection.s+ahead*0.55,passOffset)
   local desiredCurvature=pursuitCurvature+
     previewCurvature*CFG.CURVATURE_FEEDFORWARD
 
