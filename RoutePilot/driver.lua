@@ -834,17 +834,22 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
     end
   end
 
-  local transitionOut=22.0
+  local urgent=p.emergencyPassRequest==true
+  local transitionOut=urgent and 6.0 or 22.0
   local transitionBack=22.0
   local totalDistance=math.max(20.0,passDistance)+transitionBack
-  local step=3.0
+  local step=urgent and 1.5 or 3.0
   local distance=0.0
   while distance<=totalDistance+0.001 do
     local sample=Geometry.sample(route,p.routeProgress+distance)
     if not sample then return false,"route_ends" end
 
     local outT=clamp(distance/transitionOut,0,1)
-    outT=outT*outT*(3.0-2.0*outT)
+    if urgent then
+      outT=1.0-(1.0-outT)*(1.0-outT)*(1.0-outT)
+    else
+      outT=outT*outT*(3.0-2.0*outT)
+    end
     local backT=clamp((distance-passDistance)/transitionBack,0,1)
     backT=backT*backT*(3.0-2.0*backT)
     local offset
@@ -873,7 +878,7 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
       local longitudinal=routeGap(ownProgress,predictedOther)
       local lateralGap=math.abs(offset-other.lateral)
       local longitudinalClearance=ownHalfLength+other.halfLength+
-        math.max(2.5,math.abs(speed-other.speed)*0.30)
+        math.max(1.0,math.abs(speed-other.speed)*0.15)
       local lateralClearance=ownHalfWidth+other.halfWidth+0.45
       if math.abs(longitudinal)<longitudinalClearance and
          lateralGap<lateralClearance then
