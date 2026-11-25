@@ -343,8 +343,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     safeMin,safeMax=center,center
   end
   local bodyEnvelope=halfWidth+BOUND_MARGIN
-  local mid,width=(H.boundsAt(p.segIdx))
-  local leftCenter=width>=5.4 and ((mid+width)*0.5) or mid
+  local laneLeft,laneRight=H.boundsAt(p.segIdx)
+  local mid,width=(laneLeft+laneRight)*0.5,laneRight-laneLeft
+  local leftCenter=width>=5.4 and ((mid+laneRight)*0.5) or mid
   if p.overtakeSide==0 then
     p.baseLaneOffset=p.baseLaneOffset or leftCenter
     p.laneOffset=p.baseLaneOffset
@@ -377,7 +378,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- feed-forward to begin rotating into the bend before heading error grows.
   local alpha=signedAngle(fx,fz,dx/targetDist,dz/targetDist)
   local pursuitCurvature=2.0*math.sin(alpha)/targetDist
-  local previewCurvature=safeNumber(curvePreview.k)
+  local previewCurvature=safeNumber(raceTarget and raceTarget.k or curvePreview.k)
   local desiredCurvature=pursuitCurvature+
     previewCurvature*CFG.CURVATURE_FEEDFORWARD
 
@@ -397,7 +398,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
-  p.pathCurvature=safeNumber(current.k)
+  local currentRace= p.racingPlan and RacingLine.sample(p.racingPlan,0) or nil
+  p.pathCurvature=safeNumber(currentRace and currentRace.k or current.k)
   p.steerCurvature=desiredCurvature
   p.projectionProgressDelta=projection.delta or 0
   p.boundaryError=boundaryError
@@ -703,7 +705,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
-  local horizon=clamp(math.max(100.0,v*v/(2*brakeAccel)+v*1.5+45.0),100.0,300.0)
+  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+45.0),CFG.PLAN_HORIZON,500.0)
   p.racingPlan=RacingLine.plan(state.routeGeometry,Geometry.sample,
     p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0)
@@ -1062,6 +1064,9 @@ function Driver.update(carIndex, car, dt)
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
+  -- Overtake state can change in this frame; rebuild the steering path before
+  -- issuing controls so the first lateral movement follows the reserved side.
+  if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   p.targetSpeed = targetSpeed
 
   p.boundaryEmergency=false
