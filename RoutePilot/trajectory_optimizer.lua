@@ -58,18 +58,21 @@ local function makeSpeedProfile(plan, lateralAccel, brakeAccel, accel)
     speeds[i]=k>0.00035 and math.min(110.0,math.sqrt(lateralAccel/k)) or 110.0
   end
   if plan.loop then
-    for _=1,5 do
-      for i=n,1,-1 do
+    -- Sweep two complete laps in both directions so a slow corner constrains
+    -- its true braking approach, including when it lies just after s=0.
+    for _=1,2 do
+      for k=2*n,1,-1 do
+        local i=((k-1)%n)+1
         local nextIndex=i==n and 1 or i+1
         speeds[i]=math.min(speeds[i],math.sqrt(speeds[nextIndex]^2+
           2*brakeAccel*plan.spacing))
       end
-      for i=2,n do
-        speeds[i]=math.min(speeds[i],math.sqrt(speeds[i-1]^2+
+      for k=1,2*n do
+        local i=((k-1)%n)+1
+        local previous=i==1 and n or i-1
+        speeds[i]=math.min(speeds[i],math.sqrt(speeds[previous]^2+
           2*accel*plan.spacing))
       end
-      speeds[1]=math.min(speeds[1],math.sqrt(speeds[n]^2+
-        2*accel*plan.spacing))
     end
   else
     speeds[n]=0
@@ -322,13 +325,15 @@ function Optimizer.sample(plan,distance,speeds)
     s=clamp(s,0,plan.total)
   end
   local position=s/plan.spacing
-  local index=math.floor(position)+1
-  local t=position-math.floor(position)
-  if plan.loop then
-    index=((index-1)%n)+1
+  local index,t
+  if not plan.loop and s>=plan.total then
+    index=n-1
+    t=1
   else
-    index=clamp(index,1,n-1)
-    t=clamp(position-math.floor(position),0,1)
+    index=math.floor(position)+1
+    t=position-math.floor(position)
+    if plan.loop then index=((index-1)%n)+1
+    else index=clamp(index,1,n-1) end
   end
   local nextIndex=index+1
   if nextIndex>n then nextIndex=plan.loop and 1 or n end
