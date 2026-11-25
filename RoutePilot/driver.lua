@@ -389,6 +389,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local route=state.routeGeometry
   p.plannedPathSamples=nil
   p.boundaryInfeasible=false
+  p.plannerFirstBoundaryFailure=nil
+  p.plannerFallback="none"
   if not route then
     p.lineDist=0; p.crossTrackError=0; p.headingError=0
     p.pathCurvature=0; p.steerCurvature=0
@@ -553,7 +555,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.plannerRejectOther=rejectOther
   p.plannerHorizon=bestHorizon
   p.plannerFailureReason=nil
-  p.plannerFirstBoundaryFailure=nil
   if best==nil then
     p.boundaryInfeasible=true
     p.boundaryCandidateMin=minOffset; p.boundaryCandidateMax=maxOffset
