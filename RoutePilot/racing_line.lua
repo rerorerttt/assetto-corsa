@@ -95,6 +95,12 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local edgeMargin = 0.38
   local baseMargin = halfWidth + edgeMargin
   local step = math.max(3.5, spacing or 4.5)
+  -- A path may use the full road, but its lateral position cannot jump
+  -- sideways between samples. The limit tightens with speed to keep the
+  -- generated line physically drivable instead of asking for a lane-change
+  -- impulse at racing speed.
+  local planSpeed = math.max(0, safe(car and car.speedMs))
+  local maxOffsetStep = step * clamp(4.0 / math.max(10.0, planSpeed), 0.10, 0.32)
   local length = math.min(180.0, math.max(45.0, horizon or 150.0))
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
@@ -193,10 +199,10 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local clearance = footprintClearance(samples[1], samples[2],
         off0, off1, bounds[1], bounds[2],
         halfWidth, halfLength, edgeMargin)
-      if clearance >= -0.015 then
+      if clearance >= -0.015 and math.abs(off1 - off0) <= maxOffsetStep then
         local continuity = priorOffsets[2] and
-          (off1 - priorOffsets[2]) ^ 2 * 0.08 or 0
-        local cost = (off1 - off0) ^ 2 * 0.035 + continuity +
+          (off1 - priorOffsets[2]) ^ 2 * 0.12 or 0
+        local cost = (off1 - off0) ^ 2 * 0.16 + continuity +
           edgeCost(clearance) + trafficCost(off1, forbiddenAt[2])
         firstLayer[#firstLayer + 1] = {
           a = 1, b = j, cost = cost, prev = nil
@@ -220,19 +226,21 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local clearance = footprintClearance(samples[station], samples[station + 1],
             offB, offC, bounds[station], bounds[station + 1],
             halfWidth, halfLength, edgeMargin)
-          if clearance >= -0.015 then
+          local second = offA - 2.0 * offB + offC
+          if clearance >= -0.015 and
+             math.abs(offC - offB) <= maxOffsetStep and
+             math.abs(second) <= maxOffsetStep * 0.90 then
             local pointC = pointAt(samples[station + 1], offC)
             local k = curvature(pointA, pointB, pointC)
-            local second = offA - 2.0 * offB + offC
             local slope = offC - offB
             local continuity = priorOffsets[station + 1] and
-              (offC - priorOffsets[station + 1]) ^ 2 * 0.08 or 0
+              (offC - priorOffsets[station + 1]) ^ 2 * 0.12 or 0
             -- Integrated curvature plus a peak-curvature term approximates
             -- lap-time minimization: it prefers long straight chords through
             -- small boundary wiggles and opens consecutive bends as one line.
             local k2 = k * k
-            local cost = node.cost + k2 * 240.0 + k2 * k2 * 90000.0 +
-              second * second * 0.16 + slope * slope * 0.045 +
+            local cost = node.cost + k2 * 300.0 + k2 * k2 * 110000.0 +
+              second * second * 0.65 + slope * slope * 0.12 +
               continuity + edgeCost(clearance) +
               trafficCost(offC, forbiddenAt[station + 1])
             local key = node.b * 100 + c
