@@ -600,12 +600,10 @@ local function updateBoundsRecording(player)
   if state.loopRoute then idx=((seg-1)%n)+1 end
   if idx>=1 and idx<=n then
     state.boundsL[idx]=newL; state.boundsR[idx]=newR
-    state.racingLine=nil
   end
   if state.recBoundsSeg and seg~=state.recBoundsSeg then
     state.boundsL[state.recBoundsSeg]=newL
     state.boundsR[state.recBoundsSeg]=newR
-    state.racingLine=nil
     state.recBoundsSeg=seg
   end
 end
@@ -911,7 +909,7 @@ function windowMain(dt)
     ui.sameLine(0,4)
     if ui.button(state.recBounds and "СТОП запись границ" or "Запись границ",vec2(-0.5,24)) then
       if state.recBounds then
-        state.recBounds=false; state.status="Границы записаны"
+        state.recBounds=false; state.racingLine=nil; state.status="Границы записаны"
       else
         local player=ac.getCar(0)
         if player then
