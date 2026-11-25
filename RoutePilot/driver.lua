@@ -357,6 +357,7 @@ function Driver.rebuildTrajectory()
     return true
   end
   H.log("GLOBAL_TRAJECTORY_FAILED reason=%s",tostring(reason))
+  state.status=string.format("Оптимизация не удалась: %s",tostring(reason))
   return false,reason
 end
 
