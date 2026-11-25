@@ -420,12 +420,12 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18+boundarySteer
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
   if p.emergencyPass then
-    steer=steer*CFG.EMERGENCY_STEER_GAIN+boundarySteer
-    return clamp(steer,-1.0,1.0)
+    steer=steer*CFG.EMERGENCY_STEER_GAIN
+    return clamp(steer+boundarySteer,-1.0,1.0)
   end
-  return clamp(steer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
+  return clamp(steer+boundarySteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
