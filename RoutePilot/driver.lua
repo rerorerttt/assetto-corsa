@@ -153,6 +153,8 @@ local function readVehicleDynamics(car, p, dt)
   local longVel = vx * fx + vz * fz
   local latVel = vx * rx + vz * rz
   p.slipAngle = math.atan2(latVel, math.max(0.5, longVel))
+  local slipAlpha=clamp((dt or 0.05)/(0.10+(dt or 0.05)),0,1)
+  p.slipAngleFiltered=lerp(safeNumber(p.slipAngleFiltered,p.slipAngle),p.slipAngle,slipAlpha)
   p.yawRate = 0
   if p.previousFx and dt > 0.0001 then
     p.yawRate = signedAngle(p.previousFx, p.previousFz, fx, fz) / dt
@@ -328,27 +330,23 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- Project onto the continuous spline, then aim at a point measured by
   -- arc distance. The controller never aims at the next raw recorded node.
-  local locked=p.routeLocked and p.routeProgress~=nil
-  local projection=Geometry.project(route,car.position,p.routeProgress,car.look,
-    speed,dt,locked)
-  if not projection or
-     (not locked and not initialProjectionValid(projection,car.look)) or
-     (p.spawnSeeded and projection.distance>8.0) then
+  -- Driver.update() already projected this car onto the spline this
+  -- frame. Reusing that result avoids a second full route projection per car.
+  local progress=p.routeProgress
+  if progress==nil or p.projectionLost then
     p.projectionLost=true; p.targetSpeed=0; p.gas=0; p.brake=1; p.lineDist=999
     return 0
   end
   p.projectionLost=false; p.routeLocked=true
-  p.routeProgress=projection.s; p.segIdx=projection.seg
-  p.lineDist=projection.distance; p.latOff=projection.lateral
 
   -- Preview the complete vehicle footprint through the steering horizon.
   -- The common safe lateral interval forces the target to remain inside both
   -- saved boundaries before the car reaches a narrowing or a bend.
   local ahead=clamp(CFG.LOOKAHEAD_BASE+speed*CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN,CFG.LOOKAHEAD_MAX)
-  local current=Geometry.sample(route,projection.s)
-  local future=Geometry.sample(route,projection.s+ahead)
-  local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
+  local current=Geometry.sample(route,progress)
+  local future=Geometry.sample(route,progress+ahead)
+  local curvePreview=Geometry.sample(route,progress+ahead*0.55)
   if not current or not future or not curvePreview then return 0 end
 
   local halfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
@@ -370,7 +368,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.laneOffset=p.passLat
   end
   local laneTarget=p.laneOffset or leftCenter
-  local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
+  local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,progress) or 0
   local raceTarget=p.racingPlan and RacingLine.sample(p.racingPlan,ahead+clamp(planAdvance,0,30.0)) or nil
   if raceTarget then
     p.laneOffsetCurrent=raceTarget.offset
@@ -380,7 +378,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.laneOffsetCurrent=previousOffset+
       clamp(laneTarget-previousOffset,-maxStep,maxStep)
   end
-  if p.returningFromPass and math.abs(projection.lateral-laneTarget)<0.35 then
+  if p.returningFromPass and math.abs(safeNumber(p.latOff)-laneTarget)<0.35 then
     p.returningFromPass=false
   end
 
@@ -406,7 +404,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local lateralVelocity=safeNumber(velocity.x)*(-current.tz)+
     safeNumber(velocity.z)*current.tx
   local previewTime=clamp(ahead/math.max(5.0,speed),0.35,1.25)
-  local predictedLateral=projection.lateral+lateralVelocity*previewTime
+  local predictedLateral=safeNumber(p.latOff)+lateralVelocity*previewTime
   local safePredicted=clamp(predictedLateral,safeMin,safeMax)
   local boundaryError=safePredicted-predictedLateral
   local boundaryDistance=math.max(6.0,ahead*0.50)
@@ -419,10 +417,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   desiredCurvature=desiredCurvature+boundaryCurvature
   local boundarySteer=clamp(boundaryError*0.075,-0.22,0.22)
   -- Continuous lateral-velocity damping suppresses left-right weaving on straights.
-  local lateralDamping=clamp(-lateralVelocity*0.028,-0.16,0.16)
+  local lateralDamping=clamp(-lateralVelocity*0.012,-0.08,0.08)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
-  p.crossTrackError=p.laneOffsetCurrent-projection.lateral
+  p.crossTrackError=p.laneOffsetCurrent-safeNumber(p.latOff)
   local currentRace= p.racingPlan and RacingLine.sample(p.racingPlan,0) or nil
   p.pathCurvature=safeNumber(currentRace and currentRace.k or current.k)
   p.steerCurvature=desiredCurvature
@@ -438,8 +436,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- primary steering signal.
   -- Positive lateral velocity means the car drifts right of the route;
   -- counter-steer left. Slip feedback must oppose, not reinforce, that drift.
+  local slipFeedback=clamp(safeNumber(p.slipAngleFiltered,p.slipAngle)*0.08,-0.07,0.07)
   local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+
-    p.slipAngle*0.18+lateralDamping
+    slipFeedback+lateralDamping
   if not p.emergencyPass and math.abs(desiredCurvature)<0.0015 and
      math.abs(boundaryError)<0.08 and math.abs(lateralVelocity)<0.12 and
      math.abs(steer)<0.012 then
@@ -798,7 +797,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
-  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+45.0),CFG.PLAN_HORIZON,180.0)
+  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+50.0),CFG.PLAN_HORIZON,180.0)
   local planFailure=nil
   local obstacles=fixedOffset==nil and
     buildTrafficObstacles(carIndex,car,p,speed) or nil
@@ -823,9 +822,10 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local previousPlan=p.racingPlan
   local previousPlanAdvance=previousPlan and p.racingPlanStartProgress and
     routeGap(p.racingPlanStartProgress,p.routeProgress) or 0
+  local previousFailure=p.racingPlanFailure
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,4.5,
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,6.0,
     fixedOffset==nil and obstacleAt or nil,previousPlan,
     math.max(0,previousPlanAdvance))
   p.racingPlanStartProgress=p.routeProgress
@@ -836,7 +836,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   p.racingPlanFailure=planFailure
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
-  if p.racingPlanBlocked then
+  if p.racingPlanBlocked and previousFailure~=planFailure then
     H.log("RACE_LINE_BLOCKED id=%d reason=%s",carIndex,tostring(planFailure))
   end
   if p.racingPlanMode~=mode then
@@ -846,7 +846,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
       safeNumber(p.racingPlan and p.racingPlan.curvature[2]),horizon)
   end
   p.racingPlanMode=mode
-  p.racingPlanTimer=0.40
+  p.racingPlanTimer=0.80
   if p.racingPlan then
     p.racingPlanCurvature=safeNumber(p.racingPlan.curvature[2])
   end
