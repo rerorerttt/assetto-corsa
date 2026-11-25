@@ -765,7 +765,7 @@ render.on('main.track.transparent', function()
       local lx,lz=normalize2(nx.x-node.x,nx.z-node.z)
       local al,ar=boundsAt(i2)
       -- distance cull only for the finished track (long range view)
-      if isRec or true then
+      if isRec or flatDist(player.position,node)<CFG.DRAW_RANGE then
         render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
         render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
           vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
