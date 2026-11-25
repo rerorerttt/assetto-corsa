@@ -385,11 +385,33 @@ local function trajectoryForCar(car)
   return plan
 end
 
-local function assignTrajectory(p,car)
+local function hasNearbyTraffic(carIndex,car)
+  local sim=ac.getSim()
+  if not sim then return false end
+  local rangeSq=30.0*30.0
+  for i=0,sim.carsCount-1 do
+    if i~=carIndex then
+      local other=ac.getCar(i)
+      if other and other.isActive then
+        local dx=other.position.x-car.position.x
+        local dz=other.position.z-car.position.z
+        if dx*dx+dz*dz<rangeSq then return true end
+      end
+    end
+  end
+  return false
+end
+
+local function assignTrajectory(p,car,carIndex)
   p.trajectoryBundle=trajectoryForCar(car)
   if p.trajectoryBundle then
+    local preferred=nil
+    if hasNearbyTraffic(carIndex,car) then
+      preferred=type(p.latOff)=="number" and p.latOff or p.baseLaneOffset
+    end
     p.trajectoryPlan,p.globalSpeedProfile=TrajectoryOptimizer.select(
-      p.trajectoryBundle,p.lateralAccelLimit,p.brakeAccelEstimate,p.accelEstimate)
+      p.trajectoryBundle,p.lateralAccelLimit,p.brakeAccelEstimate,
+      p.accelEstimate,preferred,p.routeProgress or 0)
   else
     p.trajectoryPlan=nil
     p.globalSpeedProfile=nil
@@ -1400,13 +1422,6 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  if not p.trajectoryBundle then assignTrajectory(p,car) end
-  p.globalProfileTimer=math.max(0,safeNumber(p.globalProfileTimer)-dt)
-  if p.trajectoryBundle and p.globalProfileTimer<=0 then
-    p.trajectoryPlan,p.globalSpeedProfile=TrajectoryOptimizer.select(
-      p.trajectoryBundle,p.lateralAccelLimit,p.brakeAccelEstimate,p.accelEstimate)
-    p.globalProfileTimer=2.0
-  end
   local progress, projectedLateral, projectedSeg, _, projectionDistance =
     routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
   if p.spawnSeeded and
@@ -1425,6 +1440,19 @@ function Driver.update(carIndex, car, dt)
   calculateStability(p, speed)
   readWheelSlip(car,p)
 
+  if not p.trajectoryBundle then assignTrajectory(p,car,carIndex) end
+  p.globalProfileTimer=math.max(0,safeNumber(p.globalProfileTimer)-dt)
+  if p.trajectoryBundle and p.globalProfileTimer<=0 then
+    local preferred=nil
+    if hasNearbyTraffic(carIndex,car) then
+      preferred=type(p.latOff)=="number" and p.latOff or p.baseLaneOffset
+    end
+    p.trajectoryPlan,p.globalSpeedProfile=TrajectoryOptimizer.select(
+      p.trajectoryBundle,p.lateralAccelLimit,p.brakeAccelEstimate,
+      p.accelEstimate,preferred,p.routeProgress or 0)
+    p.globalProfileTimer=2.0
+  end
+
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
   if speed<RESCUE_SPEED then
     p.stuck=p.stuck+dt
@@ -1441,10 +1469,6 @@ function Driver.update(carIndex, car, dt)
     if rescued then return end
   end
 
-  if not state.globalTrajectory and not state.globalTrajectoryBuildFailed then
-    Driver.rebuildTrajectory()
-    if not p.trajectoryBundle then assignTrajectory(p,car) end
-  end
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
   local previousOvertakeSide=p.overtakeSide
