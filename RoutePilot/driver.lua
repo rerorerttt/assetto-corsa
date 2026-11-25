@@ -682,6 +682,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   refreshRouteMetrics()
   if not state.routeGeometry or p.routeProgress==nil then
     p.racingPlan=nil
+    p.racingPlanBlocked=false
+    p.racingPlanBlockedDistance=nil
     return
   end
   local bl,br=H.boundsAt(p.segIdx)
@@ -720,11 +722,11 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0)
-  p.racingPlanBlocked=planFailure=="NO_FIT"
+  p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
   if p.racingPlanBlocked then
-    H.log("RACE_LINE_BLOCKED id=%d reason=VEHICLE_DOES_NOT_FIT_BOUNDS",carIndex)
+    H.log("RACE_LINE_BLOCKED id=%d reason=%s",carIndex,tostring(planFailure))
   end
   if p.racingPlanMode~=mode then
     H.log("RACE_LINE id=%d mode=%s base=%.2f target=%.2f curve=%.4f horizon=%.1f",
