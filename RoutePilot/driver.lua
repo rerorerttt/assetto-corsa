@@ -222,11 +222,26 @@ local function speedPlanningCurvature(route,progress)
   local peak=0
   for i=1,#windows do
     local half=windows[i]
-    local a=Geometry.sample(route,progress-half)
-    local b=Geometry.sample(route,progress+half)
-    if a and b then
-      local turn=math.abs(signedAngle(a.tx,a.tz,b.tx,b.tz))
-      local curvature=turn/(2.0*half)
+    local intervals=math.max(2,math.ceil((2.0*half)/5.0))
+    local spacing=(2.0*half)/intervals
+    local previous=Geometry.sample(route,progress-half)
+    local totalTurn=0
+    local valid=previous~=nil
+    for j=1,intervals do
+      local current=Geometry.sample(route,progress-half+spacing*j)
+      if not current or not previous then
+        valid=false
+        break
+      end
+      -- Sum absolute heading changes, rather than only comparing the two
+      -- window endpoints. Opposite-direction linked bends therefore remain
+      -- visible instead of cancelling into an apparently straight segment.
+      totalTurn=totalTurn+
+        math.abs(signedAngle(previous.tx,previous.tz,current.tx,current.tz))
+      previous=current
+    end
+    if valid then
+      local curvature=totalTurn/(2.0*half)
       if curvature>peak then peak=curvature end
     end
   end
