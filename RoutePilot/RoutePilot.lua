@@ -972,7 +972,9 @@ function windowMain(dt)
     if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
-        state.nodes={}; state.p={}; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
+        state.nodes={}; state.p={}; state.playerTelemetry=nil; state.routeGeometry=nil
+        state.globalTrajectory=nil; state.trajectoryCache={}; state.globalTrajectoryBuildFailed=nil
+        state.boundsL={}; state.boundsR={}
         state.loaded=false; state.recBounds=false
         state.status="Запись линии и границ..."
       else
@@ -1015,6 +1017,7 @@ function windowMain(dt)
     if ui.button("Очистить",vec2(-0.25,22)) then
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
       state.routeGeometry=nil; state.globalTrajectory=nil; state.trajectoryCache={}
+      state.globalTrajectoryBuildFailed=nil
       state.status="Очищено"; state.loaded=false
     end
     ui.separator()
