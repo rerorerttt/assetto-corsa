@@ -231,7 +231,7 @@ local function planTargetSpeed(p,speed)
     -- Ignore curvature below the noise floor of a route recorded at 3 m.
     -- The optimizer's path curvature, not the reference-line curvature,
     -- determines braking on an open road.
-    if curvature>math.max(CFG.CURVE_MIN,0.0018) then
+    if curvature>CFG.CURVE_MIN then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*1.18
       local curveSpeed=math.sqrt(lateralLimit/curvature)
       local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.25)
@@ -425,8 +425,15 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+
-    p.slipAngle*0.18+lateralDamping
+  -- Positive lateral velocity means the car drifts right of the route;
+  -- counter-steer left. Slip feedback must oppose, not reinforce, that drift.
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN-
+    p.slipAngle*0.22+lateralDamping
+  if not p.emergencyPass and math.abs(desiredCurvature)<0.0015 and
+     math.abs(boundaryError)<0.08 and math.abs(lateralVelocity)<0.12 and
+     math.abs(steer)<0.012 then
+    steer=0
+  end
   if p.emergencyPass then
     steer=steer*CFG.EMERGENCY_STEER_GAIN
     return clamp(steer+boundarySteer,-1.0,1.0)
@@ -1038,7 +1045,6 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.routeLocked = true
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
-  if p.returningFromPass then return targetSpeed end
   local leftCenter,rightCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
   local defaultOffset=p.baseLaneOffset or leftCenter or ((bl+br)*0.5)

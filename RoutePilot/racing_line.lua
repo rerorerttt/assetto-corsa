@@ -183,7 +183,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
           local cost=node.cost+k*k*180.0+excess*excess*200000.0+
-            second*second*0.18+slope*slope*0.075+
+            second*second*0.42+slope*slope*0.20+
             0.00008/math.max(0.12,clearance+0.12)+
             0
           local key=node.b*100+c
