@@ -15,6 +15,7 @@
 local Driver = {}
 local Geometry = require("route_geometry")
 local RacingLine = require("racing_line")
+local TrajectoryOptimizer = require("trajectory_optimizer")
 local CFG, state, H
 
 local BOUND_MARGIN = 0.4
@@ -54,6 +55,9 @@ function Driver.setup(cfg, st, helpers)
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
+  state.globalTrajectory = nil
+  state.trajectoryCache = {}
+  state.globalTrajectoryBuildFailed = nil
 end
 
 local function refreshRouteMetrics()
@@ -64,7 +68,12 @@ local function refreshRouteMetrics()
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
+  state.globalTrajectory = nil
+  state.trajectoryCache = {}
+  state.globalTrajectoryBuildFailed = nil
   for _, p in pairs(state.p) do
+    p.trajectoryPlan = nil
+    p.globalSpeedProfile = nil
     p.routeLocked = false
     p.routeProgress = nil
   end
@@ -216,6 +225,10 @@ end
 
 local function planTargetSpeed(p,speed)
   refreshRouteMetrics()
+  if p.trajectoryPlan and p.overtakeSide==0 and not p.returningFromPass then
+    local profile=TrajectoryOptimizer.sample(p.trajectoryPlan,p.routeProgress or 0,p.globalSpeedProfile)
+    if profile then return math.max(0,profile.targetSpeed) end
+  end
   local route=state.routeGeometry
   if not route or not p.routeProgress then return 11.0 end
   local target=p.cruiseSpeed
@@ -279,6 +292,83 @@ local function routeBoundsAtSample(sample)
   local rightOffset=(centerX+rawNx*right-sample.x)*splineNx+
     (centerZ+rawNz*right-sample.z)*splineNz
   return math.min(leftOffset,rightOffset),math.max(leftOffset,rightOffset)
+end
+
+local function representativeCar()
+  if ac and ac.getSim then
+    local sim=ac.getSim()
+    if sim then
+      for i=1,sim.carsCount-1 do
+        local car=ac.getCar(i)
+        if car and car.isActive then return car end
+      end
+      local player=ac.getCar(0)
+      if player and player.isActive then return player end
+    end
+  end
+  return nil
+end
+
+local function trajectorySizeKey(car)
+  local size=car and car.aabbSize
+  local w=math.max(0.75,safeNumber(size and size.x,2.0)*0.5)
+  local l=math.max(1.5,safeNumber(size and size.z,4.5)*0.5)
+  return string.format("%.1f:%.1f",math.floor(w*10+0.5)/10,
+    math.floor(l*10+0.5)/10),w,l
+end
+
+function Driver.rebuildTrajectory()
+  refreshRouteMetrics()
+  if not state.routeGeometry then
+    state.globalTrajectory=nil
+    state.globalTrajectoryBuildFailed="NO_ROUTE"
+    return false,"NO_ROUTE"
+  end
+  state.trajectoryCache={}
+  local car=representativeCar()
+  local key=trajectorySizeKey(car)
+  local plan,reason=TrajectoryOptimizer.build(state.routeGeometry,Geometry.sample,
+    state.nodes,state.loopRoute,H.boundsAt,car,{
+      spacing=4.5,lateralAccel=10.0,brakeAccel=8.0,accel=4.0
+    })
+  state.globalTrajectory=plan
+  state.globalTrajectoryBuildFailed=plan and nil or reason
+  if plan then
+    state.trajectoryCache[key]=plan
+    H.log("GLOBAL_TRAJECTORY_READY points=%d alternatives=%d length=%.1f best_time=%.2f anchors=%s",
+      #plan.points,plan.alternativeCount or 1,plan.routeLength or 0,
+      plan.estimatedTime or 0,tostring(plan.anchorFraction))
+    for i,alternative in ipairs(plan.alternatives or {}) do
+      H.log("GLOBAL_TRAJECTORY_ALT index=%d anchor=%.2f time=%.2f",
+        i,alternative.anchorFraction or 0,alternative.estimatedTime or 0)
+    end
+    return true
+  end
+  H.log("GLOBAL_TRAJECTORY_FAILED reason=%s",tostring(reason))
+  return false,reason
+end
+
+local function trajectoryForCar(car)
+  if not state.globalTrajectory and not state.globalTrajectoryBuildFailed then
+    Driver.rebuildTrajectory()
+  end
+  local key=trajectorySizeKey(car)
+  local cached=state.trajectoryCache and state.trajectoryCache[key]
+  if cached then return cached end
+  if not state.routeGeometry then return nil end
+  local plan,reason=TrajectoryOptimizer.build(state.routeGeometry,Geometry.sample,
+    state.nodes,state.loopRoute,H.boundsAt,car,{
+      spacing=4.5,lateralAccel=10.0,brakeAccel=8.0,accel=4.0
+    })
+  if plan then
+    state.trajectoryCache=state.trajectoryCache or {}
+    state.trajectoryCache[key]=plan
+    H.log("VEHICLE_TRAJECTORY_READY size=%s points=%d alternatives=%d time=%.2f",
+      key,#plan.points,plan.alternativeCount or 1,plan.estimatedTime or 0)
+  else
+    H.log("VEHICLE_TRAJECTORY_FAILED size=%s reason=%s",key,tostring(reason))
+  end
+  return plan
 end
 
 local function safeCorridorForPreview(route, progress, ahead, car, fx, fz)
@@ -368,6 +458,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local laneTarget=p.laneOffset or leftCenter
   local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
   local raceTarget=p.racingPlan and RacingLine.sample(p.racingPlan,ahead+clamp(planAdvance,0,30.0)) or nil
+  if not raceTarget and p.trajectoryPlan and p.overtakeSide==0 and not p.returningFromPass then
+    raceTarget=TrajectoryOptimizer.sample(p.trajectoryPlan,projection.s+ahead,p.globalSpeedProfile)
+  end
   if raceTarget then
     p.laneOffsetCurrent=raceTarget.offset
   else
@@ -418,6 +511,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
   local currentRace= p.racingPlan and RacingLine.sample(p.racingPlan,0) or nil
+  if not currentRace and p.trajectoryPlan and p.overtakeSide==0 and not p.returningFromPass then
+    currentRace=TrajectoryOptimizer.sample(p.trajectoryPlan,projection.s,p.globalSpeedProfile)
+  end
   p.pathCurvature=safeNumber(currentRace and currentRace.k or current.k)
   p.steerCurvature=desiredCurvature
   p.projectionProgressDelta=projection.delta or 0
@@ -753,6 +849,15 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local forcedMode=nil
   if p.overtakeSide~=0 then forcedMode="PASS"
   elseif p.returningFromPass then forcedMode="RETURN" end
+  if forcedMode==nil and p.trajectoryPlan then
+    p.racingPlan=nil
+    p.racingPlanBlocked=false
+    p.racingPlanBlockedDistance=nil
+    p.racingPlanMode="OPEN"
+    p.racingPlanComputed=true
+    p.racingPlanTimer=0.40
+    return
+  end
   -- Cache failed plans too. Previously nil plans bypassed the timer and the
   -- optimizer ran twice per frame, logging NO_PATH thousands of times.
   if p.racingPlanComputed and p.racingPlanTimer>0 then
@@ -1269,6 +1374,13 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
+  if not p.trajectoryPlan then p.trajectoryPlan=trajectoryForCar(car) end
+  p.globalProfileTimer=math.max(0,safeNumber(p.globalProfileTimer)-dt)
+  if p.trajectoryPlan and (not p.globalSpeedProfile or p.globalProfileTimer<=0) then
+    p.globalSpeedProfile=TrajectoryOptimizer.retime(p.trajectoryPlan,
+      p.lateralAccelLimit,p.brakeAccelEstimate,p.accelEstimate)
+    p.globalProfileTimer=2.0
+  end
   local progress, projectedLateral, projectedSeg, _, projectionDistance =
     routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
   if p.spawnSeeded and
@@ -1303,6 +1415,10 @@ function Driver.update(carIndex, car, dt)
     if rescued then return end
   end
 
+  if not state.globalTrajectory and not state.globalTrajectoryBuildFailed then
+    Driver.rebuildTrajectory()
+    if not p.trajectoryPlan then p.trajectoryPlan=trajectoryForCar(car) end
+  end
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
   local previousOvertakeSide=p.overtakeSide
