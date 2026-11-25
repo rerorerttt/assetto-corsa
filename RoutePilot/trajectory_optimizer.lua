@@ -153,7 +153,7 @@ local function solveVariant(samples, bounds, loopRoute, halfWidth, halfLength,
       list[1]=clamp(anchor,lo,hi)
       if math.abs(list[1]-anchor)>0.25 then return nil end
     else
-      for c=0,8 do list[#list+1]=lo+(hi-lo)*c/8 end
+      for c=0,6 do list[#list+1]=lo+(hi-lo)*c/6 end
     end
     candidates[i]=list
   end
@@ -276,7 +276,7 @@ function Optimizer.build(route, sampleFn, nodes, loopRoute, boundsAt, car, optio
     return nil,"INVALID_ROUTE"
   end
   options=options or {}
-  local spacing=clamp(safe(options.spacing,4.5),3.0,8.0)
+  local spacing=clamp(safe(options.spacing,4.5),3.0,20.0)
   local halfWidth=math.max(0.75,safe(car and car.aabbSize and car.aabbSize.x,2.0)*0.5)
   local halfLength=math.max(1.5,safe(car and car.aabbSize and car.aabbSize.z,4.5)*0.5)
   local uniqueCount=loopRoute and math.max(24,math.ceil(route.total/spacing)) or
