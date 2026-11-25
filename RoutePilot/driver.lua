@@ -888,9 +888,9 @@ local function safeFollowingSpeed(gap,leaderSpeed,brakeAccel)
   return math.sqrt(math.max(0,leader*leader+2*decel*available))
 end
 
--- Predict the complete lateral pass, the side-by-side phase and the
--- return to the original line. A candidate is accepted only when the whole
--- swept vehicle footprint remains inside the road and clear of every car.
+-- Predict the future swept corridors of every car ahead. If our body
+-- will still overlap the leader's corridor at the encounter point, cap speed
+-- using the measured braking envelope instead of relying on lane heuristics.
 local function predictiveFollowingSpeed(carIndex,car,p,speed,targetSpeed)
   local sim=ac.getSim()
   local ownProgress=p.routeProgress
@@ -942,8 +942,9 @@ local function predictiveFollowingSpeed(carIndex,car,p,speed,targetSpeed)
             local otherStart=otherState and
               otherState.racingPlanStartProgress or op
             local otherAdvance=otherStart and routeGap(otherStart,op) or 0
-            local otherFuture=otherPlan and RacingLine.sample(otherPlan,
-              math.max(0,otherAdvance)+otherSpeed*time) or nil
+            local otherFuture=directionDot>=-0.25 and otherPlan and
+              RacingLine.sample(otherPlan,
+                math.max(0,otherAdvance)+otherSpeed*time) or nil
             local otherLateral=otherFuture and otherFuture.offset or ol
             local otherHalf=math.max(0.75,
               safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
