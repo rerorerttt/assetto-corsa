@@ -232,7 +232,7 @@ local function planTargetSpeed(p,speed)
     -- The optimizer's path curvature, not the reference-line curvature,
     -- determines braking on an open road.
     if curvature>math.max(CFG.CURVE_MIN,0.0018) then
-      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*0.90
+      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*1.18
       local curveSpeed=math.sqrt(lateralLimit/curvature)
       local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.25)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
@@ -407,6 +407,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     (boundaryDistance*boundaryDistance),-0.06,0.06)
   desiredCurvature=desiredCurvature+boundaryCurvature
   local boundarySteer=clamp(boundaryError*0.075-lateralVelocity*0.035,-0.22,0.22)
+  -- Continuous lateral-velocity damping suppresses left-right weaving on straights.
+  local lateralDamping=clamp(-lateralVelocity*0.028,-0.16,0.16)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
@@ -423,7 +425,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+
+    p.slipAngle*0.18+lateralDamping
   if p.emergencyPass then
     steer=steer*CFG.EMERGENCY_STEER_GAIN
     return clamp(steer+boundarySteer,-1.0,1.0)
@@ -1025,6 +1028,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
 end
 
 local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
+  p.trafficBrake=false
   p.overtakeRetryT=math.max(0,safeNumber(p.overtakeRetryT)-dt)
   local ownProgress, _, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
   if ownProgress == nil then
@@ -1052,6 +1056,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     if rightGap then
       passSafeSpeed = math.min(passSafeSpeed,
         safeFollowingSpeed(rightGap, rightLeaderSpeed or 0,p.brakeAccelEstimate))
+      p.trafficBrake=passSafeSpeed<speed-1.5
     end
     local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
     local passedClearance = false
@@ -1168,13 +1173,17 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       p.emergencyPassRequest=false
     end
     local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
-    return math.min(targetSpeed,safe)
+    local result=math.min(targetSpeed,safe)
+    p.trafficBrake=result<speed-1.5
+    return result
   end
 
   p.followTimer = 0
   p.blockedT = 0
   local safe = safeFollowingSpeed(gap, leaderSpeed or 0,p.brakeAccelEstimate)
-  return math.min(targetSpeed, safe)
+  local result=math.min(targetSpeed,safe)
+  p.trafficBrake=result<speed-1.5
+  return result
 end
 
 local function readWheelSlip(car, p)
@@ -1200,7 +1209,10 @@ end
 local function calculateThrottle(p, speed, targetSpeed, dt)
   local error=targetSpeed-speed
   local gas=clamp(error*CFG.GAS_GAIN,0,CFG.MAX_GAS)
-  local brake=clamp(-error*CFG.BRAKE_GAIN,0,CFG.MAX_BRAKE)
+  -- Curvature and road geometry are handled by lifting the throttle only.
+  -- Hydraulic braking is reserved for a closing collision with another car.
+  local brake=p.trafficBrake and
+    clamp(-error*CFG.BRAKE_GAIN,0,CFG.MAX_BRAKE) or 0
 
   -- Fast torque cut on wheelspin, slow recovery to avoid repeated grip/spin.
   local slip=math.max(0,safeNumber(p.wheelSlip))
