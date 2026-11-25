@@ -79,8 +79,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     local lo, hi = left + margin, right - margin
     if lo > hi then
       -- A near-field corridor that cannot contain the car is an immediate
-      -- hard stop. A distant narrowing becomes a braking constraint instead
-      -- of stopping the car hundreds of metres early.
+      -- hard stop. A distant narrowing becomes a braking constraint instead.
       if d <= 10.0 then return nil, "NO_FIT" end
       blockedDistance=blockedDistance or d
       local center=(left+right)*0.5
@@ -88,51 +87,107 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     end
     samples[#samples + 1] = sample
     bounds[#bounds + 1] = { lo, hi }
-    local t = clamp(d / 22.0, 0, 1)
-    local desired
-    if fixedOffset ~= nil then
-      desired=initial+(safe(fixedOffset,initial)-initial)*t
-    elseif i==0 then
-      desired=initial
-    else
-      -- Seed the optimizer on the outside of the upcoming bend. Starting
-      -- every point in the same lane creates a local minimum that cannot
-      -- discover a smooth corner-cutting path through coordinate descent.
-      local previous=sampleFn(route,progress+math.max(0,d-step))
-      local following=sampleFn(route,progress+d+step)
-      local kp=safe(previous and previous.k)
-      local kc=safe(sample.k)
-      local kn=safe(following and following.k,kc)
-      local smoothCurvature=(kp+2.0*kc+kn)*0.25
-      local cornerBias=clamp(-smoothCurvature*90.0,-2.8,2.8)
-      desired=preferred+cornerBias
-    end
-    offsets[#offsets + 1] = clamp(desired, lo, hi)
   end
 
   local n = #samples
   if n < 3 then return nil end
 
-  if fixedOffset == nil then
-    -- Coordinate descent over the complete available corridor. The objective
-    -- minimizes curvature of the actual offset path, penalizes abrupt lateral
-    -- changes and keeps a weak preference for the normal cruising lane.
-    for _ = 1, 7 do
-      for i = 2, n - 1 do
-        local lo, hi = bounds[i][1], bounds[i][2]
-        local best, bestCost = offsets[i], math.huge
-        local candidates = 13
-        for c = 0, candidates - 1 do
-          local candidate = lo + (hi - lo) * c / (candidates - 1)
-          offsets[i] = candidate
-          local cost = localCost(samples, bounds, offsets, i, preferred)
-          if cost < bestCost then
-            best, bestCost = candidate, cost
+  if fixedOffset ~= nil then
+    for i=1,n do
+      local d=(i-1)*step
+      local t=clamp(d/22.0,0,1)
+      local desired=initial+(safe(fixedOffset,initial)-initial)*t
+      offsets[i]=clamp(desired,bounds[i][1],bounds[i][2])
+    end
+  else
+    -- Dynamic programming over pairs of lateral candidates. Each transition
+    -- evaluates the curvature of the real offset path, so the search can
+    -- compare outside-in-out lines globally instead of getting trapped by
+    -- one-point coordinate-descent minima.
+    local candidateSets={}
+    candidateSets[1]={clamp(initial,bounds[1][1],bounds[1][2])}
+    local function addCandidate(list,value,lo,hi)
+      local v=clamp(value,lo,hi)
+      for j=1,#list do
+        if math.abs(list[j]-v)<0.04 then return end
+      end
+      list[#list+1]=v
+    end
+    for i=2,n do
+      local lo,hi=bounds[i][1],bounds[i][2]
+      local list={}
+      for c=0,8 do addCandidate(list,lo+(hi-lo)*c/8,lo,hi) end
+      addCandidate(list,preferred,lo,hi)
+      local d=(i-1)*step
+      local previous=sampleFn(route,progress+math.max(0,d-step))
+      local following=sampleFn(route,progress+d+step)
+      local kp=safe(previous and previous.k)
+      local kc=safe(samples[i].k)
+      local kn=safe(following and following.k,kc)
+      local smoothCurvature=(kp+2.0*kc+kn)*0.25
+      addCandidate(list,preferred+clamp(-smoothCurvature*90.0,-2.8,2.8),lo,hi)
+      candidateSets[i]=list
+    end
+
+    local firstLayer={}
+    for j=1,#candidateSets[2] do
+      local off0=candidateSets[1][1]
+      local off1=candidateSets[2][j]
+      local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
+      local cost=(off1-off0)^2*0.02+
+        0.00008/math.max(0.12,clearance+0.12)+
+        (off1-preferred)^2*0.0002
+      firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
+    end
+    local layer=firstLayer
+    for station=2,n-1 do
+      local nextLayer={}
+      local bestByPair={}
+      for _,node in ipairs(layer) do
+        local offA=candidateSets[station-1][node.a]
+        local offB=candidateSets[station][node.b]
+        local pointA=pointAt(samples[station-1],offA)
+        local pointB=pointAt(samples[station],offB)
+        for c=1,#candidateSets[station+1] do
+          local offC=candidateSets[station+1][c]
+          local pointC=pointAt(samples[station+1],offC)
+          local k=curvature(pointA,pointB,pointC)
+          local reference=math.abs(safe(samples[station].k))
+          local excess=math.max(0,math.abs(k)-math.max(reference*1.05,0.002))
+          local second=offA-2.0*offB+offC
+          local slope=offC-offB
+          local clearance=math.min(offC-bounds[station+1][1],
+            bounds[station+1][2]-offC)
+          local cost=node.cost+k*k*180.0+excess*excess*6000.0+
+            second*second*0.055+slope*slope*0.02+
+            0.00008/math.max(0.12,clearance+0.12)+
+            (offC-preferred)^2*0.0002
+          local key=node.b*100+c
+          local existing=bestByPair[key]
+          if not existing or cost<existing.cost then
+            local nextNode={a=node.b,b=c,cost=cost,prev=node}
+            bestByPair[key]=nextNode
           end
         end
-        offsets[i] = best
       end
+      for _,node in pairs(bestByPair) do nextLayer[#nextLayer+1]=node end
+      layer=nextLayer
+      if #layer==0 then return nil, "NO_PATH" end
     end
+
+    local best=nil
+    for _,node in ipairs(layer) do
+      if not best or node.cost<best.cost then best=node end
+    end
+    if not best then return nil, "NO_PATH" end
+    local node,station=best,n
+    while node and station>=2 do
+      offsets[station]=candidateSets[station][node.b]
+      offsets[station-1]=candidateSets[station-1][node.a]
+      node=node.prev
+      station=station-1
+    end
+    offsets[1]=candidateSets[1][1]
   end
 
   local points = {}
