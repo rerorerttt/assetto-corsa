@@ -193,8 +193,14 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local offC=candidateSets[station+1][c]
           local pointC=pointAt(samples[station+1],offC)
           local k=curvature(pointA,pointB,pointC)
-          if footprintFits(pointA,pointC,samples[station],offB,halfWidth,
-              halfLength,bounds[station][1],bounds[station][2]) then
+          -- Validate the two real adjacent path segments independently.
+          -- The old A-to-C chord cut across the middle of an S-bend and could
+          -- reject every valid transition, returning NO_PATH on an open road.
+          local fitsAB=footprintFits(pointA,pointB,samples[station],offB,
+            halfWidth,halfLength,bounds[station][1],bounds[station][2])
+          local fitsBC=footprintFits(pointB,pointC,samples[station+1],offC,
+            halfWidth,halfLength,bounds[station+1][1],bounds[station+1][2])
+          if fitsAB and fitsBC then
           -- Minimize estimated traversal time over the complete preview,
           -- rather than penalizing curvature that exceeds the recorded route.
           -- With a lateral-acceleration model, local time per distance is
