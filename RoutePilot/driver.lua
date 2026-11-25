@@ -106,6 +106,28 @@ local function routeGap(ownProgress, otherProgress)
   return gap
 end
 
+-- Resolve a recorded spawn hint using the route data itself. Do not depend on
+-- an optional Geometry.distanceAt export: CSP can keep an older required
+-- module in its Lua package cache while the app files have already changed.
+local function routeDistanceAt(route, segment, parameter)
+  if not route or not segment or type(route.samples) ~= "table" then return nil end
+  local samples = route.samples
+  local u = clamp(parameter or 0, 0, 1)
+  local before, after
+  for i = 1, #samples do
+    local sample = samples[i]
+    if sample.seg == segment then
+      if sample.t <= u then before = sample end
+      if sample.t >= u then after = sample; break end
+    end
+  end
+  if not before then return after and after.s or nil end
+  if not after then return before.s end
+  local span = after.t - before.t
+  local t = span > 1e-8 and clamp((u - before.t) / span, 0, 1) or 0
+  return before.s + (after.s - before.s) * t
+end
+
 local function newPersonality(carIndex)
   -- No artificial cruise-speed ceiling: the route planner and vehicle physics
   -- determine speed. Curvature and measured braking capability remain limits.
@@ -125,7 +147,7 @@ local function newPersonality(carIndex)
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
-    local seededProgress=Geometry.distanceAt(
+    local seededProgress=routeDistanceAt(
       state.routeGeometry,spawnHint.segment,spawnHint.parameter)
     if seededProgress~=nil then
       p.routeProgress=seededProgress
