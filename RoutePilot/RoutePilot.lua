@@ -54,6 +54,7 @@ local state = {
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false,
 }
+local driverReady=false
 local logger=nil
 if Logger and type(Logger.new)=="function" then
   local ok, result = pcall(function()
@@ -178,6 +179,10 @@ local function saveLine()
   end
   if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
   saveBounds()
+  if driverReady and Driver and Driver.rebuildTrajectory then
+    local okPlan,planError=pcall(Driver.rebuildTrajectory)
+    if not okPlan then writeLog("GLOBAL_TRAJECTORY_ERROR err=%s",tostring(planError)) end
+  end
   if wroteFile then
     state.status=string.format("Сохранено: %d точек",#state.nodes)
     writeLog("SAVE_ROUTE points=%d",#state.nodes)
@@ -206,7 +211,12 @@ local function loadLine()
     end
     state.status=string.format("Загружено: %d точек",#loaded)
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
-    loadBounds(); flushLog()
+    loadBounds()
+    if driverReady and Driver and Driver.rebuildTrajectory then
+      local okPlan,planError=pcall(Driver.rebuildTrajectory)
+      if not okPlan then writeLog("GLOBAL_TRAJECTORY_ERROR err=%s",tostring(planError)) end
+    end
+    flushLog()
     return true
   end
   state.status="Линия не найдена"; state.loaded=false
@@ -639,6 +649,9 @@ local function applyWidthPreset(preset)
     state.boundsR[i]=half
   end
   writeLog("WIDTH_PRESET preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
+  if driverReady and Driver and Driver.rebuildTrajectory then
+    pcall(Driver.rebuildTrajectory)
+  end
 end
 local function releaseCar(carIndex)
   local ok,controls=pcall(ac.overrideCarControls,carIndex)
@@ -648,7 +661,6 @@ local function releaseCar(carIndex)
   end
   state.p[carIndex]=nil
 end
-local driverReady=false
 local function ensureDriver()
   if driverReady or not Driver then return Driver~=nil end
   if type(Driver.setup)~="function" then return false end
@@ -659,6 +671,10 @@ local function ensureDriver()
     teleportHome=teleportHome, log=writeLog,
   })
   driverReady=true
+  if Driver.rebuildTrajectory then
+    local okPlan,planError=pcall(Driver.rebuildTrajectory)
+    if not okPlan then writeLog("GLOBAL_TRAJECTORY_ERROR err=%s",tostring(planError)) end
+  end
   return true
 end
 function script.update(dt)
@@ -937,12 +953,18 @@ function windowMain(dt)
         state.status="Запись линии и границ..."
       else
         state.status="Записано точек: "..#state.nodes
+        if ensureDriver() and Driver.rebuildTrajectory then
+          local okPlan,planError=pcall(Driver.rebuildTrajectory)
+          if okPlan then state.status=state.status.." | траектория рассчитана"
+          else writeLog("GLOBAL_TRAJECTORY_ERROR err=%s",tostring(planError)) end
+        end
       end
     end
     ui.sameLine(0,4)
     if ui.button(state.recBounds and "СТОП запись границ" or "Запись границ",vec2(-0.5,24)) then
       if state.recBounds then
-        state.recBounds=false; state.status="Границы записаны"
+        state.recBounds=false; saveBounds(); state.status="Границы записаны"
+        if ensureDriver() and Driver.rebuildTrajectory then pcall(Driver.rebuildTrajectory) end
       else
         local player=ac.getCar(0)
         if player then
@@ -959,6 +981,8 @@ function windowMain(dt)
     if ui.button(state.loopRoute and "Круг: ВКЛ" or "Круг: ВЫКЛ",vec2(-0.5,22)) then
       state.loopRoute=not state.loopRoute
       state.p={}
+      state.routeGeometry=nil
+      if ensureDriver() and Driver.rebuildTrajectory then pcall(Driver.rebuildTrajectory) end
     end
     if ui.button("Сохранить",vec2(-0.25,22)) then saveLine() end
     ui.sameLine(0,4)
@@ -966,6 +990,7 @@ function windowMain(dt)
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+      state.routeGeometry=nil; state.globalTrajectory=nil; state.trajectoryCache={}
       state.status="Очищено"; state.loaded=false
     end
     ui.separator()
