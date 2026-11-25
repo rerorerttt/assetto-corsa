@@ -827,14 +827,14 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local previousFailure=p.racingPlanFailure
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,6.0,
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0,
     fixedOffset==nil and obstacleAt or nil,previousPlan,
     math.max(0,previousPlanAdvance))
   p.racingPlanStartProgress=p.routeProgress
   -- NO_PATH is a solver/traffic-planning failure, not proof that the road
   -- physically cannot contain the car. Only NO_FIT is a geometric failure;
   -- traffic conflicts are handled by predictiveFollowingSpeed below.
-  p.racingPlanBlocked=planFailure=="NO_FIT"
+  p.racingPlanBlocked=type(planFailure)=="string" and string.sub(planFailure,1,6)=="NO_FIT"
   p.racingPlanFailure=planFailure
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
