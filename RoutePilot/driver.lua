@@ -344,6 +344,8 @@ function Driver.rebuildTrajectory()
     H.log("GLOBAL_TRAJECTORY_READY points=%d alternatives=%d length=%.1f best_time=%.2f anchors=%s",
       #plan.points,plan.alternativeCount or 1,plan.routeLength or 0,
       plan.estimatedTime or 0,tostring(plan.anchorFraction))
+    state.status=string.format("Гоночная траектория: %d варианта, %.1f с",
+      plan.alternativeCount or 1,plan.estimatedTime or 0)
     for i,alternative in ipairs(plan.alternatives or {}) do
       H.log("GLOBAL_TRAJECTORY_ALT index=%d anchor=%.2f time=%.2f",
         i,alternative.anchorFraction or 0,alternative.estimatedTime or 0)
