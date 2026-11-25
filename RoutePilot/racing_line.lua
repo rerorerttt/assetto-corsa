@@ -78,6 +78,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
   local blockedDistance=nil
+  local halfLength=math.max(1.5,safe(size and size.z,4.5)*0.5)
   local initial = safe(startOffset, safe(baseOffset, 0))
   local preferred = safe(baseOffset, initial)
 
@@ -109,6 +110,17 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local t=clamp(d/22.0,0,1)
       local desired=initial+(safe(fixedOffset,initial)-initial)*t
       offsets[i]=clamp(desired,bounds[i][1],bounds[i][2])
+      -- Even fixed-lane PASS/RETURN and the NO_PATH fallback must fit the
+      -- actual swept vehicle footprint. A distant narrowing remains a
+      -- braking constraint rather than invalidating the whole plan.
+      if i>1 and (not blockedDistance or d<blockedDistance) then
+        local a=pointAt(samples[i-1],offsets[i-1])
+        local b=pointAt(samples[i],offsets[i])
+        if not footprintFits(a,b,samples[i],offsets[i],halfWidth,
+            halfLength,bounds[i][1],bounds[i][2]) then
+          return nil,"NO_PATH"
+        end
+      end
     end
   else
     -- Dynamic programming over pairs of lateral candidates. Each transition
@@ -166,7 +178,6 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     end
 
     local firstLayer={}
-    local halfLength=math.max(1.5,safe(size and size.z,4.5)*0.5)
     for j=1,#candidateSets[2] do
       local off0=candidateSets[1][1]
       local off1=candidateSets[2][j]
