@@ -796,7 +796,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
       safeNumber(p.racingPlan and p.racingPlan.curvature[2]),horizon)
   end
   p.racingPlanMode=mode
-  p.racingPlanTimer=0.24
+  p.racingPlanTimer=0.40
   if p.racingPlan then
     p.racingPlanCurvature=safeNumber(p.racingPlan.curvature[2])
   end
