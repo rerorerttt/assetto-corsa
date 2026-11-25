@@ -24,8 +24,8 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  -- Keep roughly 0.9–1.3 seconds of preview at 100–300 km/h; 28 m was
-  -- only 0.34 s at 300 km/h and caused late, alternating corrections.
+  -- Use a moderate preview and shorten it further when an S-bend reverses
+  -- curvature, so the target does not jump beyond the next corner.
   LOOKAHEAD_BASE=8.0, LOOKAHEAD_SPEED=0.65, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=28.0,
   CURVATURE_STEER_GAIN=4.5, CURVATURE_FEEDFORWARD=0.20,
   STEER_LIMIT=1.0, STEER_RATE=4.5, STEER_FILTER=0.08,
