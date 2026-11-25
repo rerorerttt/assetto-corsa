@@ -24,7 +24,9 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.35, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=28.0,
+  -- Keep roughly 0.9–1.1 seconds of preview at high speed; 28 m was
+  -- only 0.34 s at 300 km/h and caused late, alternating corrections.
+  LOOKAHEAD_BASE=16.0, LOOKAHEAD_SPEED=0.75, LOOKAHEAD_MIN=18.0, LOOKAHEAD_MAX=90.0,
   CURVATURE_STEER_GAIN=4.5, CURVATURE_FEEDFORWARD=0.20,
   STEER_LIMIT=1.0, STEER_RATE=4.5, STEER_FILTER=0.08,
   EMERGENCY_STEER_GAIN=2.6, EMERGENCY_STEER_RATE=10.0,
@@ -35,6 +37,7 @@ local CFG = {
   TC_SLIP_START=0.10, TC_SLIP_FULL=0.28, TC_MAX_CUT=0.88,
   TC_RECOVERY_RATE=1.25, TC_CORNER_CUT=0.22,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
+  SPAWN_ROW_GAP=8.5, SPAWN_LANE_WIDTH=3.5,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
@@ -483,41 +486,60 @@ local function trySpawnTeleport(sim,dt)
   local metrics=buildSpawnRouteMetrics()
   if not metrics then state.spawnDone=true; return end
   local count=#aiCars
-  local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
-  if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
+  -- Form a compact starting grid instead of placing every car 25 m behind
+  -- the previous one. The lane count follows the saved physical road width:
+  -- 3/7/11/15 m corridors accommodate 1/2/3/4 cars per row.
+  local firstPosition,firstDirection,firstSegment=
+    sampleSpawnRoute(metrics,0)
+  local left,right=boundsAt(firstSegment or 1)
+  local roadWidth=math.max(0.1,right-left)
+  local lanes=clamp(math.floor((roadWidth+0.5)/CFG.SPAWN_LANE_WIDTH),1,4)
+  local rows=math.ceil(count/lanes)
+  local rowGap=CFG.SPAWN_ROW_GAP
   local startDistance=0
   if metrics.loop then
     local player=ac.getCar(0)
     if player then
       local routeDistance,routeError=findRouteDistanceAtPosition(
         player.position,metrics,player.look)
-      startDistance=routeDistance+gap
+      startDistance=routeDistance+math.max(CFG.SPAWN_GAP,
+        (rows-1)*rowGap+CFG.SAFE_RESPAWN_CLEAR+3.0)
       writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f)",
         routeDistance,routeError,player.look.x,player.look.z)
-    else startDistance=gap end
+    else startDistance=math.max(CFG.SPAWN_GAP,(rows-1)*rowGap+12.0) end
+  else
+    startDistance=(rows-1)*rowGap
   end
   local moved,failed=0,0
   for order=1,count do
     local carIndex=aiCars[order]
+    local row=math.floor((order-1)/lanes)
+    local lane=(order-1)%lanes
     local position,direction,routeSegment,routeParameter=
-      sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
+      sampleSpawnRoute(metrics,startDistance-row*rowGap)
     if position and direction then
-      -- Keep the previously user-verified orientation. The SDK documents
-      -- an explicit direction vector but does not define its sign convention.
+      local laneLeft,laneRight=boundsAt(routeSegment or 1)
+      local laneWidth=(laneRight-laneLeft)/lanes
+      local lateralOffset=laneLeft+laneWidth*(lane+0.5)
+      -- Positive offset is left in RoutePilot's local route frame.
+      position=vec3(position.x-direction.z*lateralOffset,position.y,
+        position.z+direction.x*lateralOffset)
+      -- Keep the previously user-verified orientation and SDK argument order.
       local ok,result=pcall(physics.setAICarPosition,carIndex,
         position,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
         moved=moved+1
         state.p[carIndex]=nil
         state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
-        writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
-          carIndex,position.x,position.y,position.z,direction.x,direction.z,
-          routeSegment,routeParameter)
+        writeLog("SPAWN_CAR id=%d row=%d lane=%d offset=%.2f pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
+          carIndex,row+1,lane+1,lateralOffset,position.x,position.y,position.z,
+          direction.x,direction.z,routeSegment,routeParameter)
       else failed=failed+1 end
     else failed=failed+1 end
   end
   state.spawnDone=true
-  writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
+  writeLog("SPAWN_FINISH moved=%d failed=%d rows=%d lanes=%d row_gap=%.2f",
+    moved,failed,rows,lanes,rowGap)
   flushLog()
 end
 local function teleportHome(carIndex,car)
