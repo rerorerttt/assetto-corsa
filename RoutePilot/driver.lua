@@ -687,21 +687,26 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     p.baseLaneOffset=base
   end
 
+  p.racingPlanTimer=math.max(0,safeNumber(p.racingPlanTimer)-dt)
+  local forcedMode=nil
+  if p.overtakeSide~=0 then forcedMode="PASS"
+  elseif p.returningFromPass then forcedMode="RETURN" end
+  if p.racingPlan and p.racingPlanTimer>0 then
+    if forcedMode==nil and
+       (p.racingPlanMode=="OPEN" or p.racingPlanMode=="TRAFFIC") then return end
+    if forcedMode~=nil and p.racingPlanMode==forcedMode then return end
+  end
+
   local fixedOffset=nil
-  local mode="OPEN"
-  if p.overtakeSide~=0 then
+  local mode=forcedMode or "OPEN"
+  if mode=="PASS" then
     fixedOffset=safeNumber(p.passLat,p.laneOffset or base)
-    mode="PASS"
-  elseif p.returningFromPass then
+  elseif mode=="RETURN" then
     fixedOffset=safeNumber(p.baseLaneOffset,base)
-    mode="RETURN"
   elseif hasTrafficInCorridor(carIndex,car,p,base) then
     fixedOffset=base
     mode="TRAFFIC"
   end
-
-  p.racingPlanTimer=math.max(0,safeNumber(p.racingPlanTimer)-dt)
-  if p.racingPlan and p.racingPlanMode==mode and p.racingPlanTimer>0 then return end
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
@@ -709,6 +714,12 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   p.racingPlan=RacingLine.plan(state.routeGeometry,Geometry.sample,
     p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0)
+  if p.racingPlanMode~=mode then
+    H.log("RACE_LINE id=%d mode=%s base=%.2f target=%.2f curve=%.4f horizon=%.1f",
+      carIndex,mode,base,safeNumber(p.racingPlan and p.racingPlan.points[2] and
+      p.racingPlan.points[2].offset,base),
+      safeNumber(p.racingPlan and p.racingPlan.curvature[2]),horizon)
+  end
   p.racingPlanMode=mode
   p.racingPlanTimer=0.10
   if p.racingPlan then
