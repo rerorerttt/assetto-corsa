@@ -317,14 +317,13 @@ function Optimizer.build(route, sampleFn, nodes, loopRoute, boundsAt, car, optio
 
   local roadWidth=math.max(0,bounds[1][2]-bounds[1][1])
   local laneCount=clamp(math.floor((roadWidth+0.5)/3.5),1,4)
-  local anchors
-  -- One candidate per physical lane. The previous lists had laneCount+1
-  -- anchors (three trajectories on a two-lane road), allowing AI cars to
-  -- settle into a third, overlapping center corridor.
-  if laneCount==1 then anchors={0.50}
-  elseif laneCount==2 then anchors={0.25,0.75}
-  elseif laneCount==3 then anchors={1/6,0.50,5/6}
-  else anchors={0.125,0.375,0.625,0.875} end
+  local anchors={}
+  -- Exactly one optimizer anchor per physical lane. Lane centres are spaced
+  -- by the fixed 3.5 m lane width; leftover road width is split at the edges.
+  for lane=1,laneCount do
+    local centerOffset=(lane-(laneCount+1)*0.5)*3.5
+    anchors[lane]=clamp((roadWidth*0.5+centerOffset)/roadWidth,0,1)
+  end
   local alternatives={}
   for i=1,#anchors do
     local plan=solveVariant(samples,bounds,loopRoute,halfWidth,halfLength,
