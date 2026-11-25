@@ -397,13 +397,14 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local safePredicted=clamp(predictedLateral,safeMin,safeMax)
   local boundaryError=safePredicted-predictedLateral
   local boundaryDistance=math.max(6.0,ahead*0.50)
-  local boundaryCurvature=clamp(3.5*boundaryError/
-    (boundaryDistance*boundaryDistance),-0.22,0.22)
+  -- Boundary recovery is deliberately a low-authority damping term.
+  -- The previous high-gain prediction feedback changed sign every time the
+  -- lateral velocity crossed zero, producing full-lock left/right oscillation
+  -- on straights. Main path tracking remains responsible for normal steering.
+  local boundaryCurvature=clamp(1.2*boundaryError/
+    (boundaryDistance*boundaryDistance),-0.06,0.06)
   desiredCurvature=desiredCurvature+boundaryCurvature
-  -- Curvature-only boundary recovery was too weak when a car was already
-  -- outside the usable footprint corridor. Add direct lateral-position and
-  -- lateral-velocity feedback so the whole body is driven back onto asphalt.
-  local boundarySteer=clamp(boundaryError*0.24-lateralVelocity*0.10,-0.85,0.85)
+  local boundarySteer=clamp(boundaryError*0.075-lateralVelocity*0.035,-0.22,0.22)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
@@ -714,10 +715,10 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedOffset=safeNumber(p.passLat,p.laneOffset or base)
   elseif mode=="RETURN" then
     fixedOffset=safeNumber(p.baseLaneOffset,base)
-  elseif hasTrafficInCorridor(carIndex,car,p,base) then
-    fixedOffset=base
-    mode="TRAFFIC"
   end
+  -- Traffic does not reserve a permanent lane. In open running the optimizer
+  -- may use the complete physical road width; only an active, validated pass
+  -- or its return phase temporarily reserves a passing corridor.
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
