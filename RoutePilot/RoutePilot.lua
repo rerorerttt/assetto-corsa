@@ -24,7 +24,7 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.35, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=28.0,
+  LOOKAHEAD_BASE=20.0, LOOKAHEAD_SPEED=0.60, LOOKAHEAD_MIN=18.0, LOOKAHEAD_MAX=50.0,
   CURVATURE_STEER_GAIN=4.5, CURVATURE_FEEDFORWARD=0.20,
   STEER_LIMIT=1.0, STEER_RATE=4.5, STEER_FILTER=0.08,
   EMERGENCY_STEER_GAIN=2.6, EMERGENCY_STEER_RATE=10.0,
@@ -36,7 +36,7 @@ local CFG = {
   TC_RECOVERY_RATE=2.50, TC_CORNER_CUT=0.16,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
-  PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
+  PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=120.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
   MAP_TOP=175.0, MAP_PAD=6.0, MAP_MIN_OFFSET=10.0,
 }
@@ -821,13 +821,14 @@ local function drawMapInRect(q0,q1)
       and not (y1<q0.y and y2<q0.y) and not (y1>q1.y and y2>q1.y)
   end
   local n=#state.nodes
+  local stride=math.max(1,math.ceil(n/180))
   local minOff=CFG.MAP_MIN_OFFSET
-  -- bounds: dark red, thick, min offset from the line
+  -- Bounds are decimated for rendering; route geometry remains full resolution.
   for pass=1,2 do
     local prev
-    for i=1,n do
+    for i=1,n,stride do
       local node=state.nodes[i]
-      local nxt=state.nodes[(i%n)+1]
+      local nxt=state.nodes[((i-1+stride)%n)+1]
       local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
       local l,r=boundsAt(i)
       local off=(pass==1) and l or r
@@ -846,7 +847,7 @@ local function drawMapInRect(q0,q1)
   -- AI line: yellow, thick
   do
     local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
-    for i=2,n do
+    for i=1,n,stride do
       local sx=mx+(state.nodes[i].x-cx)*scale
       local sy=my+(state.nodes[i].z-cz)*scale
       if segVisible(prev.x,prev.y,sx,sy) then
