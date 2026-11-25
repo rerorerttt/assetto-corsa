@@ -56,7 +56,7 @@ end
 -- fixedOffset is used while passing: it disables racing-line optimization and
 -- follows the reserved passing corridor instead.
 function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, baseOffset,
-    fixedOffset, horizon, spacing)
+    fixedOffset, horizon, spacing, obstacleAt)
   if not route or not progress or not boundsAt then return nil end
   local size = car and car.aabbSize
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
@@ -115,9 +115,30 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     for i=2,n do
       local lo,hi=bounds[i][1],bounds[i][2]
       local list={}
-      for c=0,12 do addCandidate(list,lo+(hi-lo)*c/12,lo,hi) end
-      addCandidate(list,preferred,lo,hi)
       local d=(i-1)*step
+      local forbidden=obstacleAt and obstacleAt(samples[i],d) or nil
+      local function isBlocked(value)
+        for _,interval in ipairs(forbidden or {}) do
+          if value>interval[1] and value<interval[2] then return true end
+        end
+        return false
+      end
+      for c=0,12 do
+        local value=lo+(hi-lo)*c/12
+        if not isBlocked(value) then addCandidate(list,value,lo,hi) end
+      end
+      if not isBlocked(preferred) then addCandidate(list,preferred,lo,hi) end
+      if #list==0 then
+        -- If traffic fills the usable width, keep a deterministic edge
+        -- candidate; longitudinal following control must then reduce speed.
+        local edge=lo
+        for _,interval in ipairs(forbidden or {}) do
+          if edge>=interval[1] and edge<=interval[2] then
+            edge=clamp(interval[2]+0.08,lo,hi)
+          end
+        end
+        addCandidate(list,edge,lo,hi)
+      end
       local previous=sampleFn(route,progress+math.max(0,d-step))
       local following=sampleFn(route,progress+d+step)
       local kp=safe(previous and previous.k)
