@@ -341,7 +341,8 @@ function Driver.rebuildTrajectory()
       lateralAccel=10.0,brakeAccel=8.0,accel=4.0
     })
   state.globalTrajectory=plan
-  state.globalTrajectoryBuildFailed=plan and nil or reason
+  if plan then state.globalTrajectoryBuildFailed=nil
+  else state.globalTrajectoryBuildFailed=reason end
   if plan then
     state.trajectoryCache[key]=plan
     H.log("GLOBAL_TRAJECTORY_READY points=%d alternatives=%d length=%.1f best_time=%.2f anchors=%s",
