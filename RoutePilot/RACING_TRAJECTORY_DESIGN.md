@@ -82,3 +82,16 @@ Release criteria: zero boundary departures and collisions in the test set; zero 
 - No artificial global speed cap; maximize speed subject to the selected trajectory, grip and braking distance.
 - AI must route around the player and other cars whenever a physically safe corridor exists.
 - Preserve the known-good baseline and keep experimental work isolated on this branch.
+
+
+## Implemented first correction — 2026-11-25
+
+The first runtime-code correction is committed in `driver.lua`.
+
+- Removed the requirement that one constant lateral target offset must be valid across the old 170 m horizon.
+- Candidate lateral offsets are now generated from the current vehicle-footprint-safe interval. Each candidate is still checked against the recorded left/right boundaries over every sample of its chosen horizon; the change does not relax the hard boundary check.
+- Added receding-horizon retries: the planner tries a speed-dependent horizon first (24–90 m), then 65, 45, 30, 20 and 14 m. A distant infeasible section therefore cannot by itself force an immediate stop when a shorter safe trajectory exists.
+- Added a denser local lateral candidate lattice and telemetry fields `PLAN_HORIZON` and `PLAN_FAIL_REASON`.
+- Reordered the update pipeline so steering/path validation happens before path-speed calculation, and overtake logic consumes the current frame's lane offset rather than the previous frame's value.
+
+This is a targeted deadlock correction, not yet the complete multi-knot space-time racing planner described above. Moving-vehicle trajectory prediction, coordinated time-space reservations, multi-knot lateral beam search and calibrated grip/speed optimization remain outstanding. The Lua code has been committed, but no Assetto Corsa/CSP runtime test has been performed in this environment. The release gates above remain mandatory.
