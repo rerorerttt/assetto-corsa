@@ -362,7 +362,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.laneOffsetCurrent=previousOffset+
       clamp(laneTarget-previousOffset,-maxStep,maxStep)
   end
-  if p.returningFromPass and math.abs(p.laneOffsetCurrent-laneTarget)<0.25 then
+  if p.returningFromPass and math.abs(projection.lateral-laneTarget)<0.35 then
     p.returningFromPass=false
   end
 
