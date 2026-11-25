@@ -37,6 +37,18 @@ local function curvature(a, b, c)
   return 2 * cross / math.max(0.001, ab * bc * ca)
 end
 
+local function footprintFits(a, b, sample, offset, halfWidth, halfLength, lo, hi)
+  local dx,dz=b.x-a.x,b.z-a.z
+  local length=math.sqrt(dx*dx+dz*dz)
+  if length<0.05 then return false end
+  dx,dz=dx/length,dz/length
+  local along=math.abs(dx*sample.tx+dz*sample.tz)
+  local across=math.abs(dx*sample.tz-dz*sample.tx)
+  local envelope=halfWidth*along+halfLength*across+0.42
+  local extra=math.max(0,envelope-(halfWidth+0.42))
+  return offset>=lo+extra and offset<=hi-extra
+end
+
 local function localCost(samples, bounds, offsets, index, baseOffset)
   local n = #samples
   if index <= 1 or index >= n then return 0 end
@@ -154,14 +166,19 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     end
 
     local firstLayer={}
+    local halfLength=math.max(1.5,safe(size and size.z,4.5)*0.5)
     for j=1,#candidateSets[2] do
       local off0=candidateSets[1][1]
       local off1=candidateSets[2][j]
-      local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
-      local cost=(off1-off0)^2*0.02+
-        0.00008/math.max(0.12,clearance+0.12)+
-        0
-      firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
+      local point0=pointAt(samples[1],off0)
+      local point1=pointAt(samples[2],off1)
+      if footprintFits(point0,point1,samples[2],off1,halfWidth,
+          halfLength,bounds[2][1],bounds[2][2]) then
+        local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
+        local cost=(off1-off0)^2*0.02+
+          0.00008/math.max(0.12,clearance+0.12)
+        firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
+      end
     end
     local layer=firstLayer
     for station=2,n-1 do
@@ -176,6 +193,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local offC=candidateSets[station+1][c]
           local pointC=pointAt(samples[station+1],offC)
           local k=curvature(pointA,pointB,pointC)
+          if footprintFits(pointA,pointC,samples[station],offB,halfWidth,
+              halfLength,bounds[station][1],bounds[station][2]) then
           -- Minimize estimated traversal time over the complete preview,
           -- rather than penalizing curvature that exceeds the recorded route.
           -- With a lateral-acceleration model, local time per distance is
@@ -196,6 +215,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
             local nextNode={a=node.b,b=c,cost=cost,prev=node}
             bestByPair[key]=nextNode
           end
+          end
         end
       end
       for _,node in pairs(bestByPair) do nextLayer[#nextLayer+1]=node end
@@ -203,6 +223,18 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       if #layer==0 then return nil, "NO_PATH" end
     end
 
+    local finalLayer={}
+    for _,node in ipairs(layer) do
+      local offA=candidateSets[n-1][node.a]
+      local offB=candidateSets[n][node.b]
+      local pointA=pointAt(samples[n-1],offA)
+      local pointB=pointAt(samples[n],offB)
+      if footprintFits(pointA,pointB,samples[n],offB,halfWidth,
+          halfLength,bounds[n][1],bounds[n][2]) then
+        finalLayer[#finalLayer+1]=node
+      end
+    end
+    layer=finalLayer
     local best=nil
     for _,node in ipairs(layer) do
       if not best or node.cost<best.cost then best=node end
