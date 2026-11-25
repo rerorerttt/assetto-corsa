@@ -153,12 +153,12 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local pointC=pointAt(samples[station+1],offC)
           local k=curvature(pointA,pointB,pointC)
           local reference=math.abs(safe(samples[station].k))
-          local excess=math.max(0,math.abs(k)-math.max(reference*1.05,0.002))
+          local excess=math.max(0,math.abs(k)-math.max(reference*1.05,0.003))
           local second=offA-2.0*offB+offC
           local slope=offC-offB
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
-          local cost=node.cost+k*k*180.0+excess*excess*6000.0+
+          local cost=node.cost+k*k*180.0+excess*excess*200000.0+
             second*second*0.055+slope*slope*0.02+
             0.00008/math.max(0.12,clearance+0.12)+
             (offC-preferred)^2*0.0002
