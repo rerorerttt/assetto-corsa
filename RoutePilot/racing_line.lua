@@ -117,8 +117,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         return false
       end
 
-      for c = 0, 8 do
-        local value = lo + (hi - lo) * c / 8
+      for c = 0, 6 do
+        local value = lo + (hi - lo) * c / 6
         if not isBlocked(value) then addCandidate(list, value, lo, hi) end
       end
       if not isBlocked(preferred) then addCandidate(list, preferred, lo, hi) end
