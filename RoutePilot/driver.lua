@@ -834,7 +834,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   -- NO_PATH is a solver/traffic-planning failure, not proof that the road
   -- physically cannot contain the car. Only NO_FIT is a geometric failure;
   -- traffic conflicts are handled by predictiveFollowingSpeed below.
-  p.racingPlanBlocked=type(planFailure)=="string" and string.sub(planFailure,1,6)=="NO_FIT"
+  p.racingPlanBlocked=planFailure=="NO_FIT_BOUNDS" or planFailure=="NO_FIT_SAMPLES"
   p.racingPlanFailure=planFailure
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
