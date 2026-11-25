@@ -230,11 +230,14 @@ local function planTargetSpeed(p,speed)
     local stoppingRoom=math.max(0,p.racingPlanBlockedDistance-10.0)
     local corridorSpeed=math.sqrt(2.0*coastDecel*stoppingRoom)
     target=math.min(target,corridorSpeed)
+    if currentSpeed>corridorSpeed+1.0 then p.boundaryBrake=true end
   end
   local distance=0
   while distance<=horizon do
     local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,p.routeProgress) or 0
-    local planned=p.racingPlan and RacingLine.sample(p.racingPlan,distance+clamp(planAdvance,0,30.0)) or nil
+    local planDistance=distance+clamp(planAdvance,0,30.0)
+    local planned=p.racingPlan and planDistance<=safeNumber(p.racingPlan.horizon) and
+      RacingLine.sample(p.racingPlan,planDistance) or nil
     local sample=planned or Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
     local curvature=math.abs(safeNumber(planned and planned.k or sample.k))
@@ -1269,7 +1272,7 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local gas=clamp(error*CFG.GAS_GAIN,0,CFG.MAX_GAS)
   -- Curvature and road geometry are handled by lifting the throttle only.
   -- Hydraulic braking is reserved for a closing collision with another car.
-  local brake=p.trafficBrake and
+  local brake=(p.trafficBrake or p.boundaryBrake) and
     clamp(-error*CFG.BRAKE_GAIN,0,CFG.MAX_BRAKE) or 0
 
   -- Fast torque cut on wheelspin, slow recovery to avoid repeated grip/spin.
@@ -1350,6 +1353,7 @@ function Driver.update(carIndex, car, dt)
   end
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
+  p.boundaryBrake=false
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   -- Overtake state can change in this frame; rebuild the steering path before
