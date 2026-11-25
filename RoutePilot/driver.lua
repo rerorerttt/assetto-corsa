@@ -1053,7 +1053,7 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  local progress, _, projectedSeg, _, projectionDistance =
+  local progress, projectedLateral, projectedSeg, _, projectionDistance =
     routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
   if p.spawnSeeded and
      (projectionDistance==nil or projectionDistance>8.0) then
@@ -1062,6 +1062,7 @@ function Driver.update(carIndex, car, dt)
   if progress ~= nil then
     p.routeLocked = true
     p.routeProgress = progress
+    p.latOff = projectedLateral or p.latOff
     p.projectionLost = false
     if projectedSeg then p.segIdx = projectedSeg end
   else
