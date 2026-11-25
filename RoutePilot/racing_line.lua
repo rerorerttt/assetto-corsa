@@ -89,8 +89,24 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     samples[#samples + 1] = sample
     bounds[#bounds + 1] = { lo, hi }
     local t = clamp(d / 22.0, 0, 1)
-    local desired = fixedOffset ~= nil and
-      (initial + (safe(fixedOffset, initial) - initial) * t) or preferred
+    local desired
+    if fixedOffset ~= nil then
+      desired=initial+(safe(fixedOffset,initial)-initial)*t
+    elseif i==0 then
+      desired=initial
+    else
+      -- Seed the optimizer on the outside of the upcoming bend. Starting
+      -- every point in the same lane creates a local minimum that cannot
+      -- discover a smooth corner-cutting path through coordinate descent.
+      local previous=sampleFn(route,progress+math.max(0,d-step))
+      local following=sampleFn(route,progress+d+step)
+      local kp=safe(previous and previous.k)
+      local kc=safe(sample.k)
+      local kn=safe(following and following.k,kc)
+      local smoothCurvature=(kp+2.0*kc+kn)*0.25
+      local cornerBias=clamp(-smoothCurvature*90.0,-2.8,2.8)
+      desired=preferred+cornerBias
+    end
     offsets[#offsets + 1] = clamp(desired, lo, hi)
   end
 
