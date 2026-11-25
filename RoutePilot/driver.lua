@@ -493,6 +493,24 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local ahead=clamp(CFG.LOOKAHEAD_BASE+speed*CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN,CFG.LOOKAHEAD_MAX)
   local current=Geometry.sample(route,projection.s)
+  if not current then return 0 end
+  -- Shorten the steering preview when an S-bend reverses curvature. A long
+  -- preview can aim beyond the first bend and cut across the next one.
+  local previousCurvature=safeNumber(current.k)
+  local sTurn=false
+  for i=1,4 do
+    local check=Geometry.sample(route,projection.s+ahead*i*0.25)
+    local k=safeNumber(check and check.k)
+    if math.abs(previousCurvature)>0.003 and math.abs(k)>0.003 and
+       previousCurvature*k<0 then
+      sTurn=true
+      break
+    end
+    previousCurvature=k
+  end
+  if sTurn then
+    ahead=math.min(ahead,clamp(8.0+speed*0.45,10.0,18.0))
+  end
   local future=Geometry.sample(route,projection.s+ahead)
   local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
   if not current or not future or not curvePreview then return 0 end
@@ -949,6 +967,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local v=math.max(0,speed)
   local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+35.0),CFG.PLAN_HORIZON,150.0)
   local planFailure=nil
+  local previousPlan=p.racingPlan
+  local previousPlanStart=p.racingPlanStartProgress
   local obstacles=fixedOffset==nil and
     buildTrafficObstacles(carIndex,car,p,speed) or nil
   local function obstacleAt(sample,distance)
@@ -963,22 +983,33 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     end
     return blocked
   end
-  p.racingPlan,planFailure=RacingLine.plan(
+  local planned,reason=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,
+    fixedOffset~=nil and 6.0 or 7.5,
     fixedOffset==nil and obstacleAt or nil)
+  planFailure=reason
   local planFallback=false
-  -- If the global search has no connected candidate chain, keep a validated
-  -- constant-offset corridor and let following/overtake logic handle traffic.
-  -- A search failure is not itself a physical obstacle and must not command
-  -- a full stop on an otherwise drivable route.
+  -- Open-road planning may fall back to the assigned safe corridor. During a
+  -- pass/return, never replace a validated path with an unplanned lane guess.
   if planFailure=="NO_PATH" and fixedOffset==nil then
-    p.racingPlan,planFailure=RacingLine.plan(
+    planned,planFailure=RacingLine.plan(
       state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
       safeNumber(p.latOff,base),base,base,horizon,7.5,nil)
-    planFallback=p.racingPlan~=nil
+    planFallback=planned~=nil
   end
-  p.racingPlanStartProgress=p.routeProgress
+  if planned then
+    p.racingPlan=planned
+    p.racingPlanStartProgress=p.routeProgress
+    p.racingPlanHeld=false
+  elseif forcedMode~=nil and previousPlan then
+    p.racingPlan=previousPlan
+    p.racingPlanStartProgress=previousPlanStart
+    p.racingPlanHeld=true
+  else
+    p.racingPlan=nil
+    p.racingPlanHeld=false
+  end
   p.racingPlanComputed=true
   p.racingPlanFallback=planFallback
   -- Optimizer failure is not proof that the road is blocked. In particular,
@@ -989,7 +1020,10 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   p.racingPlanFailure=planFailure
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
-  if planFailure then
+  if planFailure and p.racingPlanHeld then
+    H.log("RACE_LINE_HOLD_LAST_VALID id=%d mode=%s reason=%s",
+      carIndex,mode,tostring(planFailure))
+  elseif planFailure then
     H.log("RACE_LINE_FALLBACK id=%d mode=%s reason=%s",
       carIndex,mode,tostring(planFailure))
   elseif planFallback then
@@ -1260,7 +1294,31 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   local bl,br=H.boundsAt(p.segIdx)
   local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
     defaultCenter or ((bl+br)*0.5)
+  -- Validate the lane-change path with the same vehicle-footprint planner
+  -- that will steer the car. Traffic clearance alone is not sufficient.
+  local passHorizon=clamp(math.max(45.0,(passDistance or 60.0)+22.0),45.0,150.0)
+  local passPlan,passPlanError=RacingLine.plan(
+    state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+    source,source,offset,passHorizon,6.0,nil)
+  if not passPlan then
+    p.lastPassDeniedReason="pass_path_"..tostring(passPlanError or "NO_PATH")
+    p.overtakeRetryT=0.35
+    if not p.overtakeDeniedLogged then
+      H.log("CAR=%d OVERTAKE_DENIED reason=%s gap=%.1f",
+        carIndex,p.lastPassDeniedReason,gap or -1)
+      p.overtakeDeniedLogged=true
+    end
+    return false
+  end
   p.overtakeDeniedLogged=false
+  p.racingPlan=passPlan
+  p.racingPlanStartProgress=p.routeProgress
+  p.racingPlanMode="PASS"
+  p.racingPlanComputed=true
+  p.racingPlanHeld=false
+  p.racingPlanTimer=0.40
+  H.log("CAR=%d PASS_PATH_VALIDATED from=%.2f to=%.2f horizon=%.1f",
+    carIndex,source,offset,passPlan.horizon or passHorizon)
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex;p.passT=0;p.followTimer=0;p.blockedT=0
