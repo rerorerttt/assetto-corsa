@@ -222,10 +222,14 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local slope=offC-offB
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
+          -- Preserve the car's assigned lane on straights. Without this
+          -- term, edge-clearance cost pulls every car toward road center,
+          -- undoing the multi-lane grid and creating side-by-side contact.
+          local laneDelta=offC-preferred
+          local lanePreference=laneDelta*laneDelta*0.02
           local cost=node.cost+timeCost+k*k*18.0+
-            second*second*0.12+slope*slope*0.045+
-            0.00008/math.max(0.12,clearance+0.12)+
-            0
+            second*second*0.12+slope*slope*0.045+lanePreference+
+            0.00008/math.max(0.12,clearance+0.12)
           local key=node.b*100+c
           local existing=bestByPair[key]
           if not existing or cost<existing.cost then
