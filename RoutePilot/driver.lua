@@ -826,7 +826,10 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       passedClearance = true
     end
 
-    local returnOffset=p.passFromOffset or p.baseLaneOffset or defaultOffset
+    local returnOffset=Racing.offsetAt(state.racingLine,ownProgress)
+    if state.racingLine==nil then
+      returnOffset=p.passFromOffset or p.baseLaneOffset or defaultOffset
+    end
     if passedClearance and
        not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
       p.overtakeSide=0
