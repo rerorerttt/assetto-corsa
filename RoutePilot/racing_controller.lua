@@ -127,6 +127,7 @@ function Racing.build(route,nodes,boundsAt,loopRoute)
       local amplitude=clamp(magnitude*18.0,0.35,1.6)
       seed=(meanCurvature>0 and 1 or -1)*amplitude*phase
     end
+    if not line.loop and (i==1 or i==#line.points) then seed=0 end
     line.offsets[i]=clamp(seed,line.minimum[i],line.maximum[i])
   end
   -- Coordinate descent minimizes integrated path curvature, path-length
