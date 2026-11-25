@@ -389,13 +389,18 @@ local function hasNearbyTraffic(carIndex,car)
   local sim=ac.getSim()
   if not sim then return false end
   local rangeSq=30.0*30.0
+  local fx,fz=normalize2(car.look.x,car.look.z)
   for i=0,sim.carsCount-1 do
     if i~=carIndex then
       local other=ac.getCar(i)
       if other and other.isActive then
         local dx=other.position.x-car.position.x
         local dz=other.position.z-car.position.z
-        if dx*dx+dz*dz<rangeSq then return true end
+        local distanceSq=dx*dx+dz*dz
+        local forward=dx*fx+dz*fz
+        -- Cars ahead and cars alongside count as traffic; a distant rear car
+        -- must not make the driver abandon its fastest clear-road trajectory.
+        if distanceSq<rangeSq and forward>-6.0 then return true end
       end
     end
   end
