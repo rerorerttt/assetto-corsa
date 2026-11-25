@@ -1,5 +1,19 @@
 # RoutePilot development status
 
+## 2026-11-25 experimental racing-line branch
+
+Branch: `routepilot/racing-line-2026-11-25`, based directly on current `main`.
+
+Implemented in source:
+- A smoothed curvature-aware lateral offset, averaged over samples spanning 48 m, moves the target toward the outside of sustained bends.
+- Offset magnitude is constrained by the usable half-lane width and a conservative vehicle-footprint envelope. On wide two-lane routes the racing line stays inside the active lane; during an overtake the passing target takes priority.
+- The forward speed planner evaluates approximate offset-path curvature and samples every 4 m over its braking horizon.
+- Steering aims at the offset path ahead; `RACE_OFFSET` is recorded in telemetry.
+- Reduced the generic corner throttle reserve cut from 45% to 18%; wheel-slip traction control remains enabled.
+
+Validation: source changes only. No Lua runtime, Assetto Corsa, or CSP execution test has been performed by the assistant. The new line is a curvature-based approximation, not a globally optimized minimum-time path. Its offset-curve curvature omits derivatives of the changing lateral offset. In-game validation is required for corner entry/apex/exit, footprint clearance, steering smoothness, braking stability, and overtaking transitions. Do not describe this branch as a finished or proven racing AI until those tests pass.
+
+
 Updated: 2026-11-24
 
 ## Active traffic model
