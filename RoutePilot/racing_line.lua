@@ -46,34 +46,28 @@ end
 
 local function footprintClearance(sampleA, sampleB, offsetA, offsetB,
     boundsA, boundsB, halfWidth, halfLength, edgeMargin)
-  local a = pointAt(sampleA, offsetA)
-  local b = pointAt(sampleB, offsetB)
-  local dx, dz = normalize(b.x - a.x, b.z - a.z)
-  local function atSample(sample, offset, bounds)
-    local dot = math.abs(dx * sample.tx + dz * sample.tz)
-    local cross = math.abs(sample.tx * dz - sample.tz * dx)
-    local envelope = halfWidth * dot + halfLength * cross + edgeMargin
-    return math.min(offset - (bounds[1] + envelope),
-      (bounds[2] - envelope) - offset)
-  end
+  local dx, dz = sampleB.x - sampleA.x, sampleB.z - sampleA.z
+  local baseLength = math.max(0.05, math.sqrt(dx * dx + dz * dz))
+  local offsetSlope = (offsetB - offsetA) / baseLength
   local function sweptAt(t)
     local tx,tz=normalize(
       sampleA.tx+(sampleB.tx-sampleA.tx)*t,
       sampleA.tz+(sampleB.tz-sampleA.tz)*t)
-    local sample={
-      x=sampleA.x+(sampleB.x-sampleA.x)*t,
-      z=sampleA.z+(sampleB.z-sampleA.z)*t,
-      tx=tx,tz=tz
-    }
-    local bounds={
-      boundsA[1]+(boundsB[1]-boundsA[1])*t,
-      boundsA[2]+(boundsB[2]-boundsA[2])*t
-    }
+    local k=safe(sampleA.k+(sampleB.k-sampleA.k)*t)
     local offset=offsetA+(offsetB-offsetA)*t
-    return atSample(sample,offset,bounds)
+    -- The car follows the tangent of the optimized offset curve, not the
+    -- straight chord between two planning stations. In Frenet coordinates:
+    -- dP/ds = (1 - k*offset)*T + offsetSlope*N.
+    local pathX,pathZ=normalize(
+      tx*(1.0-k*offset)-tz*offsetSlope,
+      tz*(1.0-k*offset)+tx*offsetSlope)
+    local dot=math.abs(pathX*tx+pathZ*tz)
+    local cross=math.abs(pathX*tz-pathZ*tx)
+    local envelope=halfWidth*dot+halfLength*cross+edgeMargin
+    local left=boundsA[1]+(boundsB[1]-boundsA[1])*t
+    local right=boundsA[2]+(boundsB[2]-boundsA[2])*t
+    return math.min(offset-(left+envelope),(right-envelope)-offset)
   end
-  -- Check the complete swept centre path, not only its endpoints. Quarter
-  -- samples catch a boundary pinch between route stations for a long body.
   return math.min(sweptAt(0),sweptAt(0.25),sweptAt(0.5),
     sweptAt(0.75),sweptAt(1))
 end
@@ -117,7 +111,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   -- resulting curvature and lifts the throttle early when a slower path is
   -- required; the geometry solver itself must not fail just because the car
   -- arrived too fast for a sharp transition.
-  local maxOffsetStep = step * 0.32
+  local maxOffsetStep = step * 0.42
   local length = math.min(180.0, math.max(45.0, horizon or 150.0))
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
@@ -190,7 +184,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         priorDistance + d) or nil
       priorOffsets[i] = prior and prior.offset or nil
 
-      for c = 0, 10 do
+      for c = 0, 6 do
         addCandidate(list, lo + (hi - lo) * c / 10.0, lo, hi)
       end
       addCandidate(list, preferred, lo, hi)
