@@ -102,3 +102,15 @@ The branch `routepilot/racing-corridor-optimizer-2026-11-25` adds `racing_line.l
 - The steering input is no longer artificially capped at 75%; the initial lateral-acceleration target is raised to 8 m/s².
 - This branch is experimental and has **not** been validated in Assetto Corsa/CSP. In-game tests are required for corner entry/exit speed, road-boundary clearance, side-by-side traffic, opposing traffic, and multi-car pass reservations. Do not treat source-level changes as proof of collision-free driving.
 
+
+
+## Linked-corner racing-line optimizer (2026-11-25)
+
+The branch `routepilot/linked-corner-optimizer-2026-11-25` refines the experimental corridor optimizer specifically for linked bends such as a fast left-right sequence. It plans one continuous offset path over the full forward horizon instead of treating each bend as an independent apex target.
+
+- The search samples the usable road width at seven lateral positions, plus the preferred and curvature-informed offsets, on a 4 m longitudinal grid over up to 135 m.
+- The dynamic-programming objective combines actual offset-path curvature, estimated time loss at the current operating speed, lateral transition smoothness, and edge clearance. It therefore rewards a broad chord through a chicane when the road width permits it.
+- The speed planner uses the curvature of the optimized path and the same learned lateral-acceleration limit used by the optimizer. It can therefore release the throttle as soon as the optimized path straightens after the linked bends.
+- The optimized path is sampled with cubic Hermite interpolation to avoid steering toward a sequence of disconnected straight segments. Existing overtake path locking and traffic-obstacle intervals remain in place.
+
+This is a source-level implementation only. It has not been compiled with the CSP Lua runtime or tested in Assetto Corsa. The main branch is unchanged; validate the experimental branch with a fresh trace before treating speed, boundary clearance, or frame-time behavior as confirmed.
