@@ -161,6 +161,13 @@ local function readVehicleDynamics(car, p, dt)
   -- Learn this car's real braking response from measured speed loss while
   -- the previous frame was braking. Ignore noisy samples and filter changes.
   if p.previousSpeed ~= nil and dt > 0.002 then
+    if p.brake < 0.05 and p.gas < 0.05 and speed < p.previousSpeed and speed > 5.0 then
+      local measuredCoast=(p.previousSpeed-speed)/dt
+      if measuredCoast>=0.10 and measuredCoast<=5.0 then
+        p.coastDecelEstimate=lerp(
+          safeNumber(p.coastDecelEstimate,1.4),clamp(measuredCoast,0.5,3.5),0.06)
+      end
+    end
     if p.brake > 0.15 and speed < p.previousSpeed then
       local measured = (p.previousSpeed - speed) / dt
       if measured >= 1.5 and measured <= 25.0 then
@@ -181,10 +188,10 @@ local function readVehicleDynamics(car, p, dt)
   p.lateralAccel = math.abs(p.yawRate * speed)
   -- Learn usable cornering grip from actual vehicle response. Increase the
   -- limit only while the car is stable; reduce it when slip indicates loss.
-  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)
+  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,CFG.MAX_LATERAL_ACCEL)
   if speed>12.0 and math.abs(p.slipAngle)<0.08 and
      safeNumber(p.wheelSlip)<0.20 and p.lateralAccel>grip*0.70 then
-    grip=lerp(grip,clamp(p.lateralAccel*1.18,grip,20.0),0.015)
+    grip=lerp(grip,clamp(p.lateralAccel*1.05,grip,CFG.MAX_LATERAL_ACCEL),0.015)
   elseif speed>12.0 and
      (math.abs(p.slipAngle)>0.15 or safeNumber(p.wheelSlip)>0.30) and
      p.lateralAccel>3.0 then
@@ -215,10 +222,13 @@ local function planTargetSpeed(p,speed)
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
-  local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
+  local coastDecel=clamp(safeNumber(p.coastDecelEstimate,1.4),0.5,3.5)
+  local coastLookahead=math.min(350.0,
+    currentSpeed*currentSpeed/(2*coastDecel)+currentSpeed*0.5+35.0)
+  local horizon=math.max(CFG.PLAN_HORIZON,coastLookahead)
   if p.racingPlanBlockedDistance then
     local stoppingRoom=math.max(0,p.racingPlanBlockedDistance-10.0)
-    local corridorSpeed=math.sqrt(2.0*brakeAccel*stoppingRoom)
+    local corridorSpeed=math.sqrt(2.0*coastDecel*stoppingRoom)
     target=math.min(target,corridorSpeed)
   end
   local distance=0
@@ -232,11 +242,11 @@ local function planTargetSpeed(p,speed)
     -- The optimizer's path curvature, not the reference-line curvature,
     -- determines braking on an open road.
     if curvature>CFG.CURVE_MIN then
-      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*1.18
+      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,CFG.MAX_LATERAL_ACCEL)*0.90
       local curveSpeed=math.sqrt(lateralLimit/curvature)
-      local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.25)
+      local coastDistanceAvailable=math.max(0,distance-currentSpeed*0.30)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
-        2*brakeAccel*brakingDistanceAvailable)
+        2*coastDecel*coastDistanceAvailable)
       if safeSpeed<target then target=safeSpeed end
     end
     distance=distance+5.0
@@ -406,7 +416,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local boundaryCurvature=clamp(1.2*boundaryError/
     (boundaryDistance*boundaryDistance),-0.06,0.06)
   desiredCurvature=desiredCurvature+boundaryCurvature
-  local boundarySteer=clamp(boundaryError*0.075-lateralVelocity*0.035,-0.22,0.22)
+  local boundarySteer=clamp(boundaryError*0.075,-0.22,0.22)
   -- Continuous lateral-velocity damping suppresses left-right weaving on straights.
   local lateralDamping=clamp(-lateralVelocity*0.028,-0.16,0.16)
 
@@ -427,8 +437,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- primary steering signal.
   -- Positive lateral velocity means the car drifts right of the route;
   -- counter-steer left. Slip feedback must oppose, not reinforce, that drift.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN-
-    p.slipAngle*0.22+lateralDamping
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+
+    p.slipAngle*0.18+lateralDamping
   if not p.emergencyPass and math.abs(desiredCurvature)<0.0015 and
      math.abs(boundaryError)<0.08 and math.abs(lateralVelocity)<0.12 and
      math.abs(steer)<0.012 then
@@ -543,9 +553,14 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
             safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
           local separation=ownHalfWidth+otherHalfWidth+0.35
           local actualGap=math.abs(actualLateral-laneOffset)
+          local otherPlanAdvance=otherState and otherState.racingPlanStartProgress and
+            routeGap(otherState.racingPlanStartProgress,progress) or 0
+          local otherPlan=otherState and otherState.racingPlan and
+            RacingLine.sample(otherState.racingPlan,math.max(0,otherPlanAdvance)) or nil
           local otherTarget=otherState and
             (otherState.overtakeSide~=0 or otherState.returningFromPass) and
-            safeNumber(otherState.laneOffset,actualLateral) or actualLateral
+            safeNumber(otherState.laneOffset,actualLateral) or
+            (otherPlan and otherPlan.offset or actualLateral)
           local reservedGap=math.abs(otherTarget-laneOffset)
           local currentOffset=own and safeNumber(own.laneOffsetCurrent,
             own.laneOffset or laneOffset) or laneOffset
@@ -723,10 +738,14 @@ local function buildTrafficObstacles(carIndex,car,p,speed)
           -- Only cars that can occupy the same piece of road when we reach
           -- the sample become obstacles. Rear traffic is handled by its own
           -- planner and does not force us into a fixed lane.
-          if longitudinalGap>=-7.0 and longitudinalGap<=120.0 then
+          if longitudinalGap>=-120.0 and longitudinalGap<=120.0 then
             obstacles[#obstacles+1]={
               progress=op,lateral=ol,speed=otherSpeed,
-              halfWidth=ownHalf+half+0.65
+              plan=otherState and otherState.racingPlan or nil,
+              planStartProgress=otherState and otherState.racingPlanStartProgress or op,
+              halfWidth=ownHalf+half+0.85,
+              halfLength=(safeNumber(car.aabbSize and car.aabbSize.z,4.5)+
+                safeNumber(other.aabbSize and other.aabbSize.z,4.5))*0.5+2.0
             }
           end
         end
@@ -785,18 +804,29 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     for _,o in ipairs(obstacles or {}) do
       local otherProgress=o.progress+o.speed*travelTime
       local gap=routeGap(sample.s,otherProgress)
-      if gap>=-6.0 and gap<=7.0 then
-        blocked[#blocked+1]={o.lateral-o.halfWidth,o.lateral+o.halfWidth}
+      local advance=o.planStartProgress and
+        routeGap(o.planStartProgress,o.progress) or 0
+      local otherPlan=o.plan and RacingLine.sample(o.plan,
+        math.max(0,advance)+o.speed*travelTime) or nil
+      local otherLateral=otherPlan and otherPlan.offset or o.lateral
+      local longitudinalBuffer=o.halfLength or 8.0
+      if gap>=-longitudinalBuffer and gap<=longitudinalBuffer then
+        blocked[#blocked+1]={otherLateral-o.halfWidth,otherLateral+o.halfWidth}
       end
     end
     return blocked
   end
+  local previousPlan=p.racingPlan
+  local previousPlanAdvance=previousPlan and p.racingPlanStartProgress and
+    routeGap(p.racingPlanStartProgress,p.routeProgress) or 0
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
-    fixedOffset==nil and obstacleAt or nil)
+    fixedOffset==nil and obstacleAt or nil,previousPlan,
+    math.max(0,previousPlanAdvance))
   p.racingPlanStartProgress=p.routeProgress
   p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
+  p.racingPlanFailure=planFailure
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
   if p.racingPlanBlocked then
@@ -894,9 +924,17 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           if otherState and
              (otherState.overtakeSide~=0 or otherState.returningFromPass) then
             otherOffset=safeNumber(otherState.laneOffset,otherOffset)
+          elseif otherState and otherState.racingPlan then
+            local planAdvance=otherState.racingPlanStartProgress and
+              routeGap(otherState.racingPlanStartProgress,op) or 0
+            local planned=RacingLine.sample(otherState.racingPlan,math.max(0,planAdvance))
+            if planned then otherOffset=planned.offset end
           end
+          local otherPlan=otherState and otherState.racingPlan or nil
+          local otherPlanStart=otherState and otherState.racingPlanStartProgress or op
           traffic[#traffic+1]={
             index=i,progress=op,lateral=otherOffset,speed=signedSpeed,
+            plan=otherPlan,planStartProgress=otherPlanStart,
             halfWidth=otherHalfWidth,halfLength=otherHalfLength
           }
         end
@@ -946,7 +984,12 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
     for _,other in ipairs(traffic) do
       local predictedOther=other.progress+other.speed*time
       local longitudinal=routeGap(ownProgress,predictedOther)
-      local lateralGap=math.abs(offset-other.lateral)
+      local otherPlanAdvance=other.planStartProgress and
+        routeGap(other.planStartProgress,other.progress) or 0
+      local predictedPlan=other.speed>=0 and other.plan and
+        RacingLine.sample(other.plan,math.max(0,otherPlanAdvance)+other.speed*time) or nil
+      local predictedLateral=predictedPlan and predictedPlan.offset or other.lateral
+      local lateralGap=math.abs(offset-predictedLateral)
       local longitudinalClearance=ownHalfLength+other.halfLength+
         math.max(1.0,math.abs(speed-other.speed)*0.15)
       local lateralClearance=ownHalfWidth+other.halfWidth+0.45
@@ -1309,7 +1352,11 @@ function Driver.update(carIndex, car, dt)
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  if p.racingPlanBlocked then targetSpeed=0 end
+  -- Recheck after rebuilding the plan for a newly selected passing/return path.
+  if p.racingPlanBlocked then
+    targetSpeed=0
+    p.trafficBrake=true
+  end
   -- Overtake state can change in this frame; rebuild the steering path before
   -- issuing controls so the first lateral movement follows the reserved side.
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
