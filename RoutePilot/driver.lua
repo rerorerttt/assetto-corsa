@@ -746,7 +746,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local forcedMode=nil
   if p.overtakeSide~=0 then forcedMode="PASS"
   elseif p.returningFromPass then forcedMode="RETURN" end
-  if p.racingPlan and p.racingPlanTimer>0 then
+  -- Cache failed plans too. Previously nil plans bypassed the timer and the
+  -- optimizer ran twice per frame, logging NO_PATH thousands of times.
+  if p.racingPlanComputed and p.racingPlanTimer>0 then
     if forcedMode==nil and
        (p.racingPlanMode=="OPEN" or p.racingPlanMode=="TRAFFIC") then return end
     if forcedMode~=nil and p.racingPlanMode==forcedMode then return end
@@ -785,12 +787,27 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
     fixedOffset==nil and obstacleAt or nil)
+  local planFallback=false
+  -- If the global search has no connected candidate chain, keep a validated
+  -- constant-offset corridor and let following/overtake logic handle traffic.
+  -- A search failure is not itself a physical obstacle and must not command
+  -- a full stop on an otherwise drivable route.
+  if planFailure=="NO_PATH" and fixedOffset==nil then
+    p.racingPlan,planFailure=RacingLine.plan(
+      state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+      safeNumber(p.latOff,base),base,base,horizon,7.5,nil)
+    planFallback=p.racingPlan~=nil
+  end
   p.racingPlanStartProgress=p.routeProgress
+  p.racingPlanComputed=true
+  p.racingPlanFallback=planFallback
   p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
   if p.racingPlanBlocked then
     H.log("RACE_LINE_BLOCKED id=%d reason=%s",carIndex,tostring(planFailure))
+  elseif planFallback then
+    H.log("RACE_LINE_FALLBACK id=%d mode=%s reason=NO_PATH",carIndex,mode)
   end
   if p.racingPlanMode~=mode then
     H.log("RACE_LINE id=%d mode=%s base=%.2f target=%.2f curve=%.4f horizon=%.1f",
@@ -1281,11 +1298,17 @@ function Driver.update(carIndex, car, dt)
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
+  local previousOvertakeSide=p.overtakeSide
+  local previousReturning=p.returningFromPass
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   if p.racingPlanBlocked then targetSpeed=0 end
-  -- Overtake state can change in this frame; rebuild the steering path before
-  -- issuing controls so the first lateral movement follows the reserved side.
-  if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
+  -- Rebuild immediately only when the pass/return state actually changes.
+  -- Normal plans are refreshed by their timer once per frame, not twice.
+  if not p.projectionLost and
+     (p.overtakeSide~=previousOvertakeSide or
+      p.returningFromPass~=previousReturning) then
+    updateRacingPlan(carIndex,car,p,speed,dt)
+  end
   p.targetSpeed = targetSpeed
 
   p.boundaryEmergency=false
