@@ -49,6 +49,7 @@ end
 function Driver.setup(cfg, st, helpers)
   CFG, state, H = cfg, st, helpers
   state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
+  state.speedCurvatureCache = nil
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
@@ -59,6 +60,7 @@ local function refreshRouteMetrics()
   if state.routeGeometry and state.routeMetricCount == #state.nodes and
      state.routeMetricLoop == state.loopRoute then return end
   state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
+  state.speedCurvatureCache = nil
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
@@ -214,14 +216,15 @@ local function calculateStability(p, speed)
   p.stability = 1 - severity
 end
 
--- Estimate route curvature at three spatial scales. A short window sees
--- linked tight bends; medium/long windows identify sustained arcs while
--- averaging out single-sample Catmull-Rom spikes and recorded-point noise.
-local function speedPlanningCurvature(route,progress)
-  local windows={5.0,10.0,18.0}
+-- Curvature is precomputed once per loaded route and shared by every AI
+-- car. This avoids thousands of spline samples per frame in multi-car races.
+local SPEED_CURVATURE_STEP=2.5
+local SPEED_CURVATURE_WINDOWS={5.0,10.0,18.0}
+
+local function computeSpeedPlanningCurvature(route,progress)
   local peak=0
-  for i=1,#windows do
-    local half=windows[i]
+  for i=1,#SPEED_CURVATURE_WINDOWS do
+    local half=SPEED_CURVATURE_WINDOWS[i]
     local intervals=math.max(2,math.ceil((2.0*half)/5.0))
     local spacing=(2.0*half)/intervals
     local previous=Geometry.sample(route,progress-half)
@@ -233,9 +236,8 @@ local function speedPlanningCurvature(route,progress)
         valid=false
         break
       end
-      -- Sum absolute heading changes, rather than only comparing the two
-      -- window endpoints. Opposite-direction linked bends therefore remain
-      -- visible instead of cancelling into an apparently straight segment.
+      -- Absolute heading changes preserve linked S-bends instead of letting
+      -- opposite turns cancel when only the window endpoints are compared.
       totalTurn=totalTurn+
         math.abs(signedAngle(previous.tx,previous.tz,current.tx,current.tz))
       previous=current
@@ -246,6 +248,32 @@ local function speedPlanningCurvature(route,progress)
     end
   end
   return peak
+end
+
+local function ensureSpeedCurvatureCache(route)
+  if state.speedCurvatureCache and
+     state.speedCurvatureCache.route==route then return end
+  local count=math.max(1,math.ceil(route.total/SPEED_CURVATURE_STEP))
+  local step=route.total/count
+  local values={}
+  for i=0,count do
+    values[i+1]=computeSpeedPlanningCurvature(route,i*step)
+  end
+  state.speedCurvatureCache={route=route,values=values,step=step,count=count}
+end
+
+local function speedPlanningCurvature(route,progress)
+  ensureSpeedCurvatureCache(route)
+  local cache=state.speedCurvatureCache
+  local s=route.loop and (progress%route.total) or
+    clamp(progress,0,route.total)
+  local position=s/cache.step
+  local index=math.floor(position)
+  if index>=cache.count then index=cache.count-1 end
+  local t=clamp(position-index,0,1)
+  local a=cache.values[index+1] or 0
+  local b=cache.values[index+2] or a
+  return lerp(a,b,t)
 end
 
 local function planTargetSpeed(p,speed)
@@ -260,7 +288,9 @@ local function planTargetSpeed(p,speed)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
   local reactionDistance=currentSpeed*0.20
   local step=2.5
-  local profile={}
+  local profile=p.speedProfile or {}
+  p.speedProfile=profile
+  for i=#profile,1,-1 do profile[i]=nil end
   local distance=0
 
   -- Current-position curvature is a hard local cap: the reaction allowance
@@ -281,7 +311,7 @@ local function planTargetSpeed(p,speed)
     if curvature>CFG.CURVE_MIN then
       cap=math.sqrt(lateralLimit/curvature)
     end
-    profile[#profile+1]={distance=distance,speed=cap}
+    profile[#profile+1]=cap
     distance=distance+step
     if not route.loop and
        p.routeProgress+reactionDistance+distance>=route.total then break end
@@ -293,13 +323,12 @@ local function planTargetSpeed(p,speed)
   -- when the reaction interval ends, so the controller begins decelerating
   -- early enough to arrive there without an abrupt late brake.
   for i=#profile-1,1,-1 do
-    local ds=profile[i+1].distance-profile[i].distance
-    local reachable=math.sqrt(profile[i+1].speed*profile[i+1].speed+
-      2.0*brakeAccel*ds)
-    if reachable<profile[i].speed then profile[i].speed=reachable end
+    local reachable=math.sqrt(profile[i+1]*profile[i+1]+
+      2.0*brakeAccel*step)
+    if reachable<profile[i] then profile[i]=reachable end
   end
 
-  local target=math.min(p.cruiseSpeed,currentCap,profile[1].speed)
+  local target=math.min(p.cruiseSpeed,currentCap,profile[1])
   p.speedPlanCurvature=currentCurvature
   p.speedPlanGrip=lateralLimit
   p.speedPlanHorizon=horizon
