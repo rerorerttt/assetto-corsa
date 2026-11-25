@@ -202,6 +202,8 @@ local function readVehicleDynamics(car, p, dt)
   p.previousSpeed = speed
   p.previousFx, p.previousFz = fx, fz
   p.lateralAccel = math.abs(p.yawRate * speed)
+  local yawAlpha=clamp(dt/(0.12+dt),0,1)
+  p.yawRateFiltered=lerp(safeNumber(p.yawRateFiltered,p.yawRate),p.yawRate,yawAlpha)
   -- Learn usable cornering grip from actual vehicle response. Increase the
   -- limit only while the car is stable; reduce it when slip indicates loss.
   local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)
@@ -215,6 +217,16 @@ local function readVehicleDynamics(car, p, dt)
   end
   p.lateralAccelLimit=grip
   return speed, fx, fz
+end
+
+local function planningLateralAccel(p)
+  local measured=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),5.0,16.0)
+  return clamp(math.min(7.0,measured*0.72),4.5,7.0)
+end
+
+local function planningBrakeAccel(p)
+  local measured=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),3.0,18.0)
+  return clamp(math.min(6.5,measured*0.75),3.0,6.5)
 end
 
 local function calculateStability(p, speed)
@@ -239,7 +251,7 @@ local function planTargetSpeed(p,speed)
   local route=state.routeGeometry
   if not route or not p.routeProgress then return 11.0 end
   local target=p.cruiseSpeed
-  local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+  local brakeAccel=planningBrakeAccel(p)
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
@@ -259,8 +271,8 @@ local function planTargetSpeed(p,speed)
     -- The optimizer's path curvature, not the reference-line curvature,
     -- determines braking on an open road.
     if curvature>math.max(CFG.CURVE_MIN,0.0018) then
-      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*0.90
-      local curveSpeed=math.sqrt(lateralLimit/curvature)
+      local lateralLimit=planningLateralAccel(p)
+      local curveSpeed=math.sqrt(lateralLimit/curvature)*0.95
       local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.25)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
         2*brakeAccel*brakingDistanceAvailable)
@@ -343,8 +355,8 @@ function Driver.rebuildTrajectory()
   local key=trajectorySizeKey(car)
   local plan,reason=TrajectoryOptimizer.build(state.routeGeometry,Geometry.sample,
     state.nodes,state.loopRoute,H.boundsAt,car,{
-      spacing=math.max(4.5,state.routeGeometry.total/1800),
-      lateralAccel=10.0,brakeAccel=8.0,accel=4.0
+      spacing=math.max(2.5,state.routeGeometry.total/2500),
+      lateralAccel=7.0,brakeAccel=6.0,accel=4.0
     })
   state.globalTrajectory=plan
   if plan then state.globalTrajectoryBuildFailed=nil
@@ -377,7 +389,7 @@ local function trajectoryForCar(car)
   if not state.routeGeometry then return nil end
   local plan,reason=TrajectoryOptimizer.build(state.routeGeometry,Geometry.sample,
     state.nodes,state.loopRoute,H.boundsAt,car,{
-      spacing=4.5,lateralAccel=10.0,brakeAccel=8.0,accel=4.0
+      spacing=2.5,lateralAccel=7.0,brakeAccel=6.0,accel=4.0
     })
   if plan then
     state.trajectoryCache=state.trajectoryCache or {}
@@ -395,7 +407,7 @@ end
 local function hasNearbyTraffic(carIndex,car)
   local sim=ac.getSim()
   if not sim then return false end
-  local rangeSq=30.0*30.0
+  local rangeSq=55.0*55.0
   local fx,fz=normalize2(car.look.x,car.look.z)
   for i=0,sim.carsCount-1 do
     if i~=carIndex then
@@ -417,12 +429,13 @@ end
 local function assignTrajectory(p,car,carIndex)
   p.trajectoryBundle=trajectoryForCar(car)
   if p.trajectoryBundle then
+    p.baseLaneOffset=p.baseLaneOffset or safeNumber(p.latOff,0)
     local preferred=nil
     if hasNearbyTraffic(carIndex,car) then
-      preferred=type(p.latOff)=="number" and p.latOff or p.baseLaneOffset
+      preferred=p.baseLaneOffset or p.latOff
     end
     p.trajectoryPlan,p.globalSpeedProfile=TrajectoryOptimizer.select(
-      p.trajectoryBundle,p.lateralAccelLimit,p.brakeAccelEstimate,
+      p.trajectoryBundle,planningLateralAccel(p),planningBrakeAccel(p),
       p.accelEstimate,preferred,p.routeProgress or 0)
   else
     p.trajectoryPlan=nil
@@ -490,27 +503,12 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- Preview the complete vehicle footprint through the steering horizon.
   -- The common safe lateral interval forces the target to remain inside both
   -- saved boundaries before the car reaches a narrowing or a bend.
+  -- Keep a speed-proportional preview near one second. A short 10–18 m
+  -- target makes the controller chase each bend and oscillate at high speed.
   local ahead=clamp(CFG.LOOKAHEAD_BASE+speed*CFG.LOOKAHEAD_SPEED,
     CFG.LOOKAHEAD_MIN,CFG.LOOKAHEAD_MAX)
   local current=Geometry.sample(route,projection.s)
   if not current then return 0 end
-  -- Shorten the steering preview when an S-bend reverses curvature. A long
-  -- preview can aim beyond the first bend and cut across the next one.
-  local previousCurvature=safeNumber(current.k)
-  local sTurn=false
-  for i=1,4 do
-    local check=Geometry.sample(route,projection.s+ahead*i*0.25)
-    local k=safeNumber(check and check.k)
-    if math.abs(previousCurvature)>0.003 and math.abs(k)>0.003 and
-       previousCurvature*k<0 then
-      sTurn=true
-      break
-    end
-    previousCurvature=k
-  end
-  if sTurn then
-    ahead=math.min(ahead,clamp(8.0+speed*0.45,10.0,18.0))
-  end
   local future=Geometry.sample(route,projection.s+ahead)
   local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
   if not current or not future or not curvePreview then return 0 end
@@ -604,7 +602,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
+  local yawDamping=safeNumber(p.yawRateFiltered,p.yawRate)*0.16
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+
+    p.slipAngle*0.12-yawDamping
   if p.emergencyPass then
     steer=steer*clamp(CFG.EMERGENCY_STEER_GAIN,1.0,1.30)
   end
@@ -1082,7 +1082,7 @@ end
 -- return to the original line. A candidate is accepted only when the whole
 -- swept vehicle footprint remains inside the road and clear of every car.
 local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
-    passDistance,speed)
+    passDistance,speed,transitionOnly)
   local route=state.routeGeometry
   if not route or p.routeProgress==nil then return false,"no_route" end
   local ownHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
@@ -1154,7 +1154,8 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   local urgent=p.emergencyPassRequest==true
   local transitionOut=urgent and 6.0 or 22.0
   local transitionBack=22.0
-  local totalDistance=math.max(20.0,passDistance)+transitionBack
+  local totalDistance=transitionOnly and transitionBack or
+    (math.max(20.0,passDistance)+transitionBack)
   local step=urgent and 1.5 or 3.0
   local distance=0.0
   while distance<=totalDistance+0.001 do
@@ -1170,7 +1171,9 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
     local backT=clamp((distance-passDistance)/transitionBack,0,1)
     backT=backT*backT*(3.0-2.0*backT)
     local offset
-    if distance<=passDistance then
+    if transitionOnly then
+      offset=source+(targetOffset-source)*outT
+    elseif distance<=passDistance then
       offset=source+(targetOffset-source)*outT
     else
       offset=targetOffset+(source-targetOffset)*backT
@@ -1396,7 +1399,10 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     end
 
     local returnOffset=p.passFromOffset or p.baseLaneOffset or defaultOffset
-    if passedClearance and
+    local returnPathClear,returnPathReason=passingPathClear(
+      carIndex,car,p,p.passTargetIndex,p.passLat or currentLaneOffset,
+      returnOffset,0,speed,true)
+    if passedClearance and returnPathClear and
        not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
       p.overtakeSide=0
       p.passTargetIndex=nil
@@ -1414,7 +1420,16 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       return targetSpeed
     end
 
-    -- Hold the selected free offset until the target is fully behind us.
+    -- Hold the selected free offset until the target is fully behind us and
+    -- the complete return corridor has become free.
+    if passedClearance and not returnPathClear and
+       not p.returnPathDeniedLogged then
+      H.log("CAR=%d RETURN_DENIED reason=%s",
+        carIndex,tostring(returnPathReason or "occupied_return_corridor"))
+      p.returnPathDeniedLogged=true
+    elseif returnPathClear then
+      p.returnPathDeniedLogged=false
+    end
     p.laneOffset=p.passLat
     return passSafeSpeed
   end
@@ -1574,10 +1589,10 @@ function Driver.update(carIndex, car, dt)
   if p.trajectoryBundle and p.globalProfileTimer<=0 then
     local preferred=nil
     if hasNearbyTraffic(carIndex,car) then
-      preferred=type(p.latOff)=="number" and p.latOff or p.baseLaneOffset
+      preferred=p.baseLaneOffset or p.latOff
     end
     p.trajectoryPlan,p.globalSpeedProfile=TrajectoryOptimizer.select(
-      p.trajectoryBundle,p.lateralAccelLimit,p.brakeAccelEstimate,
+      p.trajectoryBundle,planningLateralAccel(p),planningBrakeAccel(p),
       p.accelEstimate,preferred,p.routeProgress or 0)
     p.globalProfileTimer=2.0
   end
