@@ -389,7 +389,8 @@ local function trajectoryForCar(car)
   if not state.routeGeometry then return nil end
   local plan,reason=TrajectoryOptimizer.build(state.routeGeometry,Geometry.sample,
     state.nodes,state.loopRoute,H.boundsAt,car,{
-      spacing=2.5,lateralAccel=7.0,brakeAccel=6.0,accel=4.0
+      spacing=math.max(2.5,state.routeGeometry.total/2500),
+      lateralAccel=7.0,brakeAccel=6.0,accel=4.0
     })
   if plan then
     state.trajectoryCache=state.trajectoryCache or {}
