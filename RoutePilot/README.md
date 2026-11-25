@@ -1,6 +1,17 @@
-# RoutePilot 0.9.1 — experimental traffic avoidance 9_Обгон_обе_линии
+# RoutePilot 1.0.0 — racing controller
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
+
+
+## Racing controller 1.0.0
+
+This build adds a separate bounded racing-line optimizer while retaining the existing traffic and overtake state machine. The optimizer samples the recorded Catmull–Rom route at 3 m intervals, transforms the saved left/right boundaries into the spline's lateral frame, reserves 1.30 m for the vehicle body and margin, and solves for a smooth path by coordinate descent. Its objective penalizes path curvature, unnecessary path-length growth and rapid lateral oscillation. The resulting offset is interpolated continuously by route distance.
+
+The steering controller now follows the optimized path as a varying offset. It no longer intersects one constant safe lateral interval across the whole preview distance, which previously squeezed a changing racing line back toward the route center. The target is clamped against the actual local boundary and vehicle footprint at its preview station. During an overtake, the selected passing offset takes control; after clearance, the controller transitions back to the racing line. The speed planner evaluates curvature from the optimized path itself, including a constant-offset path while passing, rather than using the original AI spline curvature.
+
+The optimizer is rebuilt when the route or saved bounds change. Startup telemetry reports `RACING_LINE_READY` and the maximum generated offset; a failed build reports `RACING_LINE_UNAVAILABLE`. The existing route-space leader detection, passing-corridor checks, pass clearance and rescue logic are retained.
+
+**Validation status:** source changes are committed, but this version has not been compiled by a Lua interpreter or run in Assetto Corsa/CSP in this environment. The optimizer is a geometric minimum-curvature approximation, not a tire/vehicle-dynamics lap-time solver. It must be validated on track before being treated as a working release; in particular, confirm that `RACING_LINE_READY` reports a meaningful non-zero offset on a wide corridor, that corner target speeds change, and that overtakes still complete without boundary departures.
 
 ## Install
 
