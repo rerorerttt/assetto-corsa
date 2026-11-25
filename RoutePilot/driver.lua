@@ -683,6 +683,41 @@ local function hasTrafficInCorridor(carIndex,car,p,baseOffset)
   return false
 end
 
+local function buildTrafficObstacles(carIndex,car,p,speed)
+  local sim=ac.getSim()
+  if not sim or not state.routeGeometry or p.routeProgress==nil then return {} end
+  local obstacles={}
+  local ownHalf=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+  for i=0,sim.carsCount-1 do
+    if i~=carIndex then
+      local other=ac.getCar(i)
+      if other and other.isActive then
+        local otherState=state.p[i]
+        local op,ol=routeProjection(other,
+          otherState and otherState.segIdx or p.segIdx,
+          not (otherState and otherState.routeLocked),
+          otherState and otherState.routeProgress,
+          safeNumber(other.speedMs),0.05)
+        if op~=nil and ol~=nil then
+          local otherSpeed=math.max(0,safeNumber(other.speedMs))
+          local half=math.max(0.75,safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+          local longitudinalGap=routeGap(p.routeProgress,op)
+          -- Only cars that can occupy the same piece of road when we reach
+          -- the sample become obstacles. Rear traffic is handled by its own
+          -- planner and does not force us into a fixed lane.
+          if longitudinalGap>=-7.0 and longitudinalGap<=38.0 then
+            obstacles[#obstacles+1]={
+              progress=op,lateral=ol,speed=otherSpeed,
+              halfWidth=ownHalf+half+0.65
+            }
+          end
+        end
+      end
+    end
+  end
+  return obstacles
+end
+
 local function updateRacingPlan(carIndex,car,p,speed,dt)
   refreshRouteMetrics()
   if not state.routeGeometry or p.routeProgress==nil then
@@ -724,9 +759,24 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local v=math.max(0,speed)
   local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+45.0),CFG.PLAN_HORIZON,500.0)
   local planFailure=nil
+  local obstacles=fixedOffset==nil and
+    buildTrafficObstacles(carIndex,car,p,speed) or nil
+  local function obstacleAt(sample,distance)
+    local blocked={}
+    local travelTime=distance/math.max(8.0,speed)
+    for _,o in ipairs(obstacles or {}) do
+      local otherProgress=o.progress+o.speed*travelTime
+      local gap=routeGap(sample.s,otherProgress)
+      if gap>=-6.0 and gap<=7.0 then
+        blocked[#blocked+1]={o.lateral-o.halfWidth,o.lateral+o.halfWidth}
+      end
+    end
+    return blocked
+  end
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0)
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0,
+    fixedOffset==nil and obstacleAt or nil)
   p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
