@@ -821,7 +821,7 @@ local function drawMapInRect(q0,q1)
       and not (y1<q0.y and y2<q0.y) and not (y1>q1.y and y2>q1.y)
   end
   local n=#state.nodes
-  local stride=math.max(1,math.ceil(n/180))
+  local stride=math.max(1,Math.ceil(n/120))
   local minOff=CFG.MAP_MIN_OFFSET
   -- Bounds are decimated for rendering; route geometry remains full resolution.
   for pass=1,2 do
