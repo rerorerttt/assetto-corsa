@@ -424,7 +424,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local currentRace= p.racingPlan and RacingLine.sample(p.racingPlan,0) or nil
   p.pathCurvature=safeNumber(currentRace and currentRace.k or current.k)
   p.steerCurvature=desiredCurvature
-  p.projectionProgressDelta=projection.delta or 0
   p.boundaryError=boundaryError
   p.boundarySafeMin=safeMin
   p.boundarySafeMax=safeMax
