@@ -257,7 +257,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
             local segmentLength=math.sqrt(
               (pointC.x-pointB.x)^2+(pointC.z-pointB.z)^2)
             local timeCost=segmentLength*math.sqrt(math.abs(k)/12.0)*30.0
-            local cost = node.cost + timeCost +
+            local distanceCost=segmentLength*0.80
+            local cost = node.cost + distanceCost + timeCost +
               k2 * 300.0 + k2 * k2 * 110000.0 +
               second * second * 0.65 + slope * slope * 0.12 +
               continuity + edgeCost(clearance) +
