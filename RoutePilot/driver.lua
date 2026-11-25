@@ -73,6 +73,7 @@ local function refreshRouteMetrics()
   state.globalTrajectoryBuildFailed = nil
   for _, p in pairs(state.p) do
     p.trajectoryPlan = nil
+    p.trajectoryBundle = nil
     p.globalSpeedProfile = nil
     p.routeLocked = false
     p.routeProgress = nil
@@ -327,6 +328,7 @@ function Driver.rebuildTrajectory()
   state.trajectoryCache={}
   for _,p in pairs(state.p) do
     p.trajectoryPlan=nil
+    p.trajectoryBundle=nil
     p.globalSpeedProfile=nil
     p.racingPlan=nil
     p.racingPlanComputed=false
@@ -379,6 +381,18 @@ local function trajectoryForCar(car)
     H.log("VEHICLE_TRAJECTORY_FAILED size=%s reason=%s",key,tostring(reason))
   end
   return plan
+end
+
+local function assignTrajectory(p,car)
+  p.trajectoryBundle=trajectoryForCar(car)
+  if p.trajectoryBundle then
+    p.trajectoryPlan,p.globalSpeedProfile=TrajectoryOptimizer.select(
+      p.trajectoryBundle,p.lateralAccelLimit,p.brakeAccelEstimate,p.accelEstimate)
+  else
+    p.trajectoryPlan=nil
+    p.globalSpeedProfile=nil
+  end
+  p.globalProfileTimer=2.0
 end
 
 local function safeCorridorForPreview(route, progress, ahead, car, fx, fz)
@@ -1384,11 +1398,11 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  if not p.trajectoryPlan then p.trajectoryPlan=trajectoryForCar(car) end
+  if not p.trajectoryBundle then assignTrajectory(p,car) end
   p.globalProfileTimer=math.max(0,safeNumber(p.globalProfileTimer)-dt)
-  if p.trajectoryPlan and (not p.globalSpeedProfile or p.globalProfileTimer<=0) then
-    p.globalSpeedProfile=TrajectoryOptimizer.retime(p.trajectoryPlan,
-      p.lateralAccelLimit,p.brakeAccelEstimate,p.accelEstimate)
+  if p.trajectoryBundle and p.globalProfileTimer<=0 then
+    p.trajectoryPlan,p.globalSpeedProfile=TrajectoryOptimizer.select(
+      p.trajectoryBundle,p.lateralAccelLimit,p.brakeAccelEstimate,p.accelEstimate)
     p.globalProfileTimer=2.0
   end
   local progress, projectedLateral, projectedSeg, _, projectionDistance =
@@ -1427,7 +1441,7 @@ function Driver.update(carIndex, car, dt)
 
   if not state.globalTrajectory and not state.globalTrajectoryBuildFailed then
     Driver.rebuildTrajectory()
-    if not p.trajectoryPlan then p.trajectoryPlan=trajectoryForCar(car) end
+    if not p.trajectoryBundle then assignTrajectory(p,car) end
   end
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
