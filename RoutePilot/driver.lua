@@ -325,6 +325,12 @@ function Driver.rebuildTrajectory()
     return false,"NO_ROUTE"
   end
   state.trajectoryCache={}
+  for _,p in pairs(state.p) do
+    p.trajectoryPlan=nil
+    p.globalSpeedProfile=nil
+    p.racingPlan=nil
+    p.racingPlanComputed=false
+  end
   local car=representativeCar()
   local key=trajectorySizeKey(car)
   local plan,reason=TrajectoryOptimizer.build(state.routeGeometry,Geometry.sample,
@@ -354,7 +360,7 @@ local function trajectoryForCar(car)
   end
   local key=trajectorySizeKey(car)
   local cached=state.trajectoryCache and state.trajectoryCache[key]
-  if cached then return cached end
+  if cached~=nil then return cached or nil end
   if not state.routeGeometry then return nil end
   local plan,reason=TrajectoryOptimizer.build(state.routeGeometry,Geometry.sample,
     state.nodes,state.loopRoute,H.boundsAt,car,{
@@ -366,6 +372,8 @@ local function trajectoryForCar(car)
     H.log("VEHICLE_TRAJECTORY_READY size=%s points=%d alternatives=%d time=%.2f",
       key,#plan.points,plan.alternativeCount or 1,plan.estimatedTime or 0)
   else
+    state.trajectoryCache=state.trajectoryCache or {}
+    state.trajectoryCache[key]=false
     H.log("VEHICLE_TRAJECTORY_FAILED size=%s reason=%s",key,tostring(reason))
   end
   return plan
