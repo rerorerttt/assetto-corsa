@@ -55,10 +55,29 @@ local function makeSpeedProfile(plan, lateralAccel, brakeAccel, accel)
   if n<2 then return nil end
   lateralAccel=clamp(safe(lateralAccel,10.0),3.0,25.0)
   brakeAccel=clamp(safe(brakeAccel,8.0),2.5,25.0)
-  accel=clamp(safe(accel,4.0),0.5,20.0)
+  -- A low-speed sample taken during cornering, wheelspin or partial throttle
+  -- must not become the acceleration limit for the entire lap. The driver
+  -- supplies a filtered straight-line estimate with a conservative floor.
+  accel=clamp(safe(accel,5.0),2.5,20.0)
   local speeds={}
+  local absCurvature={}
+  for i=1,n do absCurvature[i]=math.abs(safe(plan.curvature[i])) end
+  local function speedCurvature(i)
+    local previous,nextIndex
+    if plan.loop then
+      previous=i==1 and n or i-1
+      nextIndex=i==n and 1 or i+1
+    else
+      previous=math.max(1,i-1)
+      nextIndex=math.min(n,i+1)
+    end
+    -- Smooth isolated spline/recording noise without cancelling an S-bend:
+    -- average absolute curvature, not signed curvature.
+    return absCurvature[i]*0.50+
+      (absCurvature[previous]+absCurvature[nextIndex])*0.25
+  end
   for i=1,n do
-    local k=math.abs(safe(plan.curvature[i]))
+    local k=speedCurvature(i)
     speeds[i]=k>0.00035 and math.min(110.0,math.sqrt(lateralAccel/k)) or 110.0
   end
   if plan.loop then
@@ -299,10 +318,13 @@ function Optimizer.build(route, sampleFn, nodes, loopRoute, boundsAt, car, optio
   local roadWidth=math.max(0,bounds[1][2]-bounds[1][1])
   local laneCount=clamp(math.floor((roadWidth+0.5)/3.5),1,4)
   local anchors
+  -- One candidate per physical lane. The previous lists had laneCount+1
+  -- anchors (three trajectories on a two-lane road), allowing AI cars to
+  -- settle into a third, overlapping center corridor.
   if laneCount==1 then anchors={0.50}
-  elseif laneCount==2 then anchors={0.18,0.50,0.82}
-  elseif laneCount==3 then anchors={0.12,0.38,0.62,0.88}
-  else anchors={0.10,0.30,0.50,0.70,0.90} end
+  elseif laneCount==2 then anchors={0.18,0.82}
+  elseif laneCount==3 then anchors={0.12,0.50,0.88}
+  else anchors={0.125,0.375,0.625,0.875} end
   local alternatives={}
   for i=1,#anchors do
     local plan=solveVariant(samples,bounds,loopRoute,halfWidth,halfLength,
