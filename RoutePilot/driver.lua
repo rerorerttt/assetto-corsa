@@ -625,8 +625,11 @@ local function laneLayout(seg)
   local width=math.max(0,br-bl)
   local count=clamp(math.floor((width+1.0)/4.0),1,4)
   local centers={}
-  local laneWidth=width/count
-  for i=1,count do centers[i]=bl+(i-0.5)*laneWidth end
+  local laneWidth=3.5
+  local mid=(bl+br)*0.5
+  for i=1,count do
+    centers[i]=mid+(i-(count+1)*0.5)*laneWidth
+  end
   return centers,count,laneWidth
 end
 
