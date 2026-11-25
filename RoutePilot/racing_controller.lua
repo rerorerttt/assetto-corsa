@@ -1,6 +1,7 @@
 -- RoutePilot/racing_controller.lua
 -- Offline racing-line optimizer and curvature evaluator.
 local Racing = {}
+local Geometry = require("route_geometry")
 local function clamp(v,a,b) return math.max(a,math.min(b,v)) end
 local function normalize(x,z)
   local l=math.sqrt(x*x+z*z)
@@ -59,8 +60,13 @@ local function localEnergy(line,i,candidate)
   end
   local prev,next=line.points[getIndex(line,i-1)],line.points[getIndex(line,i+1)]
   local oPrev,oNext=offset(i-1),offset(i+1)
-  local dsPrev=math.max(0.1,line.points[getIndex(line,i)].s-prev.s)
-  local dsNext=math.max(0.1,next.s-line.points[getIndex(line,i)].s)
+  local currentS=line.points[getIndex(line,i)].s
+  local dsPrev=currentS-prev.s
+  local dsNext=next.s-currentS
+  if line.loop and dsPrev<0 then dsPrev=dsPrev+line.route.total end
+  if line.loop and dsNext<0 then dsNext=dsNext+line.route.total end
+  dsPrev=math.max(0.1,dsPrev)
+  dsNext=math.max(0.1,dsNext)
   energy=energy+0.10*((candidate-oPrev)^2+(oNext-candidate)^2)
   energy=energy+0.0005*candidate*candidate
   local x1,z1=pointAt(line.route,prev,oPrev)
@@ -80,7 +86,7 @@ function Racing.build(route,nodes,boundsAt,loopRoute)
   for i=1,count do
     local s=math.min(route.total,(i-1)*spacing)
     if loopRoute and i==count then break end
-    local sample=require("route_geometry").sample(route,s)
+    local sample=Geometry.sample(route,s)
     if sample then
       local lo,hi=routeBounds(route,nodes,boundsAt,sample)
       -- Keep the complete vehicle body inside the recorded corridor.
@@ -144,7 +150,7 @@ function Racing.offsetAt(line,s)
   return line.offsets[a]+(line.offsets[b]-line.offsets[a])*t
 end
 local function pathPoint(line,s,overrideOffset)
-  local sample=require("route_geometry").sample(line.route,s)
+  local sample=Geometry.sample(line.route,s)
   if not sample then return nil end
   local offset=overrideOffset
   if offset==nil then offset=Racing.offsetAt(line,s) end
