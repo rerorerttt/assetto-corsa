@@ -77,8 +77,9 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     left, right = safe(left, -2.0), safe(right, 2.0)
     local lo, hi = left + margin, right - margin
     if lo > hi then
-      local center = (left + right) * 0.5
-      lo, hi = center, center
+      -- No center offset can keep the complete vehicle footprint on the road.
+      -- Refuse to invent a path outside the physical corridor.
+      return nil, "NO_FIT"
     end
     samples[#samples + 1] = sample
     bounds[#bounds + 1] = { lo, hi }
