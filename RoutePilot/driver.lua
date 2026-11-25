@@ -14,6 +14,7 @@
 
 local Driver = {}
 local Geometry = require("route_geometry")
+local RacingLine = require("racing_line")
 local CFG, state, H
 
 local BOUND_MARGIN = 0.4
@@ -212,19 +213,22 @@ local function planTargetSpeed(p,speed)
   if not route or not p.routeProgress then return 11.0 end
   local target=p.cruiseSpeed
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
-  -- At high speed, inspect beyond the braking distance plus response margin.
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
   local distance=0
   while distance<=horizon do
-    local sample=Geometry.sample(route,p.routeProgress+distance)
+    local planned=p.racingPlan and RacingLine.sample(p.racingPlan,distance) or nil
+    local sample=planned or Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
-    local curvature=math.abs(sample.k or 0)
-    if curvature>CFG.CURVE_MIN then
+    local curvature=math.abs(safeNumber(planned and planned.k or sample.k))
+    -- Ignore curvature below the noise floor of a route recorded at 3 m.
+    -- The optimizer's path curvature, not the reference-line curvature,
+    -- determines braking on an open road.
+    if curvature>math.max(CFG.CURVE_MIN,0.0018) then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
       local curveSpeed=math.sqrt(lateralLimit/curvature)
-      local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.35)
+      local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.25)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
         2*brakeAccel*brakingDistanceAvailable)
       if safeSpeed<target then target=safeSpeed end
@@ -330,30 +334,41 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
   if not current or not future or not curvePreview then return 0 end
 
-  local safeMin,safeMax,bodyEnvelope,boundaryDeficit=safeCorridorForPreview(
-    route,projection.s,ahead,car,fx,fz)
-  local bl,br=H.boundsAt(p.segIdx)
-  local mid,width=(bl+br)*0.5,br-bl
-  local leftCenter=width>=5.4 and ((mid+br)*0.5) or mid
+  local halfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+  local bl,br=routeBoundsAtSample(current)
+  local safeMin,safeMax=bl+halfWidth+BOUND_MARGIN,br-halfWidth-BOUND_MARGIN
+  local boundaryDeficit=math.max(0,safeMin-safeMax)
+  if boundaryDeficit>0 then
+    local center=(safeMin+safeMax)*0.5
+    safeMin,safeMax=center,center
+  end
+  local bodyEnvelope=halfWidth+BOUND_MARGIN
+  local mid,width=(H.boundsAt(p.segIdx))
+  local leftCenter=width>=5.4 and ((mid+width)*0.5) or mid
   if p.overtakeSide==0 then
     p.baseLaneOffset=p.baseLaneOffset or leftCenter
     p.laneOffset=p.baseLaneOffset
   else
     p.laneOffset=p.passLat
   end
-  local laneTarget=clamp(p.laneOffset or leftCenter,safeMin,safeMax)
-  local laneChangeRate=p.emergencyPass and 12.0 or 1.8
-  local maxStep=laneChangeRate*math.max(0,dt or 0)
-  local previousOffset=p.laneOffsetCurrent
-  if previousOffset==nil then previousOffset=laneTarget end
-  p.laneOffsetCurrent=previousOffset+
-    clamp(laneTarget-previousOffset,-maxStep,maxStep)
+  local laneTarget=p.laneOffset or leftCenter
+  local raceTarget=p.racingPlan and RacingLine.sample(p.racingPlan,ahead) or nil
+  if raceTarget then
+    p.laneOffsetCurrent=raceTarget.offset
+  else
+    local maxStep=(p.emergencyPass and 12.0 or 1.8)*math.max(0,dt or 0)
+    local previousOffset=p.laneOffsetCurrent or laneTarget
+    p.laneOffsetCurrent=previousOffset+
+      clamp(laneTarget-previousOffset,-maxStep,maxStep)
+  end
   if p.returningFromPass and math.abs(p.laneOffsetCurrent-laneTarget)<0.25 then
     p.returningFromPass=false
   end
 
-  local targetX=future.x-future.tz*p.laneOffsetCurrent
-  local targetZ=future.z+future.tx*p.laneOffsetCurrent
+  local targetX=raceTarget and raceTarget.x or
+    (future.x-future.tz*p.laneOffsetCurrent)
+  local targetZ=raceTarget and raceTarget.z or
+    (future.z+future.tx*p.laneOffsetCurrent)
   local dx,dz=targetX-car.position.x,targetZ-car.position.z
   local targetDist=math.sqrt(dx*dx+dz*dz)
   if targetDist<0.5 then return 0 end
@@ -613,6 +628,90 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
     end
   end
   return bestGap,bestSpeed,bestIndex,bestLateral
+end
+
+local function hasTrafficInCorridor(carIndex,car,p,baseOffset)
+  local sim=ac.getSim()
+  if not sim or not p.routeProgress then return true end
+  local ownSample=Geometry.sample(state.routeGeometry,p.routeProgress)
+  if not ownSample then return true end
+  local bl,br=H.boundsAt(p.segIdx)
+  local corridorMin,corridorMax=bl-1.0,br+1.0
+  for i=0,sim.carsCount-1 do
+    if i~=carIndex then
+      local other=ac.getCar(i)
+      if other and other.isActive then
+        local otherState=state.p[i]
+        local progress,lateral=routeProjection(other,
+          otherState and otherState.segIdx or p.segIdx,
+          not (otherState and otherState.routeLocked),
+          otherState and otherState.routeProgress,other.speedMs,0.05)
+        if otherState and progress~=nil then
+          otherState.routeProgress=progress
+          otherState.routeLocked=true
+        end
+        local otherFx,otherFz=normalize2(other.look.x,other.look.z)
+        local otherSample=progress and Geometry.sample(state.routeGeometry,progress)
+        local directionDot=otherSample and
+          (otherFx*otherSample.tx+otherFz*otherSample.tz) or 1.0
+        local gap,off
+        if progress~=nil and directionDot>=-0.25 then
+          gap=routeGap(p.routeProgress,progress)
+          off=lateral
+        else
+          gap,off=relativeToRoute(other.position,ownSample)
+        end
+        if gap~=nil and off~=nil and gap>-18.0 and gap<105.0 and
+           off>=corridorMin and off<=corridorMax then
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+
+local function updateRacingPlan(carIndex,car,p,speed,dt)
+  refreshRouteMetrics()
+  if not state.routeGeometry or p.routeProgress==nil then
+    p.racingPlan=nil
+    return
+  end
+  local bl,br=H.boundsAt(p.segIdx)
+  local mid=(bl+br)*0.5
+  local base=p.baseLaneOffset
+  if base==nil then
+    base=(br-bl)>=5.4 and ((mid+br)*0.5) or mid
+    p.baseLaneOffset=base
+  end
+
+  local fixedOffset=nil
+  local mode="OPEN"
+  if p.overtakeSide~=0 then
+    fixedOffset=safeNumber(p.passLat,p.laneOffset or base)
+    mode="PASS"
+  elseif p.returningFromPass then
+    fixedOffset=safeNumber(p.baseLaneOffset,base)
+    mode="RETURN"
+  elseif hasTrafficInCorridor(carIndex,car,p,base) then
+    fixedOffset=base
+    mode="TRAFFIC"
+  end
+
+  p.racingPlanTimer=math.max(0,safeNumber(p.racingPlanTimer)-dt)
+  if p.racingPlan and p.racingPlanMode==mode and p.racingPlanTimer>0 then return end
+
+  local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+  local v=math.max(0,speed)
+  local horizon=clamp(math.max(100.0,v*v/(2*brakeAccel)+v*1.5+45.0),100.0,300.0)
+  p.racingPlan=RacingLine.plan(state.routeGeometry,Geometry.sample,
+    p.routeProgress,car,routeBoundsAtSample,
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0)
+  p.racingPlanMode=mode
+  p.racingPlanTimer=0.10
+  if p.racingPlan then
+    p.racingPlanCurvature=safeNumber(p.racingPlan.curvature[2])
+  end
 end
 
 local function passingReservationBlocked(carIndex,p,targetOffset,speed)
@@ -960,6 +1059,7 @@ function Driver.update(carIndex, car, dt)
     if rescued then return end
   end
 
+  if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   p.targetSpeed = targetSpeed
