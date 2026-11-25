@@ -66,6 +66,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local length = math.max(35.0, horizon or 85.0)
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
+  local blockedDistance=nil
   local initial = safe(startOffset, safe(baseOffset, 0))
   local preferred = safe(baseOffset, initial)
 
@@ -77,9 +78,13 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     left, right = safe(left, -2.0), safe(right, 2.0)
     local lo, hi = left + margin, right - margin
     if lo > hi then
-      -- No center offset can keep the complete vehicle footprint on the road.
-      -- Refuse to invent a path outside the physical corridor.
-      return nil, "NO_FIT"
+      -- A near-field corridor that cannot contain the car is an immediate
+      -- hard stop. A distant narrowing becomes a braking constraint instead
+      -- of stopping the car hundreds of metres early.
+      if d <= 10.0 then return nil, "NO_FIT" end
+      blockedDistance=blockedDistance or d
+      local center=(left+right)*0.5
+      lo,hi=center,center
     end
     samples[#samples + 1] = sample
     bounds[#bounds + 1] = { lo, hi }
@@ -131,13 +136,16 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     spacing = step,
     count = n,
     horizon = (n - 1) * step,
-    fixed = fixedOffset ~= nil
+    fixed = fixedOffset ~= nil,
+    blockedDistance = blockedDistance
   }
 end
 
 function RacingLine.sample(plan, distance)
   if not plan or not plan.points or plan.count < 2 then return nil end
-  local position = clamp(distance / plan.spacing, 0, plan.count - 1)
+  local usableDistance=plan.blockedDistance and
+    math.max(0,plan.blockedDistance-10.0) or distance
+  local position = clamp(usableDistance / plan.spacing, 0, plan.count - 1)
   local index = math.floor(position) + 1
   local nextIndex = math.min(plan.count, index + 1)
   local t = position - math.floor(position)
