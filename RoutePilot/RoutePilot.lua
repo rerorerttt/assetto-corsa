@@ -912,6 +912,30 @@ local function drawMapInRect(q0,q1)
       end
     end
   end
+  -- Precomputed full-lap time-optimal trajectory: cyan-blue over the
+  -- recorded center/reference line. This is the line the AI follows in open
+  -- running; passing plans are generated locally around traffic.
+  local optimized=state.globalTrajectory
+  if optimized and optimized.points and #optimized.points>1 then
+    local prev
+    for i=1,#optimized.points do
+      local point=optimized.points[i]
+      local sx=mx+(point.x-cx)*scale
+      local sy=my+(point.z-cz)*scale
+      if prev and segVisible(prev.x,prev.y,sx,sy) then
+        ui.drawLine(prev,vec2(sx,sy),rgbm(0.05,0.85,1.0,0.95),2)
+      end
+      prev=vec2(sx,sy)
+    end
+    if optimized.loop and prev then
+      local first=optimized.points[1]
+      local fx=mx+(first.x-cx)*scale
+      local fy=my+(first.z-cz)*scale
+      if segVisible(prev.x,prev.y,fx,fy) then
+        ui.drawLine(prev,vec2(fx,fy),rgbm(0.05,0.85,1.0,0.95),2)
+      end
+    end
+  end
   -- cars: player = cyan, AI = white/green when overtaking
   local sim=ac.getSim()
   if sim then
