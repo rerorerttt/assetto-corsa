@@ -223,7 +223,8 @@ local function planTargetSpeed(p,speed)
   end
   local distance=0
   while distance<=horizon do
-    local planned=p.racingPlan and RacingLine.sample(p.racingPlan,distance) or nil
+    local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,p.routeProgress) or 0
+    local planned=p.racingPlan and RacingLine.sample(p.racingPlan,distance+clamp(planAdvance,0,30.0)) or nil
     local sample=planned or Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
     local curvature=math.abs(safeNumber(planned and planned.k or sample.k))
@@ -358,7 +359,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.laneOffset=p.passLat
   end
   local laneTarget=p.laneOffset or leftCenter
-  local raceTarget=p.racingPlan and RacingLine.sample(p.racingPlan,ahead) or nil
+  local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
+  local raceTarget=p.racingPlan and RacingLine.sample(p.racingPlan,ahead+clamp(planAdvance,0,30.0)) or nil
   if raceTarget then
     p.laneOffsetCurrent=raceTarget.offset
   else
@@ -783,6 +785,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
     fixedOffset==nil and obstacleAt or nil)
+  p.racingPlanStartProgress=p.routeProgress
   p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
