@@ -705,7 +705,7 @@ local function buildTrafficObstacles(carIndex,car,p,speed)
           -- Only cars that can occupy the same piece of road when we reach
           -- the sample become obstacles. Rear traffic is handled by its own
           -- planner and does not force us into a fixed lane.
-          if longitudinalGap>=-7.0 and longitudinalGap<=38.0 then
+          if longitudinalGap>=-7.0 and longitudinalGap<=120.0 then
             obstacles[#obstacles+1]={
               progress=op,lateral=ol,speed=otherSpeed,
               halfWidth=ownHalf+half+0.65
