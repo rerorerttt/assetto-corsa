@@ -102,3 +102,17 @@ The branch `routepilot/racing-corridor-optimizer-2026-11-25` adds `racing_line.l
 - The steering input is no longer artificially capped at 75%; the initial lateral-acceleration target is raised to 8 m/s².
 - This branch is experimental and has **not** been validated in Assetto Corsa/CSP. In-game tests are required for corner entry/exit speed, road-boundary clearance, side-by-side traffic, opposing traffic, and multi-car pass reservations. Do not treat source-level changes as proof of collision-free driving.
 
+
+
+## Experimental linked-chicane path planner (2026-11-25)
+
+The branch `routepilot/chicane-through-line-2026-11-25` changes the open-road racing-line optimizer for consecutive opposite-direction bends:
+
+- The optimizer samples the route every 4.5 m instead of 7.5 m, so short left-right transitions are represented by several planning stations rather than being skipped.
+- The candidate set explicitly includes the usable corridor centre as well as intermediate positions, allowing a nearly straight central chord through an S-bend whenever the recorded physical boundaries leave enough room.
+- Dynamic programming minimizes driven-path curvature and adds a separate penalty for abrupt curvature changes. This makes the optimizer evaluate the left-right sequence as one continuous path instead of treating each corner as an isolated apex.
+- A weak centre preference discourages unnecessary edge-to-edge weaving on open road. Lateral movement between adjacent planning stations is bounded to avoid discontinuous offset jumps.
+- The speed planner continues to use curvature from the optimized path, so a genuinely straighter feasible path can retain more speed and the throttle controller can request acceleration immediately when the predicted path opens.
+- Passing and return modes remain fixed-offset paths; the new open-road optimization does not replace traffic reservations or authorize crossing physical road bounds.
+
+This is an experimental source change, not a validated driving result. It has not been run in Assetto Corsa/CSP. The route must contain real left/right boundary measurements; default or fabricated widths are not evidence that a straight chord fits. A track trace is required to verify the chicane path, boundary clearance, steering saturation, speed target, throttle recovery and CPU cost with the intended cars.
