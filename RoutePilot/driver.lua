@@ -120,7 +120,7 @@ local function newPersonality(carIndex)
   -- determine speed. Curvature and measured braking capability remain limits.
   local p = {
     segIdx = 1, cruiseSpeed = math.huge, brakeAccelEstimate = CFG.BRAKE_ACCEL,
-    accelEstimate = 4.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
+    accelEstimate = 5.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
     previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
@@ -185,11 +185,17 @@ local function readVehicleDynamics(car, p, dt)
         p.brakeAccelEstimate = lerp(
           safeNumber(p.brakeAccelEstimate, CFG.BRAKE_ACCEL), estimate, 0.12)
       end
-    elseif p.gas > 0.2 and speed > p.previousSpeed then
+    elseif p.gas > 0.85 and p.brake < 0.05 and
+       safeNumber(p.tractionScale,1.0) > 0.85 and
+       safeNumber(p.wheelSlip) < 0.12 and p.lateralAccel < 4.5 and
+       speed > p.previousSpeed then
+      -- Learn acceleration only on a clean, near-full-throttle straight.
+      -- Partial throttle, cornering, gear shifts and traction-control cuts
+      -- otherwise poisoned the lap profile (values fell to 0.5–0.7 m/s²).
       local measured = (speed - p.previousSpeed) / dt
-      if measured >= 0.3 and measured <= 18.0 then
-        local estimate = clamp(measured, 0.5, 18.0)
-        p.accelEstimate = lerp(safeNumber(p.accelEstimate,4.0),estimate,0.08)
+      if measured >= 1.5 and measured <= 18.0 then
+        local estimate = clamp(measured, 2.5, 18.0)
+        p.accelEstimate = lerp(safeNumber(p.accelEstimate,5.0),estimate,0.04)
       end
     end
   end
@@ -967,11 +973,17 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   p.racingPlanStartProgress=p.routeProgress
   p.racingPlanComputed=true
   p.racingPlanFallback=planFallback
-  p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
+  -- Optimizer failure is not proof that the road is blocked. In particular,
+  -- PASS/RETURN plans can fail while the already-validated lane transition is
+  -- still drivable. Keep following the recorded route/lane fallback; only a
+  -- lost route projection is allowed to command a full stop.
+  p.racingPlanBlocked=false
+  p.racingPlanFailure=planFailure
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
-  if p.racingPlanBlocked then
-    H.log("RACE_LINE_BLOCKED id=%d reason=%s",carIndex,tostring(planFailure))
+  if planFailure then
+    H.log("RACE_LINE_FALLBACK id=%d mode=%s reason=%s",
+      carIndex,mode,tostring(planFailure))
   elseif planFallback then
     H.log("RACE_LINE_FALLBACK id=%d mode=%s reason=NO_PATH",carIndex,mode)
   end
@@ -1034,6 +1046,8 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   local ownHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
   local ownHalfLength=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
   local fx,fz=normalize2(car.look.x,car.look.z)
+  local ownSample=Geometry.sample(route,p.routeProgress)
+  if not ownSample then return false,"no_route_sample" end
   local traffic={}
   local sim=ac.getSim()
   if not sim then return false,"no_sim" end
@@ -1048,10 +1062,28 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           not (otherState and otherState.routeLocked),
           otherState and otherState.routeProgress,other.speedMs,0.05)
         if op==nil then
+          -- A failed spline projection must not make every nearby vehicle a
+          -- global pass veto. Classify it in the current route's local frame
+          -- and reserve only its real longitudinal/lateral footprint.
           local dx=other.position.x-car.position.x
           local dz=other.position.z-car.position.z
           if dx*dx+dz*dz<80.0*80.0 then
-            return false,"near_vehicle_unprojected"
+            local longitudinal,lateral=relativeToRoute(other.position,ownSample)
+            if longitudinal and lateral then
+              local ofx,ofz=normalize2(other.look.x,other.look.z)
+              local signedSpeed=math.max(0,safeNumber(other.speedMs))
+              if ofx*ownSample.tx+ofz*ownSample.tz < -0.25 then
+                signedSpeed=-signedSpeed
+              end
+              local otherHalfWidth=math.max(0.75,
+                safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+              local otherHalfLength=math.max(1.5,
+                safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
+              traffic[#traffic+1]={
+                index=i,progress=p.routeProgress+longitudinal,lateral=lateral,
+                speed=signedSpeed,halfWidth=otherHalfWidth,halfLength=otherHalfLength
+              }
+            end
           end
         else
           local os=Geometry.sample(route,op)
