@@ -181,14 +181,14 @@ local function readVehicleDynamics(car, p, dt)
   p.lateralAccel = math.abs(p.yawRate * speed)
   -- Learn usable cornering grip from actual vehicle response. Increase the
   -- limit only while the car is stable; reduce it when slip indicates loss.
-  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
+  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)
   if speed>12.0 and math.abs(p.slipAngle)<0.08 and
      safeNumber(p.wheelSlip)<0.20 and p.lateralAccel>grip*0.70 then
     grip=lerp(grip,clamp(p.lateralAccel*1.18,grip,20.0),0.015)
   elseif speed>12.0 and
      (math.abs(p.slipAngle)>0.15 or safeNumber(p.wheelSlip)>0.30) and
      p.lateralAccel>3.0 then
-    grip=lerp(grip,clamp(p.lateralAccel*0.95,4.0,grip),0.08)
+    grip=lerp(grip,clamp(p.lateralAccel*0.95,7.5,grip),0.08)
   end
   p.lateralAccelLimit=grip
   return speed, fx, fz
@@ -231,7 +231,7 @@ local function planTargetSpeed(p,speed)
     -- The optimizer's path curvature, not the reference-line curvature,
     -- determines braking on an open road.
     if curvature>math.max(CFG.CURVE_MIN,0.0018) then
-      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
+      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*0.90
       local curveSpeed=math.sqrt(lateralLimit/curvature)
       local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.25)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
@@ -396,10 +396,14 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local predictedLateral=projection.lateral+lateralVelocity*previewTime
   local safePredicted=clamp(predictedLateral,safeMin,safeMax)
   local boundaryError=safePredicted-predictedLateral
-  local boundaryDistance=math.max(8.0,ahead*0.65)
-  local boundaryCurvature=clamp(2.5*boundaryError/
-    (boundaryDistance*boundaryDistance),-0.15,0.15)
+  local boundaryDistance=math.max(6.0,ahead*0.50)
+  local boundaryCurvature=clamp(3.5*boundaryError/
+    (boundaryDistance*boundaryDistance),-0.22,0.22)
   desiredCurvature=desiredCurvature+boundaryCurvature
+  -- Curvature-only boundary recovery was too weak when a car was already
+  -- outside the usable footprint corridor. Add direct lateral-position and
+  -- lateral-velocity feedback so the whole body is driven back onto asphalt.
+  local boundarySteer=clamp(boundaryError*0.24-lateralVelocity*0.10,-0.85,0.85)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
@@ -416,9 +420,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18+boundarySteer
   if p.emergencyPass then
-    steer=steer*CFG.EMERGENCY_STEER_GAIN
+    steer=steer*CFG.EMERGENCY_STEER_GAIN+boundarySteer
     return clamp(steer,-1.0,1.0)
   end
   return clamp(steer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
@@ -777,7 +781,109 @@ local function safeFollowingSpeed(gap,leaderSpeed,brakeAccel)
   return math.sqrt(math.max(0,leader*leader+2*decel*available))
 end
 
-local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
+-- Predict the complete lateral pass, the side-by-side phase and the
+-- return to the original line. A candidate is accepted only when the whole
+-- swept vehicle footprint remains inside the road and clear of every car.
+local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
+    passDistance,speed)
+  local route=state.routeGeometry
+  if not route or p.routeProgress==nil then return false,"no_route" end
+  local ownHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+  local ownHalfLength=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
+  local fx,fz=normalize2(car.look.x,car.look.z)
+  local traffic={}
+  local sim=ac.getSim()
+  if not sim then return false,"no_sim" end
+
+  for i=0,sim.carsCount-1 do
+    if i~=carIndex then
+      local other=ac.getCar(i)
+      if other and other.isActive then
+        local otherState=state.p[i]
+        local op,ol=routeProjection(other,
+          otherState and otherState.segIdx or p.segIdx,
+          not (otherState and otherState.routeLocked),
+          otherState and otherState.routeProgress,other.speedMs,0.05)
+        if op==nil then
+          local dx=other.position.x-car.position.x
+          local dz=other.position.z-car.position.z
+          if dx*dx+dz*dz<80.0*80.0 then
+            return false,"near_vehicle_unprojected"
+          end
+        else
+          local os=Geometry.sample(route,op)
+          local ofx,ofz=normalize2(other.look.x,other.look.z)
+          local direction=os and (ofx*os.tx+ofz*os.tz) or 1.0
+          local signedSpeed=math.max(0,safeNumber(other.speedMs))
+          if direction < -0.25 then signedSpeed=-signedSpeed end
+          local otherHalfWidth=math.max(0.75,
+            safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+          local otherHalfLength=math.max(1.5,
+            safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
+          local otherOffset=ol or 0
+          if otherState and
+             (otherState.overtakeSide~=0 or otherState.returningFromPass) then
+            otherOffset=safeNumber(otherState.laneOffset,otherOffset)
+          end
+          traffic[#traffic+1]={
+            index=i,progress=op,lateral=otherOffset,speed=signedSpeed,
+            halfWidth=otherHalfWidth,halfLength=otherHalfLength
+          }
+        end
+      end
+    end
+  end
+
+  local transitionOut=22.0
+  local transitionBack=22.0
+  local totalDistance=math.max(20.0,passDistance)+transitionBack
+  local step=3.0
+  local distance=0.0
+  while distance<=totalDistance+0.001 do
+    local sample=Geometry.sample(route,p.routeProgress+distance)
+    if not sample then return false,"route_ends" end
+
+    local outT=clamp(distance/transitionOut,0,1)
+    outT=outT*outT*(3.0-2.0*outT)
+    local backT=clamp((distance-passDistance)/transitionBack,0,1)
+    backT=backT*backT*(3.0-2.0*backT)
+    local offset
+    if distance<=passDistance then
+      offset=source+(targetOffset-source)*outT
+    else
+      offset=targetOffset+(source-targetOffset)*backT
+    end
+
+    local angle=signedAngle(fx,fz,sample.tx,sample.tz)*
+      (1.0-clamp(distance/12.0,0,1))
+    local envelope=ownHalfWidth*math.abs(math.cos(angle))+
+      ownHalfLength*math.abs(math.sin(angle))+BOUND_MARGIN+0.12
+    local left,right=routeBoundsAtSample(sample)
+    if offset<left+envelope or offset>right-envelope then
+      return false,"road_boundary"
+    end
+
+    local time=distance/math.max(5.0,speed)
+    local ownProgress=p.routeProgress+distance
+    for _,other in ipairs(traffic) do
+      local predictedOther=other.progress+other.speed*time
+      local longitudinal=routeGap(ownProgress,predictedOther)
+      local lateralGap=math.abs(offset-other.lateral)
+      local longitudinalClearance=ownHalfLength+other.halfLength+
+        math.max(2.5,math.abs(speed-other.speed)*0.30)
+      local lateralClearance=ownHalfWidth+other.halfWidth+0.45
+      if math.abs(longitudinal)<longitudinalClearance and
+         lateralGap<lateralClearance then
+        return false,"predicted_vehicle_conflict"
+      end
+    end
+    distance=distance+step
+  end
+  return true
+end
+
+local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
+    speed,passDistance)
   if p.routeProgress==nil or leaderLateral==nil then return nil end
   local fx,fz=normalize2(car.look.x,car.look.z)
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
@@ -790,20 +896,30 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
-  local separation=(ownWidth+targetWidth)*0.5+0.35
+  local separation=(ownWidth+targetWidth)*0.5+0.55
   local candidates={}
-  local step=0.35
+  local step=0.30
   for i=0,math.floor((safeMax-safeMin)/step) do
     local offset=safeMin+i*step
-    if math.abs(offset-source)>=1.15 and math.abs(offset-leaderLateral)>=separation then
+    if math.abs(offset-source)>=1.15 and
+       math.abs(offset-leaderLateral)>=separation then
       candidates[#candidates+1]=offset
     end
   end
   table.sort(candidates,function(a,b)return math.abs(a-source)<math.abs(b-source) end)
+  local lastReason="no_candidate"
   for _,offset in ipairs(candidates) do
     local reserved=passingReservationBlocked(carIndex,p,offset,speed)
-    if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then return offset end
+    if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then
+      local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
+        source,offset,passDistance or 60.0,speed)
+      if clear then return offset end
+      lastReason=reason or lastReason
+    else
+      lastReason=reserved and "reserved_corridor" or "occupied_corridor"
+    end
   end
+  p.lastPassDeniedReason=lastReason
   return nil
 end
 
@@ -813,13 +929,13 @@ local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
   return safeFollowingSpeed(currentGap,currentSpeed,p.brakeAccelEstimate)
 end
 
-local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed)
+local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,passDistance)
   if p.overtakeRetryT>0 then return false end
-  local offset=findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed)
+  local offset=findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,passDistance)
   if offset==nil then
     p.overtakeRetryT=0.25
     if not p.overtakeDeniedLogged then
-      H.log("CAR=%d OVERTAKE_DENIED no_free_passing_offset gap=%.1f",carIndex,gap or -1)
+      H.log("CAR=%d OVERTAKE_DENIED reason=%s gap=%.1f",carIndex,tostring(p.lastPassDeniedReason or "no_free_passing_offset"),gap or -1)
       p.overtakeDeniedLogged=true
     end
     return false
@@ -970,7 +1086,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     if canActuallyPass and gap<=passWindow and p.overtakeSide==0 and
        p.overtakeRetryT<=0 then
       p.emergencyPassRequest=urgent
-      if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed) then
+      if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,estimatedPassDistance) then
         return targetSpeed
       end
       p.emergencyPassRequest=false
