@@ -781,10 +781,12 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     end
     return blocked
   end
+  local lateralLimit=clamp(
+    safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*0.90
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
-    fixedOffset==nil and obstacleAt or nil)
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,4.0,
+    fixedOffset==nil and obstacleAt or nil,lateralLimit)
   p.racingPlanStartProgress=p.routeProgress
   p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
   p.racingPlanBlockedDistance=p.racingPlan and
