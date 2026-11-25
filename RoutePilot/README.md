@@ -92,3 +92,14 @@ The user has tested the 2026-11-24 RoutePilot build in Assetto Corsa and confirm
 The separate branch `routepilot/predictive-boundary-guard-2026-11-24` contains an experimental correction for AI spawn direction and predictive road-boundary avoidance. It uses the recorded route's forward direction when spawning, heading-aware route selection for the spawn reference, a first-acquisition distance/direction gate, and a lookahead corridor check that transforms saved bounds into spline coordinates and accounts for the car's rotated bounding-box footprint. New trace fields are `BOUNDARY`, `SAFE`, and `BODY`.
 
 This build is not yet validated in Assetto Corsa/CSP. Keep using the confirmed baseline unless deliberately testing this experimental branch.
+
+
+## Racing speed-profile experiment — 2026-11-25
+
+Branch: `routepilot/racing-speed-profile-2026-11-25`, created directly from the current `main` commit `b08c8e82f286ff4e6e560fb9fca97a2f883e9f31`. The main branch is not modified.
+
+This experiment changes only the speed planner and the grip telemetry used by that planner. It replaces point-local spline curvature with a three-scale heading-change estimate (5, 10, and 18 m half-windows), taking the most restrictive scale so a sequence of linked bends is not averaged away. It constructs a spatial speed-cap profile at 4 m intervals and propagates braking constraints backwards through the complete preview horizon. This distinguishes sustained arcs from isolated interpolation spikes while retaining genuine tighter bends.
+
+The initial lateral-acceleration target is raised from 6.0 to 10.5 m/s². It is adapted per car using CSP StateCar lateral acceleration (in G, converted to m/s²) and the documented wheel slipAngle in degrees; rising tire slip reduces the estimate, while stable loaded cornering gradually raises it. This is an intentionally performance-oriented experiment, not a universal grip guarantee.
+
+No steering, route projection, road-boundary, lane, overtaking, collision, spawn, or recovery logic is changed. Static source review is required before in-game testing. This branch has not been runtime-validated in Assetto Corsa/CSP; test smooth banked/angled roads, linked S-bends, and genuinely tight corners, checking both speed and boundary clearance.
