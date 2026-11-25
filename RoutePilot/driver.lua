@@ -65,12 +65,19 @@ function Driver.setup(cfg, st, helpers)
 end
 
 local function refreshRouteMetrics()
-  if state.routeGeometry and state.routeMetricCount == #state.nodes and
+  if state.routeGeometry and state.racingLine and
+     state.routeMetricCount == #state.nodes and
      state.routeMetricLoop == state.loopRoute then return end
   state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
   state.routeLength = state.routeGeometry and state.routeGeometry.total or 0
   state.racingLine = state.routeGeometry and
     Racing.build(state.routeGeometry,state.nodes,H.boundsAt,state.loopRoute) or nil
+  if state.racingLine then
+    H.log("RACING_LINE_REBUILT points=%d max_offset=%.2f",
+      #state.racingLine.points,state.racingLine.maxAbsOffset or 0)
+  else
+    H.log("RACING_LINE_REBUILD_FAILED")
+  end
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
