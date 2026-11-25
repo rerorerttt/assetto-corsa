@@ -567,30 +567,29 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local desiredCurvature=pursuitCurvature+
     previewCurvature*CFG.CURVATURE_FEEDFORWARD
 
-  -- Predict lateral drift over the preview time and steer back before the
-  -- vehicle footprint reaches a saved boundary.
+  -- Boundary protection must react to a real footprint/boundary approach,
+  -- not to a long-range extrapolation of lateral velocity. On a straight that
+  -- extrapolation fed the controller's own correction back into a larger
+  -- opposite correction and caused high-speed fishtailing.
   local velocity=car.velocity
   local lateralVelocity=safeNumber(velocity.x)*(-current.tz)+
     safeNumber(velocity.z)*current.tx
   p.lateralVelocity=lateralVelocity
   p.lookaheadDistance=ahead
-  local previewTime=clamp(ahead/math.max(5.0,speed),0.35,1.25)
-  local predictedLateral=projection.lateral+lateralVelocity*previewTime
-  local safePredicted=clamp(predictedLateral,safeMin,safeMax)
-  local boundaryError=safePredicted-predictedLateral
-  local boundaryDistance=math.max(6.0,ahead*0.50)
-  -- Boundary recovery is deliberately a low-authority damping term.
-  -- The previous high-gain prediction feedback changed sign every time the
-  -- lateral velocity crossed zero, producing full-lock left/right oscillation
-  -- on straights. Main path tracking remains responsible for normal steering.
-  local boundaryCurvature=clamp(1.2*boundaryError/
-    (boundaryDistance*boundaryDistance),-0.06,0.06)
-  desiredCurvature=desiredCurvature+boundaryCurvature
-  local boundarySteer=clamp(boundaryError*0.075-lateralVelocity*0.035,-0.22,0.22)
+  local boundaryError=0.0
+  if projection.lateral<safeMin then
+    boundaryError=safeMin-projection.lateral
+  elseif projection.lateral>safeMax then
+    boundaryError=safeMax-projection.lateral
+  end
+  local boundarySteer=0.0
+  if boundaryError~=0 then
+    boundarySteer=clamp(boundaryError*0.035-lateralVelocity*0.012,-0.06,0.06)
+  end
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
-  local currentRace= p.racingPlan and RacingLine.sample(p.racingPlan,0) or nil
+  local currentRace=p.racingPlan and RacingLine.sample(p.racingPlan,0) or nil
   if not currentRace and p.trajectoryPlan and p.overtakeSide==0 and not p.returningFromPass then
     currentRace=TrajectoryOptimizer.sample(p.trajectoryPlan,projection.s,p.globalSpeedProfile)
   end
@@ -604,11 +603,20 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.boundaryDeficit=boundaryDeficit
   p.boundaryEmergency=math.abs(boundaryError)>0.45 or boundaryDeficit>0.15
 
-  -- Small slip-angle damping is secondary; the spline preview is the
-  -- primary steering signal.
-  local yawDamping=safeNumber(p.yawRateFiltered,p.yawRate)*0.16
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+
-    p.slipAngle*0.12-yawDamping
+  -- A straight-line controller has no reason to chase tiny lateral-velocity
+  -- fluctuations. Use yaw-rate damping only; target slip is zero outside a
+  -- deliberate drift/pass recovery state.
+  local straight=math.abs(current.k)<0.00035 and
+    math.abs(curvePreview.k)<0.00035 and math.abs(previewCurvature)<0.00035
+  local yawDamping=safeNumber(p.yawRateFiltered,p.yawRate)*0.18
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN-yawDamping
+  if straight then
+    steer=clamp(steer,-0.08,0.08)
+    if math.abs(projection.lateral)<0.10 and
+       math.abs(p.headingError)<0.012 and math.abs(p.yawRateFiltered)<0.035 then
+      steer=0.0
+    end
+  end
   if p.emergencyPass then
     steer=steer*clamp(CFG.EMERGENCY_STEER_GAIN,1.0,1.30)
   end
