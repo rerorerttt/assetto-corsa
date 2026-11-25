@@ -98,7 +98,7 @@ This build is not yet validated in Assetto Corsa/CSP. Keep using the confirmed b
 
 Branch: `routepilot/racing-speed-profile-2026-11-25`, created directly from the current `main` commit `b08c8e82f286ff4e6e560fb9fca97a2f883e9f31`. The main branch is not modified.
 
-This experiment changes only the speed planner and the grip telemetry used by that planner. It replaces point-local spline curvature with a three-scale heading-change estimate (5, 10, and 18 m half-windows), taking the most restrictive scale so a sequence of linked bends is not averaged away. It constructs a spatial speed-cap profile at 4 m intervals and propagates braking constraints backwards through the complete preview horizon. This distinguishes sustained arcs from isolated interpolation spikes while retaining genuine tighter bends.
+This experiment changes only the speed planner and the grip telemetry used by that planner. It replaces point-local spline curvature with a three-scale estimate (5, 10, and 18 m half-windows) that accumulates absolute heading changes inside each window, so linked S-bends do not cancel each other. It constructs a spatial speed-cap profile at 2.5 m intervals and propagates braking constraints backwards through the complete preview horizon. This distinguishes sustained arcs from isolated interpolation spikes while retaining genuine tighter bends.
 
 The initial lateral-acceleration target is raised from 6.0 to 10.5 m/s². It is adapted per car using CSP StateCar lateral acceleration (in G, converted to m/s²) and the documented wheel slipAngle in degrees; rising tire slip reduces the estimate, while stable loaded cornering gradually raises it. This is an intentionally performance-oriented experiment, not a universal grip guarantee.
 
