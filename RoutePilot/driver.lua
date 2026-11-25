@@ -218,13 +218,17 @@ end
 
 local function planTargetSpeed(p,speed)
   refreshRouteMetrics()
+  p.cornerBrake=false
   local route=state.routeGeometry
   if not route or not p.routeProgress then return 11.0 end
   local target=p.cruiseSpeed
   local currentSpeed=math.max(0,safeNumber(speed))
   local coastDecel=clamp(safeNumber(p.coastDecelEstimate,1.4),0.5,3.5)
+  local brakeDecel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)*0.82
+  -- Scan far enough to find the corner, then calculate the speed from which
+  -- the car can actually brake to its apex speed before reaching it.
   local coastLookahead=math.min(350.0,
-    currentSpeed*currentSpeed/(2*coastDecel)+currentSpeed*0.5+35.0)
+    currentSpeed*currentSpeed/(2*brakeDecel)+currentSpeed*0.5+50.0)
   local horizon=math.max(CFG.PLAN_HORIZON,coastLookahead)
   if p.racingPlanBlockedDistance then
     local stoppingRoom=math.max(0,p.racingPlanBlockedDistance-10.0)
@@ -241,16 +245,15 @@ local function planTargetSpeed(p,speed)
     local sample=planned or Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
     local curvature=math.abs(safeNumber(planned and planned.k or sample.k))
-    -- Ignore curvature below the noise floor of a route recorded at 3 m.
-    -- The optimizer's path curvature, not the reference-line curvature,
-    -- determines the throttle-lift speed target on an open road.
+    -- Use the optimized path curvature and measured braking capability.
     if curvature>CFG.CURVE_MIN then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,CFG.MAX_LATERAL_ACCEL)*0.90
       local curveSpeed=math.sqrt(lateralLimit/curvature)
-      local coastDistanceAvailable=math.max(0,distance-currentSpeed*0.30)
+      local brakeDistanceAvailable=math.max(0,distance-currentSpeed*0.30)
       local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
-        2*coastDecel*coastDistanceAvailable)
+        2*brakeDecel*brakeDistanceAvailable)
       if safeSpeed<target then target=safeSpeed end
+      if safeSpeed<currentSpeed-0.75 then p.cornerBrake=true end
     end
     distance=distance+5.0
     if not route.loop and p.routeProgress+distance>=route.total then break end
@@ -1351,7 +1354,7 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local gas=clamp(error*CFG.GAS_GAIN,0,CFG.MAX_GAS)
   -- Curvature and road geometry are handled by lifting the throttle only.
   -- Hydraulic braking is reserved for traffic conflicts and unsafe boundary corridors.
-  local brake=(p.trafficBrake or p.boundaryBrake) and
+  local brake=(p.trafficBrake or p.boundaryBrake or p.cornerBrake) and
     clamp(-error*CFG.BRAKE_GAIN,0,CFG.MAX_BRAKE) or 0
 
   -- Fast torque cut on wheelspin, slow recovery to avoid repeated grip/spin.
