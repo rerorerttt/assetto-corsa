@@ -136,7 +136,6 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       if prior and not isBlocked(prior.offset) then
         addCandidate(list,prior.offset,lo,hi)
       end
-      if #list==0 then return nil, "NO_PATH" end
       local previous=sampleFn(route,progress+math.max(0,d-step))
       local following=sampleFn(route,progress+d+step)
       local kp=safe(previous and previous.k)
@@ -148,6 +147,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       if not isBlocked(curvatureCandidate) then
         addCandidate(list,curvatureCandidate,lo,hi)
       end
+      if #list==0 then return nil, "NO_PATH" end
       candidateSets[i]=list
     end
 
