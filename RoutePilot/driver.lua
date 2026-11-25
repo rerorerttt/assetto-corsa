@@ -416,28 +416,32 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local transitionLength=clamp(math.max(18.0,speed*1.5),18.0,48.0)
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local brakingDistance=speed*speed/(2*brakeAccel)
-  -- Validate the chosen path beyond steering lookahead, far enough to see
-  -- boundaries and bends that require braking before the next update window.
-  local planningHorizon=math.max(CFG.PLAN_HORIZON,
-    brakingDistance+speed*1.5+35.0,ahead)
-
-  -- Candidate range is the union of local usable offsets; each candidate is
-  -- subsequently checked at every sample, so this range is not itself treated
-  -- as a safe corridor.
-  local minOffset,maxOffset=math.huge,-math.huge
-  local d=-halfLength
-  while d<=planningHorizon+halfLength+0.001 do
-    local sample=Geometry.sample(route,projection.s+d)
-    if sample then
-      local l,r=routeBoundsAtSample(sample)
-      minOffset=math.min(minOffset,l+halfWidth+BOUND_MARGIN)
-      maxOffset=math.max(maxOffset,r-halfWidth-BOUND_MARGIN)
+  -- Receding horizon: plan far enough to react at the current speed, but do
+  -- not require one constant lateral offset to remain valid for 170 metres.
+  -- A failed distant section must never freeze a car while its near path is clear.
+  local requestedHorizon=clamp(math.max(ahead+halfLength,
+    speed*2.25+14.0,brakingDistance*0.65+12.0),24.0,90.0)
+  local horizonTrials={requestedHorizon}
+  for _,candidateHorizon in ipairs({65.0,45.0,30.0,20.0,14.0}) do
+    if candidateHorizon<requestedHorizon-1.0 then
+      horizonTrials[#horizonTrials+1]=candidateHorizon
     end
-    d=d+4.0
   end
-  if minOffset==math.huge or maxOffset<minOffset then
+
+  -- Candidate offsets are constrained by the CURRENT vehicle footprint.
+  -- Future boundaries are checked on every trajectory sample below. Taking
+  -- the intersection of every road section over the whole horizon was wrong:
+  -- it rejected valid paths whenever the road bends or changes width.
+  local headingErrorNow=signedAngle(current.tx,current.tz,fx,fz)
+  local currentEnvelope=halfWidth*math.abs(math.cos(headingErrorNow))+
+    halfLength*math.abs(math.sin(headingErrorNow))+BOUND_MARGIN
+  local currentLeft,currentRight=routeBoundsAtSample(current)
+  local minOffset=currentLeft+currentEnvelope
+  local maxOffset=currentRight-currentEnvelope
+  if maxOffset<minOffset then
     p.boundaryInfeasible=true; p.gas=0; p.brake=1
-    p.plannerMinClearance=-math.huge
+    p.plannerMinClearance=maxOffset-minOffset
+    p.plannerFailureReason="current_footprint"
     return 0
   end
 
@@ -445,50 +449,75 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local function addCandidate(value)
     value=clamp(value,minOffset,maxOffset)
     for i=1,#candidates do
-      if math.abs(candidates[i]-value)<0.12 then return end
+      if math.abs(candidates[i]-value)<0.10 then return end
     end
     candidates[#candidates+1]=value
   end
-  addCandidate(desired); addCandidate(startOffset)
-  for i=0,12 do addCandidate(minOffset+(maxOffset-minOffset)*i/12) end
+  addCandidate(desired)
+  addCandidate(startOffset)
+  addCandidate((minOffset+maxOffset)*0.5)
+  -- Dense local lateral lattice; every candidate is subsequently checked
+  -- against the complete car footprint and all future boundary samples.
+  local width=maxOffset-minOffset
+  local steps=math.min(24,math.max(1,math.ceil(width/0.25)))
+  for i=0,steps do addCandidate(minOffset+width*i/steps) end
 
   local best,bestCost,bestSamples=nil,math.huge,nil
   local bestClearance,bestCurvature,bestEnvelope=-math.huge,math.huge,0
+  local bestHorizon=0
   local rejectBoundary,rejectOther=0,0
-  for i=1,#candidates do
-    local candidate=candidates[i]
-    local samples,reason,clearance,maxCurvature,envelope=evaluateOffsetPath(
-      route,projection.s,startOffset,candidate,transitionLength,planningHorizon,
-      halfWidth,halfLength,fx,fz,initialSlope)
-    if samples then
-      local cost=math.abs(candidate-desired)+
-        math.abs(candidate-startOffset)*0.10+maxCurvature*2.0+
-        0.04/math.max(0.10,clearance+0.10)
-      if cost<bestCost then
-        best,bestCost,bestSamples=candidate,cost,samples
-        bestClearance,bestCurvature,bestEnvelope=clearance,maxCurvature,envelope
-      end
-    elseif reason=="boundary" then rejectBoundary=rejectBoundary+1
-    else rejectOther=rejectOther+1 end
+  for h=1,#horizonTrials do
+    local horizon=horizonTrials[h]
+    local horizonBest,horizonCost,horizonSamples=nil,math.huge,nil
+    local horizonClearance,horizonCurvature,horizonEnvelope=-math.huge,math.huge,0
+    for i=1,#candidates do
+      local candidate=candidates[i]
+      local samples,reason,clearance,maxCurvature,envelope=evaluateOffsetPath(
+        route,projection.s,startOffset,candidate,transitionLength,horizon,
+        halfWidth,halfLength,fx,fz,initialSlope)
+      if samples then
+        local cost=math.abs(candidate-desired)+
+          math.abs(candidate-startOffset)*0.10+maxCurvature*2.0+
+          0.04/math.max(0.10,clearance+0.10)
+        if cost<horizonCost then
+          horizonBest,horizonCost,horizonSamples=candidate,cost,samples
+          horizonClearance,horizonCurvature,horizonEnvelope=
+            clearance,maxCurvature,envelope
+        end
+      elseif reason=="boundary" then rejectBoundary=rejectBoundary+1
+      else rejectOther=rejectOther+1 end
+    end
+    if horizonBest~=nil then
+      best,bestCost,bestSamples=horizonBest,horizonCost,horizonSamples
+      bestClearance,bestCurvature,bestEnvelope=
+        horizonClearance,horizonCurvature,horizonEnvelope
+      bestHorizon=horizon
+      break
+    end
   end
 
   p.plannerRejectBoundary=rejectBoundary
   p.plannerRejectOther=rejectOther
+  p.plannerHorizon=bestHorizon
+  p.plannerFailureReason=nil
   if best==nil then
     p.boundaryInfeasible=true
     p.boundaryCandidateMin=minOffset; p.boundaryCandidateMax=maxOffset
-    local headingError=signedAngle(current.tx,current.tz,fx,fz)
-    p.boundaryEnvelope=halfWidth*math.abs(math.cos(headingError))+
-      halfLength*math.abs(math.sin(headingError))+BOUND_MARGIN
+    p.boundaryEnvelope=currentEnvelope
     p.boundaryDeficit=0
     p.plannerMinClearance=-math.huge
     p.plannedPathSamples=nil
+    p.plannerFailureReason="no_boundary_safe_local_trajectory"
     p.gas=0; p.brake=1
+    H.log("PLAN_BLOCK id=%d reason=%s speed=%.2f bounds=[%.2f,%.2f] reject=%d/%d",
+      p.carIndex or -1,p.plannerFailureReason,speed,minOffset,maxOffset,
+      rejectBoundary,rejectOther)
     return 0
   end
 
   p.plannedPathSamples=bestSamples
   p.plannedTargetOffset=best
+  p.plannerHorizon=bestHorizon
   p.plannerMinClearance=bestClearance
   p.plannerMaxCurvature=bestCurvature
   p.boundaryCandidateMin=minOffset; p.boundaryCandidateMax=maxOffset
@@ -1092,6 +1121,7 @@ function Driver.update(carIndex, car, dt)
     end
   end
 
+  p.carIndex=carIndex
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   local progress, _, projectedSeg, _, projectionDistance =
     routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
@@ -1126,11 +1156,12 @@ function Driver.update(carIndex, car, dt)
     if rescued then return end
   end
 
-  local trafficSpeedCap = p.projectionLost and 0 or planTargetSpeed(p,speed)
-  trafficSpeedCap = updateOvertake(carIndex, car, p, speed, trafficSpeedCap, dt)
+  -- Select and validate the path BEFORE deriving its speed profile. The old
+  -- order evaluated speed twice and could apply a stale path's limit.
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
   local pathSpeedCap = p.projectionLost and 0 or planTargetSpeed(p,speed)
-  local targetSpeed = math.min(trafficSpeedCap,pathSpeedCap)
+  local trafficSpeedCap = updateOvertake(carIndex, car, p, speed, pathSpeedCap, dt)
+  local targetSpeed = trafficSpeedCap
   if p.projectionLost or p.boundaryInfeasible then targetSpeed=0 end
   p.targetSpeed=targetSpeed
   local steer = filterSteering(p, steerTarget, dt)
