@@ -177,19 +177,27 @@ local function readVehicleDynamics(car, p, dt)
   end
   p.previousSpeed = speed
   p.previousFx, p.previousFz = fx, fz
-  p.lateralAccel = math.abs(p.yawRate * speed)
-  -- Learn usable cornering grip from actual vehicle response. Increase the
-  -- limit only while the car is stable; reduce it when slip indicates loss.
-  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
-  if speed>12.0 and math.abs(p.slipAngle)<0.08 and
-     safeNumber(p.wheelSlip)<0.20 and p.lateralAccel>grip*0.70 then
-    grip=lerp(grip,clamp(p.lateralAccel*1.18,grip,20.0),0.015)
-  elseif speed>12.0 and
-     (math.abs(p.slipAngle)>0.15 or safeNumber(p.wheelSlip)>0.30) and
+  -- CSP StateCar.acceleration is expressed in G. Prefer its measured
+  -- lateral component; yaw-rate * speed remains a fallback for older builds.
+  local accel=car.acceleration
+  local measuredLat=accel and math.abs(safeNumber(accel.x))*9.81 or 0
+  p.lateralAccel = measuredLat>0.5 and measuredLat or math.abs(p.yawRate*speed)
+
+  -- Learn the usable lateral limit from the actual tire slip angles, not
+  -- body yaw alone. Wheel slipAngle is documented by CSP in degrees.
+  local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),5.0,15.0)
+  local tireSlip=math.max(0,safeNumber(p.tireSlipAngle,0))
+  if speed>10.0 and tireSlip<4.5 and math.abs(p.slipAngle)<0.10 and
+     safeNumber(p.wheelSlip)<0.22 and p.lateralAccel>grip*0.60 then
+    local observed=clamp(p.lateralAccel*1.10,grip,15.0)
+    grip=lerp(grip,observed,0.025)
+  elseif speed>10.0 and (tireSlip>7.0 or math.abs(p.slipAngle)>0.18) and
      p.lateralAccel>3.0 then
-    grip=lerp(grip,clamp(p.lateralAccel*0.95,4.0,grip),0.08)
+    local observed=clamp(p.lateralAccel*0.88,5.0,grip)
+    grip=lerp(grip,observed,0.10)
   end
   p.lateralAccelLimit=grip
+  p.tireSlipAngle=tireSlip
   return speed, fx, fz
 end
 
@@ -198,7 +206,7 @@ local function calculateStability(p, speed)
   local severity = 0
   if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
     local ss = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
-    local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
+    local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),5.0,15.0)
     local as = clamp((p.lateralAccel - grip) / (grip * 0.7), 0, 1)
     severity = math.max(ss, as)
   end
@@ -206,32 +214,77 @@ local function calculateStability(p, speed)
   p.stability = 1 - severity
 end
 
+-- Estimate route curvature at three spatial scales. A short window sees
+-- linked tight bends; medium/long windows identify sustained arcs while
+-- averaging out single-sample Catmull-Rom spikes and recorded-point noise.
+local function speedPlanningCurvature(route,progress)
+  local windows={5.0,10.0,18.0}
+  local peak=0
+  for i=1,#windows do
+    local half=windows[i]
+    local a=Geometry.sample(route,progress-half)
+    local b=Geometry.sample(route,progress+half)
+    if a and b then
+      local turn=math.abs(signedAngle(a.tx,a.tz,b.tx,b.tz))
+      local curvature=turn/(2.0*half)
+      if curvature>peak then peak=curvature end
+    end
+  end
+  return peak
+end
+
 local function planTargetSpeed(p,speed)
   refreshRouteMetrics()
   local route=state.routeGeometry
   if not route or not p.routeProgress then return 11.0 end
-  local target=p.cruiseSpeed
+
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
-  -- At high speed, inspect beyond the braking distance plus response margin.
+  local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),5.0,15.0)
   local currentSpeed=math.max(0,safeNumber(speed))
-  local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
+  local brakingDistance=currentSpeed*currentSpeed/(2.0*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
+  local step=4.0
+  local profile={}
   local distance=0
+
+  -- First pass: build a spatial speed-cap profile from filtered multi-scale
+  -- curvature. This deliberately does not use the spline's point-local k,
+  -- which can overreact to a single noisy sample or road-edge kink.
   while distance<=horizon do
-    local sample=Geometry.sample(route,p.routeProgress+distance)
-    if not sample then break end
-    local curvature=math.abs(sample.k or 0)
+    local curvature=speedPlanningCurvature(route,p.routeProgress+distance)
+    local cap=math.huge
     if curvature>CFG.CURVE_MIN then
-      local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
-      local curveSpeed=math.sqrt(lateralLimit/curvature)
-      local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.35)
-      local safeSpeed=math.sqrt(curveSpeed*curveSpeed+
-        2*brakeAccel*brakingDistanceAvailable)
-      if safeSpeed<target then target=safeSpeed end
+      cap=math.sqrt(lateralLimit/curvature)
     end
-    distance=distance+5.0
+    profile[#profile+1]={distance=distance,cap=cap,speed=cap}
+    distance=distance+step
     if not route.loop and p.routeProgress+distance>=route.total then break end
   end
+  if #profile==0 then return p.cruiseSpeed end
+
+  -- Second pass: propagate braking constraints backwards over the complete
+  -- profile. Every small bend remains represented; linked bends cannot hide
+  -- behind a long-window average because the most restrictive scale wins.
+  for i=#profile-1,1,-1 do
+    local ds=profile[i+1].distance-profile[i].distance
+    local reachable=math.sqrt(profile[i+1].speed*profile[i+1].speed+
+      2.0*brakeAccel*ds)
+    if reachable<profile[i].speed then profile[i].speed=reachable end
+  end
+
+  -- Apply a short actuator/reaction allowance before accepting future speed
+  -- reductions, then choose the strictest reachable target in the horizon.
+  local target=p.cruiseSpeed
+  local reactionDistance=currentSpeed*0.25
+  for i=1,#profile do
+    local point=profile[i]
+    local available=math.max(0,point.distance-reactionDistance)
+    local safe=math.sqrt(point.speed*point.speed+2.0*brakeAccel*available)
+    if safe<target then target=safe end
+  end
+  p.speedPlanCurvature=speedPlanningCurvature(route,p.routeProgress)
+  p.speedPlanGrip=lateralLimit
+  p.speedPlanHorizon=horizon
   return math.max(0,target)
 end
 
@@ -860,9 +913,10 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
 end
 
 local function readWheelSlip(car, p)
-  -- Documented CSP StateCar.wheels[0..3] fields. Positive longitudinal
-  -- slip is wheelspin; negative braking slip does not trigger torque cut.
+  -- CSP wheel slipRatio/speedDifference are used for traction control;
+  -- slipAngle (degrees) independently measures lateral tire saturation.
   local maxSlip=0
+  local maxTireAngle=0
   local wheels=car and car.wheels
   if wheels then
     for i=0,3 do
@@ -872,10 +926,12 @@ local function readWheelSlip(car, p)
         local speedDiff=safeNumber(wheel.speedDifference)
         local normalizedDiff=speedDiff/math.max(3.0,safeNumber(car.speedMs))
         maxSlip=math.max(maxSlip,ratio,normalizedDiff)
+        maxTireAngle=math.max(maxTireAngle,math.abs(safeNumber(wheel.slipAngle)))
       end
     end
   end
   p.wheelSlip=math.max(0,maxSlip)
+  p.tireSlipAngle=maxTireAngle
   return p.wheelSlip
 end
 
