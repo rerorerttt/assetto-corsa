@@ -198,7 +198,9 @@ local function solveVariant(samples, bounds, loopRoute, halfWidth, halfLength,
           local clearance=math.min(
             candidates[station+1][c]-nextLo,nextHi-candidates[station+1][c])
           local pathDistance=math.sqrt((pc.x-pb.x)^2+(pc.z-pb.z)^2)
-          local timeCost=pathDistance*math.sqrt(math.abs(k)/lateralAccel)
+          local localSpeed=math.min(110.0,math.sqrt(lateralAccel/
+            math.max(0.00035,math.abs(k))))
+          local timeCost=pathDistance/math.max(2.0,localSpeed)
           local cost=node.cost+timeCost+second*second*0.018+
             slope*slope*0.0015+0.001/math.max(0.08,clearance+0.08)
           local key=node.b*100+c
