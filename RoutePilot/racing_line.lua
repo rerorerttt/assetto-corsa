@@ -1,7 +1,8 @@
 -- RoutePilot/racing_line.lua
--- Short-horizon corridor optimizer. It optimizes the actual driven path,
--- not the recorded reference spline. All candidate points are constrained
--- by the recorded physical road bounds and the vehicle footprint.
+-- Geometry-first racing line optimizer. It minimizes the curvature of the
+-- complete swept vehicle path over several bends, using the actual vehicle
+-- footprint and recorded road boundaries. Traffic is a soft path cost: a
+-- car ahead must not make an otherwise drivable road return NO_PATH.
 local RacingLine = {}
 
 local function clamp(v, a, b)
@@ -13,6 +14,12 @@ local function safe(v, fallback)
     return fallback or 0
   end
   return v
+end
+
+local function normalize(x, z)
+  local length = math.sqrt(x * x + z * z)
+  if length < 0.00001 then return 0, 1 end
+  return x / length, z / length
 end
 
 local function pointAt(sample, offset)
@@ -37,182 +44,235 @@ local function curvature(a, b, c)
   return 2 * cross / math.max(0.001, ab * bc * ca)
 end
 
-local function localCost(samples, bounds, offsets, index, baseOffset)
-  local n = #samples
-  if index <= 1 or index >= n then return 0 end
-  local a = pointAt(samples[index - 1], offsets[index - 1])
-  local b = pointAt(samples[index], offsets[index])
-  local c = pointAt(samples[index + 1], offsets[index + 1])
-  local k = curvature(a, b, c)
-  local second = offsets[index - 1] - 2 * offsets[index] + offsets[index + 1]
-  local clearance = math.min(offsets[index] - bounds[index][1],
-    bounds[index][2] - offsets[index])
-  local edgePenalty = 0.00008 / math.max(0.12, clearance + 0.12)
-  return k * k * 180.0 + second * second * 0.075 +
-    edgePenalty
+local function footprintClearance(sampleA, sampleB, offsetA, offsetB,
+    boundsA, boundsB, halfWidth, halfLength, edgeMargin)
+  local a = pointAt(sampleA, offsetA)
+  local b = pointAt(sampleB, offsetB)
+  local dx, dz = normalize(b.x - a.x, b.z - a.z)
+  local function atSample(sample, offset, bounds)
+    local dot = math.abs(dx * sample.tx + dz * sample.tz)
+    local cross = math.abs(sample.tx * dz - sample.tz * dx)
+    local envelope = halfWidth * dot + halfLength * cross + edgeMargin
+    return math.min(offset - (bounds[1] + envelope),
+      (bounds[2] - envelope) - offset)
+  end
+  return math.min(
+    atSample(sampleA, offsetA, boundsA),
+    atSample(sampleB, offsetB, boundsB))
 end
 
--- boundsAt(sample) returns left/right offsets in the spline's local frame.
--- fixedOffset is used while passing: it disables racing-line optimization and
--- follows the reserved passing corridor instead.
+local function trafficCost(offset, forbidden)
+  local cost = 0
+  for _, interval in ipairs(forbidden or {}) do
+    local lo, hi = safe(interval[1]), safe(interval[2])
+    if offset >= lo and offset <= hi then
+      local penetration = math.min(offset - lo, hi - offset)
+      cost = cost + 260.0 + penetration * 90.0
+    else
+      local clearance = offset < lo and lo - offset or offset - hi
+      if clearance < 0.75 then
+        local near = 0.75 - clearance
+        cost = cost + near * near * 55.0
+      end
+    end
+  end
+  return cost
+end
+
+local function edgeCost(clearance)
+  return 0.002 / math.max(0.06, clearance + 0.06)
+end
+
+-- boundsAt(sample) returns left/right road-edge offsets in the spline frame.
+-- fixedOffset is used only for a previously validated passing corridor.
 function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, baseOffset,
     fixedOffset, horizon, spacing, obstacleAt, previousPlan, previousAdvance)
   if not route or not progress or not boundsAt then return nil end
+
   local size = car and car.aabbSize
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
-  local margin = halfWidth + 0.42
-  local step = math.max(6.0, spacing or 7.5)
-  local length = math.min(135.0, math.max(35.0, horizon or 95.0))
+  local halfLength = math.max(1.5, safe(size and size.z, 4.5) * 0.5)
+  local edgeMargin = 0.38
+  local baseMargin = halfWidth + edgeMargin
+  local step = math.max(3.5, spacing or 4.5)
+  local length = math.min(180.0, math.max(45.0, horizon or 150.0))
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
-  local blockedDistance=nil
+  local blockedDistance = nil
   local initial = safe(startOffset, safe(baseOffset, 0))
   local preferred = safe(baseOffset, initial)
 
+  -- First build the physical corridor. A distant narrowing terminates the
+  -- usable plan; it is not converted into a fake center-line path.
   for i = 0, count do
     local d = i * step
     local sample = sampleFn and sampleFn(route, progress + d) or nil
     if not sample then break end
     local left, right = boundsAt(sample)
     left, right = safe(left, -2.0), safe(right, 2.0)
-    local lo, hi = left + margin, right - margin
+    local lo, hi = left + baseMargin, right - baseMargin
     if lo > hi then
-      -- A near-field corridor that cannot contain the car is an immediate
-      -- hard stop. A distant narrowing becomes a braking constraint instead.
-      if d <= 10.0 then return nil, "NO_FIT" end
-      blockedDistance=blockedDistance or d
-      local center=(left+right)*0.5
-      lo,hi=center,center
+      if d <= 8.0 then return nil, "NO_FIT" end
+      blockedDistance = d
+      break
     end
     samples[#samples + 1] = sample
-    bounds[#bounds + 1] = { lo, hi }
+    bounds[#bounds + 1] = {left, right, lo, hi}
   end
 
   local n = #samples
-  if n < 3 then return nil end
+  if n < 3 then return nil, "NO_FIT" end
 
   if fixedOffset ~= nil then
-    for i=1,n do
-      local d=(i-1)*step
-      local t=clamp(d/22.0,0,1)
-      local desired=initial+(safe(fixedOffset,initial)-initial)*t
-      offsets[i]=clamp(desired,bounds[i][1],bounds[i][2])
-    end
-  else
-    -- Dynamic programming over pairs of lateral candidates. Each transition
-    -- evaluates the curvature of the real offset path, so the search can
-    -- compare outside-in-out lines globally instead of getting trapped by
-    -- one-point coordinate-descent minima.
-    local candidateSets={}
-    local priorOffsets={}
-    priorOffsets[1]=initial
-    candidateSets[1]={clamp(initial,bounds[1][1],bounds[1][2])}
-    local function addCandidate(list,value,lo,hi)
-      local v=clamp(value,lo,hi)
-      for j=1,#list do
-        if math.abs(list[j]-v)<0.04 then return end
-      end
-      list[#list+1]=v
-    end
-    for i=2,n do
-      local lo,hi=bounds[i][1],bounds[i][2]
-      local list={}
-      local d=(i-1)*step
-      local forbidden=obstacleAt and obstacleAt(samples[i],d) or nil
-      local prior=previousPlan and RacingLine.sample(previousPlan,
-        math.max(0,safe(previousAdvance,0))+d) or nil
-      priorOffsets[i]=prior and prior.offset or nil
-      local function isBlocked(value)
-        for _,interval in ipairs(forbidden or {}) do
-          if value>interval[1] and value<interval[2] then return true end
+    for i = 1, n do
+      local d = (i - 1) * step
+      local t = clamp(d / 22.0, 0, 1)
+      local desired = initial + (safe(fixedOffset, initial) - initial) * t
+      offsets[i] = clamp(desired, bounds[i][3], bounds[i][4])
+      if i > 1 then
+        local clearance = footprintClearance(samples[i - 1], samples[i],
+          offsets[i - 1], offsets[i], bounds[i - 1], bounds[i],
+          halfWidth, halfLength, edgeMargin)
+        if clearance < -0.015 then
+          blockedDistance = d
+          n = i - 1
+          break
         end
-        return false
       end
-      for c=0,6 do
-        local value=lo+(hi-lo)*c/6
-        if not isBlocked(value) then addCandidate(list,value,lo,hi) end
+    end
+    if n < 3 then return nil, "NO_FIT" end
+  else
+    -- Candidate offsets span the complete physically usable road. Traffic
+    -- intervals add a strong cost but never erase every candidate and freeze
+    -- a car merely because a leader occupies the same lane.
+    local candidateSets, priorOffsets, forbiddenAt = {}, {}, {}
+    local priorDistance = math.max(0, safe(previousAdvance, 0))
+    candidateSets[1] = {clamp(initial, bounds[1][3], bounds[1][4])}
+    priorOffsets[1] = initial
+
+    local function addCandidate(list, value, lo, hi)
+      local v = clamp(value, lo, hi)
+      for j = 1, #list do
+        if math.abs(list[j] - v) < 0.035 then return end
       end
-      if not isBlocked(preferred) then addCandidate(list,preferred,lo,hi) end
-      if prior and not isBlocked(prior.offset) then
-        addCandidate(list,prior.offset,lo,hi)
-      end
-      local previous=sampleFn(route,progress+math.max(0,d-step))
-      local following=sampleFn(route,progress+d+step)
-      local kp=safe(previous and previous.k)
-      local kc=safe(samples[i].k)
-      local kn=safe(following and following.k,kc)
-      local smoothCurvature=(kp+2.0*kc+kn)*0.25
-      local curvatureCandidate=clamp(
-        preferred+clamp(-smoothCurvature*90.0,-2.8,2.8),lo,hi)
-      if not isBlocked(curvatureCandidate) then
-        addCandidate(list,curvatureCandidate,lo,hi)
-      end
-      if #list==0 then return nil, "NO_PATH" end
-      candidateSets[i]=list
+      list[#list + 1] = v
     end
 
-    local firstLayer={}
-    for j=1,#candidateSets[2] do
-      local off0=candidateSets[1][1]
-      local off1=candidateSets[2][j]
-      local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
-      local continuity=priorOffsets[2] and (off1-priorOffsets[2])^2*0.70 or 0
-      local cost=(off1-off0)^2*0.02+continuity+
-        0.00008/math.max(0.12,clearance+0.12)+
-        0
-      firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
+    for i = 2, n do
+      local lo, hi = bounds[i][3], bounds[i][4]
+      local list = {}
+      local d = (i - 1) * step
+      forbiddenAt[i] = obstacleAt and obstacleAt(samples[i], d) or nil
+      local prior = previousPlan and RacingLine.sample(previousPlan,
+        priorDistance + d) or nil
+      priorOffsets[i] = prior and prior.offset or nil
+
+      for c = 0, 10 do
+        addCandidate(list, lo + (hi - lo) * c / 10.0, lo, hi)
+      end
+      addCandidate(list, preferred, lo, hi)
+      if prior then addCandidate(list, prior.offset, lo, hi) end
+
+      local previous = sampleFn(route, progress + math.max(0, d - step))
+      local following = sampleFn(route, progress + d + step)
+      local kp = safe(previous and previous.k)
+      local kc = safe(samples[i].k)
+      local kn = safe(following and following.k, kc)
+      local smoothCurvature = (kp + 2.0 * kc + kn) * 0.25
+      local curvatureCandidate = clamp(
+        preferred + clamp(-smoothCurvature * 110.0, -3.5, 3.5), lo, hi)
+      addCandidate(list, curvatureCandidate, lo, hi)
+      if #list == 0 then return nil, "NO_FIT" end
+      candidateSets[i] = list
     end
-    local layer=firstLayer
-    for station=2,n-1 do
-      local nextLayer={}
-      local bestByPair={}
-      for _,node in ipairs(layer) do
-        local offA=candidateSets[station-1][node.a]
-        local offB=candidateSets[station][node.b]
-        local pointA=pointAt(samples[station-1],offA)
-        local pointB=pointAt(samples[station],offB)
-        for c=1,#candidateSets[station+1] do
-          local offC=candidateSets[station+1][c]
-          local pointC=pointAt(samples[station+1],offC)
-          local k=curvature(pointA,pointB,pointC)
-          local reference=math.abs(safe(samples[station].k))
-          local excess=math.max(0,math.abs(k)-math.max(reference*1.05,0.003))
-          local second=offA-2.0*offB+offC
-          local slope=offC-offB
-          local clearance=math.min(offC-bounds[station+1][1],
-            bounds[station+1][2]-offC)
-          local continuity=priorOffsets[station+1] and
-            (offC-priorOffsets[station+1])^2*0.70 or 0
-          local cost=node.cost+k*k*180.0+excess*excess*200000.0+
-            second*second*0.42+slope*slope*0.20+continuity+
-            0.00008/math.max(0.12,clearance+0.12)+
-            0
-          local key=node.b*100+c
-          local existing=bestByPair[key]
-          if not existing or cost<existing.cost then
-            local nextNode={a=node.b,b=c,cost=cost,prev=node}
-            bestByPair[key]=nextNode
+
+    local firstLayer = {}
+    for j = 1, #candidateSets[2] do
+      local off0 = candidateSets[1][1]
+      local off1 = candidateSets[2][j]
+      local clearance = footprintClearance(samples[1], samples[2],
+        off0, off1, bounds[1], bounds[2],
+        halfWidth, halfLength, edgeMargin)
+      if clearance >= -0.015 then
+        local continuity = priorOffsets[2] and
+          (off1 - priorOffsets[2]) ^ 2 * 0.08 or 0
+        local cost = (off1 - off0) ^ 2 * 0.035 + continuity +
+          edgeCost(clearance) + trafficCost(off1, forbiddenAt[2])
+        firstLayer[#firstLayer + 1] = {
+          a = 1, b = j, cost = cost, prev = nil
+        }
+      end
+    end
+    if #firstLayer == 0 then return nil, "NO_FIT" end
+
+    local layer = firstLayer
+    local reachable = 2
+    for station = 2, n - 1 do
+      local nextLayer = {}
+      local bestByPair = {}
+      for _, node in ipairs(layer) do
+        local offA = candidateSets[station - 1][node.a]
+        local offB = candidateSets[station][node.b]
+        local pointA = pointAt(samples[station - 1], offA)
+        local pointB = pointAt(samples[station], offB)
+        for c = 1, #candidateSets[station + 1] do
+          local offC = candidateSets[station + 1][c]
+          local clearance = footprintClearance(samples[station], samples[station + 1],
+            offB, offC, bounds[station], bounds[station + 1],
+            halfWidth, halfLength, edgeMargin)
+          if clearance >= -0.015 then
+            local pointC = pointAt(samples[station + 1], offC)
+            local k = curvature(pointA, pointB, pointC)
+            local second = offA - 2.0 * offB + offC
+            local slope = offC - offB
+            local continuity = priorOffsets[station + 1] and
+              (offC - priorOffsets[station + 1]) ^ 2 * 0.08 or 0
+            -- Integrated curvature plus a peak-curvature term approximates
+            -- lap-time minimization: it prefers long straight chords through
+            -- small boundary wiggles and opens consecutive bends as one line.
+            local k2 = k * k
+            local cost = node.cost + k2 * 240.0 + k2 * k2 * 90000.0 +
+              second * second * 0.16 + slope * slope * 0.045 +
+              continuity + edgeCost(clearance) +
+              trafficCost(offC, forbiddenAt[station + 1])
+            local key = node.b * 100 + c
+            local existing = bestByPair[key]
+            if not existing or cost < existing.cost then
+              bestByPair[key] = {
+                a = node.b, b = c, cost = cost, prev = node
+              }
+            end
           end
         end
       end
-      for _,node in pairs(bestByPair) do nextLayer[#nextLayer+1]=node end
-      layer=nextLayer
-      if #layer==0 then return nil, "NO_PATH" end
+      for _, node in pairs(bestByPair) do
+        nextLayer[#nextLayer + 1] = node
+      end
+      if #nextLayer == 0 then
+        -- Keep the last physically valid part of the path and let the speed
+        -- envelope slow before the first point that cannot contain the body.
+        blockedDistance = station * step
+        n = reachable
+        break
+      end
+      layer = nextLayer
+      reachable = station + 1
     end
 
-    local best=nil
-    for _,node in ipairs(layer) do
-      if not best or node.cost<best.cost then best=node end
+    if n < 3 then return nil, "NO_FIT" end
+    local best = nil
+    for _, node in ipairs(layer) do
+      if not best or node.cost < best.cost then best = node end
     end
-    if not best then return nil, "NO_PATH" end
-    local node,station=best,n
-    while node and station>=2 do
-      offsets[station]=candidateSets[station][node.b]
-      offsets[station-1]=candidateSets[station-1][node.a]
-      node=node.prev
-      station=station-1
+    if not best then return nil, "NO_FIT" end
+    local node, station = best, n
+    while node and station >= 2 do
+      offsets[station] = candidateSets[station][node.b]
+      offsets[station - 1] = candidateSets[station - 1][node.a]
+      node = node.prev
+      station = station - 1
     end
-    offsets[1]=candidateSets[1][1]
+    offsets[1] = candidateSets[1][1]
   end
 
   local points = {}
@@ -239,8 +299,8 @@ end
 
 function RacingLine.sample(plan, distance)
   if not plan or not plan.points or plan.count < 2 then return nil end
-  local usableDistance=plan.blockedDistance and
-    math.max(0,plan.blockedDistance-10.0) or distance
+  local usableDistance = plan.blockedDistance and
+    math.max(0, plan.blockedDistance - 10.0) or distance
   local position = clamp(usableDistance / plan.spacing, 0, plan.count - 1)
   local index = math.floor(position) + 1
   local nextIndex = math.min(plan.count, index + 1)
