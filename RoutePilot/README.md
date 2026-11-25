@@ -50,6 +50,16 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Urgent passes increase lateral path transition speed to 12 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (8 m or less), the controller adds a 180 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
 - Stuck detection is not reset merely because another car exists ahead. After ten seconds without movement, the app attempts a respawn only at a point whose actual spawn position is clear of other vehicles.
 
+## Experimental racing-line build (2026-11-25)
+
+- Added a curvature-aware lateral racing-line offset. The offset is averaged over a 48 m route window, moves toward the outside of sustained bends, and is clamped to the usable half-lane corridor after accounting for the vehicle footprint.
+- The speed planner evaluates the approximate curvature of that offset path, rather than only the recorded centerline, and samples the route every 4 m over the predicted braking horizon.
+- The steering target follows the offset path ahead. During an overtake, the selected passing offset remains authoritative and the racing-line offset is disabled so the two path targets do not fight each other.
+- Reduced the cornering throttle reserve cut from 45% to 18%; wheel-slip traction control and the measured lateral-grip limit remain active.
+- Added `RACE_OFFSET` to telemetry to show the active racing-line displacement.
+
+This is an experimental source implementation. It has not been executed or validated in Assetto Corsa/CSP. The offset-curve curvature is an approximation and does not include all effects of rapidly changing lateral offset. Verify the full vehicle footprint, entry/apex/exit behavior, speed stability, and passing transitions in-game before treating it as a finished racing AI.
+ 
 ## Experimental 0.9.1 changes (2026-11-25)
 
 - Removed the fixed 170 km/h cruise setting. RoutePilot uses an unbounded cruise target; speed is limited by upcoming route curvature and braking distance.
