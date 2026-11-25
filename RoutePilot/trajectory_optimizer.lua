@@ -327,7 +327,27 @@ end
 
 -- Re-evaluate all precomputed line variants using this car's measured grip,
 -- braking and acceleration. The selected line minimizes its predicted lap time.
-function Optimizer.select(bundle,lateralAccel,brakeAccel,accel)
+local function offsetAt(plan,distance)
+  local n=#plan.points
+  local s=safe(distance)
+  if plan.loop then s=((s%plan.total)+plan.total)%plan.total
+  else s=clamp(s,0,plan.total) end
+  local position=s/plan.spacing
+  local index,t
+  if not plan.loop and s>=plan.total then index=n-1; t=1
+  else
+    index=math.floor(position)+1
+    t=position-math.floor(position)
+    if plan.loop then index=((index-1)%n)+1
+    else index=clamp(index,1,n-1) end
+  end
+  local nextIndex=index+1
+  if nextIndex>n then nextIndex=plan.loop and 1 or n end
+  return plan.points[index].offset+
+    (plan.points[nextIndex].offset-plan.points[index].offset)*t
+end
+
+function Optimizer.select(bundle,lateralAccel,brakeAccel,accel,preferredOffset,progress)
   if not bundle then return nil,nil,nil end
   local alternatives=bundle.alternatives or {bundle}
   local best,bestSpeeds,bestTime=nil,nil,math.huge
@@ -336,8 +356,14 @@ function Optimizer.select(bundle,lateralAccel,brakeAccel,accel)
     local speeds=makeSpeedProfile(candidate,lateralAccel,brakeAccel,accel)
     if speeds then
       local time=estimateTime(candidate,speeds)
-      if time<bestTime then
-        best,bestSpeeds,bestTime=candidate,speeds,time
+      local score=time
+      -- Nearby traffic makes the closest safe lane variant preferable;
+      -- with clear road, the score is pure predicted lap time.
+      if type(preferredOffset)=="number" then
+        score=score+math.abs(offsetAt(candidate,progress or 0)-preferredOffset)*0.8
+      end
+      if score<bestTime then
+        best,bestSpeeds,bestTime=candidate,speeds,score
       end
     end
   end
