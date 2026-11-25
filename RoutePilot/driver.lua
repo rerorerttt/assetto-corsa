@@ -1136,6 +1136,15 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
 
+  -- During the return-to-lane transition, keep checking the newly occupied
+  -- lane for a closing vehicle, but do not start another pass mid-transition.
+  if p.returningFromPass then
+    local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
+    local result=math.min(targetSpeed,safe)
+    p.trafficBrake=result<speed-1.5
+    return result
+  end
+
   local leaderPace=math.max(0,leaderSpeed or 0)
   local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
   -- Predict one second of available acceleration rather than treating an
