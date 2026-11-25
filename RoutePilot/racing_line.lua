@@ -129,7 +129,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     left, right = safe(left, -2.0), safe(right, 2.0)
     local lo, hi = left + baseMargin, right - baseMargin
     if lo > hi then
-      if d <= 8.0 then return nil, "NO_FIT" end
+      if d <= 8.0 then return nil, "NO_FIT_BOUNDS" end
       blockedDistance = d
       break
     end
@@ -138,7 +138,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   end
 
   local n = #samples
-  if n < 3 then return nil, "NO_FIT" end
+  if n < 3 then return nil, "NO_FIT_SAMPLES" end
 
   if fixedOffset ~= nil then
     for i = 1, n do
@@ -157,7 +157,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         end
       end
     end
-    if n < 3 then return nil, "NO_FIT" end
+    if n < 3 then return nil, "NO_FIT_PASS" end
   else
     -- Candidate offsets span the complete physically usable road. Traffic
     -- intervals add a strong cost but never erase every candidate and freeze
@@ -199,7 +199,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local curvatureCandidate = clamp(
         preferred + clamp(-smoothCurvature * 110.0, -3.5, 3.5), lo, hi)
       addCandidate(list, curvatureCandidate, lo, hi)
-      if #list == 0 then return nil, "NO_FIT" end
+      if #list == 0 then return nil, "NO_FIT_CANDIDATES" end
       candidateSets[i] = list
     end
 
@@ -220,7 +220,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         }
       end
     end
-    if #firstLayer == 0 then return nil, "NO_FIT" end
+    if #firstLayer == 0 then return nil, "NO_FIT_START" end
 
     local layer = firstLayer
     local reachable = 2
@@ -287,12 +287,12 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       reachable = station + 1
     end
 
-    if n < 3 then return nil, "NO_FIT" end
+    if n < 3 then return nil, "NO_FIT_TRANSITION" end
     local best = nil
     for _, node in ipairs(layer) do
       if not best or node.cost < best.cost then best = node end
     end
-    if not best then return nil, "NO_FIT" end
+    if not best then return nil, "NO_FIT_DP" end
     local node, station = best, n
     while node and station >= 2 do
       offsets[station] = candidateSets[station][node.b]
