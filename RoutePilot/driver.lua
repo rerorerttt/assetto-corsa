@@ -509,12 +509,16 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.plannedPathSamples=nil
     p.plannerFailureReason="no_boundary_safe_local_trajectory"
     p.gas=0; p.brake=1
-    H.log("PLAN_BLOCK id=%d reason=%s speed=%.2f bounds=[%.2f,%.2f] reject=%d/%d",
-      p.carIndex or -1,p.plannerFailureReason,speed,minOffset,maxOffset,
-      rejectBoundary,rejectOther)
+    if not p.plannerFailureLogged then
+      H.log("PLAN_BLOCK id=%d reason=%s speed=%.2f bounds=[%.2f,%.2f] reject=%d/%d",
+        p.carIndex or -1,p.plannerFailureReason,speed,minOffset,maxOffset,
+        rejectBoundary,rejectOther)
+      p.plannerFailureLogged=true
+    end
     return 0
   end
 
+  p.plannerFailureLogged=false
   p.plannedPathSamples=bestSamples
   p.plannedTargetOffset=best
   p.plannerHorizon=bestHorizon
