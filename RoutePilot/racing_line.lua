@@ -61,8 +61,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local size = car and car.aabbSize
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
   local margin = halfWidth + 0.42
-  local step = math.max(3.0, spacing or 5.0)
-  local length = math.max(35.0, horizon or 85.0)
+  local step = math.max(6.0, spacing or 7.5)
+  local length = math.min(135.0, math.max(35.0, horizon or 95.0))
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
   local blockedDistance=nil
@@ -123,8 +123,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         end
         return false
       end
-      for c=0,12 do
-        local value=lo+(hi-lo)*c/12
+      for c=0,6 do
+        local value=lo+(hi-lo)*c/6
         if not isBlocked(value) then addCandidate(list,value,lo,hi) end
       end
       if not isBlocked(preferred) then addCandidate(list,preferred,lo,hi) end
@@ -183,7 +183,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
           local cost=node.cost+k*k*180.0+excess*excess*200000.0+
-            second*second*0.055+slope*slope*0.02+
+            second*second*0.18+slope*slope*0.075+
             0.00008/math.max(0.12,clearance+0.12)+
             0
           local key=node.b*100+c
