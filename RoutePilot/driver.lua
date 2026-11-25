@@ -795,7 +795,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
-  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+35.0),CFG.PLAN_HORIZON,135.0)
+  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+45.0),CFG.PLAN_HORIZON,180.0)
   local planFailure=nil
   local obstacles=fixedOffset==nil and
     buildTrafficObstacles(carIndex,car,p,speed) or nil
@@ -822,7 +822,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     routeGap(p.racingPlanStartProgress,p.routeProgress) or 0
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,4.5,
     fixedOffset==nil and obstacleAt or nil,previousPlan,
     math.max(0,previousPlanAdvance))
   p.racingPlanStartProgress=p.routeProgress
@@ -1009,7 +1009,7 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   if p.routeProgress==nil or leaderLateral==nil then return nil end
   local fx,fz=normalize2(car.look.x,car.look.z)
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
-    math.max(18.0,math.max(0,speed)*0.8+12.0),car,fx,fz)
+    10.0,car,fx,fz)
   if not safeMin or not safeMax or safeMax-safeMin<1.15 then return nil end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
@@ -1294,7 +1294,6 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
   gas=gas*p.tractionScale*cornerScale
 
-  if speed<5 then gas=math.min(gas,0.6) end
   if error>=0 then brake=0 end
   p.gas=clamp(gas,0,CFG.MAX_GAS)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)
