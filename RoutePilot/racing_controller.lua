@@ -102,6 +102,24 @@ function Racing.build(route,nodes,boundsAt,loopRoute)
     end
   end
   if #line.points<3 then return nil end
+  -- Seed the search on the outside of sustained bends. Starting every
+  -- waypoint at zero creates a poor local minimum because a whole corner
+  -- must move together before its curvature energy improves.
+  for i=1,#line.points do
+    local sum,weight=0,0
+    for delta=-4,4 do
+      local j=i+delta
+      if line.loop then j=getIndex(line,j) end
+      if j>=1 and j<=#line.points then
+        local w=5-math.abs(delta)
+        sum=sum+(line.points[j].k or 0)*w
+        weight=weight+w
+      end
+    end
+    local meanCurvature=weight>0 and sum/weight or 0
+    local seed=clamp(-meanCurvature*18.0,line.minimum[i],line.maximum[i])
+    line.offsets[i]=seed
+  end
   -- Coordinate descent minimizes integrated path curvature, path-length
   -- growth and lateral oscillation, subject to the usable road corridor.
   local steps={1.0,0.5,0.25,0.125}
