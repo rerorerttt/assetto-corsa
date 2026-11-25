@@ -389,7 +389,7 @@ function Optimizer.select(bundle,lateralAccel,brakeAccel,accel,preferredOffset,p
       -- Nearby traffic makes the closest safe lane variant preferable;
       -- with clear road, the score is pure predicted lap time.
       if type(preferredOffset)=="number" then
-        score=score+math.abs(offsetAt(candidate,progress or 0)-preferredOffset)*2.0
+        score=score+math.abs(offsetAt(candidate,progress or 0)-preferredOffset)*40.0
       end
       if score<bestTime then
         best,bestSpeeds,bestTime=candidate,speeds,score
