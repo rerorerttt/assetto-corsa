@@ -123,6 +123,13 @@ local function newPersonality(carIndex)
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
+  if spawnHint and type(spawnHint.lateralOffset)=="number" then
+    -- Preserve the grid lane after teleport; otherwise every car defaults
+    -- to the same left lane and immediately converges across the road.
+    p.baseLaneOffset=spawnHint.lateralOffset
+    p.laneOffset=spawnHint.lateralOffset
+    p.laneOffsetCurrent=spawnHint.lateralOffset
+  end
   if spawnHint and state.routeGeometry then
     local seededProgress=Geometry.distanceAt(
       state.routeGeometry,spawnHint.segment,spawnHint.parameter)
@@ -140,8 +147,8 @@ local function newPersonality(carIndex)
     state.spawnHints[carIndex]=nil
   end
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT cruise=PHYSICS_LIMITED",
-    carIndex)
+  H.log("CAR_INIT id=%d lane_offset=%.2f cruise=PHYSICS_LIMITED",
+    carIndex,safeNumber(p.baseLaneOffset,0))
 end
 
 local function readVehicleDynamics(car, p, dt)
@@ -1309,6 +1316,7 @@ function Driver.update(carIndex, car, dt)
       p.returningFromPass~=previousReturning) then
     updateRacingPlan(carIndex,car,p,speed,dt)
   end
+  if p.racingPlanBlocked then targetSpeed=0 end
   p.targetSpeed = targetSpeed
 
   p.boundaryEmergency=false
