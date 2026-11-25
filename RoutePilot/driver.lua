@@ -588,27 +588,24 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- primary steering signal.
   local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
   if p.emergencyPass then
-    steer=steer*CFG.EMERGENCY_STEER_GAIN
-    return clamp(steer+boundarySteer,-1.0,1.0)
+    steer=steer*clamp(CFG.EMERGENCY_STEER_GAIN,1.0,1.30)
   end
   return clamp(steer+boundarySteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
-  if safeNumber(p.emergencySteerBoostT)>0 and math.abs(target)>0.02 then
-    p.emergencySteerBoostT=math.max(0,p.emergencySteerBoostT-dt)
-    local fullLock=target>0 and 1.0 or -1.0
-    p.steer=fullLock
-    p.steerFiltered=fullLock
-    return fullLock
-  else
-    p.emergencySteerBoostT=0
-  end
+  -- Never bypass the steering filter with a blind full-lock pulse. At speed,
+  -- reduce the allowed command slew rate; urgent passing gets only a modest
+  -- increase so it remains responsive without snapping the car sideways.
+  p.emergencySteerBoostT=0
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  local steerRate=p.emergencyPass and math.max(CFG.STEER_RATE,CFG.EMERGENCY_STEER_RATE) or CFG.STEER_RATE
+  local v=math.max(0,safeNumber(p.speedForSteering,0))
+  local speedScale=math.sqrt(35.0/math.max(35.0,v))
+  local baseRate=CFG.STEER_RATE*clamp(speedScale,0.58,1.0)
+  local steerRate=p.emergencyPass and math.min(baseRate*1.20,CFG.STEER_RATE*1.25) or baseRate
   local maxChange=steerRate*dt
-  local steerLimit=p.emergencyPass and 1.0 or CFG.STEER_LIMIT
+  local steerLimit=CFG.STEER_LIMIT
   p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
     -steerLimit, steerLimit)
   return p.steer
@@ -620,15 +617,23 @@ local function roomAt(seg, off)
   return off - bl, br - off
 end
 
--- The road is split into two fixed 3 m lanes when the recorded corridor
--- is wide enough. Positive lateral offset is the left lane.
+-- Track-width presets map to 1..4 fixed traffic lanes (3/7/11/15 m).
+-- Lane count is discrete; car dimensions are used only for collision clearance,
+-- never to invent extra lanes or arbitrary passing offsets.
+local function laneLayout(seg)
+  local bl,br=H.boundsAt(seg)
+  local width=math.max(0,br-bl)
+  local count=clamp(math.floor((width+1.0)/4.0),1,4)
+  local centers={}
+  local laneWidth=width/count
+  for i=1,count do centers[i]=bl+(i-0.5)*laneWidth end
+  return centers,count,laneWidth
+end
+
 local function laneCenters(seg)
-  local bl, br = H.boundsAt(seg)
-  local mid = (bl + br) * 0.5
-  local left = (mid + br) * 0.5
-  local right = (bl + mid) * 0.5
-  if (mid - bl < 2.7 or br - mid < 2.7) then return nil, nil end
-  return left, right
+  local centers,count=laneLayout(seg)
+  if count>=2 then return centers[count],centers[count-1] end
+  return nil,nil
 end
 
 -- Checks traffic in a specified lane, both ahead and behind. This is used
@@ -1168,38 +1173,63 @@ end
 local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     speed,passDistance)
   if p.routeProgress==nil or leaderLateral==nil then return nil end
+  local centers,laneCount=laneLayout(p.segIdx)
+  if laneCount<2 then
+    p.lastPassDeniedReason="single_lane"
+    return nil
+  end
+
+  -- The racing line remains free to use the full road while unobstructed.
+  -- For a pass only, identify the lane nearest the current racing-line offset
+  -- and consider its immediate neighbours; never sample arbitrary lateral
+  -- positions between lane centres.
+  local source=safeNumber(p.laneOffsetCurrent,
+    safeNumber(p.latOff,centers[1]))
+  local sourceLane=1
+  local sourceDistance=math.abs(source-centers[1])
+  for i=2,laneCount do
+    local distance=math.abs(source-centers[i])
+    if distance<sourceDistance then sourceLane=i;sourceDistance=distance end
+  end
+
   local fx,fz=normalize2(car.look.x,car.look.z)
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
     math.max(18.0,math.max(0,speed)*0.8+12.0),car,fx,fz)
-  if not safeMin or not safeMax or safeMax-safeMin<1.15 then return nil end
-  local defaultCenter=laneCenters(p.segIdx)
-  local bl,br=H.boundsAt(p.segIdx)
-  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
-    defaultCenter or ((bl+br)*0.5)
+  if not safeMin or not safeMax then
+    p.lastPassDeniedReason="no_safe_corridor"
+    return nil
+  end
+
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
   local separation=(ownWidth+targetWidth)*0.5+0.55
   local candidates={}
-  local step=0.30
-  for i=0,math.floor((safeMax-safeMin)/step) do
-    local offset=safeMin+i*step
-    if math.abs(offset-source)>=1.15 and
+  if sourceLane>1 then candidates[#candidates+1]=sourceLane-1 end
+  if sourceLane<laneCount then candidates[#candidates+1]=sourceLane+1 end
+  table.sort(candidates,function(a,b)
+    return math.abs(centers[a]-source)<math.abs(centers[b]-source)
+  end)
+
+  local lastReason="no_adjacent_lane"
+  for _,laneIndex in ipairs(candidates) do
+    local offset=centers[laneIndex]
+    if offset>=safeMin and offset<=safeMax and
        math.abs(offset-leaderLateral)>=separation then
-      candidates[#candidates+1]=offset
-    end
-  end
-  table.sort(candidates,function(a,b)return math.abs(a-source)<math.abs(b-source) end)
-  local lastReason="no_candidate"
-  for _,offset in ipairs(candidates) do
-    local reserved=passingReservationBlocked(carIndex,p,offset,speed)
-    if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then
-      local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
-        source,offset,passDistance or 60.0,speed)
-      if clear then return offset end
-      lastReason=reason or lastReason
+      local reserved=passingReservationBlocked(carIndex,p,offset,speed)
+      if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then
+        local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
+          source,offset,passDistance or 60.0,speed)
+        if clear then
+          p.passLaneIndex=laneIndex
+          return offset
+        end
+        lastReason=reason or lastReason
+      else
+        lastReason=reserved and "reserved_lane" or "occupied_lane"
+      end
     else
-      lastReason=reserved and "reserved_corridor" or "occupied_corridor"
+      lastReason="lane_outside_safe_corridor"
     end
   end
   p.lastPassDeniedReason=lastReason
@@ -1232,7 +1262,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex;p.passT=0;p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
-  p.emergencySteerBoostT=(p.emergencyPass and gap<=8.0) and 0.18 or 0
+  p.emergencySteerBoostT=0
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
@@ -1531,6 +1561,7 @@ function Driver.update(carIndex, car, dt)
   -- the corridor. Do not convert lateral correction magnitude into a speed
   -- cap: that caused repeated full stops even with zero corridor deficit.
   p.targetSpeed=targetSpeed
+  p.speedForSteering=speed
   local steer = filterSteering(p, steerTarget, dt)
 
   calculateThrottle(p, speed, targetSpeed, dt)
