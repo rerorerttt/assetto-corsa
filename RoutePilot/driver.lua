@@ -1068,15 +1068,21 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
     local targetLength=math.max(3.0,safeNumber(targetCar and targetCar.aabbSize and targetCar.aabbSize.z,4.5))
     local clearanceDistance=ownLength+targetLength+6.0
-    local estimatedPassDistance
-    if speed-leaderPace>=3.0 then
-      estimatedPassDistance=clearanceDistance*
-        math.max(speed,leaderPace+1.0)/(speed-leaderPace)
+    -- Include the actual distance to the leader. Estimating only the
+    -- side-by-side clearance made the planner return to the source lane
+    -- before the target was passed when the initial gap was large.
+    local requiredClosure=math.max(0,safeNumber(gap))+clearanceDistance
+    local relativeSpeed=speed-leaderPace
+    local passTime
+    if relativeSpeed>0.1 then
+      passTime=requiredClosure/relativeSpeed
     else
-      local passTime=math.sqrt(2.0*clearanceDistance/acceleration)
-      estimatedPassDistance=math.max(speed,leaderPace)*passTime+
-        0.5*acceleration*passTime*passTime
+      passTime=(-relativeSpeed+
+        math.sqrt(relativeSpeed*relativeSpeed+2.0*acceleration*requiredClosure))/
+        acceleration
     end
+    local estimatedPassDistance=speed*passTime+
+      0.5*acceleration*passTime*passTime
     local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
     local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
       speed>=(leaderSpeed or 0)-4.0
