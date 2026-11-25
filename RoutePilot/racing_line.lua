@@ -121,7 +121,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local forbidden=obstacleAt and obstacleAt(samples[i],d) or nil
       local prior=previousPlan and RacingLine.sample(previousPlan,
         math.max(0,safe(previousAdvance,0))+d) or nil
-      priorOffsets[i]=prior and prior.offset or preferred
+      priorOffsets[i]=prior and prior.offset or nil
       local function isBlocked(value)
         for _,interval in ipairs(forbidden or {}) do
           if value>interval[1] and value<interval[2] then return true end
@@ -156,7 +156,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local off0=candidateSets[1][1]
       local off1=candidateSets[2][j]
       local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
-      local continuity=(off1-priorOffsets[2])^2*0.70
+      local continuity=priorOffsets[2] and (off1-priorOffsets[2])^2*0.70 or 0
       local cost=(off1-off0)^2*0.02+continuity+
         0.00008/math.max(0.12,clearance+0.12)+
         0
@@ -181,7 +181,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local slope=offC-offB
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
-          local continuity=(offC-priorOffsets[station+1])^2*0.70
+          local continuity=priorOffsets[station+1] and
+            (offC-priorOffsets[station+1])^2*0.70 or 0
           local cost=node.cost+k*k*180.0+excess*excess*200000.0+
             second*second*0.42+slope*slope*0.20+continuity+
             0.00008/math.max(0.12,clearance+0.12)+

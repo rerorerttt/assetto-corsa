@@ -1352,14 +1352,15 @@ function Driver.update(carIndex, car, dt)
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
-  -- Recheck after rebuilding the plan for a newly selected passing/return path.
+  -- Overtake state can change in this frame; rebuild the steering path before
+  -- issuing controls so the first lateral movement follows the reserved side.
+  if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
+  -- A failed traffic/boundary corridor must invoke the safety brake only
+  -- after the final plan for this frame has been evaluated.
   if p.racingPlanBlocked then
     targetSpeed=0
     p.trafficBrake=true
   end
-  -- Overtake state can change in this frame; rebuild the steering path before
-  -- issuing controls so the first lateral movement follows the reserved side.
-  if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   p.targetSpeed = targetSpeed
 
   p.boundaryEmergency=false
