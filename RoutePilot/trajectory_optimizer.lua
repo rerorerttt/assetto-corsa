@@ -46,6 +46,10 @@ local function fits(a, b, sample, offset, halfWidth, halfLength, lo, hi)
   return offset>=lo+extra and offset<=hi-extra
 end
 
+local function edgeDistance(plan,index)
+  return plan.edgeDistances and plan.edgeDistances[index] or plan.spacing
+end
+
 local function makeSpeedProfile(plan, lateralAccel, brakeAccel, accel)
   local n=#plan.points
   if n<2 then return nil end
@@ -65,24 +69,24 @@ local function makeSpeedProfile(plan, lateralAccel, brakeAccel, accel)
         local i=((k-1)%n)+1
         local nextIndex=i==n and 1 or i+1
         speeds[i]=math.min(speeds[i],math.sqrt(speeds[nextIndex]^2+
-          2*brakeAccel*plan.spacing))
+          2*brakeAccel*edgeDistance(plan,i)))
       end
       for k=1,2*n do
         local i=((k-1)%n)+1
         local previous=i==1 and n or i-1
         speeds[i]=math.min(speeds[i],math.sqrt(speeds[previous]^2+
-          2*accel*plan.spacing))
+          2*accel*edgeDistance(plan,previous)))
       end
     end
   else
     speeds[n]=0
     for i=n-1,1,-1 do
       speeds[i]=math.min(speeds[i],math.sqrt(speeds[i+1]^2+
-        2*brakeAccel*plan.spacing))
+        2*brakeAccel*edgeDistance(plan,i)))
     end
     for i=2,n do
       speeds[i]=math.min(speeds[i],math.sqrt(speeds[i-1]^2+
-        2*accel*plan.spacing))
+        2*accel*edgeDistance(plan,i-1)))
     end
   end
   return speeds
@@ -95,7 +99,7 @@ local function estimateTime(plan, speeds)
   for i=1,edges do
     local j=i==n and 1 or i+1
     local mean=(speeds[i]+speeds[j])*0.5
-    total=total+plan.spacing/math.max(1.0,mean)
+    total=total+edgeDistance(plan,i)/math.max(1.0,mean)
   end
   return total
 end
@@ -193,8 +197,8 @@ local function solveVariant(samples, bounds, loopRoute, halfWidth, halfLength,
           local slope=candidates[station+1][c]-candidates[station][node.b]
           local clearance=math.min(
             candidates[station+1][c]-nextLo,nextHi-candidates[station+1][c])
-          local timeCost=samples[station+1].s-samples[station].s
-          timeCost=timeCost*math.sqrt(math.abs(k)/lateralAccel)
+          local pathDistance=math.sqrt((pc.x-pb.x)^2+(pc.z-pb.z)^2)
+          local timeCost=pathDistance*math.sqrt(math.abs(k)/lateralAccel)
           local cost=node.cost+timeCost+second*second*0.018+
             slope*slope*0.0015+0.001/math.max(0.08,clearance+0.08)
           local key=node.b*100+c
@@ -241,10 +245,16 @@ local function solveVariant(samples, bounds, loopRoute, halfWidth, halfLength,
   local points={}
   for i=1,uniqueCount do points[i]=pointAt(samples[i],offsets[i],samples[i].s) end
   local plan={
-    points=points,curvature={},loop=loopRoute,total=samples[stationCount].s,
+    points=points,curvature={},edgeDistances={},loop=loopRoute,total=samples[stationCount].s,
     spacing=samples[2].s-samples[1].s,anchor=anchor
   }
   local n=#points
+  local edgeCount=loopRoute and n or n-1
+  for i=1,edgeCount do
+    local j=i==n and 1 or i+1
+    local dx,dz=points[j].x-points[i].x,points[j].z-points[i].z
+    plan.edgeDistances[i]=math.sqrt(dx*dx+dz*dz)
+  end
   for i=1,n do
     local prev=i==1 and (loopRoute and n or 1) or i-1
     local nxt=i==n and (loopRoute and 1 or n) or i+1
@@ -284,7 +294,7 @@ function Optimizer.build(route, sampleFn, nodes, loopRoute, boundsAt, car, optio
     bounds[i+1]={left,right}
   end
 
-  local anchors=loopRoute and {0.18,0.50,0.82} or {0.50}
+  local anchors={0.18,0.50,0.82}
   local alternatives={}
   for i=1,#anchors do
     local plan=solveVariant(samples,bounds,loopRoute,halfWidth,halfLength,
