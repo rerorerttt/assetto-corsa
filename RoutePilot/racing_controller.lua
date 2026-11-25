@@ -102,23 +102,32 @@ function Racing.build(route,nodes,boundsAt,loopRoute)
     end
   end
   if #line.points<3 then return nil end
-  -- Seed the search on the outside of sustained bends. Starting every
-  -- waypoint at zero creates a poor local minimum because a whole corner
-  -- must move together before its curvature energy improves.
+  -- Seed a classical outside -> apex -> outside line. The curvature
+  -- envelope identifies the corner's sustained apex region: entry/exit
+  -- move outward, while the high-curvature middle moves toward the inside.
+  -- This avoids the zero-offset local minimum of a purely local search.
   for i=1,#line.points do
-    local sum,weight=0,0
+    local sum,weight,peak=0,0,0
     for delta=-4,4 do
       local j=i+delta
       if line.loop then j=getIndex(line,j) end
       if j>=1 and j<=#line.points then
         local w=5-math.abs(delta)
-        sum=sum+(line.points[j].k or 0)*w
+        local k=line.points[j].k or 0
+        sum=sum+k*w
         weight=weight+w
+        peak=math.max(peak,math.abs(k))
       end
     end
     local meanCurvature=weight>0 and sum/weight or 0
-    local seed=clamp(-meanCurvature*18.0,line.minimum[i],line.maximum[i])
-    line.offsets[i]=seed
+    local magnitude=math.abs(meanCurvature)
+    local seed=0
+    if magnitude>0.0015 and peak>0.0015 then
+      local phase=2.0*clamp(magnitude/peak,0,1)^2-1.0
+      local amplitude=clamp(magnitude*18.0,0.35,1.6)
+      seed=(meanCurvature>0 and 1 or -1)*amplitude*phase
+    end
+    line.offsets[i]=clamp(seed,line.minimum[i],line.maximum[i])
   end
   -- Coordinate descent minimizes integrated path curvature, path-length
   -- growth and lateral oscillation, subject to the usable road corridor.
