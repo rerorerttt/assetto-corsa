@@ -1082,15 +1082,17 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local requiredClosure=math.max(0,safeNumber(gap))+clearanceDistance
     local relativeSpeed=speed-leaderPace
     local passTime
-    if relativeSpeed>0.1 then
+    local estimatedPassDistance
+    if relativeSpeed>=3.0 then
       passTime=requiredClosure/relativeSpeed
+      estimatedPassDistance=speed*passTime
     else
       passTime=(-relativeSpeed+
         math.sqrt(relativeSpeed*relativeSpeed+2.0*acceleration*requiredClosure))/
         acceleration
+      estimatedPassDistance=speed*passTime+
+        0.5*acceleration*passTime*passTime
     end
-    local estimatedPassDistance=speed*passTime+
-      0.5*acceleration*passTime*passTime
     local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
     local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
       speed>=(leaderSpeed or 0)-4.0
