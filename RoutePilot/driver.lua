@@ -693,11 +693,17 @@ local function buildTrafficObstacles(carIndex,car,p,speed)
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
-        local op,ol=routeProjection(other,
-          otherState and otherState.segIdx or p.segIdx,
-          not (otherState and otherState.routeLocked),
-          otherState and otherState.routeProgress,
-          safeNumber(other.speedMs),0.05)
+        local op=otherState and otherState.routeProgress
+        local ol=otherState and otherState.latOff
+        -- Every active AI is updated by RoutePilot each frame. Reuse its
+        -- current projection; only project an unadopted car once as fallback.
+        if op==nil or ol==nil then
+          op,ol=routeProjection(other,
+            otherState and otherState.segIdx or p.segIdx,
+            not (otherState and otherState.routeLocked),
+            otherState and otherState.routeProgress,
+            safeNumber(other.speedMs),0.05)
+        end
         if op~=nil and ol~=nil then
           local otherSpeed=math.max(0,safeNumber(other.speedMs))
           local half=math.max(0.75,safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
@@ -757,7 +763,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
-  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+45.0),CFG.PLAN_HORIZON,500.0)
+  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+35.0),CFG.PLAN_HORIZON,135.0)
   local planFailure=nil
   local obstacles=fixedOffset==nil and
     buildTrafficObstacles(carIndex,car,p,speed) or nil
@@ -775,7 +781,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   p.racingPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0,
+    safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
     fixedOffset==nil and obstacleAt or nil)
   p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
   p.racingPlanBlockedDistance=p.racingPlan and
@@ -790,7 +796,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
       safeNumber(p.racingPlan and p.racingPlan.curvature[2]),horizon)
   end
   p.racingPlanMode=mode
-  p.racingPlanTimer=0.10
+  p.racingPlanTimer=0.24
   if p.racingPlan then
     p.racingPlanCurvature=safeNumber(p.racingPlan.curvature[2])
   end
