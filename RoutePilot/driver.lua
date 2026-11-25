@@ -1399,9 +1399,12 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     end
 
     local returnOffset=p.passFromOffset or p.baseLaneOffset or defaultOffset
-    local returnPathClear,returnPathReason=passingPathClear(
-      carIndex,car,p,p.passTargetIndex,p.passLat or currentLaneOffset,
-      returnOffset,0,speed,true)
+    local returnPathClear,returnPathReason=false,nil
+    if passedClearance then
+      returnPathClear,returnPathReason=passingPathClear(
+        carIndex,car,p,p.passTargetIndex,p.passLat or currentLaneOffset,
+        returnOffset,0,speed,true)
+    end
     if passedClearance and returnPathClear and
        not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
       p.overtakeSide=0
