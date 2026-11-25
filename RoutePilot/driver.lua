@@ -216,6 +216,11 @@ local function planTargetSpeed(p,speed)
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
+  if p.racingPlanBlockedDistance then
+    local stoppingRoom=math.max(0,p.racingPlanBlockedDistance-10.0)
+    local corridorSpeed=math.sqrt(2.0*brakeAccel*stoppingRoom)
+    target=math.min(target,corridorSpeed)
+  end
   local distance=0
   while distance<=horizon do
     local planned=p.racingPlan and RacingLine.sample(p.racingPlan,distance) or nil
@@ -712,10 +717,12 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local v=math.max(0,speed)
   local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+45.0),CFG.PLAN_HORIZON,500.0)
   local planFailure=nil
-  p.racingPlan,planFailure=RacingLine.plan(state.routeGeometry,Geometry.sample,
-    p.routeProgress,car,routeBoundsAtSample,
+  p.racingPlan,p.racingPlanFailureDistance,planFailure=RacingLine.plan(
+    state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,5.0)
   p.racingPlanBlocked=planFailure=="NO_FIT"
+  p.racingPlanBlockedDistance=p.racingPlan and
+    p.racingPlan.blockedDistance or nil
   if p.racingPlanBlocked then
     H.log("RACE_LINE_BLOCKED id=%d reason=VEHICLE_DOES_NOT_FIT_BOUNDS",carIndex)
   end
