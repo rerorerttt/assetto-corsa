@@ -92,3 +92,13 @@ The user has tested the 2026-11-24 RoutePilot build in Assetto Corsa and confirm
 The separate branch `routepilot/predictive-boundary-guard-2026-11-24` contains an experimental correction for AI spawn direction and predictive road-boundary avoidance. It uses the recorded route's forward direction when spawning, heading-aware route selection for the spawn reference, a first-acquisition distance/direction gate, and a lookahead corridor check that transforms saved bounds into spline coordinates and accounts for the car's rotated bounding-box footprint. New trace fields are `BOUNDARY`, `SAFE`, and `BODY`.
 
 This build is not yet validated in Assetto Corsa/CSP. Keep using the confirmed baseline unless deliberately testing this experimental branch.
+
+## Experimental racing-corridor optimizer (2026-11-25)
+
+The branch `routepilot/racing-corridor-optimizer-2026-11-25` adds `racing_line.lua`. It builds a short-horizon path from the recorded route and its saved left/right bounds, then optimizes the actual offset path for lower curvature while constraining the vehicle footprint inside the corridor. The speed planner reads curvature from this optimized path instead of blindly treating the recorded reference line as the driven line.
+
+- On open road, the optimizer may use the complete safe road width to open a corner and then naturally converge toward the preferred lane on straights.
+- When traffic is close to the route, racing-line optimization is suspended and the car holds its lane. During an overtake or return, the path is locked to the selected/reserved offset.
+- The steering input is no longer artificially capped at 75%; the initial lateral-acceleration target is raised to 8 m/s².
+- This branch is experimental and has **not** been validated in Assetto Corsa/CSP. In-game tests are required for corner entry/exit speed, road-boundary clearance, side-by-side traffic, opposing traffic, and multi-car pass reservations. Do not treat source-level changes as proof of collision-free driving.
+
