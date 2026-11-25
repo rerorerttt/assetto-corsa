@@ -765,7 +765,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
-  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+35.0),CFG.PLAN_HORIZON,135.0)
+  local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+35.0),CFG.PLAN_HORIZON,150.0)
   local planFailure=nil
   local obstacles=fixedOffset==nil and
     buildTrafficObstacles(carIndex,car,p,speed) or nil
