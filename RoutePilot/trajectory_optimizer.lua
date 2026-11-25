@@ -322,8 +322,8 @@ function Optimizer.build(route, sampleFn, nodes, loopRoute, boundsAt, car, optio
   -- anchors (three trajectories on a two-lane road), allowing AI cars to
   -- settle into a third, overlapping center corridor.
   if laneCount==1 then anchors={0.50}
-  elseif laneCount==2 then anchors={0.18,0.82}
-  elseif laneCount==3 then anchors={0.12,0.50,0.88}
+  elseif laneCount==2 then anchors={0.25,0.75}
+  elseif laneCount==3 then anchors={1/6,0.50,5/6}
   else anchors={0.125,0.375,0.625,0.875} end
   local alternatives={}
   for i=1,#anchors do
