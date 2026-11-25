@@ -24,7 +24,7 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
-  -- Keep roughly 0.9–1.1 seconds of preview at high speed; 28 m was
+  -- Keep roughly 0.9–1.3 seconds of preview at 100–300 km/h; 28 m was
   -- only 0.34 s at 300 km/h and caused late, alternating corrections.
   LOOKAHEAD_BASE=16.0, LOOKAHEAD_SPEED=0.75, LOOKAHEAD_MIN=18.0, LOOKAHEAD_MAX=90.0,
   CURVATURE_STEER_GAIN=4.5, CURVATURE_FEEDFORWARD=0.20,
@@ -38,7 +38,8 @@ local CFG = {
   TC_RECOVERY_RATE=1.25, TC_CORNER_CUT=0.22,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
   SPAWN_ROW_GAP=8.5, SPAWN_LANE_WIDTH=3.5,
-  LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
+  LOG_INTERVAL=1.0, LOG_HIGH_SPEED_INTERVAL=0.20,
+  MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
   MAP_TOP=175.0, MAP_PAD=6.0, MAP_MIN_OFFSET=10.0,
@@ -725,9 +726,21 @@ function script.update(dt)
     else
       for idx in pairs(state.p) do releaseCar(idx) end
     end
+    -- One-second snapshots are too sparse to expose high-speed steering
+    -- oscillation. Increase telemetry to 5 Hz while any controlled car is
+    -- above 100 km/h; return to the lightweight rate at lower speeds.
+    local logInterval=CFG.LOG_INTERVAL
+    for i=0,sim.carsCount-1 do
+      local car=ac.getCar(i)
+      if car and car.isActive and car.isAIControlled and
+         safeNumber(car.speedMs)>27.78 then
+        logInterval=CFG.LOG_HIGH_SPEED_INTERVAL
+        break
+      end
+    end
     state.logAccum=state.logAccum+dt
-    if state.logAccum>=CFG.LOG_INTERVAL then
-      state.logAccum=state.logAccum-CFG.LOG_INTERVAL
+    if state.logAccum>=logInterval then
+      state.logAccum=0
       recordSecondTelemetry(sim)
     end
   end)
