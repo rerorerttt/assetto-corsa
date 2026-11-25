@@ -145,7 +145,11 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local kc=safe(samples[i].k)
       local kn=safe(following and following.k,kc)
       local smoothCurvature=(kp+2.0*kc+kn)*0.25
-      addCandidate(list,preferred+clamp(-smoothCurvature*90.0,-2.8,2.8),lo,hi)
+      local curvatureCandidate=clamp(
+        preferred+clamp(-smoothCurvature*90.0,-2.8,2.8),lo,hi)
+      if not isBlocked(curvatureCandidate) then
+        addCandidate(list,curvatureCandidate,lo,hi)
+      end
       candidateSets[i]=list
     end
 
