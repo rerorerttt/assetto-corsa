@@ -768,7 +768,10 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local mid=(bl+br)*0.5
   local base=p.baseLaneOffset
   if base==nil then
-    base=(br-bl)>=5.4 and ((mid+br)*0.5) or mid
+    -- Open-road planning is not tied to a lane. Start from the road centre
+    -- (or the car's already established offset) and let the optimizer use
+    -- either side only when it improves the complete path.
+    base=mid
     p.baseLaneOffset=base
   end
 
@@ -826,7 +829,10 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedOffset==nil and obstacleAt or nil,previousPlan,
     math.max(0,previousPlanAdvance))
   p.racingPlanStartProgress=p.routeProgress
-  p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
+  -- NO_PATH is a solver/traffic-planning failure, not proof that the road
+  -- physically cannot contain the car. Only NO_FIT is a geometric failure;
+  -- traffic conflicts are handled by predictiveFollowingSpeed below.
+  p.racingPlanBlocked=planFailure=="NO_FIT"
   p.racingPlanFailure=planFailure
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
@@ -885,6 +891,78 @@ end
 -- Predict the complete lateral pass, the side-by-side phase and the
 -- return to the original line. A candidate is accepted only when the whole
 -- swept vehicle footprint remains inside the road and clear of every car.
+local function predictiveFollowingSpeed(carIndex,car,p,speed,targetSpeed)
+  local sim=ac.getSim()
+  local ownProgress=p.routeProgress
+  if not sim or ownProgress==nil then return targetSpeed end
+  local ownHalf=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+  local ownPlan=p.racingPlan
+  local ownPlanAdvance=p.racingPlanStartProgress and
+    routeGap(p.racingPlanStartProgress,ownProgress) or 0
+  local ownSpeed=math.max(0,safeNumber(speed))
+  local maxGap=math.max(55.0,ownSpeed*2.5)
+
+  for i=0,sim.carsCount-1 do
+    if i~=carIndex then
+      local other=ac.getCar(i)
+      if other and other.isActive then
+        local otherState=state.p[i]
+        local op,ol
+        if otherState and otherState.routeProgress~=nil then
+          op,ol=otherState.routeProgress,otherState.latOff
+        else
+          op,ol=routeProjection(other,p.segIdx,true,nil,
+            safeNumber(other.speedMs),0.05)
+        end
+        if op~=nil and ol~=nil then
+          local otherSpeed=math.max(0,safeNumber(other.speedMs))
+          local otherSample=Geometry.sample(state.routeGeometry,op)
+          local ofx,ofz=normalize2(other.look.x,other.look.z)
+          local directionDot=otherSample and
+            (ofx*otherSample.tx+ofz*otherSample.tz) or 1.0
+          local gap,leaderSpeed
+          if directionDot>=-0.25 then
+            gap=routeGap(ownProgress,op)
+            leaderSpeed=otherSpeed
+          else
+            local ownSample=Geometry.sample(state.routeGeometry,ownProgress)
+            if ownSample then gap=select(1,relativeToRoute(other.position,ownSample)) end
+            leaderSpeed=-otherSpeed
+          end
+
+          if gap and gap>0.0 and gap<maxGap then
+            local closing=ownSpeed-leaderSpeed
+            local time=closing>0.5 and
+              clamp((gap-ownHalf-2.0)/closing,0,3.0) or 1.0
+            local ownFuture=ownPlan and RacingLine.sample(ownPlan,
+              math.max(0,ownPlanAdvance)+ownSpeed*time) or nil
+            local ownLateral=ownFuture and ownFuture.offset or
+              safeNumber(p.laneOffsetCurrent,p.latOff or 0)
+            local otherPlan=otherState and otherState.racingPlan or nil
+            local otherStart=otherState and
+              otherState.racingPlanStartProgress or op
+            local otherAdvance=otherStart and routeGap(otherStart,op) or 0
+            local otherFuture=otherPlan and RacingLine.sample(otherPlan,
+              math.max(0,otherAdvance)+otherSpeed*time) or nil
+            local otherLateral=otherFuture and otherFuture.offset or ol
+            local otherHalf=math.max(0.75,
+              safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+            local lateralClearance=ownHalf+otherHalf+0.45
+            local predictedGap=gap-closing*time
+            if math.abs(ownLateral-otherLateral)<lateralClearance and
+               predictedGap<math.max(18.0,ownSpeed*0.35) then
+              local safe=safeFollowingSpeed(gap,leaderSpeed,p.brakeAccelEstimate)
+              if safe<targetSpeed then targetSpeed=safe end
+              if targetSpeed<ownSpeed-1.5 then p.trafficBrake=true end
+            end
+          end
+        end
+      end
+    end
+  end
+  return targetSpeed
+end
+
 local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
     passDistance,speed)
   local route=state.routeGeometry
@@ -1261,7 +1339,10 @@ local function readWheelSlip(car, p)
       end
     end
   end
-  p.wheelSlip=math.max(0,maxSlip)
+  -- Wheel-speed telemetry is noisy at high speed. Filtering prevents a
+  -- single spike from cutting engine torque for several seconds.
+  p.wheelSlipFiltered=lerp(safeNumber(p.wheelSlipFiltered,maxSlip),maxSlip,0.25)
+  p.wheelSlip=math.max(0,p.wheelSlipFiltered)
   return p.wheelSlip
 end
 
@@ -1362,6 +1443,9 @@ function Driver.update(carIndex, car, dt)
     targetSpeed=0
     p.trafficBrake=true
   end
+  -- Independent swept-path check: a car in front is considered a hazard
+  -- only if our predicted body corridors overlap at the future encounter.
+  targetSpeed=predictiveFollowingSpeed(carIndex,car,p,speed,targetSpeed)
   p.targetSpeed = targetSpeed
 
   p.boundaryEmergency=false
