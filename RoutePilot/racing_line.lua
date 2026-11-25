@@ -49,7 +49,7 @@ end
 -- fixedOffset is reserved for an active overtake: the racing-line search is
 -- disabled, but the transition to the reserved corridor remains smooth.
 function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, baseOffset,
-    fixedOffset, horizon, spacing, obstacleAt)
+    fixedOffset, horizon, spacing, obstacleAt, lateralAccelLimit)
   if not route or not progress or not boundsAt then return nil end
 
   local size = car and car.aabbSize
@@ -64,7 +64,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local initial = safe(startOffset, safe(baseOffset, 0))
   local preferred = safe(baseOffset, initial)
   local referenceSpeed = clamp(math.max(22.0, safe(car and car.speedMs, 0) * 1.15), 22.0, 65.0)
-  local lateralLimit = 11.5
+  local lateralLimit = clamp(safe(lateralAccelLimit, 8.0), 6.75, 18.0)
 
   for i = 0, count do
     local d = i * step
@@ -157,11 +157,10 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local off1 = candidateSets[2][j]
       local clearance = math.min(off1 - bounds[2][1], bounds[2][2] - off1)
       local shift = off1 - off0
-      if math.abs(shift) <= step * 0.48 then
-        local cost = shift * shift * 0.035 +
-          0.018 / math.max(0.20, clearance + 0.20)
-        firstLayer[#firstLayer + 1] = { a = 1, b = j, cost = cost, prev = nil }
-      end
+      local excessShift = math.max(0, math.abs(shift) - step * 0.48)
+      local cost = shift * shift * 0.035 + excessShift * excessShift * 0.8 +
+        0.018 / math.max(0.20, clearance + 0.20)
+      firstLayer[#firstLayer + 1] = { a = 1, b = j, cost = cost, prev = nil }
     end
     if #firstLayer == 0 then
       for j = 1, #candidateSets[2] do
@@ -186,7 +185,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         for c = 1, #candidateSets[station + 1] do
           local offC = candidateSets[station + 1][c]
           local shift = offC - offB
-          if math.abs(shift) <= step * 0.48 then
+          do
             local pointC = pointAt(samples[station + 1], offC)
             local k = curvature(pointA, pointB, pointC)
             local second = offA - 2.0 * offB + offC
@@ -201,7 +200,9 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
               math.max(0.00035, math.abs(k)))
             local timeLoss = math.max(0, 1.0 / curveSpeed - 1.0 / referenceSpeed) * step
             local curvatureCost = k * k * 150.0
-            local smoothCost = second * second * 0.11 + slope * slope * 0.055
+            local excessShift = math.max(0, math.abs(shift) - step * 0.48)
+            local smoothCost = second * second * 0.11 + slope * slope * 0.055 +
+              excessShift * excessShift * 0.8
             local edgeCost = 0.018 / math.max(0.20, clearance + 0.20)
             local cost = node.cost + curvatureCost + timeLoss * 34.0 +
               smoothCost + edgeCost
