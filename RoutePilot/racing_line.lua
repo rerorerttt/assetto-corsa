@@ -291,6 +291,10 @@ end
 
 function RacingLine.sample(plan, distance)
   if not plan or not plan.points or plan.count < 2 then return nil end
+  -- Do not extend the final optimized curvature indefinitely. The speed
+  -- planner must fall back to the reference spline beyond this short horizon
+  -- so distant corners are still seen at high speed.
+  if distance>(plan.horizon or ((plan.count-1)*plan.spacing)) then return nil end
   local usableDistance=plan.blockedDistance and
     math.max(0,plan.blockedDistance-10.0) or distance
   local position = clamp(usableDistance / plan.spacing, 0, plan.count - 1)
