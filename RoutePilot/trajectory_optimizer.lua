@@ -294,7 +294,13 @@ function Optimizer.build(route, sampleFn, nodes, loopRoute, boundsAt, car, optio
     bounds[i+1]={left,right}
   end
 
-  local anchors={0.18,0.50,0.82}
+  local roadWidth=math.max(0,bounds[1][2]-bounds[1][1])
+  local laneCount=clamp(math.floor((roadWidth+0.5)/3.5),1,4)
+  local anchors
+  if laneCount==1 then anchors={0.50}
+  elseif laneCount==2 then anchors={0.18,0.50,0.82}
+  elseif laneCount==3 then anchors={0.12,0.38,0.62,0.88}
+  else anchors={0.10,0.30,0.50,0.70,0.90} end
   local alternatives={}
   for i=1,#anchors do
     local plan=solveVariant(samples,bounds,loopRoute,halfWidth,halfLength,
