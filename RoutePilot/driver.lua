@@ -219,9 +219,7 @@ local function planTargetSpeed(p,speed)
   local route=state.routeGeometry
   if not route or not p.routeProgress then return 11.0 end
   local target=p.cruiseSpeed
-  local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local currentSpeed=math.max(0,safeNumber(speed))
-  local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local coastDecel=clamp(safeNumber(p.coastDecelEstimate,1.4),0.5,3.5)
   local coastLookahead=math.min(350.0,
     currentSpeed*currentSpeed/(2*coastDecel)+currentSpeed*0.5+35.0)
@@ -243,7 +241,7 @@ local function planTargetSpeed(p,speed)
     local curvature=math.abs(safeNumber(planned and planned.k or sample.k))
     -- Ignore curvature below the noise floor of a route recorded at 3 m.
     -- The optimizer's path curvature, not the reference-line curvature,
-    -- determines braking on an open road.
+    -- determines the throttle-lift speed target on an open road.
     if curvature>CFG.CURVE_MIN then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,CFG.MAX_LATERAL_ACCEL)*0.90
       local curveSpeed=math.sqrt(lateralLimit/curvature)
@@ -1271,7 +1269,7 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local error=targetSpeed-speed
   local gas=clamp(error*CFG.GAS_GAIN,0,CFG.MAX_GAS)
   -- Curvature and road geometry are handled by lifting the throttle only.
-  -- Hydraulic braking is reserved for a closing collision with another car.
+  -- Hydraulic braking is reserved for traffic conflicts and unsafe boundary corridors.
   local brake=(p.trafficBrake or p.boundaryBrake) and
     clamp(-error*CFG.BRAKE_GAIN,0,CFG.MAX_BRAKE) or 0
 
