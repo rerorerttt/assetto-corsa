@@ -152,6 +152,7 @@ local function loadBounds()
         end
         if #L==n then
           state.boundsL,state.boundsR=L,R
+          state.racingLine=nil
           writeLog("BOUNDS_LOADED points=%d",n)
           return true
         end
@@ -599,10 +600,12 @@ local function updateBoundsRecording(player)
   if state.loopRoute then idx=((seg-1)%n)+1 end
   if idx>=1 and idx<=n then
     state.boundsL[idx]=newL; state.boundsR[idx]=newR
+    state.racingLine=nil
   end
   if state.recBoundsSeg and seg~=state.recBoundsSeg then
     state.boundsL[state.recBoundsSeg]=newL
     state.boundsR[state.recBoundsSeg]=newR
+    state.racingLine=nil
     state.recBoundsSeg=seg
   end
 end
@@ -615,6 +618,7 @@ local function applyWidthPreset(preset)
     state.boundsL[i]=-half
     state.boundsR[i]=half
   end
+  state.racingLine=nil
   writeLog("WIDTH_PRESET preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
 end
 local function releaseCar(carIndex)
