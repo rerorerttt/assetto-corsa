@@ -96,11 +96,11 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local baseMargin = halfWidth + edgeMargin
   local step = math.max(3.5, spacing or 4.5)
   -- A path may use the full road, but its lateral position cannot jump
-  -- sideways between samples. The limit tightens with speed to keep the
-  -- generated line physically drivable instead of asking for a lane-change
-  -- impulse at racing speed.
-  local planSpeed = math.max(0, safe(car and car.speedMs))
-  local maxOffsetStep = step * clamp(4.0 / math.max(10.0, planSpeed), 0.10, 0.32)
+  -- across the whole width in one sample. The speed envelope evaluates the
+  -- resulting curvature and lifts the throttle early when a slower path is
+  -- required; the geometry solver itself must not fail just because the car
+  -- arrived too fast for a sharp transition.
+  local maxOffsetStep = step * 0.32
   local length = math.min(180.0, math.max(45.0, horizon or 150.0))
   local count = math.floor(length / step) + 1
   local samples, bounds, offsets = {}, {}, {}
