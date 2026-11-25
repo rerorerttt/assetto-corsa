@@ -418,9 +418,10 @@ local function hasNearbyTraffic(carIndex,car)
         local dz=other.position.z-car.position.z
         local distanceSq=dx*dx+dz*dz
         local forward=dx*fx+dz*fz
-        -- Cars ahead and cars alongside count as traffic; a distant rear car
-        -- must not make the driver abandon its fastest clear-road trajectory.
-        if distanceSq<rangeSq and forward>-6.0 then return true end
+        -- Nearby cars ahead, alongside and close behind all matter: a
+        -- leading car must not drift into the lane already occupied by a
+        -- faster car approaching from behind.
+        if distanceSq<rangeSq and forward>-35.0 then return true end
       end
     end
   end
