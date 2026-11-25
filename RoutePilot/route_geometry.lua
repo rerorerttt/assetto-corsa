@@ -229,4 +229,25 @@ function Geometry.project(route, position, hintS, heading, speed, dt, locked)
   return best
 end
 
+-- Smooth racing-line offset. Positive curvature is a left turn, so the
+-- preferred offset is to the outside (negative lateral offset), and vice versa.
+-- Curvature is averaged over a multi-scale window to ignore recorded-point noise.
+function Geometry.racingOffset(route, distance, maxOffset, gain)
+  if not route then return 0 end
+  local limit=math.max(0,safeNumber and safeNumber(maxOffset) or (maxOffset or 0))
+  if limit<=1e-4 then return 0 end
+  local scales={{-24,0.08},{-16,0.16},{-8,0.24},{0,0.28},{8,0.24},{16,0.16},{24,0.08}}
+  local weighted,totalWeight=0,0
+  for i=1,#scales do
+    local sample=Geometry.sample(route,distance+scales[i][1])
+    if sample then
+      weighted=weighted+(sample.k or 0)*scales[i][2]
+      totalWeight=totalWeight+scales[i][2]
+    end
+  end
+  local curvature=totalWeight>0 and weighted/totalWeight or 0
+  local desired=-curvature*(gain or 28.0)
+  return clamp(desired,-limit,limit)
+end
+
 return Geometry
