@@ -1129,7 +1129,10 @@ local function readWheelSlip(car, p)
       if wheel then
         local ratio=safeNumber(wheel.slipRatio)
         local speedDiff=safeNumber(wheel.speedDifference)
-        local normalizedDiff=speedDiff/math.max(3.0,safeNumber(car.speedMs))
+        -- speedDifference is an absolute wheel/vehicle speed delta on
+        -- several CSP physics builds; dividing by near-zero vehicle speed
+        -- made launch slip appear enormous and cut almost all engine torque.
+        local normalizedDiff=speedDiff/math.max(8.0,safeNumber(car.speedMs))
         maxSlip=math.max(maxSlip,ratio,normalizedDiff)
       end
     end
@@ -1164,7 +1167,9 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
   gas=gas*p.tractionScale*cornerScale
 
-  if speed<5 then gas=math.min(gas,0.6) end
+  -- Keep launch torque available; traction control now handles real
+  -- wheelspin without the old permanent low-speed 60% throttle ceiling.
+  if speed<5 then gas=math.min(gas,0.85) end
   if error>=0 then brake=0 end
   p.gas=clamp(gas,0,CFG.MAX_GAS)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)
