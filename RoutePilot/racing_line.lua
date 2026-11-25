@@ -48,7 +48,7 @@ local function localCost(samples, bounds, offsets, index, baseOffset)
   local clearance = math.min(offsets[index] - bounds[index][1],
     bounds[index][2] - offsets[index])
   local edgePenalty = 0.00008 / math.max(0.12, clearance + 0.12)
-  local laneBias = (offsets[index] - baseOffset) ^ 2 * 0.00003
+  local laneBias = (offsets[index] - baseOffset) ^ 2 * 0.0002
   return k * k * 180.0 + second * second * 0.055 +
     edgePenalty + laneBias
 end
