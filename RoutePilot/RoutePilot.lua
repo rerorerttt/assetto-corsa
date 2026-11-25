@@ -26,7 +26,7 @@ if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = ni
 local CFG = {
   -- Keep roughly 0.9–1.3 seconds of preview at 100–300 km/h; 28 m was
   -- only 0.34 s at 300 km/h and caused late, alternating corrections.
-  LOOKAHEAD_BASE=16.0, LOOKAHEAD_SPEED=0.75, LOOKAHEAD_MIN=18.0, LOOKAHEAD_MAX=90.0,
+  LOOKAHEAD_BASE=8.0, LOOKAHEAD_SPEED=0.65, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=28.0,
   CURVATURE_STEER_GAIN=4.5, CURVATURE_FEEDFORWARD=0.20,
   STEER_LIMIT=1.0, STEER_RATE=4.5, STEER_FILTER=0.08,
   EMERGENCY_STEER_GAIN=2.6, EMERGENCY_STEER_RATE=10.0,
