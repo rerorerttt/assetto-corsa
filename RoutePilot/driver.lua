@@ -863,7 +863,10 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
       return false,"road_boundary"
     end
 
-    local time=distance/math.max(5.0,speed)
+    local predictionSpeed=math.max(5.0,speed)
+    local predictionAccel=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
+    local time=(math.sqrt(predictionSpeed*predictionSpeed+
+      2.0*predictionAccel*distance)-predictionSpeed)/predictionAccel
     local ownProgress=p.routeProgress+distance
     for _,other in ipairs(traffic) do
       local predictedOther=other.progress+other.speed*time
