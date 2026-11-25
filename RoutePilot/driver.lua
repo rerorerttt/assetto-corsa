@@ -355,11 +355,11 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- Clamp only at the target station; intersecting the entire preview corridor
   -- here would collapse the racing line toward the center in every bend.
   local futureBl,futureBr=routeBoundsAtSample(future)
-  local futureAngle=signedAngle(fx,fz,future.tx,future.tz)
   local halfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
   local halfLength=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
-  local bodyEnvelope=halfWidth*math.abs(math.cos(futureAngle))+
-    halfLength*math.abs(math.sin(futureAngle))+BOUND_MARGIN
+  -- At the future station the vehicle is expected to align with the path
+  -- tangent; do not project today's heading through the whole upcoming bend.
+  local bodyEnvelope=halfWidth+BOUND_MARGIN
   local safeMin,safeMax=futureBl+bodyEnvelope,futureBr-bodyEnvelope
   local boundaryDeficit=math.max(0,safeMin-safeMax)
   if boundaryDeficit>0 then
