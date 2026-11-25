@@ -206,13 +206,40 @@ local function calculateStability(p, speed)
   p.stability = 1 - severity
 end
 
+local function racingOffsetLimit(sample,car,fx,fz)
+  if not sample then return 0 end
+  local bl,br=routeBoundsAtSample(sample)
+  local width=math.max(0,br-bl)
+  -- Wide recorded corridors are treated as two traffic lanes. The racing
+  -- line is optimized inside the active lane, never across the lane divider.
+  local laneHalf=width>=5.4 and width*0.25 or width*0.5
+  local size=car and car.aabbSize
+  local halfWidth=math.max(0.75,safeNumber(size and size.x,2.0)*0.5)
+  local halfLength=math.max(1.5,safeNumber(size and size.z,4.5)*0.5)
+  local angle=0
+  if fx and fz then angle=math.abs(signedAngle(fx,fz,sample.tx,sample.tz)) end
+  local envelope=halfWidth*math.abs(math.cos(angle))+
+    halfLength*math.abs(math.sin(angle))+BOUND_MARGIN
+  return clamp(laneHalf-envelope-0.05,0,CFG.RACING_LINE_MAX_OFFSET or 0.8)
+end
+
+local function effectiveRacingCurvature(route,sample,car,fx,fz)
+  local k=safeNumber(sample and sample.k)
+  if math.abs(k)<1e-7 then return 0,0 end
+  local limit=racingOffsetLimit(sample,car,fx,fz)
+  local offset=Geometry.racingOffset(route,sample.s,limit,
+    CFG.RACING_LINE_GAIN or 28.0)
+  -- Curvature of a parallel offset curve: k / (1 - offset * k).
+  local denominator=math.max(0.25,1-offset*k)
+  return math.abs(k/denominator),offset
+end
+
 local function planTargetSpeed(p,speed)
   refreshRouteMetrics()
   local route=state.routeGeometry
   if not route or not p.routeProgress then return 11.0 end
   local target=p.cruiseSpeed
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
-  -- At high speed, inspect beyond the braking distance plus response margin.
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
@@ -220,7 +247,7 @@ local function planTargetSpeed(p,speed)
   while distance<=horizon do
     local sample=Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
-    local curvature=math.abs(sample.k or 0)
+    local curvature=effectiveRacingCurvature(route,sample,nil,sample.tx,sample.tz)
     if curvature>CFG.CURVE_MIN then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
       local curveSpeed=math.sqrt(lateralLimit/curvature)
@@ -229,7 +256,7 @@ local function planTargetSpeed(p,speed)
         2*brakeAccel*brakingDistanceAvailable)
       if safeSpeed<target then target=safeSpeed end
     end
-    distance=distance+5.0
+    distance=distance+4.0
     if not route.loop and p.routeProgress+distance>=route.total then break end
   end
   return math.max(0,target)
@@ -352,8 +379,16 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.returningFromPass=false
   end
 
-  local targetX=future.x-future.tz*p.laneOffsetCurrent
-  local targetZ=future.z+future.tx*p.laneOffsetCurrent
+  local racingOffset=0
+  if p.overtakeSide==0 and not p.returningFromPass then
+    local limit=racingOffsetLimit(future,car,fx,fz)
+    racingOffset=Geometry.racingOffset(route,future.s,limit,
+      CFG.RACING_LINE_GAIN or 28.0)
+  end
+  local targetOffset=clamp(p.laneOffsetCurrent+racingOffset,safeMin,safeMax)
+  p.racingOffset=racingOffset
+  local targetX=future.x-future.tz*targetOffset
+  local targetZ=future.z+future.tx*targetOffset
   local dx,dz=targetX-car.position.x,targetZ-car.position.z
   local targetDist=math.sqrt(dx*dx+dz*dz)
   if targetDist<0.5 then return 0 end
@@ -362,9 +397,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- feed-forward to begin rotating into the bend before heading error grows.
   local alpha=signedAngle(fx,fz,dx/targetDist,dz/targetDist)
   local pursuitCurvature=2.0*math.sin(alpha)/targetDist
-  local previewCurvature=safeNumber(curvePreview.k)
+  local previewCurvature=effectiveRacingCurvature(route,curvePreview,car,fx,fz)
   local desiredCurvature=pursuitCurvature+
-    previewCurvature*CFG.CURVATURE_FEEDFORWARD
+    (curvePreview.k>=0 and previewCurvature or -previewCurvature)*
+      CFG.CURVATURE_FEEDFORWARD
 
   -- Predict lateral drift over the preview time and steer back before the
   -- vehicle footprint reaches a saved boundary.
