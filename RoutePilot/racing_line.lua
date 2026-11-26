@@ -101,29 +101,40 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local bodySampleCache={}
   local bodyBoundsCache={}
   local function bodyFitsAt(distance,point,hx,hz)
-    local sample=bodySampleCache[distance]
-    if sample==nil then
-      sample=sampleFn(route,progress+distance) or false
-      bodySampleCache[distance]=sample
-    end
-    if sample==false then return false end
     local headingLength=math.sqrt(hx*hx+hz*hz)
     if headingLength<0.001 then return false end
     hx,hz=hx/headingLength,hz/headingLength
-    local angle=math.abs(math.atan2(hx*sample.tz-hz*sample.tx,
-      hx*sample.tx+hz*sample.tz))
-    local envelope=halfWidth*math.abs(math.cos(angle))+
-      halfLength*math.abs(math.sin(angle))+margin
-    local nx,nz=-sample.tz,sample.tx
-    local offset=(point.x-sample.x)*nx+(point.z-sample.z)*nz
-    local roadBounds=bodyBoundsCache[distance]
-    if not roadBounds then
-      local left,right=boundsAt(sample)
-      roadBounds={safe(left,-2.0),safe(right,2.0)}
-      bodyBoundsCache[distance]=roadBounds
+    local checked=0
+    -- Five longitudinal slices cover the front, rear and intervening sweep
+    -- of the complete rectangle while it travels between planner stations.
+    for slice=-2,2 do
+      local longitudinal=slice*halfLength*0.5
+      local bodyDistance=distance+longitudinal
+      local sample=bodySampleCache[bodyDistance]
+      if sample==nil then
+        sample=sampleFn(route,progress+bodyDistance) or false
+        bodySampleCache[bodyDistance]=sample
+      end
+      if sample~=false then
+        local bodyX=point.x+hx*longitudinal
+        local bodyZ=point.z+hz*longitudinal
+        local angle=math.abs(math.atan2(hx*sample.tz-hz*sample.tx,
+          hx*sample.tx+hz*sample.tz))
+        local envelope=halfWidth*math.abs(math.cos(angle))+margin
+        local nx,nz=-sample.tz,sample.tx
+        local offset=(bodyX-sample.x)*nx+(bodyZ-sample.z)*nz
+        local roadBounds=bodyBoundsCache[bodyDistance]
+        if not roadBounds then
+          local left,right=boundsAt(sample)
+          roadBounds={safe(left,-2.0),safe(right,2.0)}
+          bodyBoundsCache[bodyDistance]=roadBounds
+        end
+        local left,right=roadBounds[1],roadBounds[2]
+        if offset<left+envelope or offset>right-envelope then return false end
+        checked=checked+1
+      end
     end
-    local left,right=roadBounds[1],roadBounds[2]
-    return offset>=left+envelope and offset<=right-envelope
+    return checked>0
   end
 
   local previousOffsets={}
