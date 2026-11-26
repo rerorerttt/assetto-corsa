@@ -1980,7 +1980,8 @@ local function coordinateTrafficFrame(sim,dt,frame)
   for _,q in ipairs(requests) do
     local i=q.index;local car=ac.getCar(i);local p=state.p[i]
     local leader=ac.getCar(q.leader);local lp=state.p[q.leader]
-    if car and leader and p and lp and p.overtakeSide==0 and lp.yieldRequestBy==nil then
+    if car and leader and p and lp and p.overtakeSide==0 and
+       p.yieldRequestBy==nil and lp.yieldRequestBy==nil then
       local group=collectYieldGroup(i,car,p,q.leader,
         math.min(280,clamp(28+math.max(0,safeNumber(car.speedMs))*1.6,45,95)))
       if type(group)~="table" or #group==0 then group={q.leader} end
@@ -2039,8 +2040,7 @@ local function coordinateTrafficFrame(sim,dt,frame)
           m.yieldReady=true
         end
         p.pendingYieldGroup=group
-        local commitOffset=findPassingOffset(i,car,p,q.leader,q.leaderLateral,
-          safeNumber(car.speedMs),q.distance,true,ignore)
+        local commitOffset=passOffset
         if commitOffset and beginOvertake(i,car,p,q.gap,q.leader,q.leaderLateral,
            safeNumber(car.speedMs),q.distance,commitOffset) then
           p.coordinatedPassFrame=frame
