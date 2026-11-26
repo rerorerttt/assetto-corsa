@@ -1438,6 +1438,34 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     carIndex,car,currentLaneOffset,p.overtakeSide~=0 and p.passTargetIndex or nil)
 
   if p.overtakeSide~=0 then
+    if p.passTargetLaneFailed then
+      p.passTargetLaneFailed=false
+      local sourceOffset=p.passFromOffset or p.latOff or 0
+      local alreadyAtSource=math.abs(safeNumber(p.latOff)-sourceOffset)<0.55
+      local sourceClear=not laneOccupied(carIndex,car,sourceOffset,nil)
+      if alreadyAtSource or sourceClear then
+        local targetState=p.passTargetIndex and state.p[p.passTargetIndex] or nil
+        if targetState and targetState.yieldRequestBy==carIndex then
+          targetState.yieldRequestBy=nil
+          targetState.yieldOffset=nil
+          targetState.yieldPlanBlocked=false
+        end
+        p.overtakeSide=0
+        p.passTargetIndex=nil
+        p.passLat=nil
+        p.passFromOffset=nil
+        p.passT=0
+        p.passDeadline=nil
+        p.laneOffset=nil
+        p.overtakeRetryT=1.0
+        p.trafficAction="FOLLOW"
+        p.trafficReason="target_lane_plan_failed_abort"
+        return targetSpeed
+      end
+      p.trafficAction="PASSING"
+      p.trafficReason="target_lane_plan_failed_source_occupied"
+      return 0
+    end
     p.passT=safeNumber(p.passT)+dt
     p.trafficPriority=1000000+math.max(0,100-safeNumber(p.passT))
     p.trafficAction="PASSING"
@@ -1861,6 +1889,15 @@ function Driver.update(carIndex, car, dt)
   end
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
+  if p.yieldRequestBy~=nil and p.racingPlanBlocked and not p.projectionLost then
+    local requester=state.p[p.yieldRequestBy]
+    if requester then requester.passTargetLaneFailed=true end
+    p.yieldRequestBy=nil
+    p.yieldOffset=nil
+    p.yieldPlanBlocked=true
+    p.laneOffset=nil
+    updateRacingPlan(carIndex,car,p,speed,dt)
+  end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   if p.racingPlanBlocked then targetSpeed=0 end
@@ -1871,7 +1908,7 @@ function Driver.update(carIndex, car, dt)
   -- Never let that failed reservation command a zero-speed deadlock: cancel
   -- the pass, restore the original lane, and immediately rebuild OPEN routing.
   if p.racingPlanBlocked and p.overtakeSide~=0 and not p.projectionLost then
-    local returnOffset=p.baseLaneOffset or p.passFromOffset or 0
+    local returnOffset=p.passFromOffset or p.latOff or 0
     local targetIndex=p.passTargetIndex
     local alreadyInBase=math.abs(safeNumber(p.latOff)-returnOffset)<0.55
     local baseLaneClear=not laneOccupied(carIndex,car,returnOffset,nil)
@@ -1886,8 +1923,13 @@ function Driver.update(carIndex, car, dt)
       p.returningFromPass=false
       p.returnFromOffset=nil
       p.returnTargetIndex=nil
-      p.laneOffset=returnOffset
-      p.baseLaneOffset=returnOffset
+      local targetState=targetIndex and state.p[targetIndex] or nil
+      if targetState and targetState.yieldRequestBy==carIndex then
+        targetState.yieldRequestBy=nil
+        targetState.yieldOffset=nil
+        targetState.yieldPlanBlocked=false
+      end
+      p.laneOffset=nil
       p.overtakeRetryT=1.5
       p.trafficAction="FOLLOW"
       p.trafficReason="pass_path_rejected_return_to_base_lane"
