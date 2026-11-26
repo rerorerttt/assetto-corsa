@@ -587,14 +587,26 @@ local function relativeToRoute(position, sample)
   return longitudinal,lateral
 end
 
+local function trafficFrameProjection(car,carState,fallbackSeg)
+  if carState and carState.framePreparedFrame==(state.trafficFrame or -1) then
+    local fp=carState.frameProjection
+    if not fp or not fp.valid then return nil,nil,nil end
+    return fp.progress,fp.lateral,fp.seg
+  end
+  return routeProjection(car,fallbackSeg or
+    (carState and carState.segIdx) or 1,
+    not (carState and carState.routeLocked),
+    carState and carState.routeProgress,
+    car and car.speedMs or 0,0.05)
+end
+
 local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
   local sim=ac.getSim()
   if not sim then return true end
   local own=state.p[carIndex]
   local ownProgress=own and own.routeProgress
   if ownProgress==nil then
-    ownProgress=routeProjection(car,own and own.segIdx or 1,
-      not (own and own.routeLocked),own and own.routeProgress,car.speedMs,0.05)
+    ownProgress=trafficFrameProjection(car,own,own and own.segIdx or 1)
   end
   if ownProgress==nil then return true end
   local ownSample=Geometry.sample(state.routeGeometry,ownProgress)
@@ -613,10 +625,8 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
-        local progress,lateral,otherSeg=routeProjection(other,
-          otherState and otherState.segIdx or own.segIdx or 1,
-          not (otherState and otherState.routeLocked),
-          otherState and otherState.routeProgress,other.speedMs,0.05)
+        local progress,lateral,otherSeg=trafficFrameProjection(
+          other,otherState,own and own.segIdx or 1)
         if otherState then
           if progress~=nil then otherState.routeProgress=progress end
           otherState.routeLocked=progress~=nil
@@ -822,8 +832,7 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   if not sim or not own then return nil,nil,nil,nil end
   local ownProgress=own.routeProgress
   if ownProgress==nil then
-    ownProgress=routeProjection(car,own.segIdx,not own.routeLocked,
-      own.routeProgress,car.speedMs,0.05)
+    ownProgress=trafficFrameProjection(car,own,own.segIdx)
     own.routeProgress=ownProgress
   end
   if ownProgress==nil then return nil,nil,nil,nil end
@@ -836,10 +845,8 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
-        local progress,lateral,otherSeg=routeProjection(other,
-          otherState and otherState.segIdx or own.segIdx or 1,
-          not (otherState and otherState.routeLocked),
-          otherState and otherState.routeProgress,other.speedMs,0.05)
+        local progress,lateral,otherSeg=trafficFrameProjection(
+          other,otherState,own and own.segIdx or 1)
         if otherState then
           if progress~=nil then otherState.routeProgress=progress end
           otherState.routeLocked=progress~=nil
@@ -1108,10 +1115,7 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
-        local op,ol=routeProjection(other,
-          otherState and otherState.segIdx or p.segIdx,
-          not (otherState and otherState.routeLocked),
-          otherState and otherState.routeProgress,other.speedMs,0.05)
+        local op,ol=trafficFrameProjection(other,otherState,p.segIdx)
         if op==nil then
           local dx=other.position.x-car.position.x
           local dz=other.position.z-car.position.z
@@ -1380,13 +1384,12 @@ local function collectYieldGroup(carIndex,car,p,leaderIndex,maxRange)
          os.overtakeSide==0 and not os.returningFromPass and
          os.yieldRequestBy==nil and os.pendingYieldTarget==nil and
          #candidates<8 then
-        local progress,lateral,seg=routeProjection(other,os.segIdx or p.segIdx,
-          not os.routeLocked,os.routeProgress,other.speedMs,0.05)
+        local progress,lateral,seg=trafficFrameProjection(other,os,p.segIdx)
         if progress~=nil and lateral~=nil then
-          local sample=Geometry.sample(state.routeGeometry,progress)
+          local fp=os.frameProjection
           local ofx,ofz=normalize2(other.look.x,other.look.z)
-          local sameDirection=sample and
-            (ofx*sample.tx+ofz*sample.tz)>=-0.25
+          local sameDirection=fp and fp.valid and
+            (ofx*fp.tx+ofz*fp.tz)>=-0.25
           local gap=routeGap(ownProgress,progress)
           if sameDirection and gap>leaderGap and gap<=maxRange then
             local ol,orr=H.boundsAt(seg or os.segIdx or leaderSeg)
@@ -1927,9 +1930,10 @@ local function coordinateTrafficFrame(sim,dt,frame)
     local car=ac.getCar(i);local p=state.p[i]
     if car and car.isActive and car.isAIControlled and p and
        p.framePreparedFrame==frame and p.frameProjection and p.frameProjection.valid then
-      local speed=math.max(0,safeNumber(car.speedMs))
-      updateRacingPlan(i,car,p,speed,dt or 0.05)
-      p.freeTargetSpeed=planTargetSpeed(p,speed)
+      -- Reuse the free-running target computed by Driver.update() on the
+      -- preceding simulation frame. Rebuilding the racing optimiser here
+      -- duplicated the expensive plan update for every car every frame.
+      p.freeTargetSpeed=safeNumber(p.freeTargetSpeed,p.targetSpeed or 0)
     end
   end
   local requests={}
