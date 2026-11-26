@@ -41,7 +41,7 @@ end
 -- fixedOffset is used while passing: it disables racing-line optimization and
 -- follows the reserved passing corridor instead.
 function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, baseOffset,
-    fixedOffset, horizon, spacing, obstacleAt, previousPlan, previousAdvance,
+    fixedOffset, horizon, spacing, previousPlan, previousAdvance,
     fixedTransitionDistance)
   if not route or not progress or not boundsAt then return nil end
   local size = car and car.aabbSize
@@ -96,16 +96,6 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         straightOpen=false
         break
       end
-      if i>1 and previousOffsets[i]~=nil and obstacleAt then
-        local forbidden=obstacleAt(sample,(i-1)*step) or {}
-        for _,interval in ipairs(forbidden) do
-          if previousOffsets[i]>interval[1] and previousOffsets[i]<interval[2] then
-            straightOpen=false
-            break
-          end
-        end
-        if not straightOpen then break end
-      end
     end
   end
   local stabilityWeight=straightOpen and 3.0 or 0.35
@@ -142,29 +132,15 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local lo,hi=bounds[i][1],bounds[i][2]
       local list={}
       local d=(i-1)*step
-      local forbidden=obstacleAt and obstacleAt(samples[i],d) or nil
-      local function isBlocked(value)
-        for _,interval in ipairs(forbidden or {}) do
-          if value>interval[1] and value<interval[2] then return true end
-        end
-        return false
-      end
       for c=0,6 do
         local value=lo+(hi-lo)*c/6
-        if not isBlocked(value) then addCandidate(list,value,lo,hi) end
+        addCandidate(list,value,lo,hi)
       end
-      if not isBlocked(preferred) then addCandidate(list,preferred,lo,hi) end
+      addCandidate(list,preferred,lo,hi)
       -- Keep the exact previous lateral position available. Without this
       -- candidate, temporal cost alone cannot prevent hopping between grid slots.
       local previousOffset=previousOffsets[i]
-      if previousOffset~=nil and not isBlocked(previousOffset) then
-        addCandidate(list,previousOffset,lo,hi)
-      end
-      if #list==0 then
-        -- Fail closed: never manufacture an edge candidate inside an
-        -- occupied corridor. Longitudinal following handles the blocked road.
-        return nil,"NO_PATH",d
-      end
+      if previousOffset~=nil then addCandidate(list,previousOffset,lo,hi) end
       local previous=sampleFn(route,progress+math.max(0,d-step))
       local following=sampleFn(route,progress+d+step)
       local kp=safe(previous and previous.k)
@@ -173,9 +149,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local smoothCurvature=(kp+2.0*kc+kn)*0.25
       local curvatureCandidate=clamp(
         preferred+clamp(-smoothCurvature*90.0,-2.8,2.8),lo,hi)
-      if not isBlocked(curvatureCandidate) then
-        addCandidate(list,curvatureCandidate,lo,hi)
-      end
+      addCandidate(list,curvatureCandidate,lo,hi)
       candidateSets[i]=list
     end
 
@@ -184,12 +158,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local off0=candidateSets[1][1]
       local off1=candidateSets[2][j]
       local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
-      -- Keep open-running cars in their assigned lane. Without this term,
-      -- the optimizer drifts toward the road center because that path can
-      -- have slightly lower curvature cost, leaving no usable passing lane.
-      local lanePreference=(off1-preferred)^2*4.0
       local cost=(off1-off0)^2*0.02+
-        lanePreference+
         0.00008/math.max(0.12,clearance+0.12)+
         stabilityCost(2,off1)
       firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
@@ -213,13 +182,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local slope=offC-offB
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
-          -- The preference is applied at every station, not only as a
-          -- candidate hint. This prevents temporal stability from locking a
-          -- car onto the centerline after an earlier unconstrained plan.
-          local lanePreference=(offC-preferred)^2*4.0
           local cost=node.cost+k*k*180.0+excess*excess*200000.0+
             second*second*0.18+slope*slope*0.075+
-            lanePreference+
             0.00008/math.max(0.12,clearance+0.12)+
             stabilityCost(station+1,offC)
           local key=node.b*100+c
