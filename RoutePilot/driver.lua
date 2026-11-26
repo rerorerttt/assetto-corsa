@@ -1015,14 +1015,16 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   end
   table.sort(candidates,function(a,b)return math.abs(a-source)<math.abs(b-source) end)
   local lastReason="no_candidate"
+  p.lastPassReservationOwner=nil
   for _,offset in ipairs(candidates) do
-    local reserved=passingReservationBlocked(carIndex,p,offset,speed)
+    local reserved,reservationOwner=passingReservationBlocked(carIndex,p,offset,speed)
     if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then
       local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
         source,offset,passDistance or 60.0,speed)
       if clear then return offset end
       lastReason=reason or lastReason
     else
+      if reserved then p.lastPassReservationOwner=reservationOwner end
       lastReason=reserved and "reserved_corridor" or "occupied_corridor"
     end
   end
@@ -1042,7 +1044,9 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   if offset==nil then
     p.overtakeRetryT=0.25
     if not p.overtakeDeniedLogged then
-      H.log("CAR=%d OVERTAKE_DENIED reason=%s gap=%.1f",carIndex,tostring(p.lastPassDeniedReason or "no_free_passing_offset"),gap or -1)
+      H.log("CAR=%d OVERTAKE_DENIED reason=%s reserved_by=%d gap=%.1f",
+        carIndex,tostring(p.lastPassDeniedReason or "no_free_passing_offset"),
+        safeNumber(p.lastPassReservationOwner,-1),gap or -1)
       p.overtakeDeniedLogged=true
     end
     return false
@@ -1124,6 +1128,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     p.trafficGap=rightGap or gap or -1
     p.trafficLeaderIndex=p.passTargetIndex or leaderIndex or -1
     if rightGap then
+      p.trafficLeaderSpeed=rightLeaderSpeed or 0
       passSafeSpeed = math.min(passSafeSpeed,
         safeFollowingSpeed(rightGap, rightLeaderSpeed or 0,p.brakeAccelEstimate))
     end
