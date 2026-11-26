@@ -96,6 +96,25 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local n = #samples
   if n < 3 then return nil end
 
+  -- Check the full oriented rectangle at multiple points along every swept
+  -- segment. The centre path alone is never accepted as proof of clearance.
+  local function bodyFitsAt(distance,point,hx,hz)
+    local sample=sampleFn(route,progress+distance)
+    if not sample then return false end
+    local headingLength=math.sqrt(hx*hx+hz*hz)
+    if headingLength<0.001 then return false end
+    hx,hz=hx/headingLength,hz/headingLength
+    local angle=math.abs(math.atan2(hx*sample.tz-hz*sample.tx,
+      hx*sample.tx+hz*sample.tz))
+    local envelope=halfWidth*math.abs(math.cos(angle))+
+      halfLength*math.abs(math.sin(angle))+margin
+    local nx,nz=-sample.tz,sample.tx
+    local offset=(point.x-sample.x)*nx+(point.z-sample.z)*nz
+    local left,right=boundsAt(sample)
+    left,right=safe(left,-2.0),safe(right,2.0)
+    return offset>=left+envelope and offset<=right-envelope
+  end
+
   local previousOffsets={}
   if previousPlan then
     for i=1,n do
@@ -179,11 +198,18 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     for j=1,#candidateSets[2] do
       local off0=candidateSets[1][1]
       local off1=candidateSets[2][j]
-      local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
-      local cost=(off1-off0)^2*0.02+
-        0.00008/math.max(0.12,clearance+0.12)+
-        stabilityCost(2,off1)
-      firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
+      local pointA=pointAt(samples[1],off0)
+      local pointB=pointAt(samples[2],off1)
+      local hx,hz=pointB.x-pointA.x,pointB.z-pointA.z
+      local mid={x=(pointA.x+pointB.x)*0.5,z=(pointA.z+pointB.z)*0.5}
+      if bodyFitsAt(step*0.5,mid,hx,hz) and
+         bodyFitsAt(step,pointB,hx,hz) then
+        local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
+        local cost=(off1-off0)^2*0.02+
+          0.00008/math.max(0.12,clearance+0.12)+
+          stabilityCost(2,off1)
+        firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
+      end
     end
     local layer=firstLayer
     for station=2,n-1 do
@@ -197,6 +223,15 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         for c=1,#candidateSets[station+1] do
           local offC=candidateSets[station+1][c]
           local pointC=pointAt(samples[station+1],offC)
+          local abx,abz=pointB.x-pointA.x,pointB.z-pointA.z
+          local bcx,bcz=pointC.x-pointB.x,pointC.z-pointB.z
+          local midAB={x=(pointA.x+pointB.x)*0.5,z=(pointA.z+pointB.z)*0.5}
+          local midBC={x=(pointB.x+pointC.x)*0.5,z=(pointB.z+pointC.z)*0.5}
+          local bodyClear=bodyFitsAt((station-1.5)*step,midAB,abx,abz) and
+            bodyFitsAt((station-1)*step,pointB,pointC.x-pointA.x,pointC.z-pointA.z) and
+            bodyFitsAt((station-0.5)*step,midBC,bcx,bcz) and
+            bodyFitsAt(station*step,pointC,bcx,bcz)
+          if bodyClear then
           local k=curvature(pointA,pointB,pointC)
           local reference=math.abs(safe(samples[station].k))
           local excess=math.max(0,math.abs(k)-math.max(reference*1.05,0.003))
@@ -220,6 +255,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           if not existing or cost<existing.cost then
             local nextNode={a=node.b,b=c,cost=cost,prev=node}
             bestByPair[key]=nextNode
+          end
           end
         end
       end
