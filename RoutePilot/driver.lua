@@ -1041,7 +1041,7 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
                 traffic[#traffic+1]={index=i,progress=p.routeProgress+longitudinal,
                   lateral=lateral,speed=signedSpeed,halfWidth=otherHalfWidth,
                   halfLength=otherHalfLength,yieldOffset=leaderTargetOffset,
-                  transitionDistance=transition}
+                  transitionDistance=transition,yieldDelay=0.12}
               end
             else
               local longitudinalNear=longitudinal>=-18.0 and
@@ -1082,7 +1082,8 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           traffic[#traffic+1]={
             index=i,progress=op,lateral=otherOffset,speed=signedSpeed,
             halfWidth=otherHalfWidth,halfLength=otherHalfLength,
-            yieldOffset=otherYieldOffset,transitionDistance=yieldTransition
+            yieldOffset=otherYieldOffset,transitionDistance=yieldTransition,
+            yieldDelay=(i==leaderIndex and 0.12 or 0)
           }
         end
       end
@@ -1137,7 +1138,7 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
       local longitudinal=routeGap(ownProgress,predictedOther)
       local otherLateral=other.lateral
       if other.yieldOffset~=nil and other.transitionDistance and other.transitionDistance>0 then
-        local travel=math.max(0,other.speed)*time
+        local travel=math.max(0,other.speed)*math.max(0,time-safeNumber(other.yieldDelay))
         local yieldT=clamp(travel/other.transitionDistance,0,1)
         yieldT=yieldT*yieldT*(3.0-2.0*yieldT)
         otherLateral=other.lateral+(other.yieldOffset-other.lateral)*yieldT
@@ -1330,6 +1331,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   leaderState.yieldOffset=leaderLaneOffset
   leaderState.yieldPlanBlocked=false
   leaderState.laneOffset=leaderLaneOffset
+  p.passTargetLaneFailed=false
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex
@@ -1603,7 +1605,8 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   estimatedPassDistance=math.max(estimatedPassDistance,transitionOut+12.0)
   local passWindow=math.max(45.0,25.0+potentialSpeed*1.25)
   local canActuallyPass=p.canOvertake==true and leaderIsAI==true and
-    speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
+    safeNumber(leaderSpeed,-1)>=0 and speedAdvantage>=3.0 and
+    estimatedPassDistance<=180.0 and
     potentialSpeed>=leaderPace+2.0
   local urgent=canActuallyPass and gap<=clamp(12.0+potentialSpeed*0.8,20.0,60.0)
 
