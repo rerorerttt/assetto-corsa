@@ -42,12 +42,13 @@ end
 -- follows the reserved passing corridor instead.
 function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, baseOffset,
     fixedOffset, horizon, spacing, previousPlan, previousAdvance,
-    fixedTransitionDistance)
+    fixedTransitionDistance,lateralAccelLimit)
   if not route or not progress or not boundsAt then return nil end
   local size = car and car.aabbSize
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
   local halfLength = math.max(1.5, safe(size and size.z, 4.5) * 0.5)
   local margin = 0.22
+  local lateralGrip=clamp(safe(lateralAccelLimit,10.0),6.0,20.0)
   local step = math.max(6.0, spacing or 7.5)
   local length = math.min(135.0, math.max(35.0, horizon or 95.0))
   local count = math.floor(length / step) + 1
@@ -206,7 +207,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local segmentLength=math.sqrt(
             (pointC.x-pointB.x)^2+(pointC.z-pointB.z)^2)
           local estimatedCornerSpeed=clamp(
-            math.sqrt(10.0/math.max(math.abs(k),0.0008)),8.0,90.0)
+            math.sqrt(lateralGrip/math.max(math.abs(k),0.0008)),8.0,90.0)
           local segmentTime=segmentLength/estimatedCornerSpeed
           local extraLength=math.max(0,segmentLength-step)
           local cost=node.cost+segmentTime*8.0+k*k*45.0+
