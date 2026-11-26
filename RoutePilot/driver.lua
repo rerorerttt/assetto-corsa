@@ -1263,7 +1263,7 @@ local function coordinatorMove(record,targetLane,records,reason,otherIndex)
   record.p.coordinatorOffset=record.lanes.centers[targetLane]
   record.p.baseLaneOffset=record.p.coordinatorOffset
   record.p.laneOffset=record.p.coordinatorOffset
-  record.p.coordinatorChangeT=1.5
+  record.p.coordinatorChangeT=3.0
   if reason=="PASS" then
     record.p.passTargetIndex=otherIndex
     record.p.overtakeSide=targetLane>current and 1 or -1
@@ -1304,6 +1304,11 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           p.coordinatorFromLane=nil
         end
         local lanes=coordinatorLaneGeometry(p.segIdx,car)
+        if p.coordinatedLane~=nil then
+          p.coordinatedLane=clamp(p.coordinatedLane,1,lanes.count)
+          p.homeLane=clamp(p.homeLane or p.coordinatedLane,1,lanes.count)
+          p.coordinatorOffset=lanes.centers[p.coordinatedLane]
+        end
         p.coordinatorLaneCount=lanes.count
         p.coordinatorChangeT=math.max(0,safeNumber(p.coordinatorChangeT)-dt)
         records[#records+1]={index=index,car=car,p=p,lanes=lanes,
@@ -1378,7 +1383,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         else follower,leader,distance=b,a,-gap end
         local closing=follower.speed-leader.speed+
           math.min(2.0,follower.accel*0.35)
-        local trigger=math.max(5.0,closing*2.5+7.0)
+        local trigger=math.max(5.0,closing*2.5+5.0)
         if follower.p.coordinatedLane==leader.p.coordinatedLane and
             distance<trigger and not handled[follower.index..":"..leader.index] then
           handled[follower.index..":"..leader.index]=true
