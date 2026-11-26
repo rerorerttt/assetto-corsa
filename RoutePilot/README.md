@@ -1,4 +1,4 @@
-# RoutePilot 0.9.2 — coordinated passing diagnostics
+# RoutePilot 0.9.3 — adjacent-lane traffic
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
 
@@ -39,25 +39,25 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
 - 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
 
-## Coordinated passing experiment (2026-11-26)
+## 2026-11-26 trace-driven traffic redesign
 
-Branch: `routepilot/continuous-overtake-traffic-logs-2026-11-26`.
+Branch: `routepilot/two-lane-traffic-rework-2026-11-26`.
 
-- The yielding car now moves toward the outer edge of its own available lane, away from the selected passing corridor. This replaces the previous 0.42 m nudge, which often produced no clearly separated two-car manoeuvre.
-- The Dev tab has a `ЛогиТрафик` switch. Enable it before or during a traffic test. It writes 5 Hz snapshots for every active car plus event-transition records to `routepilot_trace.txt`.
-- Traffic records include world position, speed, route projection, lateral position, requested offsets, pass/yield roles, target IDs, gap, leader speed, pass timers, yield readiness, retry timer, denial reason, steering/throttle/brake, target speed, projection status, and control-write status.
-- This is an experimental source change, not a claim of collision-free behaviour. Validate on a wide straight, a narrow section, a corner, and with several cars requesting passes simultaneously. Send the resulting `routepilot_trace.txt` after reproducing a failed or unsafe pass.
+The supplied traffic trace exposed four connected faults in the previous controller: all AI cars had an unlimited cruise target, so there was no designed slow/fast speed difference; the racing-line planner assigned every car to the route midpoint instead of a lane centre; the pass state machine waited for the target car to move aside before beginning; and a failed fixed-lane plan converted an otherwise recoverable pass into a zero-speed hard stop. The trace recorded 38 repeated `RACE_LINE_BLOCKED cause=NO_PATH` events after a pass began, followed by a rescue teleport.
 
-## Traffic behavior (multi-offset passing)
+The current traffic controller uses a simple two-class, adjacent-lane rule:
 
-- No configured 170 km/h cruise ceiling: straight-line speed is not capped by RoutePilot. The planner limits speed from upcoming route curvature and the car's measured braking response; vehicle physics determines attainable top speed.
-- Any car may pass a slower vehicle when its pace advantage and estimated pass distance make the manoeuvre feasible.
-- Passing targets use discrete logical lane slots derived from the measured corridor width (3/7/11/15 m → 1/2/3/4 slots). The complete transition, side-by-side phase and return are checked before a slot is reserved; arbitrary 0.30 m passing offsets are not used.
-- Passing reservations are local to the selected offset and limited to nearby time/space conflicts, so a physically separate free corridor remains available. Cars entering the same narrow corridor are serialized by active reservations.
-- The overtaking car stays on its selected offset until the target's rear is cleared, then returns to its original offset only after that offset is clear.
-- When the current lane is blocked and no passing offset is safe, following speed is limited by the leader in the car's current corridor only. A slow vehicle in a separate lane cannot globally throttle traffic using another free corridor.
-- Emergency passing does not increase steering gain or issue full-lock pulses. Lateral transition distance grows with speed and the estimated lateral-acceleration allowance; a pass is rejected when there is insufficient distance to complete the transition before reaching the target.
-- Stuck detection is not reset merely because another car exists ahead. After ten seconds without movement, the app attempts a respawn only at a point whose actual spawn position is clear of other vehicles.
+- Odd AI indices (1, 3, 5, ...) are slow traffic with a 40 km/h target cap.
+- Even AI indices (2, 4, 6, ...) are fast traffic with no fixed cruise-speed cap; only these cars initiate overtakes.
+- Every AI is assigned to the outermost left logical lane. The racing-line optimizer now includes a lane-preference cost and uses the same lane as its first recovery fallback.
+- When a fast car catches a slower car, it checks the immediately adjacent lane and reserves it directly. The target stays in its own lane; there is no yield request, yield timeout, or waiting for the leader to move.
+- The complete manoeuvre is checked against road boundaries and every active vehicle, including the target leader. The exact fixed-offset racing-line planner is run before the pass is accepted, so a lane that the runtime planner would reject is not reserved.
+- The overtaker stays in the passing lane until it is clear of the target by two vehicle lengths, then returns only when its base lane is clear. If the runtime pass planner nevertheless rejects the reserved path, the pass is cancelled and the car immediately replans in its base lane instead of being held at zero speed.
+- Logical lane counts are derived from measured road width: 3/7/11/15 m produce 1/2/3/4 slots. A single-lane corridor has no passing lane; if the adjacent lane is occupied or the full path is unsafe, the car follows at a collision-avoiding speed rather than forcing a pass.
+
+The Dev switch **Трафик лог** is off by default. Ordinary one-second `CAR=` records continue independently. Enabling the switch adds 5 Hz lane/traffic snapshots, state transitions, speed class, base lane, pass target, plan-block status, stuck timer, control outputs, and denial reasons to `routepilot_trace.txt`.
+
+This is a source-level redesign, not an in-game validation claim. The new build still needs a controlled Assetto Corsa test on 7 m and single-lane corridors, with several slow and fast cars, including a bend and simultaneous pass requests. A new trace from this exact branch is required to verify actual overtakes, return manoeuvres, collision clearance, and absence of planner-induced stops.
 
 ## Experimental 0.9.1 changes (2026-11-25)
 
