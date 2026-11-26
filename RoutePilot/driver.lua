@@ -1215,7 +1215,8 @@ local function collectYieldGroup(carIndex,car,p,leaderIndex,maxRange)
       local os=state.p[i]
       if other and other.isActive and other.isAIControlled and os and
          os.overtakeSide==0 and not os.returningFromPass and
-         os.yieldRequestBy==nil and #candidates<8 then
+         os.yieldRequestBy==nil and os.pendingYieldTarget==nil and
+         #candidates<8 then
         local progress,lateral,seg=routeProjection(other,os.segIdx or p.segIdx,
           not os.routeLocked,os.routeProgress,other.speedMs,0.05)
         if progress~=nil and lateral~=nil then
@@ -1684,7 +1685,9 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     if passRequestReady then
       local leaderState=state.p[leaderIndex]
       local leaderCar=ac.getCar(leaderIndex)
-      if not leaderState or not leaderCar or not leaderCar.isActive or leaderState.overtakeSide~=0 or leaderState.returningFromPass then
+      if not leaderState or not leaderCar or not leaderCar.isActive or
+         leaderState.overtakeSide~=0 or leaderState.returningFromPass or
+         leaderState.pendingYieldTarget~=nil then
         p.lastPassDeniedReason="leader_not_yield_capable"
       elseif leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
         p.pendingYieldTarget=leaderIndex;p.pendingYieldGap=gap
