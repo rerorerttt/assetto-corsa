@@ -257,3 +257,23 @@ Code commits in this branch: dynamic passing offsets `44ac2f8e2cc40e52b279110ec4
 Emergency full-lock refinement: for a validated urgent pass where the leader is within 8 m center-to-center, `filterSteering()` now applies a brief 80 ms full-range (`-1` or `+1`) steering pulse in the sign of the computed safe-path steering request, then returns to the path-following controller. The pulse is not applied if the steering request is effectively zero. The normal emergency steering gain/rate and 5 m/s lateral transition remain active after the pulse. This is the explicit bumper-distance escape response requested; it still depends on `findPassingOffset()` finding a physically clear corridor first.
 
 Latest driver commits: bumper-distance pulse `09bb989e0207fb0613353bc6d71fb43c1a5edba9`; zero-request guard `1397fbf0ccf1ecbadff4a393a41b0ce19943026a`. These final refinements also remain untested in the game.
+
+
+## 2026-11-26 straight-line stability and GDD audit pass
+
+Working branch: routepilot/straight-line-stability-audit-2026-11-26, based on routepilot/ideal-controller-foundation-2026-11-26. This is a separate branch; main and the previous working branch are untouched.
+
+Implemented:
+- Removed duplicate curvature feed-forward from pure-pursuit steering.
+- Added temporal continuity cost to the racing-line optimizer and fail-closed handling when all candidate offsets are blocked.
+- Removed emergency full-lock pulses and emergency steering-gain multiplication.
+- Increased speed-scaled preview to 85 m and synchronized the plan's origin with actual route progress; replan interval scales with speed.
+- Made plan sampling beyond the actual horizon return nil, allowing the speed planner and path follower to fall back to route geometry instead of targeting the final stale plan point.
+- Replaced continuous 0.30 m passing-offset search with discrete logical lane slots.
+- Made lane-transition distance speed- and lateral-acceleration-dependent; infeasible passes are rejected.
+- Corrected current path-offset telemetry and activated the previously unused settled-state steering deadband.
+- Removed unused stability calculation and unused racing-line helper.
+
+Open GDD gaps are recorded in ENGINEERING_AUDIT.md: default/inferred road bounds, the not-yet-time-optimal path/speed planner, distributed traffic arbitration, immediate full braking on projection loss, and unbenchmarked multi-car performance.
+
+Validation is static only. GitHub files were fetched back after the edits; no Lua compiler and no Assetto Corsa/CSP runtime test were available. Do not treat this branch as proven stable until the straight-line and subsequent traffic tests confirm it.
