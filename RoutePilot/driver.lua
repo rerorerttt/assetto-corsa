@@ -1717,17 +1717,17 @@ function Driver.update(carIndex, car, dt)
   elseif p.stuck>=RESCUE_TIME and not p.offTrackRecovering and
       safeNumber(p.emergencyBlockedT)<=0 then rescueReason="stuck_10s" end
   if rescueReason and p.rescueRetryT<=0 then
+    local elapsed=0
+    if rescueReason=="rollover" then elapsed=safeNumber(p.rolloverT)
+    elseif rescueReason=="traffic_blocked_10s" then elapsed=safeNumber(p.emergencyBlockedT)
+    elseif rescueReason=="offtrack_recovery_failed_10s" then elapsed=safeNumber(p.offTrackT)
+    elseif rescueReason=="throttle_blocked_10s" then elapsed=safeNumber(p.throttleBlockedT)
+    else elapsed=safeNumber(p.stuck) end
     p.stuck=0
     p.throttleBlockedT=0
     p.rolloverT=0
     p.rescueRetryT=5.0
     local rescued=H.teleportForward and H.teleportForward(carIndex,car,rescueReason) or false
-    local elapsed=0
-    if rescueReason=="rollover" then elapsed=0.75
-    elseif rescueReason=="traffic_blocked_10s" then elapsed=safeNumber(p.emergencyBlockedT)
-    elseif rescueReason=="offtrack_recovery_failed_10s" then elapsed=safeNumber(p.offTrackT)
-    elseif rescueReason=="throttle_blocked_10s" then elapsed=10.0
-    else elapsed=safeNumber(p.stuck) end
     H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s elapsed=%.2f",
       carIndex,rescueReason,tostring(rescued),elapsed)
     if rescued then return end
