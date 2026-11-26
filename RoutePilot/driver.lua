@@ -769,33 +769,12 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local mode=forcedMode or "OPEN"
   local fixedOffset=nil
   local fixedTransitionDistance=22.0
-  if mode=="OPEN" then
-    -- In close traffic, keep the current corridor until a pass is explicitly
-    -- granted. The optimizer may use the full road again once the conflict is
-    -- gone; it must not weave through another car while traffic arbitration
-    -- is still deciding who moves first.
-    local currentOffset=safeNumber(p.laneOffsetCurrent,p.baseLaneOffset or base)
-    local lockDistance=math.max(35.0,speed*1.5+15.0)
-    local trafficLock=p.pendingYieldTarget~=nil
-    if not trafficLock then
-      for otherIndex,otherState in pairs(state.p) do
-        if otherIndex~=carIndex and otherState.routeProgress~=nil and
-           math.abs(routeGap(p.routeProgress,otherState.routeProgress))<lockDistance then
-          trafficLock=true
-          break
-        end
-      end
-    end
-    if not trafficLock and carIndex~=0 and state.playerTelemetry and
-       state.playerTelemetry.routeProgress~=nil then
-      trafficLock=math.abs(routeGap(p.routeProgress,
-        state.playerTelemetry.routeProgress))<lockDistance
-    end
-    if trafficLock then
-      mode="TRAFFIC_HOLD"
-      fixedOffset=currentOffset
-    end
-  end
+  -- Normal racing always uses the complete road corridor, even when other
+  -- cars are nearby. Traffic spacing and conflict decisions belong to
+  -- updateTrafficControl(); converting every nearby car into a fixed-offset
+  -- TRAFFIC_HOLD path was locking the optimizer to stale lane offsets and
+  -- producing NO_PATH at the start grid. Only an explicitly reserved
+  -- PASS/RETURN/YIELD manoeuvre may constrain the racing-line corridor.
   if p.racingPlanTimer>0 and p.racingPlanMode==mode then
     return
   end
@@ -835,31 +814,22 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     previousPlan,previousAdvance,fixedTransitionDistance,p.lateralAccelLimit)
 
   -- A failed dynamic-programming search is not proof that the road is
-  -- physically blocked. In OPEN mode, retry with a deterministic corridor
-  -- path at the car's current lateral position, then at the route centre.
-  -- Both retries go through RacingLine.plan(), including the same oriented
-  -- full-body swept-path checks against the recorded road bounds. Never
-  -- change a reserved PASS/RETURN/YIELD or TRAFFIC_HOLD corridor here.
+  -- physically blocked. In ordinary OPEN running, retry on the road centre
+  -- (the GDD's neutral fallback) using the same oriented full-body swept-path
+  -- validation. Do not retry on a stale lane offset: lane slots exist only
+  -- during explicit passing/yield manoeuvres. Reserved PASS/RETURN/YIELD
+  -- paths are never moved to another corridor by this fallback.
   local originalFailure=planFailure or (not nextPlan and "NO_PLAN" or nil)
   local fallbackKind=nil
   if not nextPlan and mode=="OPEN" then
-    local fallbackOffset=safeNumber(p.laneOffsetCurrent,
-      safeNumber(p.latOff,base))
     local fallbackFailure=nil
     nextPlan,fallbackFailure=RacingLine.plan(
       state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-      safeNumber(p.latOff,base),base,fallbackOffset,horizon,7.5,
+      safeNumber(p.latOff,base),mid,mid,horizon,7.5,
       nil,0,fixedTransitionDistance,p.lateralAccelLimit)
     if nextPlan then
-      fallbackKind="CURRENT_CORRIDOR"
+      fallbackKind="ROAD_CENTRE"
     else
-      nextPlan,fallbackFailure=RacingLine.plan(
-        state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-        safeNumber(p.latOff,base),base,0,horizon,7.5,
-        nil,0,fixedTransitionDistance,p.lateralAccelLimit)
-      if nextPlan then fallbackKind="ROAD_CENTRE" end
-    end
-    if not nextPlan then
       planFailure=fallbackFailure or originalFailure or "NO_SAFE_FALLBACK"
     end
   end
