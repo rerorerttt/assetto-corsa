@@ -870,20 +870,27 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     end
   end
   if not nextPlan and mode=="OPEN" then
+    -- Traffic occupancy must not invalidate the geometric driving path.
+    -- Following distance and collision avoidance are handled by
+    -- updateTrafficControl(); blocking the road-centre fallback here made
+    -- every car in a queue report NO_SAFE_PATH and command a full stop.
+    local centreTransition=math.max(22.0,
+      math.max(0,speed)*math.sqrt(6.0*math.abs(mid-safeNumber(p.latOff,mid))/
+        clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)))
     local centreFailure=nil
-    if not laneOccupied(carIndex,car,mid,nil) then
-      local centreTransition=math.max(22.0,
-        math.max(0,speed)*math.sqrt(6.0*math.abs(mid-safeNumber(p.latOff,mid))/
-          clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)))
-      nextPlan,centreFailure=RacingLine.plan(
-        state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-        safeNumber(p.latOff,mid),mid,mid,horizon,7.5,
-        nil,0,centreTransition,p.lateralAccelLimit)
-    else
-      centreFailure="ROAD_CENTRE_OCCUPIED"
-    end
+    nextPlan,centreFailure=RacingLine.plan(
+      state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+      safeNumber(p.latOff,mid),mid,mid,horizon,7.5,
+      nil,0,centreTransition,p.lateralAccelLimit)
     if nextPlan then
       fallbackKind="ROAD_CENTRE"
+    elseif previousPlan and previousAdvance<previousPlan.horizon-20.0 then
+      -- Keep the last validated OPEN plan through a transient optimizer
+      -- failure; do not convert a one-frame planning miss into a dead stop.
+      nextPlan=previousPlan
+      planFailure=nil
+      holdPreviousPlan=true
+      fallbackKind="LAST_VALID_OPEN_PLAN"
     else
       planFailure=centreFailure or originalFailure or "NO_SAFE_FALLBACK"
     end
