@@ -1287,9 +1287,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   end
   local preferred=preferredLaneByAcceleration(carIndex,car,p,laneCount)
   if preferred and preferred~=p.laneIndex and p.overtakeSide==0 and
-      not p.returningFromPass and not p.offTrackT or
-      (preferred and preferred~=p.laneIndex and p.overtakeSide==0 and
-       not p.returningFromPass and p.offTrackT<=0) then
+      not p.returningFromPass and safeNumber(p.offTrackT)<=0 then
     local preferredOffset=laneCenter(p.segIdx,preferred)
     if not laneOccupied(carIndex,car,preferredOffset,nil) then
       p.laneIndex=preferred
@@ -1791,6 +1789,9 @@ function Driver.update(carIndex, car, dt)
   else
     p.frameProgressDelta=0
     p.projectionLost = true
+    -- Drop the stale segment lock so the next frame can reacquire the nearest
+    -- route segment after an off-road excursion.
+    p.routeLocked=false
   end
   readWheelSlip(car,p)
 
