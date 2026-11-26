@@ -1332,7 +1332,9 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       local targetCar=ac.getCar(targetIndex)
       if targetState and targetCar and targetCar.isActive then
         if targetState.yieldRequestBy==nil then
-          local yieldOffset=chooseYieldOffset(targetIndex,targetCar,targetState,p.pendingPassOffset)
+          local pendingOffset=p.pendingPassOffset or findPassingOffset(carIndex,car,p,targetIndex,targetState.latOff,speed,p.pendingPassDistance)
+          p.pendingPassOffset=pendingOffset
+          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset) or nil
           if yieldOffset~=nil then
             targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
             targetState.yieldReady=false;targetState.yieldRequestTimer=0
@@ -1423,6 +1425,12 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       local leaderCar=ac.getCar(leaderIndex)
       if not leaderState or not leaderCar or not leaderCar.isActive or leaderState.overtakeSide~=0 or leaderState.returningFromPass then
         p.lastPassDeniedReason="leader_not_yield_capable"
+      elseif leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
+        p.pendingYieldTarget=leaderIndex;p.pendingYieldGap=gap
+        p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
+        p.trafficAction="WAIT_QUEUE";p.trafficReason="earlier_pass_has_slot"
+        p.trafficLeaderIndex=leaderIndex
+        return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
       else
         local passOffset=p.pendingYieldTarget==leaderIndex and p.pendingPassOffset or
           findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,estimatedPassDistance)
