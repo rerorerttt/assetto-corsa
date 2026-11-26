@@ -1367,26 +1367,46 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   if ownSeg then p.segIdx=ownSeg end
   if ownLateral~=nil then p.latOff=ownLateral end
 
-  local baseOffset=p.baseLaneOffset
-  if baseOffset==nil then
-    local laneCount
-    baseOffset,laneCount=laneSlotCenter(p.segIdx)
-    p.baseLaneOffset=baseOffset
-    H.log("LANE_ASSIGN id=%d slot=%d/%d center=%.2f",
-      carIndex,laneCount,laneCount,baseOffset)
+  -- A target car receives a lane assignment as part of the same pass
+  -- reservation. It moves immediately; the overtaker never waits for a
+  -- yield-ready signal.
+  if p.yieldRequestBy~=nil and p.yieldOffset~=nil then
+    local requester=state.p[p.yieldRequestBy]
+    if not requester or
+       (requester.overtakeSide==0 and not requester.returningFromPass) then
+      p.yieldRequestBy=nil
+      p.yieldOffset=nil
+      p.yieldPlanBlocked=false
+      p.laneOffset=nil
+    else
+      p.laneOffset=p.yieldOffset
+      p.trafficPriority=900000
+      p.trafficAction="LANE_ASSIGN"
+      p.trafficReason="paired_overtake_lane_assignment"
+      p.trafficTargetOffset=p.yieldOffset
+      local gap,leaderSpeed=carAheadInLane(
+        carIndex,car,p.yieldOffset,p.yieldRequestBy)
+      if gap~=nil then
+        p.trafficGap=gap
+        p.trafficLeaderSpeed=leaderSpeed or 0
+        return math.min(targetSpeed,
+          safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
+      end
+      return targetSpeed
+    end
   end
 
   if p.returningFromPass then
-    local returnTarget=p.returnTargetIndex
-    if laneOccupied(carIndex,car,baseOffset,returnTarget) then
-      local passOffset=safeNumber(p.returnFromOffset,p.passLat or baseOffset)
-      if not laneOccupied(carIndex,car,passOffset,returnTarget) then
-        -- A vehicle entered the base lane during our return transition.
-        -- Re-enter the previously reserved passing lane rather than merge
-        -- into it; retry the return after that lane becomes clear.
+    local returnOffset=p.passFromOffset or p.returnFromOffset or
+      safeNumber(p.laneOffsetCurrent,p.latOff or 0)
+    if laneOccupied(carIndex,car,returnOffset,nil) then
+      local passOffset=safeNumber(p.passLat,returnOffset)
+      if not laneOccupied(carIndex,car,passOffset,nil) then
+        -- Another vehicle entered the original racing line during the return.
+        -- Re-enter the reserved passing lane rather than merge into it.
         p.overtakeSide=1
+        p.passTargetIndex=p.returnTargetIndex
         p.passLat=passOffset
-        p.passTargetIndex=returnTarget
         p.passT=0
         p.passBlockedT=0
         p.passDeadline=PASS_TIMEOUT
@@ -1394,35 +1414,35 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
         p.laneOffset=passOffset
         p.trafficPriority=1000000
         p.trafficAction="PASSING"
-        p.trafficReason="return_lane_reoccupied"
+        p.trafficReason="return_line_reoccupied"
         p.trafficTargetOffset=passOffset
         return targetSpeed
       end
       p.trafficAction="WAIT_CLEAR"
-      p.trafficReason="both_lanes_occupied"
+      p.trafficReason="both_return_and_pass_lanes_occupied"
       p.trafficTargetOffset=passOffset
       return math.min(targetSpeed,safeFollowingSpeed(8.0,0,p.brakeAccelEstimate))
     end
     p.trafficPriority=900000
     p.trafficAction="RETURNING"
     p.trafficReason="pass_completed"
-    p.trafficTargetOffset=baseOffset
+    p.trafficTargetOffset=returnOffset
     return targetSpeed
   end
 
+  local normalOffset=safeNumber(p.laneOffsetCurrent,p.latOff or 0)
   local currentLaneOffset=p.overtakeSide~=0 and
-    safeNumber(p.passLat,baseOffset) or
-    safeNumber(p.laneOffsetCurrent,baseOffset)
-  local gap,leaderSpeed,leaderIndex,leaderLateral=carAheadInLane(
+    safeNumber(p.passLat,normalOffset) or normalOffset
+  local gap,leaderSpeed,leaderIndex,leaderLateral,leaderIsAI=carAheadInLane(
     carIndex,car,currentLaneOffset,p.overtakeSide~=0 and p.passTargetIndex or nil)
 
   if p.overtakeSide~=0 then
     p.passT=safeNumber(p.passT)+dt
     p.trafficPriority=1000000+math.max(0,100-safeNumber(p.passT))
     p.trafficAction="PASSING"
-    p.trafficReason="reserved_adjacent_lane"
+    p.trafficReason="paired_adjacent_lane"
     p.trafficLeaderIndex=safeNumber(p.passTargetIndex,-1)
-    p.trafficTargetOffset=safeNumber(p.passLat,baseOffset)
+    p.trafficTargetOffset=safeNumber(p.passLat,normalOffset)
 
     local passSafeSpeed=targetSpeed
     if gap~=nil then
@@ -1438,7 +1458,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       p.passBlockedT=0
     end
 
-    local returnOffset=p.baseLaneOffset or p.passFromOffset or baseOffset
+    local returnOffset=p.passFromOffset or normalOffset
     local passExpired=p.passT>=safeNumber(p.passDeadline,PASS_TIMEOUT)
     local passDeadlocked=p.passBlockedT>=2.5
     local target=p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
@@ -1468,24 +1488,22 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       passedClearance=true
     end
 
-    if passedClearance and
-       not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
+    -- The target remains in its assigned lane until the overtaker has
+    -- returned to its original racing line. This prevents the two cars from
+    -- converging back onto the same line side-by-side.
+    if passedClearance and not laneOccupied(carIndex,car,returnOffset,nil) then
       local targetIndex=p.passTargetIndex
-      local passOffset=p.passLat
       p.overtakeSide=0
       p.passTargetIndex=nil
-      p.returnFromOffset=passOffset
       p.returnTargetIndex=targetIndex
-      p.passFromOffset=nil
       p.passT=0
       p.passBlockedT=0
       p.passDeadline=nil
       p.returningFromPass=true
       p.laneOffset=returnOffset
-      p.baseLaneOffset=returnOffset
       p.overtakeRetryT=0.8
       p.trafficAction="RETURNING"
-      p.trafficReason="target_cleared"
+      p.trafficReason="target_clear_and_return_line_free"
       p.trafficTargetOffset=returnOffset
       H.log("CAR=%d OVERTAKE_END return=%.2f clearance=2_car_lengths",
         carIndex,returnOffset)
@@ -1493,20 +1511,16 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     end
 
     if (passExpired or passDeadlocked) and passedClearance and
-       not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
+       not laneOccupied(carIndex,car,returnOffset,nil) then
       local targetIndex=p.passTargetIndex
-      local passOffset=p.passLat
       p.overtakeSide=0
       p.passTargetIndex=nil
-      p.returnFromOffset=passOffset
       p.returnTargetIndex=targetIndex
-      p.passFromOffset=nil
       p.passT=0
       p.passBlockedT=0
       p.passDeadline=nil
       p.returningFromPass=true
       p.laneOffset=returnOffset
-      p.baseLaneOffset=returnOffset
       p.overtakeRetryT=1.5
       H.log("CAR=%d OVERTAKE_ABORT reason=%s return=%.2f",
         carIndex,passDeadlocked and "pass_lane_blocked" or "timeout",returnOffset)
@@ -1521,17 +1535,15 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficLeaderSpeed=leaderSpeed or 0
   if not gap or not leaderIndex then
     p.trafficAction="OPEN"
-    p.trafficReason="no_leader_in_lane"
+    p.trafficReason="no_leader_in_racing_line"
     p.trafficPriority=0
-    p.laneOffset=baseOffset
+    p.laneOffset=nil
     return targetSpeed
   end
 
   p.trafficAction="FOLLOW"
-  p.trafficReason="leader_in_lane"
+  p.trafficReason="leader_in_racing_line"
   local leaderPace=math.max(0,safeNumber(leaderSpeed))
-  -- Fast cars have no artificial cruise cap. Use a finite high estimate only
-  -- for overtaking-distance prediction when the open-road target is +infinity.
   local targetPotential=targetSpeed==math.huge and 90.0 or safeNumber(targetSpeed)
   local potentialSpeed=math.min(90.0,math.max(speed,targetPotential))
   local speedAdvantage=potentialSpeed-leaderPace
@@ -1541,9 +1553,6 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   local leaderLength=math.max(3.0,
     safeNumber(leaderCar and leaderCar.aabbSize and leaderCar.aabbSize.z,4.5))
   local requiredClosure=math.max(0,safeNumber(gap))+ownLength+leaderLength+5.0
-  -- Predict closure from measured current speed and acceleration, not the
-  -- eventual cruise target. Treating the target speed as instantaneous made
-  -- the old planner underestimate the distance needed to reach a slower car.
   local relativeSpeed=speed-leaderPace
   local passTime
   local estimatedPassDistance
@@ -1564,64 +1573,49 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     speed*math.sqrt(6.0*passLaneWidth/passLateralLimit))
   estimatedPassDistance=math.max(estimatedPassDistance,transitionOut+12.0)
   local passWindow=math.max(45.0,25.0+potentialSpeed*1.25)
-  local laneSettled=math.abs(safeNumber(p.laneOffsetCurrent,baseOffset)-baseOffset)<=0.55 and
-    math.abs(safeNumber(p.latOff,baseOffset)-baseOffset)<=0.90
-  local canActuallyPass=p.canOvertake==true and laneSettled and
+  local canActuallyPass=p.canOvertake==true and leaderIsAI==true and
     speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
     potentialSpeed>=leaderPace+2.0
   local urgent=canActuallyPass and gap<=clamp(12.0+potentialSpeed*0.8,20.0,60.0)
 
-  -- No leader-yield handshake: the overtaker reserves the adjacent lane and
-  -- starts moving immediately. The target stays in its own lane. Whole-path
-  -- geometry, lane occupancy and other active reservations are checked before
-  -- the state changes, so a denied pass remains ordinary safe following.
-  if p.canOvertake and not laneSettled then
-    p.trafficReason="settling_assigned_lane"
-    p.trafficPriority=0
-  elseif canActuallyPass and gap<=passWindow and p.overtakeRetryT<=0 then
+  -- Both cars are assigned adjacent slots in one reservation. The target's
+  -- lane plan is prevalidated before the fast car begins; neither car waits
+  -- for a readiness flag or timeout.
+  if canActuallyPass and gap<=passWindow and p.overtakeRetryT<=0 then
     p.trafficPriority=10000+clamp(passWindow-gap,0,passWindow)*10+
       clamp(speedAdvantage,0,50)*2+(urgent and 1000 or 0)
-    local passOffset=findPassingOffset(carIndex,car,p,leaderIndex,
-      leaderLateral,speed,estimatedPassDistance)
+    local passOffset,leaderLaneOffset=findPassingOffset(carIndex,car,p,
+      leaderIndex,leaderLateral,speed,estimatedPassDistance)
     if passOffset~=nil then
       p.emergencyPassRequest=urgent
       if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,
-          speed,estimatedPassDistance,passOffset) then
+          speed,estimatedPassDistance,passOffset,leaderLaneOffset) then
         p.trafficAction="PASSING"
-        p.trafficReason="adjacent_lane_reserved"
+        p.trafficReason="paired_lane_assignment_started"
         p.trafficLeaderIndex=leaderIndex
         p.trafficTargetOffset=safeNumber(p.passLat)
         p.trafficPriority=1000000
-        H.log("CAR=%d PASS_IMMEDIATE target=%d lane=%.2f gap=%.1f",
-          carIndex,leaderIndex,safeNumber(p.passLat),gap)
+        H.log("CAR=%d PASS_IMMEDIATE target=%d passLane=%.2f targetLane=%.2f gap=%.1f",
+          carIndex,leaderIndex,safeNumber(p.passLat),safeNumber(leaderLaneOffset),gap)
         return targetSpeed
       else
         p.overtakeRetryT=0.30
         p.trafficPriority=0
-        if not p.overtakeDeniedLogged then
-          H.log("CAR=%d OVERTAKE_DENIED reason=%s gap=%.1f",
-            carIndex,tostring(p.lastPassDeniedReason or "pass_reservation_failed"),gap)
-          p.overtakeDeniedLogged=true
-        end
       end
     else
       p.overtakeRetryT=0.30
       p.trafficPriority=0
-      if not p.overtakeDeniedLogged then
-        H.log("CAR=%d OVERTAKE_DENIED reason=%s gap=%.1f",
-          carIndex,tostring(p.lastPassDeniedReason or "no_adjacent_lane"),gap)
-        p.overtakeDeniedLogged=true
-      end
     end
   else
     p.trafficPriority=0
   end
 
   p.trafficAction="FOLLOW"
-  p.trafficReason=p.lastPassDeniedReason or "leader_in_lane"
+  p.trafficReason=p.lastPassDeniedReason or "leader_in_racing_line"
   return math.min(targetSpeed,
     safeFollowingCurrentLane(carIndex,car,p,gap,leaderPace))
 end
+
 
 local function readWheelSlip(car, p)
   -- Documented CSP StateCar.wheels[0..3] fields. Positive longitudinal
