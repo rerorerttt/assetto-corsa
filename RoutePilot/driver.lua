@@ -1259,6 +1259,9 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
   -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
   local corridorWidth=br-bl
+  -- Full vehicle width is required here; ownWidth was previously undefined,
+  -- which raised a Lua error on every pass-corridor evaluation.
+  local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local laneCount=math.max(1,math.floor((corridorWidth+1.0)/4.0))
   local slotWidth=corridorWidth/laneCount
   if laneCount<2 or slotWidth<ownWidth+0.55 then
