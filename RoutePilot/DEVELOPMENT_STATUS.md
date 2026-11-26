@@ -16,7 +16,7 @@ The current implementation replaces that chain with a direct adjacent-lane polic
 - Lane slots are derived from measured bounds: widths 3/7/11/15 m yield 1/2/3/4 slots. On a single-lane corridor there is no pass.
 - A fast car detecting a slower leader checks the adjacent lane and reserves it immediately. The target does not have to yield or change its own lane.
 - The full transition, target interaction, pass phase, and return are checked against the road bounds and all active cars. The target leader is included in predicted collision checks rather than ignored.
-- The exact fixed-offset racing-line plan is prevalidated before a pass starts. If the runtime pass plan still fails, the pass is cancelled and the car replans in its base lane instead of remaining stuck at zero speed.
+- The exact fixed-offset racing-line plan is prevalidated before a pass starts. If a later far-horizon replan fails, it retries a shorter reserved horizon and keeps the last validated near-field plan while it remains usable. It returns to the base lane only when that lane is clear; it never merges into an occupied source lane. If neither lane has a validated continuation, braking remains the final collision-avoidance response.
 - The overtaker stays in the passing lane until it has cleared the target by two vehicle lengths. It returns only after the base lane is clear.
 - If the adjacent lane is occupied or the predicted swept path is unsafe, the car follows the leader using the current-lane braking model. The controller does not force an unsafe pass.
 
