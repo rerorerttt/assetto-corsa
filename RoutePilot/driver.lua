@@ -766,13 +766,29 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   if p.overtakeSide~=0 then forcedMode="PASS"
   elseif p.returningFromPass then forcedMode="RETURN"
   elseif p.yieldRequestBy~=nil and p.yieldOffset~=nil then forcedMode="YIELD" end
-  if p.racingPlanTimer>0 and p.racingPlanMode==(forcedMode or "OPEN") then
-    return
-  end
-
+  local mode=forcedMode or "OPEN"
   local fixedOffset=nil
   local fixedTransitionDistance=22.0
-  local mode=forcedMode or "OPEN"
+  if mode=="OPEN" then
+    -- In close traffic, keep the current corridor until a pass is explicitly
+    -- granted. The optimizer may use the full road again once the conflict is
+    -- gone; it must not weave through another car while traffic arbitration
+    -- is still deciding who moves first.
+    local currentOffset=safeNumber(p.laneOffsetCurrent,p.baseLaneOffset or base)
+    local aheadGap=carAheadInLane(carIndex,car,currentOffset)
+    local lockDistance=math.max(35.0,speed*1.5+15.0)
+    local trafficLock=aheadGap~=nil and aheadGap>=-6.0 and aheadGap<lockDistance
+    if not trafficLock then
+      trafficLock=laneOccupied(carIndex,car,currentOffset,nil)
+    end
+    if trafficLock then
+      mode="TRAFFIC_HOLD"
+      fixedOffset=currentOffset
+    end
+  end
+  if p.racingPlanTimer>0 and p.racingPlanMode==mode then
+    return
+  end
   if mode=="PASS" then
     fixedOffset=safeNumber(p.passLat,p.laneOffset or base)
   elseif mode=="RETURN" then
