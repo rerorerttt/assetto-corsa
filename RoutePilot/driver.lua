@@ -1181,7 +1181,6 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
           source,offset,offset,horizon,7.5,nil,0,transitionDistance,p.lateralAccelLimit)
         if validated then
           p.lastPassDeniedReason=nil
-          p.overtakeDeniedLogged=false
           return offset
         end
         lastReason="pass_plan_"..tostring(planReason or "NO_PATH")
