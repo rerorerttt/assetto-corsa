@@ -551,6 +551,54 @@ local function teleportHome(carIndex,car)
   end
   return false
 end
+local function teleportForward(carIndex,car,reason)
+  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
+    return false
+  end
+  local metrics=buildSpawnRouteMetrics()
+  if not metrics then return false end
+  local startDistance,routeError=findRouteDistanceAtPosition(
+    car.position,metrics,car.look)
+  if not startDistance or routeError>100.0 then
+    writeLog("RESCUE_FORWARD_NO_ROUTE id=%d reason=%s error=%.2f",
+      carIndex,tostring(reason),routeError or 999.0)
+    return false
+  end
+
+  -- Candidate points are strictly ahead along the recorded route. Never scan
+  -- backward from the incident: this prevents returning the car to the same
+  -- queue, wall or dead-end which caused the rescue.
+  local offsets={30.0,42.0,56.0,72.0,92.0,120.0,150.0}
+  local maxAhead=metrics.loop and math.max(0,metrics.length-12.0) or
+    math.max(0,metrics.length-startDistance-8.0)
+  for _,ahead in ipairs(offsets) do
+    if ahead<=maxAhead then
+      local routePos,direction,segment,parameter=
+        sampleSpawnRoute(metrics,startDistance+ahead)
+      if routePos and direction then
+        local pos=vec3(routePos.x-direction.x*3.0,
+          routePos.y+0.15,routePos.z-direction.z*3.0)
+        if spotIsClear(pos,carIndex) then
+          local ok,result=pcall(physics.setAICarPosition,carIndex,
+            pos,vec3(-direction.x,0,-direction.z))
+          if ok and result~=false then
+            state.p[carIndex]=nil
+            writeLog("RESCUE_FORWARD id=%d reason=%s ahead=%.1f route=%.1f segment=%d",
+              carIndex,tostring(reason),ahead,startDistance+ahead,segment or -1)
+            flushLog()
+            return true
+          end
+          writeLog("RESCUE_FORWARD_FAILED id=%d reason=%s ahead=%.1f error=%s",
+            carIndex,tostring(reason),ahead,tostring(result))
+        end
+      end
+    end
+  end
+  writeLog("RESCUE_FORWARD_NO_SAFE_POINT id=%d reason=%s route=%.1f",
+    carIndex,tostring(reason),startDistance)
+  flushLog()
+  return false
+end
 local function addPoint(pos)
   if #state.nodes>=CFG.MAX_ROUTE_POINTS then
     state.recLine=false; state.status="Достигнут лимит точек"; return
@@ -632,7 +680,7 @@ local function ensureDriver()
     segmentCount=segmentCount, segEnd=segEnd, walkLine=walkLine,
     findNearestSeg=findNearestSeg, lateralOf=lateralOf, boundsAt=boundsAt,
     getVertexCurvature=getVertexCurvature, carAheadFull=carAheadFull,
-    teleportHome=teleportHome, log=writeLog,
+    teleportHome=teleportHome, teleportForward=teleportForward, log=writeLog,
   })
   driverReady=true
   return true
