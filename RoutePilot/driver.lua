@@ -1686,48 +1686,12 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     leaderState and leaderState.accelEstimate,4.0),0.5,18.0)
   local relativeSpeed=speed-(leaderSpeed or 0)
   local relativeAccel=ownAccel-leaderAccel
-  -- Initiate before FOLLOW suppresses the speed difference. The free route
-  -- target and learned acceleration potential describe the car's own pace.
-  local potentialAdvantage=math.max(
-    ownFreeSpeed-leaderFreeSpeed,
-    relativeAccel*2.0+relativeSpeed)
-  local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
-  local leaderCar=ac.getCar(leaderIndex)
-  local leaderLength=math.max(3.0,safeNumber(
-    leaderCar and leaderCar.aabbSize and leaderCar.aabbSize.z,4.5))
-  local requiredClosure=math.max(0,safeNumber(gap))+ownLength+leaderLength+5.0
-  local passTime=math.huge
-  if relativeSpeed>0.5 then
-    passTime=requiredClosure/relativeSpeed
-  elseif relativeAccel>0.20 then
-    local discriminant=relativeSpeed*relativeSpeed+
-      2.0*relativeAccel*requiredClosure
-    if discriminant>=0 then
-      passTime=(-relativeSpeed+math.sqrt(discriminant))/relativeAccel
-    end
-  end
-  local estimatedPassDistance=passTime<math.huge and
-    (speed*passTime+0.5*ownAccel*passTime*passTime) or math.huge
-  local passWindow=clamp(28.0+speed*1.6,45.0,95.0)
-  local canAttack=potentialAdvantage>=1.0 and
-    estimatedPassDistance<=280.0 and gap<=passWindow and
-    leaderCar~=nil and leaderCar.isActive
-  if canAttack and p.overtakeRetryT<=0 and p.overtakeSide==0 then
-    p.trafficPriority=10000+clamp(passWindow-gap,0,passWindow)*10+
-      clamp(potentialAdvantage,0,50)*5
-    p.trafficReason="coordinator_waiting_for_batch_grant"
-    p.overtakeRetryT=0.10
-    if p.passScanTimer<=0 then
-      H.log("CAR=%d OVERTAKE_SCAN gap=%.1f free=%.1f leader_free=%.1f advantage=%.2f accel=%.2f leader_accel=%.2f pass_dist=%.1f result=WAIT_COORDINATOR",
-        carIndex,safeNumber(gap),ownFreeSpeed,leaderFreeSpeed,potentialAdvantage,
-        ownAccel,leaderAccel,safeNumber(estimatedPassDistance,-1))
-      p.passScanTimer=0.50
-    end
-  end
+  -- Overtake opportunities are evaluated only by the 10-second global
+  -- coordinator. Per-car control performs no independent pass scan or ETA
+  -- calculation; it follows the current corridor until a batch order arrives.
   p.followTimer=0;p.blockedT=0;p.trafficPriority=0
   local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
-  p.trafficReason=canAttack and "pass_corridor_unavailable" or
-    "leader_not_slower_on_free_pace"
+  p.trafficReason="coordinator_order_pending"
   return math.min(targetSpeed,safe)
 end
 
@@ -1925,14 +1889,12 @@ end
 -- any controller writes controls. This makes traffic decisions independent of
 -- the order in which cars are subsequently processed.
 local function coordinateTrafficFrame(sim,dt,frame)
-  -- Refresh free-running targets for every AI before allocating any corridor.
+  -- Consume the latest per-car pace estimates; this function is called only
+  -- by the 10-second batch planner, never from the per-car physics loop.
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i);local p=state.p[i]
     if car and car.isActive and car.isAIControlled and p and
        p.framePreparedFrame==frame and p.frameProjection and p.frameProjection.valid then
-      -- Reuse the free-running target computed by Driver.update() on the
-      -- preceding simulation frame. Rebuilding the racing optimiser here
-      -- duplicated the expensive plan update for every car every frame.
       p.freeTargetSpeed=safeNumber(p.freeTargetSpeed,p.targetSpeed or 0)
     end
   end
@@ -2065,9 +2027,15 @@ end
 
 function Driver.prepareFrame(sim,dt)
   if not sim then return end
-  refreshRouteMetrics()
   state.trafficFrame=(state.trafficFrame or 0)+1
   local frame=state.trafficFrame
+  -- Global traffic planning is deliberately decoupled from the physics tick.
+  -- Rebuild the all-car snapshot and issue coordinated orders once per 10 s;
+  -- individual controllers continue using their own live route projection.
+  state.trafficPlanTimer=math.max(0,safeNumber(state.trafficPlanTimer)-math.max(0,safeNumber(dt,0.05)))
+  if state.trafficPlanTimer>0 then return end
+  state.trafficPlanTimer=10.0
+  refreshRouteMetrics()
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     if car and car.isActive and car.isAIControlled then
