@@ -696,24 +696,37 @@ function script.update(dt)
           releaseCar(i)
         end
       end
-      -- Resolve simultaneous pass requests in a stable priority order.
-      -- Active manoeuvres keep priority; new requests are ranked by closing
-      -- urgency from the previous simulation step. Route progress breaks ties
-      -- before the car index, so array iteration order is not the policy.
+      -- Build a single frame-wide route/traffic snapshot before issuing any
+      -- controls. The coordinator refreshes every AI projection first; order
+      -- below is only arbitration, not a source of stale per-car geometry.
+      if Driver.prepareFrame then Driver.prepareFrame(sim,dt) end
+      -- Active reservations are immutable and run first. New pass requests
+      -- are ranked by measured acceleration/performance, then current urgency
+      -- and waiting age. FIFO request timestamps must not let a weak car hold
+      -- the passing slot ahead of a materially stronger car.
       table.sort(driveOrder,function(a,b)
         local pa,pb=state.p[a],state.p[b]
         local priorityA=safeNumber(pa and pa.trafficPriority)
         local priorityB=safeNumber(pb and pb.trafficPriority)
-        -- Active pass/return reservations always run first. Among waiting
-        -- requests, preserve FIFO order rather than re-ranking by closing speed.
-        if priorityA>=900000 or priorityB>=900000 then
-          if priorityA~=priorityB then return priorityA>priorityB end
+        local activeA=priorityA>=900000
+        local activeB=priorityB>=900000
+        if activeA~=activeB then return activeA end
+        if activeA and priorityA~=priorityB then return priorityA>priorityB end
+        local requestA=pa and pa.pendingYieldTarget~=nil
+        local requestB=pb and pb.pendingYieldTarget~=nil
+        if requestA~=requestB then return requestA end
+        if requestA then
+          local carA,carB=ac.getCar(a),ac.getCar(b)
+          local performanceA=clamp(safeNumber(pa.accelEstimate,4.0),0.5,18.0)*100.0+
+            math.max(0,safeNumber(carA and carA.speedMs))*2.0+
+            math.min(30.0,safeNumber(pa.pendingYieldTimer))*0.5
+          local performanceB=clamp(safeNumber(pb.accelEstimate,4.0),0.5,18.0)*100.0+
+            math.max(0,safeNumber(carB and carB.speedMs))*2.0+
+            math.min(30.0,safeNumber(pb.pendingYieldTimer))*0.5
+          if math.abs(performanceA-performanceB)>0.01 then
+            return performanceA>performanceB
+          end
         end
-        local queueA=pa and pa.pendingYieldOrder
-        local queueB=pb and pb.pendingYieldOrder
-        if queueA and queueB and queueA~=queueB then return queueA<queueB end
-        if queueA and not queueB then return true end
-        if queueB and not queueA then return false end
         if priorityA~=priorityB then return priorityA>priorityB end
         local progressA=pa and pa.routeProgress
         local progressB=pb and pb.routeProgress
