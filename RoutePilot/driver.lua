@@ -980,11 +980,21 @@ end
 
 local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     speed,passDistance)
-  if p.routeProgress==nil or leaderLateral==nil then return nil end
+  if p.routeProgress==nil then
+    p.lastPassDeniedReason="no_route_projection"
+    return nil
+  end
+  if leaderLateral==nil then
+    p.lastPassDeniedReason="leader_lateral_unknown"
+    return nil
+  end
   local fx,fz=normalize2(car.look.x,car.look.z)
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
     math.max(18.0,math.max(0,speed)*0.8+12.0),car,fx,fz)
-  if not safeMin or not safeMax or safeMax-safeMin<1.15 then return nil end
+  if not safeMin or not safeMax or safeMax-safeMin<1.15 then
+    p.lastPassDeniedReason="insufficient_safe_road_width"
+    return nil
+  end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
   local source=safeNumber(p.latOff,
@@ -1000,7 +1010,10 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   local corridorWidth=br-bl
   local laneCount=math.max(1,math.floor((corridorWidth+1.0)/4.0))
   local slotWidth=corridorWidth/laneCount
-  if laneCount<2 or slotWidth<ownWidth+0.55 then return nil end
+  if laneCount<2 or slotWidth<ownWidth+0.55 then
+    p.lastPassDeniedReason="no_adjacent_lane"
+    return nil
+  end
   local sourceSlot=1
   for i=2,laneCount do
     local a=math.abs((bl+(i-0.5)*slotWidth)-source)
