@@ -116,7 +116,7 @@ local function newPersonality(carIndex)
   -- determine speed. Curvature and measured braking capability remain limits.
   local p = {
     segIdx = 1, cruiseSpeed = math.huge, brakeAccelEstimate = CFG.BRAKE_ACCEL,
-    accelEstimate = 4.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
+    accelEstimate = 0.5, accelEstimateSamples = 0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
     previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     vehicleDynamicsState = VehicleDynamics and VehicleDynamics.newState() or nil,
@@ -201,11 +201,17 @@ local function readVehicleDynamics(car, p, dt)
         p.brakeAccelEstimate = lerp(
           safeNumber(p.brakeAccelEstimate, CFG.BRAKE_ACCEL), estimate, 0.12)
       end
-    elseif p.gas > 0.2 and speed > p.previousSpeed then
+    elseif p.gas > 0.85 and p.brake < 0.05 and speed > 5.0 and
+        safeNumber(p.wheelSlip)<0.18 and safeNumber(p.lateralAccel)<4.0 and
+        speed > p.previousSpeed then
+      -- Learn performance only from clean, near-full-throttle acceleration.
+      -- A car crawling behind traffic must not be classified as weak merely
+      -- because its controller has been holding it back.
       local measured = (speed - p.previousSpeed) / dt
       if measured >= 0.3 and measured <= 18.0 then
-        local estimate = clamp(measured, 0.5, 18.0)
-        p.accelEstimate = lerp(safeNumber(p.accelEstimate,4.0),estimate,0.08)
+        p.accelEstimate=math.max(
+          safeNumber(p.accelEstimate,0.5)*0.999,clamp(measured,0.5,18.0))
+        p.accelEstimateSamples=(p.accelEstimateSamples or 0)+1
       end
     end
   end
@@ -1049,6 +1055,29 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   return true
 end
 
+local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,requesterIndex,passDistance)
+  if not leaderCar or not leaderState or leaderState.routeProgress==nil then return nil end
+  local lateral=safeNumber(leaderState.latOff,leaderState.laneOffsetCurrent or 0)
+  local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
+  -- Validate the yielding edge over the same distance the pass is expected
+  -- to occupy the road, not just the first 20 metres.
+  local ahead=clamp(math.max(22.0,safeNumber(leaderCar.speedMs)*0.8+12.0,
+    safeNumber(passDistance,22.0)),22.0,260.0)
+  local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,
+    leaderState.routeProgress,ahead,leaderCar,fx,fz)
+  if not safeMin or not safeMax or safeMax-safeMin<1.0 then return nil end
+
+  -- Yield to the road edge opposite the attacker's reserved edge.
+  local desired=passOffset>lateral and safeMin or safeMax
+  local requester=ac.getCar(requesterIndex)
+  local ownHalf=math.max(0.75,safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.x,2.0)*0.5)
+  local passHalf=math.max(0.75,safeNumber(requester and requester.aabbSize and requester.aabbSize.x,2.0)*0.5)
+  if math.abs(desired-passOffset)<ownHalf+passHalf+0.45 then return nil end
+  if math.abs(desired-lateral)<0.30 then return nil end
+  if laneOccupied(leaderIndex,leaderCar,desired,requesterIndex) then return nil end
+  return desired
+end
+
 local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     speed,passDistance)
   if p.routeProgress==nil then
@@ -1066,76 +1095,67 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     p.lastPassDeniedReason="insufficient_safe_road_width"
     return nil
   end
-  local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
   local source=safeNumber(p.latOff,
-    p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
-    defaultCenter or ((bl+br)*0.5))
+    p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or ((bl+br)*0.5))
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
   local separation=(ownWidth+targetWidth)*0.5+0.55
+  local edgeInset=0.06
   local candidates={}
-  -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
-  -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
-  local corridorWidth=br-bl
-  local laneCount=math.max(1,math.floor((corridorWidth+1.0)/4.0))
-  local slotWidth=corridorWidth/laneCount
-  if laneCount<2 or slotWidth<ownWidth+0.55 then
-    p.lastPassDeniedReason="no_adjacent_lane"
-    return nil
-  end
-  local sourceSlot=1
-  for i=2,laneCount do
-    local a=math.abs((bl+(i-0.5)*slotWidth)-source)
-    local b=math.abs((bl+(sourceSlot-0.5)*slotWidth)-source)
-    if a<b then sourceSlot=i end
-  end
-  for i=1,laneCount do
-    local offset=bl+(i-0.5)*slotWidth
-    if i~=sourceSlot and math.abs(offset-leaderLateral)>=separation then
-      candidates[#candidates+1]=offset
+  local function addCandidate(offset)
+    if offset<=safeMin or offset>=safeMax or math.abs(offset-source)<0.25 then return end
+    for _,existing in ipairs(candidates) do
+      if math.abs(existing-offset)<0.10 then return end
     end
+    candidates[#candidates+1]=offset
   end
-  table.sort(candidates,function(a,b)return math.abs(a-source)<math.abs(b-source) end)
+
+  -- Include the two true usable road edges. Slot centres alone are not enough:
+  -- on a 7 m corridor their 3.5 m spacing can still leave both cars overlapping.
+  addCandidate(safeMin+edgeInset)
+  addCandidate(safeMax-edgeInset)
+
+  -- Retain discrete intermediate slots on wider roads, clamped to the actual
+  -- full-body safe corridor rather than the nominal painted-lane centre.
+  local corridorWidth=br-bl
+  local laneCount=clamp(math.floor((corridorWidth+1.0)/4.0),1,4)
+  for slot=1,laneCount do
+    local center=bl+(slot-0.5)*(corridorWidth/laneCount)
+    addCandidate(clamp(center,safeMin+edgeInset,safeMax-edgeInset))
+  end
+  table.sort(candidates,function(a,b)
+    return math.abs(a-source)<math.abs(b-source)
+  end)
+
   local lastReason="no_candidate"
   p.lastPassReservationOwner=nil
   for _,offset in ipairs(candidates) do
-    local reserved,reservationOwner=passingReservationBlocked(carIndex,p,offset,speed)
-    if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then
-      local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
-        source,offset,passDistance or 60.0,speed)
-      if clear then return offset end
-      lastReason=reason or lastReason
+    -- The target is expected to yield to the opposite edge. Check that the
+    -- two final vehicle footprints can actually fit side by side before
+    -- reserving the attacker's corridor.
+    local yieldOffset=chooseYieldOffset(leaderIndex,target,
+      state.p[leaderIndex],offset,carIndex,passDistance)
+    if yieldOffset==nil or math.abs(offset-yieldOffset)<separation then
+      lastReason="leader_has_no_safe_yield_space"
     else
-      if reserved then p.lastPassReservationOwner=reservationOwner end
-      lastReason=reserved and "reserved_corridor" or "occupied_corridor"
+      local reserved,reservationOwner=passingReservationBlocked(carIndex,p,offset,speed)
+      if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then
+        local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
+          source,offset,passDistance or 60.0,speed)
+        if clear then return offset end
+        lastReason=reason or lastReason
+      else
+        if reserved then p.lastPassReservationOwner=reservationOwner end
+        lastReason=reserved and "reserved_corridor" or "occupied_corridor"
+      end
     end
   end
   p.lastPassDeniedReason=lastReason
   return nil
 end
 
-local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,requesterIndex)
-  if not leaderCar or not leaderState or leaderState.routeProgress==nil then return nil end
-  local lateral=safeNumber(leaderState.latOff,leaderState.laneOffsetCurrent or 0)
-  local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
-  local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,
-    leaderState.routeProgress,math.max(22.0,safeNumber(leaderCar.speedMs)*0.8+12.0),
-    leaderCar,fx,fz)
-  if not safeMin or not safeMax or safeMax-safeMin<1.0 then return nil end
-
-  -- The yielding car must move to the road edge opposite the attacker's
-  -- reserved passing corridor, not merely to the other edge of its old slot.
-  local desired=passOffset>lateral and safeMin or safeMax
-  local requester=ac.getCar(requesterIndex)
-  local ownHalf=math.max(0.75,safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.x,2.0)*0.5)
-  local passHalf=math.max(0.75,safeNumber(requester and requester.aabbSize and requester.aabbSize.x,2.0)*0.5)
-  if math.abs(desired-passOffset)<ownHalf+passHalf+0.45 then return nil end
-  if math.abs(desired-lateral)<0.30 then return nil end
-  if laneOccupied(leaderIndex,leaderCar,desired,requesterIndex) then return nil end
-  return desired
-end
 local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
   -- Follow only the leader in the car's current corridor. A vehicle in a
   -- separate usable lane must never reduce this car's target speed.
@@ -1408,7 +1428,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
             if pendingOffset==nil then p.overtakeRetryT=0.25 end
           end
           p.pendingPassOffset=pendingOffset
-          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset,carIndex) or nil
+          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset,carIndex,p.pendingPassDistance) or nil
           if pendingOffset~=nil and yieldOffset==nil then p.overtakeRetryT=0.25 end
           if yieldOffset~=nil then
             targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
@@ -1458,7 +1478,9 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   local powerAdvantage=ownPower-leaderPower
   local acceleration=math.max(0.35,powerAdvantage)
   local speedAdvantage=speed-leaderPace
-  local slower=powerAdvantage>=0.35
+  local stronger=powerAdvantage>=0.25
+  local faster=speedAdvantage>=1.5
+  local slower=stronger or faster
   if slower then
     local targetCar=ac.getCar(leaderIndex)
     local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
@@ -1482,7 +1504,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         0.5*acceleration*passTime*passTime
     end
     local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
-    local canActuallyPass=powerAdvantage>=0.35 and estimatedPassDistance<=260.0 and
+    local canActuallyPass=(stronger or faster) and estimatedPassDistance<=260.0 and
       speed>=(leaderSpeed or 0)-8.0
     local urgent=canActuallyPass and gap<=urgentGap
     local passWindow=math.max(70.0,32.0+speed*2.0)
@@ -1523,7 +1545,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         if passOffset~=nil then
           if leaderState.yieldRequestBy==nil or leaderState.yieldRequestBy==carIndex then
             if leaderState.yieldRequestBy==nil then
-              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,carIndex)
+              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,carIndex,estimatedPassDistance)
               if yieldOffset~=nil then
                 leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
                 leaderState.yieldReady=true;leaderState.yieldRequestTimer=0
@@ -1639,7 +1661,6 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
   gas=gas*p.tractionScale*cornerScale
 
-  if speed<5 then gas=math.min(gas,0.6) end
   if error>=0 then brake=0 end
   p.gas=clamp(gas,0,CFG.MAX_GAS)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)
