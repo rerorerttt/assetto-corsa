@@ -445,8 +445,16 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local velocityAlpha=clamp(dt/(0.12+math.max(0,dt)),0,1)
   p.lateralVelocityFiltered=lerp(
     safeNumber(p.lateralVelocityFiltered),lateralVelocity,velocityAlpha)
+  -- Lateral-velocity damping is boundary protection, not a permanent
+  -- straight-line steering input. Fade it in only as the predicted vehicle
+  -- footprint approaches either safe corridor edge.
+  local predictedClearance=math.min(
+    safePredicted-safeMin,safeMax-safePredicted)
+  local boundaryRisk=clamp((1.5-predictedClearance)/1.5,0,1)
+  local lateralDamping=p.lateralVelocityFiltered*0.035*boundaryRisk
   local boundarySteer=clamp(
-    boundaryError*0.075-p.lateralVelocityFiltered*0.035,-0.22,0.22)
+    boundaryError*0.075-lateralDamping,-0.22,0.22)
+  p.boundaryRisk=boundaryRisk
   p.boundarySteer=boundarySteer
   p.boundaryCurvature=boundaryCurvature
   p.lookahead=ahead
@@ -1421,7 +1429,11 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
   if math.abs(safeNumber(p.boundarySteer))>0.01 then flag("BOUNDARY_STEER_ACTIVE") end
 
   local yawTarget=safeNumber(p.steerCurvature)*math.max(0,safeNumber(car.speedMs))
-  local yawActual=safeNumber(p.measuredYawRate,safeNumber(p.yawRate))
+  -- AC's localAngularVelocity.y uses the opposite sign to the X/Z
+  -- signed-angle convention used by route curvature and pure pursuit.
+  -- Keep the raw physics value for telemetry; align only this comparison.
+  local yawActual=p.measuredYawRate~=nil and
+    -safeNumber(p.measuredYawRate) or safeNumber(p.yawRate)
   p.yawRateTarget=yawTarget
   p.yawRateError=yawTarget-yawActual
   if safeNumber(car.speedMs)>15 and math.abs(p.yawRateError)>0.35 then flag("YAW_RATE_MISMATCH") end
