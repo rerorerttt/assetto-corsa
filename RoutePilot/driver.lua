@@ -759,6 +759,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   if not state.routeGeometry or p.routeProgress==nil then
     p.racingPlan=nil
     p.racingPlanBlocked=false
+    p.racingPlanTrafficBlocked=false
     p.racingPlanBlockedDistance=nil
     return
   end
@@ -774,10 +775,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local forcedMode=nil
   if p.overtakeSide~=0 then forcedMode="PASS"
   elseif p.returningFromPass then forcedMode="RETURN" end
-  if p.racingPlan and p.racingPlanTimer>0 then
-    if forcedMode==nil and
-       (p.racingPlanMode=="OPEN" or p.racingPlanMode=="TRAFFIC") then return end
-    if forcedMode~=nil and p.racingPlanMode==forcedMode then return end
+  if p.racingPlanTimer>0 and p.racingPlanMode==(forcedMode or "OPEN") then
+    return
   end
 
   local fixedOffset=nil
@@ -828,8 +827,14 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedTransitionDistance)
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
+  local wasTrafficBlocked=p.racingPlanTrafficBlocked==true
   p.racingPlanBlocked=planFailure=="NO_FIT"
   p.racingPlanTrafficBlocked=planFailure=="NO_PATH"
+  if p.racingPlanTrafficBlocked and not wasTrafficBlocked then
+    H.log("RACE_LINE_TRAFFIC_BLOCKED id=%d",carIndex)
+  elseif not p.racingPlanTrafficBlocked and wasTrafficBlocked then
+    H.log("RACE_LINE_TRAFFIC_CLEAR id=%d",carIndex)
+  end
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
   if p.racingPlanBlocked then
