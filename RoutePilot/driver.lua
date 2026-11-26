@@ -1415,6 +1415,7 @@ end
 -- High-rate dynamics trace. This is observation-only: it never changes controls.
 -- Stable running is sampled at 10 Hz; suspected instability is sampled at 20 Hz.
 local function logDynamicsTrace(carIndex,car,p,dt,controlWriteOk)
+  if not state.steeringDiagnostics then return end
   local speed=math.max(0,safeNumber(car.speedMs))
   if speed<15.0 then return end
   local velocity=car.velocity
@@ -1455,6 +1456,7 @@ local function logDynamicsTrace(carIndex,car,p,dt,controlWriteOk)
 end
 
 local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
+  if not state.steeringDiagnostics then return end
   dt=math.max(0,safeNumber(dt))
   p.steerDiagTimer=(p.steerDiagTimer or 0)+dt
   p.steerEventCooldown=math.max(0,(p.steerEventCooldown or 0)-dt)
