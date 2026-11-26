@@ -792,9 +792,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedTransitionDistance=math.max(22.0,
       math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
   end
-  -- In clear running the optimizer may use the complete road width.
-  -- TRAFFIC_HOLD, YIELD, PASS and RETURN constrain the path only while a
-  -- nearby vehicle or an explicitly reserved manoeuvre requires it.
+  -- In OPEN running the optimizer uses the complete road width.
+  -- Only explicit PASS/RETURN/YIELD reservations constrain the path.
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
@@ -808,9 +807,13 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local previousAdvance=previousPlan and p.racingPlanStartProgress and
     math.max(0,routeGap(p.racingPlanStartProgress,p.routeProgress)) or 0
   local nextPlan
+  -- In OPEN mode the preferred offset is the physical road midpoint, not
+  -- the legacy left-lane slot. Discrete lane slots are traffic reservations
+  -- for passing/yielding only; they must not bias ordinary racing-line speed.
+  local preferredOffset=mode=="OPEN" and mid or base
   nextPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-    safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
+    safeNumber(p.latOff,base),preferredOffset,fixedOffset,horizon,7.5,
     previousPlan,previousAdvance,fixedTransitionDistance,p.lateralAccelLimit)
 
   -- A failed dynamic-programming search is not proof that the road is
