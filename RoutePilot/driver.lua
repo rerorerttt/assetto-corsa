@@ -1700,8 +1700,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       local leaderState=state.p[leaderIndex]
       local leaderCar=ac.getCar(leaderIndex)
       if not leaderState or not leaderCar or not leaderCar.isActive or
-         leaderState.overtakeSide~=0 or leaderState.returningFromPass or
-         leaderState.pendingYieldTarget~=nil then
+         not leaderCar.isAIControlled or leaderState.overtakeSide~=0 or
+         leaderState.returningFromPass or leaderState.pendingYieldTarget~=nil then
         p.lastPassDeniedReason="leader_not_yield_capable"
       elseif leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
         p.pendingYieldTarget=leaderIndex;p.pendingYieldGap=gap
