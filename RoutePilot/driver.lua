@@ -251,7 +251,9 @@ local function planTargetSpeed(p,speed)
   local distance=0
   while distance<=horizon do
     local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,p.routeProgress) or 0
-    local planned=p.racingPlan and RacingLine.sample(p.racingPlan,distance+clamp(planAdvance,0,30.0)) or nil
+    local planDistance=distance+math.max(0,planAdvance)
+    local planned=p.racingPlan and planDistance<=p.racingPlan.horizon and
+      RacingLine.sample(p.racingPlan,planDistance) or nil
     local sample=planned or Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
     local curvature=math.abs(safeNumber(planned and planned.k or sample.k))
@@ -387,10 +389,11 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   end
   local laneTarget=p.laneOffset or leftCenter
   local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
-  local currentRace=p.racingPlan and
-    RacingLine.sample(p.racingPlan,clamp(planAdvance,0,30.0)) or nil
-  local raceTarget=p.racingPlan and
-    RacingLine.sample(p.racingPlan,ahead+clamp(planAdvance,0,30.0)) or nil
+  local currentRace=p.racingPlan and planAdvance<=p.racingPlan.horizon and
+    RacingLine.sample(p.racingPlan,math.max(0,planAdvance)) or nil
+  local targetPlanDistance=ahead+math.max(0,planAdvance)
+  local raceTarget=p.racingPlan and targetPlanDistance<=p.racingPlan.horizon and
+    RacingLine.sample(p.racingPlan,targetPlanDistance) or nil
   if raceTarget then
     p.raceOffsetRaw=raceTarget.offset
     p.raceOffsetCurrent=currentRace and currentRace.offset or raceTarget.offset
@@ -854,7 +857,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
       safeNumber(p.racingPlan and p.racingPlan.curvature[2]),horizon)
   end
   p.racingPlanMode=mode
-  p.racingPlanTimer=0.65
+  -- Keep the plan's origin close enough to the car that the preview point
+  -- remains inside the sampled horizon even at extreme speed.
+  p.racingPlanTimer=math.min(0.65,20.0/math.max(30.0,speed))
   if p.racingPlan then
     p.racingPlanCurvature=safeNumber(p.racingPlan.curvature[2])
   end
