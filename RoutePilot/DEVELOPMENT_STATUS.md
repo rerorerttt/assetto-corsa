@@ -293,3 +293,20 @@ Implemented on `routepilot/yield-queue-time-line-2026-11-26`, based on `routepil
 - Following speed includes a 0.45 s reaction-time term in addition to the configured standstill gap and measured braking estimate.
 
 Static validation performed after fetching the committed files back from GitHub: Lua block-token and delimiter balance checks passed for `driver.lua`, `racing_line.lua` and `RoutePilot.lua`. No Lua/LuaJIT compiler or Assetto Corsa/CSP runtime is available in this environment, so this is not a compile or in-game validation. The change does not establish an absolute collision-free guarantee: same-route queueing, opposing-direction traffic, intersections, unusual vehicle dimensions and high-density multi-car cases still require in-game trace testing. In particular, verify that each `YIELD_REQUEST` is followed by `YIELDING`, `WAIT_YIELD`/ `WAIT_QUEUE`, then `OVERTAKE_BEGIN` only after confirmation, and that every pass ends in `OVERTAKE_END` or a safe `OVERTAKE_ABORT`. Benchmark FPS with 1, 5, 10 and 20+ cars because full-body trajectory checks increase planner work.
+
+
+## 2026-11-26 false NO_PATH stop correction
+
+Reviewed the latest `routepilot_trace.txt` against `GAME_DESIGN_DOCUMENT.md` §§3, 5.1–5.3, 6.2 and 7.3. The trace showed that local racing-line search failures were being promoted directly to a full stop, even though `NO_PATH` only proves that the current sampled candidate graph did not produce a valid plan. This violated the GDD requirement to avoid planner-induced stops and to continue on a verified safe path where possible.
+
+Implemented on `routepilot/yield-queue-time-line-2026-11-26`:
+
+- In OPEN mode, a failed dynamic racing-line search now retries a deterministic path at the car's current lateral corridor. If that path does not pass, it retries the route-centre path.
+- Both fallback paths are built by the same `RacingLine.plan()` routine and therefore retain the existing oriented full-body swept-path checks against recorded road bounds. This is not an unchecked straight-line bypass.
+- PASS, RETURN, YIELD and TRAFFIC_HOLD never switch to another corridor as a fallback; their reserved/current corridor remains authoritative. If that corridor cannot be validated, the controller retains the safety stop rather than crossing another vehicle's reservation.
+- A full stop is now requested when the optimizer and the permitted geometry-validated fallbacks all fail, rather than on the first DP `NO_PATH`.
+- Added `RACE_LINE_FALLBACK` diagnostics with fallback type and original planner failure. Unrecoverable cases are logged as `RACE_LINE_BLOCKED reason=HARD_STOP_NO_SAFE_PATH`.
+
+Commit: `ae7420eabdca8643fbc3c067414aa4afdef33741`.
+
+Validation is source-level only. The updated file was fetched back from GitHub and the replacement block was inspected. No Lua compiler or Assetto Corsa/CSP runtime is available here, so no claim is made that the fix compiles or that cars have been observed driving correctly in-game. The next trace should show `RACE_LINE_FALLBACK` instead of repeated `RACE_LINE_BLOCKED reason=NO_PATH` on geometrically passable OPEN road, and should retain hard stops only where every validated fallback fails. GDD §7.3 route-projection-loss recovery remains a separate open item; this change does not weaken the existing projection-loss fail-safe.
