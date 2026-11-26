@@ -2080,6 +2080,35 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
   p.diagPreviousPlanGeneration=p.racingPlanGeneration or 0
 end
 
+-- Build one coherent route-projection snapshot for every active AI car before
+-- any controller writes controls. This makes traffic decisions independent of
+-- the order in which cars are subsequently processed.
+function Driver.prepareFrame(sim,dt)
+  if not sim then return end
+  refreshRouteMetrics()
+  state.trafficFrame=(state.trafficFrame or 0)+1
+  local frame=state.trafficFrame
+  for i=0,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive and car.isAIControlled then
+      local p=state.p[i]
+      if not p then newPersonality(i);p=state.p[i] end
+      local progress,lateral,seg,parameter,distance,tx,tz=
+        routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,
+          math.max(0,safeNumber(car.speedMs)),dt or 0.05)
+      p.framePreparedFrame=frame
+      p.frameProjection={valid=progress~=nil,progress=progress,lateral=lateral,
+        seg=seg,parameter=parameter,distance=distance,tx=tx,tz=tz}
+      if progress~=nil then
+        p.routeLocked=true
+        p.routeProgress=progress
+        if lateral~=nil then p.latOff=lateral end
+        if seg then p.segIdx=seg end
+      end
+    end
+  end
+end
+
 function Driver.update(carIndex, car, dt)
   local p = state.p[carIndex]
   if not p then
@@ -2098,14 +2127,14 @@ function Driver.update(carIndex, car, dt)
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   local previousRouteProgress=p.routeProgress
   local prepared=p.framePreparedFrame==(state.trafficFrame or -1) and p.frameProjection or nil
-  local progress, projectedLateral, projectedSeg, _, projectionDistance
+  local progress, projectedLateral, projectedSeg, projectionParameter, projectionDistance
   if prepared then
     if prepared.valid then
-      progress,projectedLateral,projectedSeg,_,projectionDistance=
+      progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance=
         prepared.progress,prepared.lateral,prepared.seg,prepared.parameter,prepared.distance
     end
   else
-    progress,projectedLateral,projectedSeg,_,projectionDistance=
+    progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance=
       routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
   end
   -- A locked projection can fail after a small transient departure. Permit a
