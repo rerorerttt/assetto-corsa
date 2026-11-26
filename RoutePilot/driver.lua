@@ -1082,6 +1082,7 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
   -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
   local corridorWidth=br-bl
+  local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local laneCount=math.max(1,math.floor((corridorWidth+1.0)/4.0))
   local slotWidth=corridorWidth/laneCount
   if laneCount<2 or slotWidth<ownWidth+0.55 then
@@ -1148,9 +1149,14 @@ local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,re
     desired=clamp((safeLow+safeHigh)*0.5,lateral-0.75,lateral+0.75)
   end
   local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
-  local corridorLow,corridorHigh=safeCorridorForPreview(state.routeGeometry,
-    leaderState.routeProgress,22.0,leaderCar,fx,fz)
-  if not corridorLow or not corridorHigh or desired<corridorLow or desired>corridorHigh then return nil end
+  local sample=Geometry.sample(state.routeGeometry,leaderState.routeProgress)
+  if not sample then return nil end
+  local angle=signedAngle(fx,fz,sample.tx,sample.tz)
+  local envelope=halfWidth*math.abs(math.cos(angle))+
+    math.max(1.5,safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.z,4.5)*0.5)*
+      math.abs(math.sin(angle))+BOUND_MARGIN
+  local roadLeft,roadRight=routeBoundsAtSample(sample)
+  if desired<roadLeft+envelope or desired>roadRight-envelope then return nil end
   if laneOccupied(leaderIndex,leaderCar,desired,requesterIndex) then return nil end
   return desired
 end
