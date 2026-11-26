@@ -1202,6 +1202,14 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   p.trafficLeaderIndex=leaderIndex or -1
   p.trafficGap=gap or -1
   p.trafficLeaderSpeed=leaderSpeed or 0
+  if p.pendingYieldTarget~=nil and p.pendingYieldTarget~=leaderIndex then
+    local oldLeader=state.p[p.pendingYieldTarget]
+    if oldLeader and oldLeader.yieldRequestBy==carIndex then
+      oldLeader.yieldRequestBy=nil;oldLeader.yieldOffset=nil;oldLeader.yieldReady=false;oldLeader.yieldRequestTimer=0
+    end
+    p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
+    p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
+  end
   if p.yieldRequestBy~=nil and p.yieldOffset~=nil then
     p.trafficAction="YIELDING"
     p.trafficReason=p.yieldReady and "yield_position_confirmed" or "moving_to_yield_position"
@@ -1253,7 +1261,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.followTimer=0
       p.blockedT=0
       p.overtakeRetryT=2.0
-      if yielded and yielded.yieldRequestBy==carIndex then        yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
+      if yielded and yielded.yieldRequestBy==carIndex then
+        yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
       end
       H.log("CAR=%d OVERTAKE_ABORT reason=%s return=%.2f",
         carIndex,passDeadlocked and "blocked" or "timeout",returnOffset)
@@ -1298,6 +1307,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
 
     if passedClearance and
        not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
+      local yielded=state.p[p.passTargetIndex]
       p.overtakeSide=0
       p.passTargetIndex=nil
       p.emergencyPass=false
@@ -1311,7 +1321,6 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.passDeadline=nil
       p.followTimer=0
       p.blockedT=0
-      local yielded=state.p[p.passTargetIndex]
       if yielded and yielded.yieldRequestBy==carIndex then
         yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
       end
@@ -1366,7 +1375,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
           return math.min(targetSpeed,safeFollowingSpeed(queueGap,targetCar.speedMs,p.brakeAccelEstimate))
         end
       end
-      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
       p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
     end
     p.followTimer = 0
@@ -1450,8 +1459,10 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
                 leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
                 p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
-                state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1
-                p.pendingYieldOrder=state.trafficRequestSerial
+                if not p.pendingYieldOrder then
+                  state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1
+                  p.pendingYieldOrder=state.trafficRequestSerial
+                end
                 p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
                 H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,leaderIndex,yieldOffset,passOffset)
               else
