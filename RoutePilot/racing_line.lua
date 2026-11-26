@@ -353,6 +353,42 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   }
 end
 
+-- Last-resort drivable reference path. The optimizer's sampled swept-body
+-- test is intentionally conservative; a numerical NO_PATH is not a physical
+-- obstacle and must never command a stationary car. Traffic collision checks
+-- remain in Driver.updateTrafficControl(), independently of this geometry.
+function RacingLine.referencePlan(route, sampleFn, progress, boundsAt, horizon, spacing)
+  if not route or progress==nil or not sampleFn or not boundsAt then return nil end
+  local step=math.max(6.0,safe(spacing,7.5))
+  local length=math.min(135.0,math.max(35.0,safe(horizon,95.0)))
+  local count=math.floor(length/step)+1
+  local points={}
+  for i=0,count do
+    local sample=sampleFn(route,progress+i*step)
+    if not sample then break end
+    local left,right=boundsAt(sample)
+    left,right=safe(left,-2.0),safe(right,2.0)
+    local offset=(left+right)*0.5
+    points[#points+1]=pointAt(sample,offset)
+  end
+  local n=#points
+  if n<3 then return nil end
+  local curvatures,feature={},{}
+  for i=2,n-1 do curvatures[i]=curvature(points[i-1],points[i],points[i+1]) end
+  curvatures[1]=curvatures[2] or 0
+  curvatures[n]=curvatures[n-1] or 0
+  for i=1,n do
+    local k=safe(curvatures[i])
+    feature[i]=math.abs(k)<0.0012 and "STRAIGHT" or
+      (math.abs(k)<0.025 and "FAST_BEND" or "CORNER")
+  end
+  return {
+    points=points,curvature=curvatures,feature=feature,
+    spacing=step,count=n,horizon=(n-1)*step,
+    fixed=false,blockedDistance=nil,referenceFallback=true
+  }
+end
+
 function RacingLine.sample(plan, distance)
   if not plan or not plan.points or plan.count < 2 then return nil end
   distance=safe(distance)
