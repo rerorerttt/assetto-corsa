@@ -105,10 +105,10 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     if headingLength<0.001 then return false end
     hx,hz=hx/headingLength,hz/headingLength
     local checked=0
-    -- Five longitudinal slices cover the front, rear and intervening sweep
+    -- Three longitudinal slices cover the front, centre and rear of the body
     -- of the complete rectangle while it travels between planner stations.
-    for slice=-2,2 do
-      local longitudinal=slice*halfLength*0.5
+    for slice=-1,1 do
+      local longitudinal=slice*halfLength
       local bodyDistance=distance+longitudinal
       local sample=bodySampleCache[bodyDistance]
       if sample==nil then
@@ -118,9 +118,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       if sample~=false then
         local bodyX=point.x+hx*longitudinal
         local bodyZ=point.z+hz*longitudinal
-        local angle=math.abs(math.atan2(hx*sample.tz-hz*sample.tx,
-          hx*sample.tx+hz*sample.tz))
-        local envelope=halfWidth*math.abs(math.cos(angle))+margin
+        local headingAlignment=math.abs(hx*sample.tx+hz*sample.tz)
+        local envelope=halfWidth*headingAlignment+margin
         local nx,nz=-sample.tz,sample.tx
         local offset=(bodyX-sample.x)*nx+(bodyZ-sample.z)*nz
         local roadBounds=bodyBoundsCache[bodyDistance]
