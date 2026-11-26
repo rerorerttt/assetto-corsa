@@ -775,12 +775,21 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     -- gone; it must not weave through another car while traffic arbitration
     -- is still deciding who moves first.
     local currentOffset=safeNumber(p.laneOffsetCurrent,p.baseLaneOffset or base)
-    local aheadGap=carAheadInLane(carIndex,car,currentOffset)
     local lockDistance=math.max(35.0,speed*1.5+15.0)
-    local trafficLock=p.pendingYieldTarget~=nil or
-      (aheadGap~=nil and aheadGap>=-6.0 and aheadGap<lockDistance)
+    local trafficLock=p.pendingYieldTarget~=nil
     if not trafficLock then
-      trafficLock=laneOccupied(carIndex,car,currentOffset,nil)
+      for otherIndex,otherState in pairs(state.p) do
+        if otherIndex~=carIndex and otherState.routeProgress~=nil and
+           math.abs(routeGap(p.routeProgress,otherState.routeProgress))<lockDistance then
+          trafficLock=true
+          break
+        end
+      end
+    end
+    if not trafficLock and carIndex~=0 and state.playerTelemetry and
+       state.playerTelemetry.routeProgress~=nil then
+      trafficLock=math.abs(routeGap(p.routeProgress,
+        state.playerTelemetry.routeProgress))<lockDistance
     end
     if trafficLock then
       mode="TRAFFIC_HOLD"
