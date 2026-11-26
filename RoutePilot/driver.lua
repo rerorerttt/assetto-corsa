@@ -1552,7 +1552,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       return targetSpeed
     end
 
-    if (passExpired or passDeadlocked) and passedClearance and
+    if (passExpired or passDeadlocked) and
        not laneOccupied(carIndex,car,returnOffset,nil) then
       local targetIndex=p.passTargetIndex
       p.overtakeSide=0
