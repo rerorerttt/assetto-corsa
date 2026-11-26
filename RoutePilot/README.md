@@ -43,11 +43,11 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 - No configured 170 km/h cruise ceiling: straight-line speed is not capped by RoutePilot. The planner limits speed from upcoming route curvature and the car's measured braking response; vehicle physics determines attainable top speed.
 - Any car may pass a slower vehicle when its pace advantage and estimated pass distance make the manoeuvre feasible.
-- The passing target is selected dynamically from the complete safe lateral corridor, not from a fixed lane. Candidate offsets are checked using vehicle widths, longitudinal separation, active passing reservations, and the complete lateral transition path; distant parallel traffic does not reserve an entire neighbouring lane.
+- Passing targets use discrete logical lane slots derived from the measured corridor width (3/7/11/15 m → 1/2/3/4 slots). The complete transition, side-by-side phase and return are checked before a slot is reserved; arbitrary 0.30 m passing offsets are not used.
 - Passing reservations are local to the selected offset and limited to nearby time/space conflicts, so a physically separate free corridor remains available. Cars entering the same narrow corridor are serialized by active reservations.
 - The overtaking car stays on its selected offset until the target's rear is cleared, then returns to its original offset only after that offset is clear.
 - When the current lane is blocked and no passing offset is safe, following speed is limited by the leader in the car's current corridor only. A slow vehicle in a separate lane cannot globally throttle traffic using another free corridor.
-- Urgent passes increase lateral path transition speed to 12 m/s and steering response to 10/s, amplify the path-following steering request by 2.6, and permit the normalized steering command to use the full -1…+1 range. At bumper-distance gaps (8 m or less), the controller adds a 180 ms full-lock pulse in the direction of the selected safe path, then returns to path-following steering.
+- Emergency passing does not increase steering gain or issue full-lock pulses. Lateral transition distance grows with speed and the estimated lateral-acceleration allowance; a pass is rejected when there is insufficient distance to complete the transition before reaching the target.
 - Stuck detection is not reset merely because another car exists ahead. After ten seconds without movement, the app attempts a respawn only at a point whose actual spawn position is clear of other vehicles.
 
 ## Experimental 0.9.1 changes (2026-11-25)
@@ -75,7 +75,7 @@ When the player drives manually, RoutePilot records car 0 passively as `MODE=PLA
 
 ### Predictive arc steering and traction control
 
-The AI path follower now uses a pure-pursuit curvature command aimed at a Catmull–Rom spline sample selected by arc distance ahead, with a small sampled-curvature feed-forward term. It no longer uses the next recorded point as its steering target. Preview distance scales with speed (10–28 m), so steering is initiated before the bend.
+The AI path follower uses pure-pursuit curvature aimed at a Catmull–Rom spline sample selected by arc distance ahead. The planner curvature is not added a second time to the pure-pursuit command. Preview distance scales with speed and now extends to 85 m. The racing-line plan is refreshed according to speed, and the preview uses the car's full progress through the existing plan rather than a fixed 30 m offset.
 
 Throttle is limited by positive wheel slip reported by CSP wheel telemetry and by lateral acceleration in corners. Wheelspin causes an immediate torque reduction with slower throttle recovery. The trace includes WHEEL_SLIP, TC_SCALE, and STEER_CURV for diagnosis. This is a feedback limiter, not a guarantee of zero slip; in-game testing across the target cars is still required.
 
