@@ -833,18 +833,63 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
     previousPlan,previousAdvance,fixedTransitionDistance,p.lateralAccelLimit)
+
+  -- A failed dynamic-programming search is not proof that the road is
+  -- physically blocked. In OPEN mode, retry with a deterministic corridor
+  -- path at the car's current lateral position, then at the route centre.
+  -- Both retries go through RacingLine.plan(), including the same oriented
+  -- full-body swept-path checks against the recorded road bounds. Never
+  -- change a reserved PASS/RETURN/YIELD or TRAFFIC_HOLD corridor here.
+  local originalFailure=planFailure or (not nextPlan and "NO_PLAN" or nil)
+  local fallbackKind=nil
+  if not nextPlan and mode=="OPEN" then
+    local fallbackOffset=safeNumber(p.laneOffsetCurrent,
+      safeNumber(p.latOff,base))
+    local fallbackFailure=nil
+    nextPlan,fallbackFailure=RacingLine.plan(
+      state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+      safeNumber(p.latOff,base),base,fallbackOffset,horizon,7.5,
+      nil,0,fixedTransitionDistance,p.lateralAccelLimit)
+    if nextPlan then
+      fallbackKind="CURRENT_CORRIDOR"
+    else
+      nextPlan,fallbackFailure=RacingLine.plan(
+        state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+        safeNumber(p.latOff,base),base,0,horizon,7.5,
+        nil,0,fixedTransitionDistance,p.lateralAccelLimit)
+      if nextPlan then fallbackKind="ROAD_CENTRE" end
+    end
+    if not nextPlan then
+      planFailure=fallbackFailure or originalFailure or "NO_SAFE_FALLBACK"
+    end
+  end
+
   if nextPlan ~= p.racingPlan then
     p.racingPlanGeneration = (p.racingPlanGeneration or 0) + 1
   end
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
-  p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
+  -- A hard stop is reserved for the case where the optimizer AND both
+  -- geometry-validated OPEN fallbacks failed, or a reserved corridor itself
+  -- cannot contain the complete vehicle body.
+  p.racingPlanBlocked=nextPlan==nil
+  p.racingPlanFailure=p.racingPlanBlocked and
+    (planFailure or originalFailure or "NO_SAFE_PATH") or nil
+  p.racingPlanFallback=fallbackKind
   p.racingPlanTrafficBlocked=false
   p.racingPlanTrafficBlockedDistance=nil
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
+  if fallbackKind and (p.racingPlanLastFallback~=fallbackKind or
+      p.racingPlanLastFallbackReason~=originalFailure) then
+    H.log("RACE_LINE_FALLBACK id=%d mode=%s type=%s cause=%s",
+      carIndex,mode,fallbackKind,tostring(originalFailure))
+  end
+  p.racingPlanLastFallback=fallbackKind
+  p.racingPlanLastFallbackReason=originalFailure
   if p.racingPlanBlocked then
-    H.log("RACE_LINE_BLOCKED id=%d reason=%s",carIndex,tostring(planFailure))
+    H.log("RACE_LINE_BLOCKED id=%d reason=HARD_STOP_NO_SAFE_PATH cause=%s",
+      carIndex,tostring(p.racingPlanFailure))
   end
   if p.racingPlanMode~=mode then
     H.log("RACE_LINE id=%d mode=%s base=%.2f target=%.2f curve=%.4f horizon=%.1f",
