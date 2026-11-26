@@ -860,15 +860,20 @@ end
 local function safeFollowingSpeed(gap,leaderSpeed,brakeAccel)
   local available=math.max(0,gap-math.max(0,safeNumber(state.followGap,8)))
   local decel=clamp(safeNumber(brakeAccel,CFG.BRAKE_ACCEL),2.5,22.0)
-  local leader= safeNumber(leaderSpeed)
+  local reactionTerm=decel*0.45
+  local leader=safeNumber(leaderSpeed)
   if leader<0 then
-    -- Negative leader speed marks an oncoming vehicle. Its velocity adds to
-    -- closing speed, so compute the own speed that can stop before impact.
+    -- Include reaction distance as well as braking distance for an oncoming
+    -- vehicle; the result is the maximum speed that can still stop in gap.
     local opposingSpeed=-leader
-    return math.max(0,math.sqrt(opposingSpeed*opposingSpeed+
-      2*decel*available)-opposingSpeed)
+    local radicand=2*decel*available+
+      2*opposingSpeed*reactionTerm+reactionTerm*reactionTerm
+    return math.max(0,math.sqrt(math.max(0,radicand))-
+      opposingSpeed-reactionTerm)
   end
-  return math.sqrt(math.max(0,leader*leader+2*decel*available))
+  -- Solve v*t_reaction + (v^2-v_leader^2)/(2*a) <= available.
+  return math.max(0,math.sqrt(math.max(0,leader*leader+
+    2*decel*available+reactionTerm*reactionTerm))-reactionTerm)
 end
 
 -- Predict the complete lateral pass, the side-by-side phase and the
