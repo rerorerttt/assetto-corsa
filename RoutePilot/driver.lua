@@ -1196,6 +1196,12 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   p.trafficLeaderIndex=leaderIndex or -1
   p.trafficGap=gap or -1
   p.trafficLeaderSpeed=leaderSpeed or 0
+  if p.yieldRequestBy~=nil and p.yieldOffset~=nil then
+    p.trafficAction="YIELDING"
+    p.trafficReason=p.yieldReady and "yield_position_confirmed" or "moving_to_yield_position"
+    if gap~=nil then return math.min(targetSpeed,safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)) end
+    return targetSpeed
+  end
 
   if p.overtakeSide ~= 0 then
     p.passT = p.passT + dt
@@ -1320,6 +1326,23 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   end
 
   if not gap or not leaderIndex then
+    if p.pendingYieldTarget~=nil then
+      local targetIndex=p.pendingYieldTarget
+      local targetState=state.p[targetIndex]
+      local targetCar=ac.getCar(targetIndex)
+      if targetState and targetCar and targetCar.isActive and targetState.yieldReady then
+        p.emergencyPassRequest=false
+        if beginOvertake(carIndex,car,p,safeNumber(p.pendingYieldGap,12.0),targetIndex,targetState.latOff,speed,p.pendingPassDistance,p.pendingPassOffset) then
+          p.trafficPriority=1000000;p.trafficAction="PASSING"
+          p.trafficReason="yield_confirmed";p.trafficLeaderIndex=targetIndex
+          p.trafficTargetOffset=safeNumber(p.passLat)
+          return targetSpeed
+        end
+        targetState.yieldRequestBy=nil;targetState.yieldOffset=nil;targetState.yieldReady=false
+      end
+      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+      p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
+    end
     p.followTimer = 0
     p.blockedT = 0
     p.trafficPriority=0
@@ -1364,7 +1387,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     local urgent=canActuallyPass and gap<=urgentGap
     local passWindow=math.max(45.0,32.0+speed*1.5)
     p.followTimer=p.followTimer+dt
-    local passRequestReady=canActuallyPass and gap<=passWindow and
+    local passRequestReady=(p.pendingYieldTarget==leaderIndex or (canActuallyPass and gap<=passWindow)) and
       p.overtakeSide==0 and p.overtakeRetryT<=0
     if passRequestReady then
       -- Requests are ranked by urgency before cars are updated. The next
