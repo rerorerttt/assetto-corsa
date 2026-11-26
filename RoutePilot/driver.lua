@@ -870,9 +870,13 @@ local function coordinatorMove(record,targetLane,records,reason,otherIndex)
   record.p.coordinatorChangeT=3.0
   if reason=="PASS" then
     record.p.passTargetIndex=otherIndex
+    record.p.yieldingFor=nil
+    record.p.coordinatorReturn=false
     record.p.overtakeSide=targetLane>current and 1 or -1
   elseif reason=="YIELD" then
+    record.p.passTargetIndex=nil
     record.p.yieldingFor=otherIndex
+    record.p.coordinatorReturn=false
     record.p.overtakeSide=0
   else
     record.p.passTargetIndex=nil
