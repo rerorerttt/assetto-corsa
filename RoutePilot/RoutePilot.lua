@@ -696,6 +696,13 @@ function script.update(dt)
           releaseCar(i)
         end
       end
+      -- Resolve every car's lane and near-future traffic conflicts as one batch.
+      -- The coordinator runs before controls are written, so requests cannot
+      -- race against per-car update order.
+      if Driver.prepareTraffic then
+        local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,driveOrder,dt)
+        if not okTraffic then writeLog("TRAFFIC_COORDINATOR_ERROR err=%s",tostring(errTraffic)) end
+      end
       -- Resolve simultaneous pass requests in a stable priority order.
       -- Active manoeuvres keep priority; new requests are ranked by closing
       -- urgency from the previous simulation step. Route progress breaks ties
