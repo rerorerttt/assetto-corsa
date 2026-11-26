@@ -154,8 +154,8 @@ local function newPersonality(carIndex)
     state.spawnHints[carIndex]=nil
   end
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT class=%s cruise=%.2f canOvertake=%d",
-    carIndex,p.speedClass,safeNumber(p.cruiseSpeed,999.0),
+  H.log("CAR_INIT id=%d lane=LEFT class=%s cruise=%s canOvertake=%d",
+    carIndex,p.speedClass,p.canOvertake and "UNLIMITED" or "40KMH",
     p.canOvertake and 1 or 0)
 end
 
