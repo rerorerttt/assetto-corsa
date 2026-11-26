@@ -15,6 +15,11 @@
 local Driver = {}
 local Geometry = require("route_geometry")
 local RacingLine = require("racing_line")
+local okVehicleDynamics, VehicleDynamics = pcall(require, "vehicle_dynamics")
+if not okVehicleDynamics or type(VehicleDynamics) ~= "table" or
+    type(VehicleDynamics.measure) ~= "function" then
+  VehicleDynamics = nil
+end
 local CFG, state, H
 
 local BOUND_MARGIN = 0.4
@@ -113,6 +118,7 @@ local function newPersonality(carIndex)
     accelEstimate = 4.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
     previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
+    vehicleDynamicsState = VehicleDynamics and VehicleDynamics.newState() or nil,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
     previousFx = nil, previousFz = nil,
     stuck = 0, blockedT = 0, passT = 0,
@@ -156,6 +162,24 @@ local function readVehicleDynamics(car, p, dt)
   p.yawRate = 0
   if p.previousFx and dt > 0.0001 then
     p.yawRate = signedAngle(p.previousFx, p.previousFz, fx, fz) / dt
+  end
+  if VehicleDynamics then
+    p.vehicleDynamicsState = p.vehicleDynamicsState or VehicleDynamics.newState()
+    local measured = VehicleDynamics.measure(car, p.vehicleDynamicsState)
+    if measured then
+      p.frontAxleSlip = measured.frontAxleAngle
+      p.rearAxleSlip = measured.rearAxleAngle
+      p.frontTireSlipDeg = measured.frontSlipDeg
+      p.rearTireSlipDeg = measured.rearSlipDeg
+      p.frontNdSlip = measured.frontNdSlip
+      p.rearNdSlip = measured.rearNdSlip
+      p.measuredYawRate = measured.yawRate
+      p.measuredWheelbase = measured.wheelbase
+      p.measuredSteerLock = measured.steerLockDeg
+      p.vehicleDynamicsValid = true
+    else
+      p.vehicleDynamicsValid = false
+    end
   end
   local speed = math.max(0, safeNumber(car.speedMs, longVel))
   -- Learn this car's real braking response from measured speed loss while
@@ -1376,7 +1400,7 @@ function Driver.telemetryLine(i, car, p)
   local mode=p.player and " MODE=PLAYER" or
     (p.playerAutopilot and " MODE=AI_AUTOPILOT" or "")
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f AXLE_VALID=%d FRONT_AXLE=%.3f REAR_AXLE=%.3f FRONT_TIRE=%.2f REAR_TIRE=%.2f FRONT_NDSLIP=%.3f REAR_NDSLIP=%.3f YAW_RATE=%.3f WHEELBASE=%.2f STEER_LOCK=%.1f%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -1389,7 +1413,13 @@ function Driver.telemetryLine(i, car, p)
     safeNumber(p.boundaryEnvelope),safeNumber(p.boundaryDeficit),
     safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),
     safeNumber(p.accelEstimate,0),safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),
-    safeNumber(p.stuck),mode)
+    safeNumber(p.stuck),
+    p.vehicleDynamicsValid and 1 or 0,
+    safeNumber(p.frontAxleSlip), safeNumber(p.rearAxleSlip),
+    safeNumber(p.frontTireSlipDeg), safeNumber(p.rearTireSlipDeg),
+    safeNumber(p.frontNdSlip), safeNumber(p.rearNdSlip),
+    safeNumber(p.measuredYawRate), safeNumber(p.measuredWheelbase),
+    safeNumber(p.measuredSteerLock), mode)
 end
 
 return Driver
