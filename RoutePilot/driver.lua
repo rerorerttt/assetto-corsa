@@ -1824,7 +1824,9 @@ function Driver.update(carIndex, car, dt)
       end
     end
   end
-  if not offRoute then
+  if progress==nil then
+    p.offTrackT=safeNumber(p.offTrackT)+dt
+  elseif not offRoute then
     p.offTrackT=0
     p.recoveryLaneOffset=nil
   end
