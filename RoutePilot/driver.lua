@@ -804,9 +804,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedTransitionDistance=math.max(22.0,
       math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
   end
-  -- Traffic does not reserve a permanent lane. In open running the optimizer
-  -- may use the complete physical road width; only an active, validated pass
-  -- or its return phase temporarily reserves a passing corridor.
+  -- In clear running the optimizer may use the complete road width.
+  -- TRAFFIC_HOLD, YIELD, PASS and RETURN constrain the path only while a
+  -- nearby vehicle or an explicitly reserved manoeuvre requires it.
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
