@@ -810,6 +810,20 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
   local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+35.0),CFG.PLAN_HORIZON,135.0)
+  -- A reserved pass/yield path only needs to remain valid until the manoeuvre
+  -- finishes. Planning a fixed offset far beyond that point can reject a safe
+  -- pass because of a later bend and trigger an unnecessary hard stop.
+  local reservationDistance=nil
+  if mode=="PASS" then
+    reservationDistance=safeNumber(p.passDistance,35.0)
+  elseif mode=="YIELD" and p.yieldRequestBy~=nil then
+    local requester=state.p[p.yieldRequestBy]
+    reservationDistance=safeNumber(requester and
+      (requester.passDistance or requester.pendingPassDistance),35.0)
+  end
+  if reservationDistance~=nil then
+    horizon=clamp(reservationDistance+fixedTransitionDistance+10.0,35.0,135.0)
+  end
   local planFailure=nil
   -- Traffic is deliberately not fed into the geometric racing-line optimizer.
   -- Following, passing and collision reservations have one owner below:
@@ -1190,6 +1204,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
     defaultCenter or ((bl+br)*0.5)
   p.overtakeDeniedLogged=false
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
+  p.passDistance=math.max(0,safeNumber(passDistance,60.0))
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex
   p.passT=0
@@ -1332,6 +1347,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.passT=0
       p.passBlockedT=0
       p.passDeadline=nil
+      p.passDistance=nil
       p.followTimer=0
       p.blockedT=0
       p.overtakeRetryT=2.0
