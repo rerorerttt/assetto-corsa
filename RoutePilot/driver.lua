@@ -29,7 +29,7 @@ local FORCE_TIME   = 2.0
 local PASS_TIMEOUT = 8.0
 local RESCUE_SPEED = 1.5
 local RESCUE_TIME  = 10.0
-local STEER_DEAD   = 0.001  -- only suppress numerical noise; never freeze real cornering input
+local STEER_DEAD   = 0.002  -- suppress only sub-resolution steering noise
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -121,6 +121,9 @@ local function newPersonality(carIndex)
     vehicleDynamicsState = VehicleDynamics and VehicleDynamics.newState() or nil,
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
     previousFx = nil, previousFz = nil,
+    lateralVelocityFiltered = 0,
+    raceOffsetRaw = 0, raceOffsetCurrent = 0,
+    pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
     stuck = 0, blockedT = 0, passT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0,
     slipSeverity = 0, stability = 1,
@@ -410,8 +413,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local alpha=signedAngle(fx,fz,dx/targetDist,dz/targetDist)
   local pursuitCurvature=2.0*math.sin(alpha)/targetDist
   local previewCurvature=safeNumber(raceTarget and raceTarget.k or curvePreview.k)
-  local desiredCurvature=pursuitCurvature+
-    previewCurvature*CFG.CURVATURE_FEEDFORWARD
+  -- Pure pursuit already calculates the curvature needed to reach this
+  -- preview point. Adding the planner's curvature again double-counts the
+  -- same bend and can create an oversteer/oscillation feedback loop.
+  local desiredCurvature=pursuitCurvature
 
   -- Predict lateral drift over the preview time and steer back before the
   -- vehicle footprint reaches a saved boundary.
@@ -430,7 +435,14 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local boundaryCurvature=clamp(1.2*boundaryError/
     (boundaryDistance*boundaryDistance),-0.06,0.06)
   desiredCurvature=desiredCurvature+boundaryCurvature
-  local boundarySteer=clamp(boundaryError*0.075-lateralVelocity*0.035,-0.22,0.22)
+  local velocityAlpha=clamp(dt/(0.12+math.max(0,dt)),0,1)
+  p.lateralVelocityFiltered=lerp(
+    safeNumber(p.lateralVelocityFiltered),lateralVelocity,velocityAlpha)
+  local boundarySteer=clamp(
+    boundaryError*0.075-p.lateralVelocityFiltered*0.035,-0.22,0.22)
+  p.boundarySteer=boundarySteer
+  p.lookahead=ahead
+  p.pursuitCurvature=pursuitCurvature
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
@@ -452,31 +464,26 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- the deviation and create a left/right steering feedback loop. The
   -- autonomous path controller owns steering; axle-based stability control
   -- will be added separately after its signs and gains are validated.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN
-  if p.emergencyPass then
-    steer=steer*CFG.EMERGENCY_STEER_GAIN
-    return clamp(steer+boundarySteer,-1.0,1.0)
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+boundarySteer
+  -- Do not erase meaningful path corrections: this deadband is only for
+  -- numerical residue around a genuinely straight, settled trajectory.
+  if math.abs(steer)<STEER_DEAD and
+     math.abs(p.crossTrackError or 0)<0.03 and
+     math.abs(p.headingError or 0)<0.001 and
+     math.abs(p.lateralVelocityFiltered or 0)<0.03 then
+    steer=0
   end
-  return clamp(steer+boundarySteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
+  return clamp(steer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
-  if safeNumber(p.emergencySteerBoostT)>0 and math.abs(target)>0.02 then
-    p.emergencySteerBoostT=math.max(0,p.emergencySteerBoostT-dt)
-    local fullLock=target>0 and 1.0 or -1.0
-    p.steer=fullLock
-    p.steerFiltered=fullLock
-    return fullLock
-  else
-    p.emergencySteerBoostT=0
-  end
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  local steerRate=p.emergencyPass and math.max(CFG.STEER_RATE,CFG.EMERGENCY_STEER_RATE) or CFG.STEER_RATE
-  local maxChange=steerRate*dt
-  local steerLimit=p.emergencyPass and 1.0 or CFG.STEER_LIMIT
+  -- Emergency passing changes the target path, not the steering authority.
+  -- No full-lock pulse or emergency gain is permitted at high speed.
+  local maxChange=CFG.STEER_RATE*dt
   p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
-    -steerLimit, steerLimit)
+    -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
   return p.steer
 end
 
@@ -810,12 +817,18 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     end
     return blocked
   end
-  p.racingPlan,planFailure=RacingLine.plan(
+  local previousPlan=p.racingPlanMode==mode and p.racingPlan or nil
+  local previousAdvance=previousPlan and p.racingPlanStartProgress and
+    math.max(0,routeGap(p.racingPlanStartProgress,p.routeProgress)) or 0
+  local nextPlan
+  nextPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
-    fixedOffset==nil and obstacleAt or nil)
+    fixedOffset==nil and obstacleAt or nil,previousPlan,previousAdvance)
+  p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
-  p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
+  p.racingPlanBlocked=planFailure=="NO_FIT"
+  p.racingPlanTrafficBlocked=planFailure=="NO_PATH"
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
   if p.racingPlanBlocked then
@@ -828,7 +841,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
       safeNumber(p.racingPlan and p.racingPlan.curvature[2]),horizon)
   end
   p.racingPlanMode=mode
-  p.racingPlanTimer=0.40
+  p.racingPlanTimer=0.65
   if p.racingPlan then
     p.racingPlanCurvature=safeNumber(p.racingPlan.curvature[2])
   end
@@ -995,11 +1008,21 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
   local separation=(ownWidth+targetWidth)*0.5+0.55
   local candidates={}
-  local step=0.30
-  for i=0,math.floor((safeMax-safeMin)/step) do
-    local offset=safeMin+i*step
-    if math.abs(offset-source)>=1.15 and
-       math.abs(offset-leaderLateral)>=separation then
+  -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
+  -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
+  local corridorWidth=br-bl
+  local laneCount=math.max(1,math.floor((corridorWidth+1.0)/4.0))
+  local slotWidth=corridorWidth/laneCount
+  if laneCount<2 or slotWidth<ownWidth+0.55 then return nil end
+  local sourceSlot=1
+  for i=2,laneCount do
+    local a=math.abs((bl+(i-0.5)*slotWidth)-source)
+    local b=math.abs((bl+(sourceSlot-0.5)*slotWidth)-source)
+    if a<b then sourceSlot=i end
+  end
+  for i=1,laneCount do
+    local offset=bl+(i-0.5)*slotWidth
+    if i~=sourceSlot and math.abs(offset-leaderLateral)>=separation then
       candidates[#candidates+1]=offset
     end
   end
@@ -1052,7 +1075,6 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
       math.max(8.0,speed))*2.0+4.0)
   p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
-  p.emergencySteerBoostT=(p.emergencyPass and gap<=8.0) and 0.18 or 0
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
@@ -1448,7 +1470,7 @@ function Driver.telemetryLine(i, car, p)
   local mode=p.player and " MODE=PLAYER" or
     (p.playerAutopilot and " MODE=AI_AUTOPILOT" or "")
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f AXLE_VALID=%d FRONT_AXLE_RAD=%.3f REAR_AXLE_RAD=%.3f FRONT_TIRE_DEG=%.2f REAR_TIRE_DEG=%.2f FRONT_NDSLIP=%.3f REAR_NDSLIP=%.3f YAW_RATE_RAD=%.3f WHEELBASE_M=%.2f STEER_LOCK_DEG=%.1f STEER_TARGET=%.3f SLIP_ANGLE_DEG=%.2f YAW_EST_RAD=%.3f PASS_BLOCKED=%.1f PASS_TIME=%.1f%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f AXLE_VALID=%d FRONT_AXLE_RAD=%.3f REAR_AXLE_RAD=%.3f FRONT_TIRE_DEG=%.2f REAR_TIRE_DEG=%.2f FRONT_NDSLIP=%.3f REAR_NDSLIP=%.3f YAW_RATE_RAD=%.3f WHEELBASE_M=%.2f STEER_LOCK_DEG=%.1f STEER_TARGET=%.3f SLIP_ANGLE_DEG=%.2f YAW_EST_RAD=%.3f PASS_BLOCKED=%.1f PASS_TIME=%.1f LOOKAHEAD=%.1f PP_CURV=%.5f BOUND_STEER=%.4f LAT_VEL=%.3f%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -1469,7 +1491,9 @@ function Driver.telemetryLine(i, car, p)
     safeNumber(p.measuredYawRate), safeNumber(p.measuredWheelbase),
     safeNumber(p.measuredSteerLock),
     safeNumber(p.steerTarget), math.deg(safeNumber(p.slipAngle)),
-    safeNumber(p.yawRate), safeNumber(p.passBlockedT), safeNumber(p.passT), mode)
+    safeNumber(p.yawRate), safeNumber(p.passBlockedT), safeNumber(p.passT),
+    safeNumber(p.lookahead),safeNumber(p.pursuitCurvature),
+    safeNumber(p.boundarySteer),safeNumber(p.lateralVelocityFiltered),mode)
 end
 
 return Driver
