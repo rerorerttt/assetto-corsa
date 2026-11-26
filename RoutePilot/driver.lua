@@ -246,10 +246,16 @@ local function planTargetSpeed(p,speed)
       RacingLine.sample(p.racingPlan,planDistance) or nil
     local sample=planned or Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
-    local curvature=math.abs(safeNumber(planned and planned.k or sample.k))
-    -- Ignore curvature below the noise floor of a route recorded at 3 m.
-    -- The optimizer's path curvature, not the reference-line curvature,
-    -- determines braking on an open road.
+    -- On an open run, use the recorded road curvature for braking.
+    -- The optimizer's first plan stations can contain a short-lived geometric
+    -- kink while the path is being rebuilt; treating that single value as a
+    -- real corner can command a large speed drop on a visually straight.
+    -- During a pass/return, the actual offset path is authoritative because
+    -- the car is deliberately leaving the reference line.
+    local usePlannedCurvature=p.racingPlanMode=="PASS" or
+      p.racingPlanMode=="RETURN"
+    local curvature=math.abs(safeNumber(
+      usePlannedCurvature and planned and planned.k or sample.k))
     if curvature>math.max(CFG.CURVE_MIN,0.0018) then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*0.90
       local curveSpeed=math.sqrt(lateralLimit/curvature)
