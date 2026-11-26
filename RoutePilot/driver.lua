@@ -377,15 +377,19 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   end
   local bodyEnvelope=halfWidth+BOUND_MARGIN
   local laneLeft,laneRight=H.boundsAt(p.segIdx)
-  local mid,width=(laneLeft+laneRight)*0.5,laneRight-laneLeft
-  local leftCenter=width>=5.4 and ((mid+laneRight)*0.5) or mid
-  if p.overtakeSide==0 then
-    p.baseLaneOffset=p.baseLaneOffset or leftCenter
-    p.laneOffset=p.baseLaneOffset
-  else
+  local roadCenter=(laneLeft+laneRight)*0.5
+  -- Ordinary driving and the post-pass return target the racing corridor,
+  -- not the legacy left-lane slot. A discrete lane offset is active only
+  -- while a pass or an explicit yield reservation is in progress.
+  if p.overtakeSide~=0 then
     p.laneOffset=p.passLat
+  elseif p.yieldRequestBy~=nil and p.yieldOffset~=nil then
+    p.laneOffset=p.yieldOffset
+  else
+    p.baseLaneOffset=p.baseLaneOffset or roadCenter
+    p.laneOffset=p.baseLaneOffset
   end
-  local laneTarget=p.laneOffset or leftCenter
+  local laneTarget=p.laneOffset or roadCenter
   local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
   local currentRace=p.racingPlan and planAdvance<=p.racingPlan.horizon and
     RacingLine.sample(p.racingPlan,math.max(0,planAdvance)) or nil
