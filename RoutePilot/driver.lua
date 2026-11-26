@@ -1179,7 +1179,11 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
         local validated,planReason=RacingLine.plan(
           state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
           source,offset,offset,horizon,7.5,nil,0,transitionDistance,p.lateralAccelLimit)
-        if validated then return offset end
+        if validated then
+          p.lastPassDeniedReason=nil
+          p.overtakeDeniedLogged=false
+          return offset
+        end
         lastReason="pass_plan_"..tostring(planReason or "NO_PATH")
       else
         lastReason=reason or lastReason
@@ -1492,9 +1496,23 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
         H.log("CAR=%d PASS_IMMEDIATE target=%d lane=%.2f gap=%.1f",
           carIndex,leaderIndex,safeNumber(p.passLat),gap)
         return targetSpeed
+      else
+        p.overtakeRetryT=0.30
+        p.trafficPriority=0
+        if not p.overtakeDeniedLogged then
+          H.log("CAR=%d OVERTAKE_DENIED reason=%s gap=%.1f",
+            carIndex,tostring(p.lastPassDeniedReason or "pass_reservation_failed"),gap)
+          p.overtakeDeniedLogged=true
+        end
       end
     else
       p.overtakeRetryT=0.30
+      p.trafficPriority=0
+      if not p.overtakeDeniedLogged then
+        H.log("CAR=%d OVERTAKE_DENIED reason=%s gap=%.1f",
+          carIndex,tostring(p.lastPassDeniedReason or "no_adjacent_lane"),gap)
+        p.overtakeDeniedLogged=true
+      end
     end
   else
     p.trafficPriority=0
