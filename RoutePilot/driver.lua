@@ -1718,8 +1718,12 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                   t=(-relative+math.sqrt(relative*relative+
                     2.0*relativeAccel*required))/relativeAccel
                 end
+                local groupDistanceEstimate=1000.0
+                if t<math.huge and t==t then
+                  groupDistanceEstimate=speed*t+0.5*acceleration*t*t
+                end
                 groupPassDistance=math.max(groupPassDistance,
-                  math.min(1000.0,speed*t+0.5*acceleration*t*t))
+                  math.min(1000.0,groupDistanceEstimate))
                 local groupOffset=groupPassDistance<=300.0 and
                   findPassingOffset(carIndex,car,p,leaderIndex,
                     leaderLateral,speed,groupPassDistance) or nil
