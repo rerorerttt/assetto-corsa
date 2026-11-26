@@ -697,17 +697,18 @@ end
 local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   local sim=ac.getSim()
   local own=state.p[carIndex]
-  if not sim or not own then return nil,nil,nil,nil end
+  if not sim or not own then return nil,nil,nil,nil,false end
   local ownProgress=own.routeProgress
   if ownProgress==nil then
     ownProgress=routeProjection(car,own.segIdx,not own.routeLocked,
       own.routeProgress,car.speedMs,0.05)
     own.routeProgress=ownProgress
   end
-  if ownProgress==nil then return nil,nil,nil,nil end
+  if ownProgress==nil then return nil,nil,nil,nil,false end
   local ownSample=Geometry.sample(state.routeGeometry,ownProgress)
-  if not ownSample then return nil,nil,nil,nil end
+  if not ownSample then return nil,nil,nil,nil,false end
   local bestGap,bestSpeed,bestIndex,bestLateral=nil,nil,nil,nil
+  local bestIsAI=false
   local ownSpeed=math.max(0,safeNumber(car.speedMs))
   for i=0,sim.carsCount-1 do
     if i~=carIndex and i~=ignoreIndex then
@@ -752,11 +753,12 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
           local measuredOtherSpeed=math.max(0,safeNumber(other.speedMs))
           bestSpeed=directionDot < -0.25 and -measuredOtherSpeed or measuredOtherSpeed
           bestIndex=i;bestLateral=actualLateral
+          bestIsAI=other.isAIControlled==true
         end
       end
     end
   end
-  return bestGap,bestSpeed,bestIndex,bestLateral
+  return bestGap,bestSpeed,bestIndex,bestLateral,bestIsAI
 end
 
 local function updateRacingPlan(carIndex,car,p,speed,dt)
