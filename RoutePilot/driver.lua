@@ -862,6 +862,15 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
           local otherFx,otherFz=normalize2(other.look.x,other.look.z)
           directionDot=otherState.routeTx and otherState.routeTz and
             (otherFx*otherState.routeTx+otherFz*otherState.routeTz) or 1.0
+          if directionDot < -0.25 then
+            local dx=safeNumber(other.position.x)-ownSample.x
+            local dz=safeNumber(other.position.z)-ownSample.z
+            if dx*dx+dz*dz<=120.0*120.0 then
+              gap,actualLateral=relativeToRoute(other.position,ownSample)
+            else
+              gap=nil
+            end
+          end
         else
           -- Opposing-direction cars may have unrelated loop progress. Only
           -- pay for local geometric projection when the cars are physically near.
