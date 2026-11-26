@@ -134,6 +134,7 @@ local function newPersonality(carIndex)
     yieldRequestBy = nil, yieldOffset = nil, yieldReady = false,
     yieldRequestTimer = 0, pendingYieldTarget = nil,
     pendingPassOffset = nil, pendingYieldTimer = 0,
+    pendingYieldGap = nil, pendingYieldSpeed = nil, pendingPassDistance = nil,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -1120,6 +1121,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
   p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+  p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
@@ -1224,6 +1226,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     local passDeadlocked=p.passBlockedT >= 2.5
     if (passExpired or passDeadlocked) and
        not laneOccupied(carIndex,car,returnOffset,nil) then
+      local yielded=state.p[p.passTargetIndex]
       p.overtakeSide=0
       p.passTargetIndex=nil
       p.emergencyPass=false
@@ -1238,9 +1241,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.followTimer=0
       p.blockedT=0
       p.overtakeRetryT=2.0
-      local yielded=state.p[p.passTargetIndex]
-      if yielded and yielded.yieldRequestBy==carIndex then
-        yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
+      if yielded and yielded.yieldRequestBy==carIndex then        yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
       end
       H.log("CAR=%d OVERTAKE_ABORT reason=%s return=%.2f",
         carIndex,passDeadlocked and "blocked" or "timeout",returnOffset)
@@ -1393,6 +1394,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
                 leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
                 p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
+                p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
                 H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,leaderIndex,yieldOffset,passOffset)
               else
                 p.lastPassDeniedReason="leader_has_no_safe_yield_space"
