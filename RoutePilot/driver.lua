@@ -28,7 +28,8 @@ local TRIGGER_TIME = 0.5
 local FORCE_TIME   = 2.0
 local PASS_TIMEOUT = 8.0
 local RESCUE_SPEED = 1.5
-local RESCUE_TIME  = 10.0
+local RESCUE_TIME  = 5.0
+local OFFTRACK_RESPAWN_TIME = 10.0
 local STEER_DEAD   = 0.002  -- suppress only sub-resolution steering noise
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -127,6 +128,7 @@ local function newPersonality(carIndex)
     raceOffsetRaw = 0, raceOffsetCurrent = 0,
     pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
     stuck = 0, blockedT = 0, passT = 0,
+    offTrackT = 0, recoveryLaneOffset = nil, laneIndex = nil,
     lineDist = 0, latOff = 0, targetSpeed = 0,
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
@@ -560,15 +562,28 @@ local function roomAt(seg, off)
   return off - bl, br - off
 end
 
--- The road is split into two fixed 3 m lanes when the recorded corridor
--- is wide enough. Positive lateral offset is the left lane.
+-- Fixed lane centres: configured road widths 3/7/11/15 m map to 1/2/3/4 lanes.
+local function laneCountForBounds(bl,br)
+  return math.max(1,math.min(4,math.floor((math.max(0,br-bl)+1.0)/4.0)))
+end
+local function laneCenter(seg,index)
+  local bl,br=H.boundsAt(seg)
+  local count=laneCountForBounds(bl,br)
+  index=clamp(math.floor(safeNumber(index,1)),1,count)
+  return bl+(index-0.5)*(br-bl)/count,count
+end
+local function laneIndexAt(seg,offset)
+  local bl,br=H.boundsAt(seg)
+  local count=laneCountForBounds(bl,br)
+  local slot=(br-bl)/count
+  if slot<=0 then return 1,count end
+  return clamp(math.floor((safeNumber(offset)-bl)/slot)+1,1,count),count
+end
 local function laneCenters(seg)
-  local bl, br = H.boundsAt(seg)
-  local mid = (bl + br) * 0.5
-  local left = (mid + br) * 0.5
-  local right = (bl + mid) * 0.5
-  if (mid - bl < 2.7 or br - mid < 2.7) then return nil, nil end
-  return left, right
+  local bl,br=H.boundsAt(seg)
+  local count=laneCountForBounds(bl,br)
+  if count<2 then return nil,nil end
+  return laneCenter(seg,count),laneCenter(seg,1)
 end
 
 -- Checks traffic in a specified lane, both ahead and behind. This is used
