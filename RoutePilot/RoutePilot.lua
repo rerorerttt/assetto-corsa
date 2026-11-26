@@ -354,7 +354,7 @@ local function recordSecondTelemetry(sim)
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     local p=state.p[i]
-    if car and car.isActive and car.isAIControlled and p then
+    if car and car.isActive and p then
       if Driver and Driver.telemetryLine then writeLog(Driver.telemetryLine(i,car,p)) end
       any=true
     end
@@ -369,7 +369,18 @@ local function recordSecondTelemetry(sim)
   end
 
   if not any and logger and logger.heartbeat then
-    pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes).." ai=0 player=0")
+    local active,aiFlag,managed=0,0,0
+    for i=1,sim.carsCount-1 do
+      local c=ac.getCar(i)
+      if c and c.isActive then
+        active=active+1
+        if c.isAIControlled then aiFlag=aiFlag+1 end
+        if state.p[i] or state.spawnHints[i] then managed=managed+1 end
+      end
+    end
+    pcall(logger.heartbeat,logger,string.format(
+      "nodes=%d active=%d ai_flag=%d managed=%d",
+      #state.nodes,active,aiFlag,managed))
   end
   flushLog()
 end
@@ -688,11 +699,17 @@ function script.update(dt)
       local driveOrder={}
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
-        local shouldDrive=car and car.isActive and car.isAIControlled
+        -- A successful CSP AI-position teleport can transiently clear
+        -- isAIControlled. Keep a car adopted once RoutePilot has initialized
+        -- its driver state, and use the spawn hint for the first post-spawn frame.
+        -- Never adopt the manually driven player through this fallback.
+        local managedBefore=state.p[i]~=nil or state.spawnHints[i]~=nil
+        local shouldDrive=car and car.isActive and
+          (car.isAIControlled or (i>0 and managedBefore))
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
           driveOrder[#driveOrder+1]=i
-        elseif state.p[i] then
+        elseif state.p[i] and (not car or not car.isActive) then
           releaseCar(i)
         end
       end
@@ -726,7 +743,9 @@ function script.update(dt)
       end)
       for _,i in ipairs(driveOrder) do
         local car=ac.getCar(i)
-        if car and car.isActive and car.isAIControlled then
+        if car and car.isActive and
+            (car.isAIControlled or (i>0 and state.p[i]~=nil) or
+             (i>0 and state.spawnHints[i]~=nil)) then
           local okc,erc=pcall(Driver.update,i,car,dt)
           if not okc then
             writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
