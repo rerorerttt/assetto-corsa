@@ -1418,6 +1418,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.passT=0
       p.passBlockedT=0
       p.passDeadline=nil
+      p.passDistance=nil
       p.followTimer=0
       p.blockedT=0
       if yielded and yielded.yieldRequestBy==carIndex then
