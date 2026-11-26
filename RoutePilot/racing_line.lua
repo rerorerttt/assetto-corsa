@@ -2,7 +2,19 @@
 -- Short-horizon corridor optimizer. It optimizes the actual driven path,
 -- not the recorded reference spline. All candidate points are constrained
 -- by the recorded physical road bounds and the vehicle footprint.
+-- v1.1: STRAIGHT-ROAD FREEZE. On a road with no real curvature ahead (only
+-- recording noise), the plan is "hold the current lateral offset". The DP
+-- optimizer is not run: on a dead-straight road it re-picked a lateral
+-- line every rebuild (ks_drag trace: the LANE target flipped between
+-- 0.00 / -1.44 / +1.75 / -2.16 / +2.16 every 0.40 s), and the steering
+-- controller chasing that jumping target is exactly what produced the
+-- 150+ km/h weave that ended in loss of control.
+-- Safety in real corners is unchanged: plan curvature is computed from the
+-- final path points, and a constant-offset path through a real bend carries
+-- the road's true curvature, so the speed planner still brakes for it.
 local RacingLine = {}
+
+local STRAIGHT_K = 0.004 -- below this |k| (radius > 250 m) it's noise, not a corner
 
 local function clamp(v, a, b)
   return math.max(a, math.min(b, v))
@@ -91,12 +103,29 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   local n = #samples
   if n < 3 then return nil end
 
+  -- STRAIGHT-ROAD FREEZE: measure the real curvature ahead. If none of the
+  -- samples exceeds the recording-noise floor, there is no corner to
+  -- optimize for — hold the current lateral offset and do NOT run the DP.
+  local maxAbsK = 0
+  for i = 1, n do
+    local ak = math.abs(safe(samples[i].k))
+    if ak > maxAbsK then maxAbsK = ak end
+  end
+  local straightFreeze = fixedOffset == nil and maxAbsK < STRAIGHT_K
+
   if fixedOffset ~= nil then
     for i=1,n do
       local d=(i-1)*step
       local t=clamp(d/22.0,0,1)
       local desired=initial+(safe(fixedOffset,initial)-initial)*t
       offsets[i]=clamp(desired,bounds[i][1],bounds[i][2])
+    end
+  elseif straightFreeze then
+    -- No corner anywhere in the horizon: the best racing line on a straight
+    -- is the one the car is already on. A constant-offset target cannot
+    -- jump sides between rebuilds, so the steering has a stationary aim.
+    for i=1,n do
+      offsets[i]=clamp(initial,bounds[i][1],bounds[i][2])
     end
   else
     -- Dynamic programming over pairs of lateral candidates. Each transition
@@ -232,6 +261,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     count = n,
     horizon = (n - 1) * step,
     fixed = fixedOffset ~= nil,
+    straight = straightFreeze,
     blockedDistance = blockedDistance
   }
 end
