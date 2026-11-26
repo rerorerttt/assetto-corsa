@@ -563,12 +563,14 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
       p.emergencyUntil=0
       p.racingPlan=nil
       p.racingPlanTimer=0
-    elseif towardSpeed<1.0 then
-      rawSteer=escapeDirection*CFG.STEER_LIMIT
-      p.emergencySteerFullLock=true
     else
+      -- Continuous lateral position/velocity controller. The previous
+      -- 1.0 m/s hard switch alternated between full lock and normal steering
+      -- whenever lateral speed crossed the threshold, causing steering kicks.
+      -- Proportional position demand plus velocity damping gives one smooth,
+      -- progressively reducing steering command throughout the escape.
+      rawSteer=clamp(escapeError*0.32-lateralVelocity*0.12,-0.62,0.62)
       p.emergencySteerFullLock=false
-      rawSteer=clamp(rawSteer,-0.35,0.35)
     end
   else
     p.emergencySteerFullLock=false
@@ -579,14 +581,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 end
 
 local function filterSteering(p, target, dt)
-  if p.emergencyEscape and p.emergencySteerFullLock then
-    p.steerFiltered=target
-    p.steer=clamp(target,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
-    p.steerRateLimited=false
-    p.steerRateLimitDemand=0
-    p.steerRateLimitApplied=0
-    return p.steer
-  end
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
   -- Emergency evasion temporarily increases steering slew rate; the normal
@@ -595,7 +589,8 @@ local function filterSteering(p, target, dt)
   if emergencyActive then
     p.emergencyUntil=math.max(0,safeNumber(p.emergencyUntil)-dt)
   end
-  local maxChange=CFG.STEER_RATE*dt*(emergencyActive and 2.5 or 1.0)
+  local maxChange=CFG.STEER_RATE*dt*
+    ((p.emergencyEscape or emergencyActive) and 1.8 or 1.0)
   local requestedChange=p.steerFiltered-p.steer
   local appliedChange=clamp(requestedChange,-maxChange,maxChange)
   p.steerRateLimited=math.abs(requestedChange)>maxChange+1e-6
@@ -979,6 +974,9 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
 end
 
 local function coordinatorMove(record,targetLane,records,reason,otherIndex)
+  -- Emergency escape owns its lane reservation until the physical manoeuvre
+  -- finishes. Ordinary PASS/YIELD/RETURN must never overwrite that decision.
+  if record.p.emergencyEscape then return false end
   local current=record.p.coordinatedLane or 1
   if targetLane<1 or targetLane>record.lanes.count or
       math.abs(targetLane-current)~=1 then return false end
@@ -1173,6 +1171,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           (not sameDirection and math.abs(gap)<math.max(5.0,
             (follower.speed+leader.speed)*1.5+5.0))
         if sameLane and conflictDistance and
+            not follower.p.emergencyEscape and not leader.p.emergencyEscape and
             not handled[follower.index..":"..leader.index] then
           handled[follower.index..":"..leader.index]=true
           local lane=follower.p.coordinatedLane
@@ -1306,7 +1305,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   -- has cleared the full pair of vehicle lengths and the home slot is free.
   for _,rec in ipairs(records) do
     local p=rec.p
-    if rec.managed and p.passTargetIndex~=nil then
+    if rec.managed and not p.emergencyEscape and p.passTargetIndex~=nil then
       local target
       for _,other in ipairs(records) do
         if other.index==p.passTargetIndex then target=other;break end
@@ -1320,7 +1319,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         p.coordinatorReturn=true
       end
     end
-    if rec.managed and p.yieldingFor~=nil then
+    if rec.managed and not p.emergencyEscape and p.yieldingFor~=nil then
       local faster
       for _,other in ipairs(records) do
         if other.index==p.yieldingFor then faster=other;break end
@@ -1330,7 +1329,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         p.yieldingFor=nil;p.coordinatorReturn=true
       end
     end
-    if rec.managed and p.coordinatorReturn and p.homeLane and
+    if rec.managed and not p.emergencyEscape and p.coordinatorReturn and p.homeLane and
         p.coordinatedLane~=p.homeLane and p.coordinatorChangeT<=0 then
       local step=p.homeLane>p.coordinatedLane and 1 or -1
       if coordinatorLaneFree(rec,p.coordinatedLane+step,records,8.0) then
@@ -1608,15 +1607,19 @@ function Driver.update(carIndex, car, dt)
   end
 
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
+  -- An emergency lane reservation being unavailable is not a recovery
+  -- failure. Teleporting here hid the traffic-planning problem and made an
+  -- identical obstacle scenario appear random. Keep the car on the road and
+  -- let prepareTraffic retry the adjacent-lane reservation every frame.
   if p.emergencyRescueReady then
     p.emergencyRescueReady=false
-    p.emergencyBlockedT=0
-    p.emergencyWaitLogged=false
-    p.rescueRetryT=1.0
-    local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
-    H.log("RESCUE_ATTEMPT id=%d reason=all_lanes_blocked_5s success=%s",
-      carIndex,tostring(rescued))
-    if rescued then return end
+    if not p.emergencyWaitLongLogged then
+      p.emergencyWaitLongLogged=true
+      H.log("TRAFFIC_EMERGENCY_WAIT_CONTINUE id=%d blocked=%.2f",
+        carIndex,safeNumber(p.emergencyBlockedT))
+    end
+  elseif safeNumber(p.emergencyBlockedT)<=0 then
+    p.emergencyWaitLongLogged=false
   end
   local blockingGap=nil
   if not p.projectionLost then
