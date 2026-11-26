@@ -2207,8 +2207,9 @@ function Driver.update(carIndex, car, dt)
     p.trafficAction=="WAIT_YIELD" or p.trafficAction=="YIELDING" or
     p.pendingYieldTarget~=nil or p.yieldRequestBy~=nil or
     p.overtakeSide~=0 or p.returningFromPass
-  local nearbyLaneLeader=p.trafficGap>=0 and
-    p.trafficGap<math.max(30.0,speed*2.0+10.0)
+  local trafficGap=safeNumber(p.trafficGap,-1)
+  local nearbyLaneLeader=trafficGap>=0 and
+    trafficGap<math.max(30.0,speed*2.0+10.0)
   if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 and
      not trafficWait and not nearbyLaneLeader and
      not p.projectionLost and not p.racingPlanBlocked then
