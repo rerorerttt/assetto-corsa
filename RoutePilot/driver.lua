@@ -136,6 +136,7 @@ local function newPersonality(carIndex)
     yieldRequestTimer = 0, pendingYieldTarget = nil,
     pendingPassOffset = nil, pendingYieldTimer = 0,
     pendingYieldGap = nil, pendingYieldSpeed = nil, pendingPassDistance = nil,
+    pendingYieldGroup = nil, passGroupTargets = nil,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -1140,6 +1141,37 @@ local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
   if laneOccupied(leaderIndex,leaderCar,desired,nil) then return nil end
   return desired
 end
+local function listContains(list,value)
+  if type(list)~="table" then return false end
+  for i=1,#list do if list[i]==value then return true end end
+  return false
+end
+
+local function pendingGroupReady(p,ownerIndex)
+  local group=p.pendingYieldGroup
+  if type(group)~="table" or #group==0 then return false end
+  for i=1,#group do
+    local member=state.p[group[i]]
+    local car=ac.getCar(group[i])
+    if not member or not car or not car.isActive or
+       member.yieldRequestBy~=ownerIndex or not member.yieldReady then
+      return false
+    end
+  end
+  return true
+end
+
+local function releaseYieldGroup(ownerIndex,group)
+  if type(group)~="table" then return end
+  for i=1,#group do
+    local member=state.p[group[i]]
+    if member and member.yieldRequestBy==ownerIndex then
+      member.yieldRequestBy=nil;member.yieldOffset=nil
+      member.yieldReady=false;member.yieldRequestTimer=0
+    end
+  end
+end
+
 local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
   -- Follow only the leader in the car's current corridor. A vehicle in a
   -- separate usable lane must never reduce this car's target speed.
@@ -1457,8 +1489,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
   -- Predict one second of available acceleration rather than treating an
   -- unbounded cruise target as an instantaneous speed advantage.
-  local speedAdvantage=speed-leaderPace+acceleration
-  local slower=speedAdvantage>=3.0
+  local speedAdvantage=speed-leaderPace+acceleration*1.5
+  local slower=speedAdvantage>=1.5
   if slower then
     local targetCar=ac.getCar(leaderIndex)
     local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
@@ -1481,11 +1513,11 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       estimatedPassDistance=speed*passTime+
         0.5*acceleration*passTime*passTime
     end
-    local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
-    local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
+    local urgentGap=clamp(22.0+speed*1.25,32.0,85.0)
+    local canActuallyPass=speedAdvantage>=1.5 and estimatedPassDistance<=260.0 and
       speed>=(leaderSpeed or 0)-4.0
     local urgent=canActuallyPass and gap<=urgentGap
-    local passWindow=math.max(45.0,32.0+speed*1.5)
+    local passWindow=math.max(65.0,48.0+speed*2.0)
     p.followTimer=p.followTimer+dt
     local passRequestReady=(p.pendingYieldTarget==leaderIndex or (canActuallyPass and gap<=passWindow)) and
       p.overtakeSide==0 and p.overtakeRetryT<=0
@@ -1635,10 +1667,10 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
   local lateralUse=clamp(math.abs(safeNumber(p.lateralAccel))/
     math.max(0.1,lateralLimit),0,1)
-  local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
+  local cornerScale=1.0-math.min(0.10,CFG.TC_CORNER_CUT*0.45)*lateralUse*lateralUse
   gas=gas*p.tractionScale*cornerScale
 
-  if speed<5 then gas=math.min(gas,0.6) end
+  if speed<5 then gas=math.min(gas,0.82) end
   if error>=0 then brake=0 end
   p.gas=clamp(gas,0,CFG.MAX_GAS)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)
