@@ -365,9 +365,11 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- arc distance. The controller never aims at the next raw recorded node.
   local locked=p.routeLocked and p.routeProgress~=nil
   local recovery=p.offTrackRecovering==true
-  if recovery then p.routeLocked=false end
+  local recoveryHint=p.routeProgress
+  local allowGlobal=not recovery and not locked
+  if recoveryHint==nil then allowGlobal=true end
   local ps,pl,pg,pt,pd,tx,tz=routeProjection(
-    car,p.segIdx,recovery or not locked,recovery and nil or p.routeProgress,speed,dt,recovery)
+    car,p.segIdx,allowGlobal,recoveryHint,speed,dt,recovery)
   local projection=ps and {s=ps,lateral=pl,seg=pg,t=pt,distance=pd,tx=tx,tz=tz} or nil
   if not projection or (p.spawnSeeded and projection.distance>8.0) then
     p.projectionLost=true; p.targetSpeed=0; p.gas=0; p.brake=1; p.lineDist=999
@@ -1313,9 +1315,12 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         end
         if chosen then
           coordinatorEmergencyMove(rec,chosen,records,nearestIndex)
+          p.emergencyBlockedT=0
+          p.emergencyRescueReady=false
+          p.emergencyWaitLogged=false
         else
           p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
-          p.emergencyRescueReady=p.emergencyBlockedT>=5.0
+          p.emergencyRescueReady=p.emergencyBlockedT>=10.0
           p.trafficAction="EMERGENCY_WAIT"
           p.trafficReason="all_lanes_occupied"
           if not p.emergencyWaitLogged then
@@ -1584,12 +1589,10 @@ function Driver.update(carIndex, car, dt)
   local previousRouteProgress=p.routeProgress
   local recovering=p.offTrackRecovering==true or safeNumber(p.offTrackT)>0
   local projectionHint=p.routeProgress
-  if recovering then
-    p.routeLocked=false
-    projectionHint=nil
-  end
+  local allowGlobal=not recovering and not p.routeLocked
+  if projectionHint==nil then allowGlobal=true end
   local progress, projectedLateral, projectedSeg, _, projectionDistance =
-    routeProjection(car,p.segIdx,recovering or not p.routeLocked,projectionHint,speed,dt,recovering)
+    routeProjection(car,p.segIdx,allowGlobal,projectionHint,speed,dt,recovering)
   if progress==nil and not p.spawnSeeded and previousRouteProgress~=nil then
     -- Off-track recovery may use a nearby global projection, but only when
     -- heading and route-progress continuity agree. This avoids jumping to a
