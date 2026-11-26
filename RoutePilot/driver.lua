@@ -131,6 +131,9 @@ local function newPersonality(carIndex)
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
     trafficPriority = 0,
+    yieldRequestBy = nil, yieldOffset = nil, yieldReady = false,
+    yieldRequestTimer = 0, pendingYieldTarget = nil,
+    pendingPassOffset = nil, pendingYieldTimer = 0,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -251,10 +254,8 @@ local function planTargetSpeed(p,speed)
     -- real corner can command a large speed drop on a visually straight.
     -- During a pass/return, the actual offset path is authoritative because
     -- the car is deliberately leaving the reference line.
-    local usePlannedCurvature=p.racingPlanMode=="PASS" or
-      p.racingPlanMode=="RETURN"
-    local curvature=math.abs(safeNumber(
-      usePlannedCurvature and planned and planned.k or roadSample.k))
+    -- Braking must use the same optimized path that steering follows.
+    local curvature=math.abs(safeNumber(planned and planned.k or roadSample.k))
     if curvature>math.max(CFG.CURVE_MIN,0.0018) then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*0.90
       local curveSpeed=math.sqrt(lateralLimit/curvature)
@@ -761,7 +762,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   p.racingPlanTimer=math.max(0,safeNumber(p.racingPlanTimer)-dt)
   local forcedMode=nil
   if p.overtakeSide~=0 then forcedMode="PASS"
-  elseif p.returningFromPass then forcedMode="RETURN" end
+  elseif p.returningFromPass then forcedMode="RETURN"
+  elseif p.yieldRequestBy~=nil and p.yieldOffset~=nil then forcedMode="YIELD" end
   if p.racingPlanTimer>0 and p.racingPlanMode==(forcedMode or "OPEN") then
     return
   end
@@ -773,6 +775,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedOffset=safeNumber(p.passLat,p.laneOffset or base)
   elseif mode=="RETURN" then
     fixedOffset=safeNumber(p.baseLaneOffset,base)
+  elseif mode=="YIELD" then
+    fixedOffset=safeNumber(p.yieldOffset,base)
   end
   if fixedOffset~=nil then
     local lateralDelta=math.abs(fixedOffset-safeNumber(p.latOff,base))
@@ -1045,15 +1049,51 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   return nil
 end
 
+local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
+  if not leaderCar or not leaderState or leaderState.routeProgress==nil then return nil end
+  local seg=leaderState.segIdx or 1
+  local bl,br=H.boundsAt(seg)
+  local width=br-bl
+  local laneCount=math.max(1,math.floor((width+1.0)/4.0))
+  local slotWidth=width/laneCount
+  local lateral=safeNumber(leaderState.latOff,leaderState.laneOffsetCurrent or 0)
+  local slot=1
+  for i=2,laneCount do
+    if math.abs(bl+(i-0.5)*slotWidth-lateral)<math.abs(bl+(slot-0.5)*slotWidth-lateral) then slot=i end
+  end
+  local slotLow=bl+(slot-1)*slotWidth
+  local slotHigh=slotLow+slotWidth
+  local halfWidth=math.max(0.75,safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.x,2.0)*0.5)
+  local safeLow=math.max(bl+halfWidth+BOUND_MARGIN,slotLow+halfWidth+0.12)
+  local safeHigh=math.min(br-halfWidth-BOUND_MARGIN,slotHigh-halfWidth-0.12)
+  if safeHigh-safeLow<0.24 then return nil end
+  local direction=passOffset>lateral and -1 or 1
+  local desired=clamp(lateral+direction*0.42,safeLow,safeHigh)
+  if math.abs(desired-lateral)<0.22 then return nil end
+  local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
+  local corridorLow,corridorHigh=safeCorridorForPreview(state.routeGeometry,leaderState.routeProgress,18.0,leaderCar,fx,fz)
+  if not corridorLow or not corridorHigh or desired<corridorLow or desired>corridorHigh then return nil end
+  if laneOccupied(leaderIndex,leaderCar,desired,nil) then return nil end
+  return desired
+end
 local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
   -- Follow only the leader in the car's current corridor. A vehicle in a
   -- separate usable lane must never reduce this car's target speed.
   return safeFollowingSpeed(currentGap,currentSpeed,p.brakeAccelEstimate)
 end
 
-local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,passDistance)
+local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,passDistance,forcedOffset)
   if p.overtakeRetryT>0 then return false end
-  local offset=findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,passDistance)
+  local offset=forcedOffset or findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,passDistance)
+  if forcedOffset~=nil then
+    local reserved=passingReservationBlocked(carIndex,p,offset,speed)
+    local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
+      p.laneOffsetCurrent or p.latOff or 0,offset,passDistance or 60.0,speed)
+    if reserved or laneOccupied(carIndex,car,offset,leaderIndex) or not clear then
+      p.lastPassDeniedReason=reason or "yielded_corridor_no_longer_clear"
+      return false
+    end
+  end
   if offset==nil then
     p.overtakeRetryT=0.25
     if not p.overtakeDeniedLogged then
@@ -1079,6 +1119,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
       math.max(8.0,speed))*2.0+4.0)
   p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
+  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
@@ -1106,7 +1147,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   else
     p.trafficPriority=0
   end
-  local ownProgress, _, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
+  local ownProgress, ownLateral, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
   if ownProgress == nil then
     p.projectionLost = true
     p.trafficPriority=0
@@ -1117,6 +1158,28 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   p.routeLocked = true
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
+  if ownLateral~=nil then p.latOff=ownLateral end
+  if p.yieldRequestBy~=nil then
+    local requester=state.p[p.yieldRequestBy]
+    local requesterCar=ac.getCar(p.yieldRequestBy)
+    if not requester or not requesterCar or not requesterCar.isActive or requester.pendingYieldTarget~=carIndex or requester.overtakeSide~=0 or p.overtakeSide~=0 or p.returningFromPass then
+      p.yieldRequestBy=nil;p.yieldOffset=nil;p.yieldReady=false;p.yieldRequestTimer=0
+    else
+      p.yieldRequestTimer=safeNumber(p.yieldRequestTimer)+dt
+      p.laneOffset=p.yieldOffset
+      local lateralError=math.abs(safeNumber(p.latOff)-safeNumber(p.yieldOffset))
+      local lateralSpeed=math.abs(safeNumber(p.lateralVelocityFiltered))
+      p.yieldReady=lateralError<=0.28 and lateralSpeed<=0.65
+      p.trafficAction="YIELDING"
+      p.trafficReason=p.yieldReady and "yield_position_confirmed" or "moving_to_yield_position"
+      p.trafficLeaderIndex=p.yieldRequestBy;p.trafficTargetOffset=safeNumber(p.yieldOffset)
+      if p.yieldRequestTimer>8.0 then
+        requester.pendingYieldTarget=nil;requester.pendingPassOffset=nil;requester.pendingYieldTimer=0
+        p.yieldRequestBy=nil;p.yieldOffset=nil;p.yieldReady=false;p.yieldRequestTimer=0
+        H.log("CAR=%d YIELD_ABORT reason=timeout",carIndex)
+      end
+    end
+  end
   if p.returningFromPass then
     p.trafficPriority=900000
     return targetSpeed
@@ -1175,6 +1238,10 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.followTimer=0
       p.blockedT=0
       p.overtakeRetryT=2.0
+      local yielded=state.p[p.passTargetIndex]
+      if yielded and yielded.yieldRequestBy==carIndex then
+        yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
+      end
       H.log("CAR=%d OVERTAKE_ABORT reason=%s return=%.2f",
         carIndex,passDeadlocked and "blocked" or "timeout",returnOffset)
       return targetSpeed
@@ -1231,6 +1298,10 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.passDeadline=nil
       p.followTimer=0
       p.blockedT=0
+      local yielded=state.p[p.passTargetIndex]
+      if yielded and yielded.yieldRequestBy==carIndex then
+        yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
+      end
       H.log("CAR=%d OVERTAKE_END return=%.2f clearance=2_car_lengths",
         carIndex,returnOffset)
       return targetSpeed
