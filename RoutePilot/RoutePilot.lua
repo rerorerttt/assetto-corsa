@@ -1034,7 +1034,7 @@ function windowMain(dt)
       ui.tabItem("Dev", function()
         ui.text("Диагностика контроллера RoutePilot")
         ui.text("Подробная телеметрия рулевого управления и динамики автомобиля.")
-        if ui.button(state.trafficDiagnostics and "ЛогиТрафик: ВКЛ" or "ЛогиТрафик",vec2(-0.5,30)) then
+        if ui.button(state.trafficDiagnostics and "Трафик лог: ВКЛ" or "Трафик лог: ВЫКЛ",vec2(-0.5,30)) then
           state.trafficDiagnostics=not state.trafficDiagnostics
           state.trafficDiagTimer=0
           state.trafficDiagLast={}
@@ -1045,7 +1045,7 @@ function windowMain(dt)
         end
         ui.text(state.trafficDiagnostics and
           "Запись трафика 5 Гц: положение, скорость, роли PASS/YIELD, смещения, причины отказа, таймеры и управление. Файл routepilot_trace.txt." or
-          "Нажмите кнопку во время движения для подробного лога обгонов.")
+          "Подробный лог трафика выключен. Обычные логи продолжают записываться; подробная запись включается только этой кнопкой.")
 
         if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
           state.steeringDiagnostics=not state.steeringDiagnostics
