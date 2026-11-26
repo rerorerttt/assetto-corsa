@@ -63,6 +63,15 @@ end
 local function flushLog()
   if logger and logger.flush then pcall(logger.flush, logger) end
 end
+if not okDriver then
+  writeLog("DRIVER_MODULE_LOAD_FAILED err=%s",tostring(Driver))
+elseif type(Driver)~="table" or type(Driver.update)~="function" then
+  writeLog("DRIVER_MODULE_INVALID type=%s update=%s",
+    type(Driver),tostring(type(Driver)=="table" and Driver.update or nil))
+else
+  writeLog("DRIVER_MODULE_READY update=%s setup=%s",
+    tostring(type(Driver.update)),tostring(type(Driver.setup)))
+end
 local function clamp(v,lo,hi) return math.max(lo,math.min(hi,v)) end
 local function lerp(a,b,t) return a+(b-a)*t end
 local function flatDist(a,b)
@@ -351,6 +360,23 @@ local function carAheadFull(carIndex,car,lateralWidth)
 end
 local function recordSecondTelemetry(sim)
   local any=false
+  local activeCount,objectCount,stateCount=0,0,0
+  local carState={}
+  for i=0,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car then
+      objectCount=objectCount+1
+      if car.isActive then activeCount=activeCount+1 end
+      if state.p[i] then stateCount=stateCount+1 end
+      if i>0 then
+        carState[#carState+1]=string.format("%d:%s/%s/%s",i,
+          tostring(car.isActive),tostring(car.isAIControlled),tostring(state.p[i]~=nil))
+      end
+    end
+  end
+  writeLog("FRAME_STATUS cars=%d objects=%d active=%d states=%d enabled=%s loaded=%s driver=%s roster=%s",
+    sim.carsCount,objectCount,activeCount,stateCount,tostring(state.enabled),
+    tostring(state.loaded),tostring(Driver~=nil),table.concat(carState,","))
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     local p=state.p[i]
