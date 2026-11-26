@@ -127,7 +127,7 @@ local function newPersonality(carIndex)
     raceOffsetRaw = 0, raceOffsetCurrent = 0,
     pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
     stuck = 0, blockedT = 0, passT = 0,
-    lineDist = 0, latOff = 0, targetSpeed = 0,
+    lineDist = 0, latOff = 0, targetSpeed = 0, freeTargetSpeed = 0,
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
@@ -1733,317 +1733,72 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     p.laneOffset=p.baseLaneOffset
   end
 
+  -- A traffic leader is an obstacle only while it occupies our corridor.
+  -- Compare independent free-running pace, not speed already capped by FOLLOW.
   if not gap or not leaderIndex then
-    if p.pendingYieldTarget~=nil then
-      local targetIndex=p.pendingYieldTarget
-      if not p.pendingYieldOrder then state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1;p.pendingYieldOrder=state.trafficRequestSerial end
-      local targetState=state.p[targetIndex]
-      local targetCar=ac.getCar(targetIndex)
-      if targetState and targetCar and targetCar.isActive then
-        if targetState.yieldRequestBy==nil then
-          local pendingOffset=p.pendingPassOffset
-          if pendingOffset==nil and p.overtakeRetryT<=0 then
-            pendingOffset=findPassingOffset(carIndex,car,p,targetIndex,targetState.latOff,speed,p.pendingPassDistance)
-            if pendingOffset==nil then p.overtakeRetryT=0.25 end
-          end
-          p.pendingPassOffset=pendingOffset
-          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset,carIndex) or nil
-          if pendingOffset~=nil and yieldOffset==nil then p.overtakeRetryT=0.25 end
-          if yieldOffset~=nil then
-            targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
-            targetState.yieldReady=false;targetState.yieldRequestTimer=0
-            H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,targetIndex,yieldOffset,safeNumber(p.pendingPassOffset))
-          end
-        end
-        if targetState.yieldRequestBy==carIndex and pendingGroupReady(p,carIndex) then
-          p.emergencyPassRequest=false
-          if beginOvertake(carIndex,car,p,safeNumber(p.pendingYieldGap,12.0),targetIndex,targetState.latOff,speed,p.pendingPassDistance,p.pendingPassOffset) then
-            p.trafficPriority=1000000;p.trafficAction="PASSING"
-            p.trafficReason="yield_confirmed";p.trafficLeaderIndex=targetIndex
-            p.trafficTargetOffset=safeNumber(p.passLat)
-            return targetSpeed
-          end
-          releaseYieldGroup(carIndex,p.pendingYieldGroup)
-          p.pendingYieldGroup=nil
-          targetState.yieldRequestBy=nil;targetState.yieldOffset=nil;targetState.yieldReady=false
-          p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
-          p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil
-          p.pendingPassDistance=nil
-        else
-          local targetProgress=routeProjection(targetCar,targetState.segIdx,not targetState.routeLocked,targetState.routeProgress,targetCar.speedMs,dt)
-          local queueGap=targetProgress and routeGap(p.routeProgress,targetProgress) or safeNumber(p.pendingYieldGap,12.0)
-          p.trafficAction=targetState.yieldRequestBy==carIndex and "WAIT_YIELD" or
-            (targetState.yieldRequestBy~=nil and "WAIT_QUEUE" or "FOLLOW")
-          p.trafficReason=targetState.yieldRequestBy==carIndex and "leader_not_yet_clear" or
-            (targetState.yieldRequestBy~=nil and "earlier_pass_has_slot" or "no_safe_pass_corridor")
-          p.trafficLeaderIndex=targetIndex;p.trafficGap=queueGap
-          return math.min(targetSpeed,safeFollowingSpeed(queueGap,targetCar.speedMs,p.brakeAccelEstimate))
-        end
-      end
-      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
-      p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
-    end
-    p.followTimer = 0
-    p.blockedT = 0
-    p.trafficPriority=0
-    p.trafficAction="OPEN"
-    p.trafficReason="no_leader_in_path"
+    p.followTimer=0;p.blockedT=0;p.trafficPriority=0
+    p.trafficAction="OPEN";p.trafficReason="no_leader_in_path"
     return targetSpeed
   end
-  p.trafficAction="FOLLOW"
-  p.trafficReason="leader_in_path"
-
-  local leaderPace=math.max(0,leaderSpeed or 0)
-  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
+  p.trafficAction="FOLLOW";p.trafficReason="leader_in_path"
   local leaderState=state.p[leaderIndex]
-  local leaderAcceleration=clamp(safeNumber(
-    leaderState and leaderState.accelEstimate,acceleration),0.5,18.0)
-  -- Compare predicted speeds, not our acceleration against a fictitious
-  -- stationary leader: equal cars at equal speed must not trigger passes.
-  local relativeAcceleration=acceleration-leaderAcceleration
-  local speedAdvantage=speed-leaderPace+relativeAcceleration*1.5
-  local slower=speedAdvantage>=1.5
-  if slower then
-    local targetCar=ac.getCar(leaderIndex)
-    local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
-    local targetLength=math.max(3.0,safeNumber(targetCar and targetCar.aabbSize and targetCar.aabbSize.z,4.5))
-    local clearanceDistance=ownLength+targetLength+6.0
-    -- Include the actual distance to the leader. Estimating only the
-    -- side-by-side clearance made the planner return to the source lane
-    -- before the target was passed when the initial gap was large.
-    local requiredClosure=math.max(0,safeNumber(gap))+clearanceDistance
-    local relativeSpeed=speed-leaderPace
-    local passTime=math.huge
-    local estimatedPassDistance=math.huge
-    if relativeSpeed>=1.0 then
-      passTime=requiredClosure/relativeSpeed
-      estimatedPassDistance=speed*passTime
-    elseif relativeAcceleration>0.25 then
-      passTime=(-relativeSpeed+
-        math.sqrt(relativeSpeed*relativeSpeed+
-          2.0*relativeAcceleration*requiredClosure))/relativeAcceleration
-      estimatedPassDistance=speed*passTime+
-        0.5*acceleration*passTime*passTime
+  local leaderFreeSpeed=math.max(0,safeNumber(
+    leaderState and leaderState.freeTargetSpeed,leaderSpeed or 0))
+  local ownFreeSpeed=math.max(0,safeNumber(targetSpeed))
+  local ownAccel=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
+  local leaderAccel=clamp(safeNumber(
+    leaderState and leaderState.accelEstimate,4.0),0.5,18.0)
+  local relativeSpeed=speed-(leaderSpeed or 0)
+  local relativeAccel=ownAccel-leaderAccel
+  -- Initiate before FOLLOW suppresses the speed difference. The free route
+  -- target and learned acceleration potential describe the car's own pace.
+  local potentialAdvantage=math.max(
+    ownFreeSpeed-leaderFreeSpeed,
+    relativeAccel*2.0+relativeSpeed)
+  local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
+  local leaderCar=ac.getCar(leaderIndex)
+  local leaderLength=math.max(3.0,safeNumber(
+    leaderCar and leaderCar.aabbSize and leaderCar.aabbSize.z,4.5))
+  local requiredClosure=math.max(0,safeNumber(gap))+ownLength+leaderLength+5.0
+  local passTime=math.huge
+  if relativeSpeed>0.5 then
+    passTime=requiredClosure/relativeSpeed
+  elseif relativeAccel>0.20 then
+    local discriminant=relativeSpeed*relativeSpeed+
+      2.0*relativeAccel*requiredClosure
+    if discriminant>=0 then
+      passTime=(-relativeSpeed+math.sqrt(discriminant))/relativeAccel
     end
-    local urgentGap=clamp(22.0+speed*1.25,32.0,85.0)
-    local canActuallyPass=speedAdvantage>=1.5 and estimatedPassDistance<=260.0 and
-      speed>=(leaderSpeed or 0)-4.0
-    local urgent=canActuallyPass and gap<=urgentGap
-    local passWindow=math.max(65.0,48.0+speed*2.0)
-    p.followTimer=p.followTimer+dt
-    local passRequestReady=(p.pendingYieldTarget==leaderIndex or (canActuallyPass and gap<=passWindow)) and
-      p.overtakeSide==0 and p.overtakeRetryT<=0
-    if passRequestReady then
-      -- Requests are ranked by urgency before cars are updated. The next
-      -- frame's deterministic ordering lets the most urgent valid request
-      -- reserve first, instead of granting every simultaneous request to
-      -- whichever car happens to have the lowest simulation index.
-      p.trafficPriority=10000+
-        clamp(passWindow-gap,0,passWindow)*10+
-        clamp(speedAdvantage,0,50)*2+
-        (urgent and 1000 or 0)
-    else
-      p.trafficPriority=0
-    end
-    if passRequestReady then
-      local leaderState=state.p[leaderIndex]
-      local leaderCar=ac.getCar(leaderIndex)
-      if leaderState and leaderCar and leaderCar.isActive and
-         leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
-        -- A pending reservation is not an active pass. A materially stronger
-        -- eligible car may take over that request before the yield manoeuvre
-        -- begins; once the pass starts, its reservation is never pre-empted.
-        local ownerIndex=leaderState.yieldRequestBy
-        local ownerState=state.p[ownerIndex]
-        local ownerCar=ac.getCar(ownerIndex)
-        if ownerState and ownerCar and ownerCar.isActive and
-           ownerState.overtakeSide==0 and not ownerState.returningFromPass then
-          local ownScore=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)*100.0+
-            math.max(0,safeNumber(car.speedMs))*2.0
-          local ownerScore=clamp(safeNumber(ownerState.accelEstimate,4.0),0.5,18.0)*100.0+
-            math.max(0,safeNumber(ownerCar.speedMs))*2.0
-          if ownScore>ownerScore+25.0 then
-            releaseYieldGroup(ownerIndex,ownerState.pendingYieldGroup or {leaderIndex})
-            ownerState.pendingYieldGroup=nil
-            ownerState.pendingYieldTarget=nil;ownerState.pendingPassOffset=nil
-            ownerState.pendingYieldTimer=0;ownerState.pendingYieldOrder=nil
-            ownerState.pendingYieldGap=nil;ownerState.pendingYieldSpeed=nil
-            ownerState.pendingPassDistance=nil
-            leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil
-            leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
-            H.log("YIELD_PREEMPT leader=%d old=%d new=%d old_score=%.1f new_score=%.1f",
-              leaderIndex,ownerIndex,carIndex,ownerScore,ownScore)
-          end
-        end
-      end
-      if not leaderState or not leaderCar or not leaderCar.isActive or
-         not leaderCar.isAIControlled or leaderState.overtakeSide~=0 or
-         leaderState.returningFromPass or leaderState.pendingYieldTarget~=nil then
-        p.lastPassDeniedReason="leader_not_yield_capable"
-      elseif leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
-        p.pendingYieldTarget=leaderIndex;p.pendingYieldGap=gap
-        if not p.pendingYieldOrder then state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1;p.pendingYieldOrder=state.trafficRequestSerial end
-        p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
-        p.trafficAction="WAIT_QUEUE";p.trafficReason="earlier_pass_has_slot"
-        p.trafficLeaderIndex=leaderIndex
-        return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
-      else
-        local passOffset=p.pendingYieldTarget==leaderIndex and p.pendingPassOffset or nil
-        if passOffset==nil and p.overtakeRetryT<=0 then
-          passOffset=findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,estimatedPassDistance)
-          if passOffset==nil then p.overtakeRetryT=0.25 end
-        end
-        if passOffset~=nil then
-          if leaderState.yieldRequestBy==nil or leaderState.yieldRequestBy==carIndex then
-            if leaderState.yieldRequestBy==nil then
-              local group,farGap=collectYieldGroup(carIndex,car,p,leaderIndex,
-                math.min(110.0,math.max(45.0,estimatedPassDistance+20.0)))
-              local groupPassDistance=estimatedPassDistance
-              if #group>1 then
-                local farState=state.p[group[#group]]
-                local farCar=ac.getCar(group[#group])
-                local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
-                local farLength=math.max(3.0,safeNumber(farCar and farCar.aabbSize and farCar.aabbSize.z,4.5))
-                local required=farGap+ownLength+farLength+6.0
-                local relative=speed-(farCar and safeNumber(farCar.speedMs) or leaderPace)
-                local farAcceleration=clamp(safeNumber(
-                  farState and farState.accelEstimate,leaderAcceleration),0.5,18.0)
-                local relativeAccel=acceleration-farAcceleration
-                local t=math.huge
-                if relative>=1.0 then
-                  t=required/relative
-                elseif relativeAccel>0.25 then
-                  t=(-relative+math.sqrt(relative*relative+
-                    2.0*relativeAccel*required))/relativeAccel
-                end
-                local groupDistanceEstimate=1000.0
-                if t<math.huge and t==t then
-                  groupDistanceEstimate=speed*t+0.5*acceleration*t*t
-                end
-                groupPassDistance=math.max(groupPassDistance,
-                  math.min(1000.0,groupDistanceEstimate))
-                local groupOffset=groupPassDistance<=300.0 and
-                  findPassingOffset(carIndex,car,p,leaderIndex,
-                    leaderLateral,speed,groupPassDistance) or nil
-                if groupOffset~=nil then passOffset=groupOffset
-                else group={leaderIndex};groupPassDistance=estimatedPassDistance end
-              end
-              local assigned={}
-              local groupOK=true
-              for gi=1,#group do
-                local memberIndex=group[gi]
-                local member=state.p[memberIndex]
-                local memberCar=ac.getCar(memberIndex)
-                local memberYield=member and memberCar and
-                  chooseYieldOffset(memberIndex,memberCar,member,passOffset,carIndex,group) or nil
-                if not member or not memberCar or not memberCar.isActive or
-                   (member.yieldRequestBy~=nil and member.yieldRequestBy~=carIndex) or
-                   memberYield==nil then
-                  groupOK=false
-                  break
-                end
-                assigned[#assigned+1]={index=memberIndex,offset=memberYield}
-              end
-              if not groupOK and #group>1 then
-                -- If the full pack cannot yield into one common safe slot,
-                -- downgrade to the nearest leader instead of abandoning a
-                -- valid ordinary one-car overtake.
-                group={leaderIndex};groupPassDistance=estimatedPassDistance
-                passOffset=findPassingOffset(carIndex,car,p,leaderIndex,
-                  leaderLateral,speed,groupPassDistance)
-                assigned={}
-                local member=state.p[leaderIndex]
-                local memberCar=ac.getCar(leaderIndex)
-                local memberYield=passOffset and member and memberCar and
-                  chooseYieldOffset(leaderIndex,memberCar,member,passOffset,carIndex,group) or nil
-                groupOK=member~=nil and memberCar~=nil and memberCar.isActive and
-                  member.yieldRequestBy==nil and memberYield~=nil
-                if groupOK then assigned[1]={index=leaderIndex,offset=memberYield} end
-              end
-              if groupOK then
-                for gi=1,#assigned do
-                  local item=assigned[gi]
-                  local member=state.p[item.index]
-                  member.yieldRequestBy=carIndex;member.yieldOffset=item.offset
-                  member.yieldReady=false;member.yieldRequestTimer=0
-                  H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f group=%d",
-                    carIndex,item.index,item.offset,passOffset,#group)
-                end
-                p.pendingYieldGroup=group
-                p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
-                if not p.pendingYieldOrder then
-                  state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1
-                  p.pendingYieldOrder=state.trafficRequestSerial
-                end
-                p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0
-                p.pendingPassDistance=groupPassDistance
-              else
-                releaseYieldGroup(carIndex,assigned and (function()
-                  local ids={} for _,v in ipairs(assigned) do ids[#ids+1]=v.index end return ids
-                end)() or group)
-                p.pendingYieldGroup=nil
-                p.lastPassDeniedReason="group_yield_unavailable";p.overtakeRetryT=0.25
-              end
-            end
-            if leaderState.yieldRequestBy==carIndex then
-              p.pendingYieldTimer=safeNumber(p.pendingYieldTimer)+dt
-              if pendingGroupReady(p,carIndex) then
-                p.emergencyPassRequest=urgent
-                if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,p.pendingPassDistance or estimatedPassDistance,p.pendingPassOffset) then
-                  p.trafficPriority=1000000;p.trafficAction="PASSING"
-                  p.trafficReason="yield_confirmed";p.trafficLeaderIndex=leaderIndex
-                  p.trafficTargetOffset=safeNumber(p.passLat)
-                  return targetSpeed
-                end
-                releaseYieldGroup(carIndex,p.pendingYieldGroup)
-                p.pendingYieldGroup=nil
-                leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
-                p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
-              else
-                p.trafficAction="WAIT_YIELD";p.trafficReason="leader_not_yet_clear"
-                p.trafficLeaderIndex=leaderIndex;p.trafficTargetOffset=safeNumber(p.pendingPassOffset)
-                if p.pendingYieldTimer>8.5 then
-                  releaseYieldGroup(carIndex,p.pendingYieldGroup)
-                  p.pendingYieldGroup=nil
-                  leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
-                  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
-                  p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
-                  p.lastPassDeniedReason="yield_timeout"
-                else
-                  return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
-                end
-              end
-            else
-              p.lastPassDeniedReason="leader_has_no_safe_yield_space"
-              p.trafficAction="FOLLOW";p.trafficReason="leader_has_no_safe_yield_space"
-              return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
-            end
-          else
-            p.lastPassDeniedReason="yield_slot_owned_by_other_car"
-          end
-        end
-      end
-      p.trafficAction="FOLLOW"
-      p.trafficReason=p.lastPassDeniedReason or "yield_not_available"
-      p.emergencyPassRequest=false
-    elseif p.pendingYieldTarget~=nil then
-      local oldLeader=state.p[p.pendingYieldTarget]
-      if oldLeader and oldLeader.yieldRequestBy==carIndex then
-        oldLeader.yieldRequestBy=nil;oldLeader.yieldOffset=nil;oldLeader.yieldReady=false;oldLeader.yieldRequestTimer=0
-      end
-      releaseYieldGroup(carIndex,p.pendingYieldGroup or {p.pendingYieldTarget})
-      p.pendingYieldGroup=nil
-      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
-    end
-    local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
-    return math.min(targetSpeed,safe)
   end
-
-  p.followTimer = 0
-  p.blockedT = 0
-  p.trafficPriority=0
-  local safe = safeFollowingSpeed(gap, leaderSpeed or 0,p.brakeAccelEstimate)
-  return math.min(targetSpeed, safe)
+  local estimatedPassDistance=passTime<math.huge and
+    (speed*passTime+0.5*ownAccel*passTime*passTime) or math.huge
+  local passWindow=clamp(28.0+speed*1.6,45.0,95.0)
+  local canAttack=potentialAdvantage>=1.0 and
+    estimatedPassDistance<=280.0 and gap<=passWindow and
+    leaderCar~=nil and leaderCar.isActive
+  if canAttack and p.overtakeRetryT<=0 and p.overtakeSide==0 then
+    p.trafficPriority=10000+clamp(passWindow-gap,0,passWindow)*10+
+      clamp(potentialAdvantage,0,50)*5
+    local passOffset=findPassingOffset(carIndex,car,p,leaderIndex,
+      leaderLateral,speed,estimatedPassDistance)
+    if passOffset~=nil and beginOvertake(carIndex,car,p,gap,leaderIndex,
+       leaderLateral,speed,estimatedPassDistance,passOffset) then
+      p.trafficPriority=1000000;p.trafficAction="PASSING"
+      p.trafficReason="immediate_safe_corridor"
+      p.trafficLeaderIndex=leaderIndex
+      p.trafficTargetOffset=safeNumber(p.passLat)
+      return targetSpeed
+    end
+    -- Recheck in 0.10 s. No yield negotiation, queue token, acknowledgement,
+    -- or cooperation from the car being passed.
+    p.overtakeRetryT=0.10
+    p.lastPassDeniedReason="no_immediate_safe_corridor"
+  end
+  p.followTimer=0;p.blockedT=0;p.trafficPriority=0
+  local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
+  p.trafficReason=canAttack and "pass_corridor_unavailable" or
+    "leader_not_slower_on_free_pace"
+  return math.min(targetSpeed,safe)
 end
 
 local function readWheelSlip(car, p)
@@ -2353,6 +2108,7 @@ function Driver.update(carIndex, car, dt)
   -- still valid, steering falls back to the recorded spline and speed planning
   -- uses its curvature instead of commanding a stationary vehicle.
   local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
+  p.freeTargetSpeed=targetSpeed
   targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   -- Overtake state can change in this frame; rebuild the steering path before
   -- issuing controls so the first lateral movement follows the reserved side.
