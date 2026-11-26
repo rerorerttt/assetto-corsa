@@ -310,3 +310,17 @@ Implemented on `routepilot/yield-queue-time-line-2026-11-26`:
 Commit: `ae7420eabdca8643fbc3c067414aa4afdef33741`.
 
 Validation is source-level only. The updated file was fetched back from GitHub and the replacement block was inspected. No Lua compiler or Assetto Corsa/CSP runtime is available here, so no claim is made that the fix compiles or that cars have been observed driving correctly in-game. The next trace should show `RACE_LINE_FALLBACK` instead of repeated `RACE_LINE_BLOCKED reason=NO_PATH` on geometrically passable OPEN road, and should retain hard stops only where every validated fallback fails. GDD §7.3 route-projection-loss recovery remains a separate open item; this change does not weaken the existing projection-loss fail-safe.
+
+ 
+## 2026-11-26 unified traffic/racing-line correction
+
+The new `nevadadrift` trace (49.6 s) contained 342 repeated `HARD_STOP_NO_SAFE_PATH cause=NO_PATH` events. Cars 4 and 5 were stopped from the first telemetry interval (7.59 s: `TARGET_SPEED=0`, `GAS=0`), while other cars initially accelerated and then queued behind them. The root cause was not a genuine road blockage: `updateRacingPlan()` converted any other car within a broad 35 m+ longitudinal window into `TRAFFIC_HOLD`, without checking whether the vehicles' physical corridors overlapped. This forced a fixed offset based on the legacy lane slot, and the fixed-path full-body validator rejected it. The resulting planner failure was then promoted to target speed zero, propagating through `FOLLOW`.
+
+Corrected in source:
+
+- Removed proximity-only `TRAFFIC_HOLD`. Normal racing-line planning now uses the complete road width regardless of nearby cars. Traffic separation, following speed and collision decisions remain owned by `updateTrafficControl()`; geometric optimization no longer duplicates traffic arbitration.
+- In `OPEN`, the optimizer's preferred offset is now the physical road midpoint, not the legacy left-lane centre. This follows GDD §6.1: lane slots are for explicit passing/yielding manoeuvres, not ordinary driving.
+- If the dynamic optimizer returns `NO_PATH` in `OPEN`, it retries a road-midpoint path through `RacingLine.plan()`, preserving the same full-body swept-path validation. It does not jump to a stale lane offset. Explicit `PASS`, `RETURN` and `YIELD` corridors are never silently changed by this fallback.
+- The speed planner and traffic controller remain separate but sequential: the racing-line planner supplies the geometric speed envelope; traffic control only reduces it when a same-corridor leader or reserved conflict requires following. Cars in a separate corridor must not cap one another's speed.
+
+This directly addresses the trace's false stops and the GDD's requirements that ordinary driving use the whole road and that planner failures must not stop cars on passable road. It is not yet a runtime-verified speed improvement. Static source validation and the next in-game trace are still required. New diagnostics should show no `TRAFFIC_HOLD` plan mode, no repeated `HARD_STOP_NO_SAFE_PATH` on passable road, and `RACE_LINE_FALLBACK type=ROAD_CENTRE` only when the dynamic search itself fails.
