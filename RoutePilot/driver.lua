@@ -1381,6 +1381,11 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       p.trafficAction="LANE_ASSIGN"
       p.trafficReason="paired_overtake_lane_assignment"
       p.trafficTargetOffset=p.yieldOffset
+      if laneOccupied(carIndex,car,p.yieldOffset,p.yieldRequestBy) then
+        requester.passTargetLaneFailed=true
+        p.trafficAction="LANE_ASSIGN_BLOCKED"
+        p.trafficReason="assigned_lane_became_occupied"
+      end
       local gap,leaderSpeed,laneLeader=carAheadInLane(
         carIndex,car,p.yieldOffset,p.yieldRequestBy)
       p.trafficLeaderIndex=laneLeader or -1
@@ -1472,6 +1477,25 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     p.trafficTargetOffset=safeNumber(p.passLat,normalOffset)
 
     local passSafeSpeed=targetSpeed
+    local passLaneBlocked=laneOccupied(carIndex,car,p.passLat,p.passTargetIndex)
+    if passLaneBlocked then
+      local returnOffset=p.passFromOffset or normalOffset
+      if not laneOccupied(carIndex,car,returnOffset,nil) then
+        local targetIndex=p.passTargetIndex
+        p.overtakeSide=0
+        p.passTargetIndex=nil
+        p.returnTargetIndex=targetIndex
+        p.returningFromPass=true
+        p.laneOffset=returnOffset
+        p.overtakeRetryT=1.5
+        p.trafficAction="RETURNING"
+        p.trafficReason="pass_lane_became_occupied"
+        p.trafficTargetOffset=returnOffset
+        return targetSpeed
+      end
+      passSafeSpeed=math.min(passSafeSpeed,
+        safeFollowingSpeed(8.0,0,p.brakeAccelEstimate))
+    end
     if gap~=nil then
       p.trafficGap=gap
       p.trafficLeaderSpeed=leaderSpeed or 0
