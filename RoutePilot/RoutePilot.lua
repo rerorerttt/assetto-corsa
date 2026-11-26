@@ -703,24 +703,12 @@ function script.update(dt)
         local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,driveOrder,dt)
         if not okTraffic then writeLog("TRAFFIC_COORDINATOR_ERROR err=%s",tostring(errTraffic)) end
       end
-      -- Resolve simultaneous pass requests in a stable priority order.
-      -- Active manoeuvres keep priority; new requests are ranked by closing
-      -- urgency from the previous simulation step. Route progress breaks ties
-      -- before the car index, so array iteration order is not the policy.
+      -- The coordinator has already resolved all lane decisions. Update cars
+      -- in deterministic route order; no per-car yield queue or pass handshake.
       table.sort(driveOrder,function(a,b)
         local pa,pb=state.p[a],state.p[b]
         local priorityA=safeNumber(pa and pa.trafficPriority)
         local priorityB=safeNumber(pb and pb.trafficPriority)
-        -- Active pass/return reservations always run first. Among waiting
-        -- requests, preserve FIFO order rather than re-ranking by closing speed.
-        if priorityA>=900000 or priorityB>=900000 then
-          if priorityA~=priorityB then return priorityA>priorityB end
-        end
-        local queueA=pa and pa.pendingYieldOrder
-        local queueB=pb and pb.pendingYieldOrder
-        if queueA and queueB and queueA~=queueB then return queueA<queueB end
-        if queueA and not queueB then return true end
-        if queueB and not queueA then return false end
         if priorityA~=priorityB then return priorityA>priorityB end
         local progressA=pa and pa.routeProgress
         local progressB=pb and pb.routeProgress
