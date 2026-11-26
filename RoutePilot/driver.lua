@@ -709,7 +709,6 @@ local function collisionEvasion(carIndex,car,p,speed)
   local nearestLateral=0
   local nearestLongitudinal=0
   local nearestHalfWidth=0
-  local nearestHalfLength=0
   for i=0,sim.carsCount-1 do
     if i~=carIndex then
       local other=ac.getCar(i)
@@ -746,7 +745,6 @@ local function collisionEvasion(carIndex,car,p,speed)
           nearestLateral=predictedLateral
           nearestLongitudinal=predictedLongitudinal
           nearestHalfWidth=otherHalfWidth
-          nearestHalfLength=otherHalfLength
         end
       end
     end
@@ -779,7 +777,12 @@ local function collisionEvasion(carIndex,car,p,speed)
   p.collisionEvasionBlockedLogged=false
 
   local side
-  if canLeft and canRight then
+  -- Keep the selected escape direction for the duration of this threat;
+  -- changing sides while the vehicles are still converging would create
+  -- exactly the steering oscillation the emergency manoeuvre is meant to avoid.
+  if p.collisionEvasionSide==1 and canLeft then side=1
+  elseif p.collisionEvasionSide==-1 and canRight then side=-1
+  elseif canLeft and canRight then
     if nearestLateral>0.15 then side=-1
     elseif nearestLateral< -0.15 then side=1
     else side=leftRoom>=rightRoom and 1 or -1 end
