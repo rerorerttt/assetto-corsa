@@ -685,18 +685,43 @@ function script.update(dt)
     -- Drive every active car which Assetto Corsa currently marks as AI,
     -- including car 0 only while the native Ctrl+8 autopilot is active.
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
+      local driveOrder={}
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
         local shouldDrive=car and car.isActive and car.isAIControlled
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
+          driveOrder[#driveOrder+1]=i
+        elseif state.p[i] then
+          releaseCar(i)
+        end
+      end
+      -- Resolve simultaneous pass requests in a stable priority order.
+      -- Active manoeuvres keep priority; new requests are ranked by closing
+      -- urgency from the previous simulation step. Route progress breaks ties
+      -- before the car index, so array iteration order is not the policy.
+      table.sort(driveOrder,function(a,b)
+        local pa,pb=state.p[a],state.p[b]
+        local priorityA=safeNumber(pa and pa.trafficPriority)
+        local priorityB=safeNumber(pb and pb.trafficPriority)
+        if priorityA~=priorityB then return priorityA>priorityB end
+        local progressA=pa and pa.routeProgress
+        local progressB=pb and pb.routeProgress
+        if progressA~=nil and progressB~=nil and progressA~=progressB then
+          return progressA<progressB
+        end
+        if progressA~=nil and progressB==nil then return true end
+        if progressA==nil and progressB~=nil then return false end
+        return a<b
+      end)
+      for _,i in ipairs(driveOrder) do
+        local car=ac.getCar(i)
+        if car and car.isActive and car.isAIControlled then
           local okc,erc=pcall(Driver.update,i,car,dt)
           if not okc then
             writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
             releaseCar(i)
           end
-        elseif state.p[i] then
-          releaseCar(i)
         end
       end
     else
