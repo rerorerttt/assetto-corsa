@@ -1910,7 +1910,10 @@ local function coordinateTrafficFrame(sim,dt,frame)
        p.framePreparedFrame==frame and p.frameProjection and p.frameProjection.valid and
        p.overtakeSide==0 and not p.returningFromPass and p.yieldRequestBy==nil and
        p.overtakeRetryT<=0 then
-      local source=p.baseLaneOffset or p.laneOffsetCurrent or p.latOff or 0
+      -- The open racing line can move anywhere across the road. Traffic
+      -- arbitration must inspect the car's CURRENT physical corridor, not its
+      -- neutral return offset (which is not where it necessarily is now).
+      local source=p.laneOffsetCurrent or p.latOff or p.baseLaneOffset or 0
       local gap,leaderSpeed,leaderIndex,leaderLateral=carAheadInLane(i,car,source)
       if gap and leaderIndex then
         local leader=ac.getCar(leaderIndex);local lp=state.p[leaderIndex]
@@ -2034,12 +2037,12 @@ function Driver.prepareFrame(sim,dt)
   if not sim then return end
   state.trafficFrame=(state.trafficFrame or 0)+1
   local frame=state.trafficFrame
-  -- Global traffic planning is deliberately decoupled from the physics tick.
-  -- Rebuild the all-car snapshot and issue coordinated orders once per 10 s;
-  -- individual controllers continue using their own live route projection.
+  -- Re-evaluate traffic frequently enough to react before a queue forms.
+  -- The expensive route snapshot and arbitration run at 4 Hz, not every
+  -- physics frame; individual controllers retain live local safety checks.
   state.trafficPlanTimer=math.max(0,safeNumber(state.trafficPlanTimer)-math.max(0,safeNumber(dt,0.05)))
   if state.trafficPlanTimer>0 then return end
-  state.trafficPlanTimer=10.0
+  state.trafficPlanTimer=0.25
   refreshRouteMetrics()
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
