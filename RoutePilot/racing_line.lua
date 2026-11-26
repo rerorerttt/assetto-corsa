@@ -2,16 +2,21 @@
 -- Short-horizon corridor optimizer. It optimizes the actual driven path,
 -- not the recorded reference spline. All candidate points are constrained
 -- by the recorded physical road bounds and the vehicle footprint.
--- v1.1: STRAIGHT-ROAD FREEZE. On a road with no real curvature ahead (only
--- recording noise), the plan is "hold the current lateral offset". The DP
--- optimizer is not run: on a dead-straight road it re-picked a lateral
--- line every rebuild (ks_drag trace: the LANE target flipped between
--- 0.00 / -1.44 / +1.75 / -2.16 / +2.16 every 0.40 s), and the steering
--- controller chasing that jumping target is exactly what produced the
--- 150+ km/h weave that ended in loss of control.
+-- v1.2: STRAIGHT-ROAD FREEZE anchors at the RECORDED LINE. v1.1 froze the
+-- plan at the car's CURRENT lateral offset, so every 0.40 s rebuild moved
+-- the target WITH the car: the steering error stayed ~100x smaller than the
+-- real drift, nothing corrected it, the drift accumulated until the
+-- boundary guard slammed the target to the road edge — and chasing that
+-- slam at 170+ km/h is the weave. The 0.9.3 ks_drag trace proves it both
+-- ways: while the frozen target happened to sit still, the car held
+-- ~195 km/h dead straight (STEER=0.000, constant LINE_ERROR); the moment
+-- rebuilds re-anchored the target to the moving car (LANE 0.31 -> 0.33 ->
+-- 0.36 -> 0.51), the drift returned and turned into the fishtail.
+-- A FIXED anchor never moves between rebuilds; pure pursuit then pulls
+-- every small drift back gently (sub-1 m/s^2 correction, no overshoot).
 -- Safety in real corners is unchanged: plan curvature is computed from the
--- final path points, and a constant-offset path through a real bend carries
--- the road's true curvature, so the speed planner still brakes for it.
+-- final path points, so a constant-offset path through a real bend still
+-- carries the road's true curvature and the speed planner still brakes.
 local RacingLine = {}
 
 local STRAIGHT_K = 0.004 -- below this |k| (radius > 250 m) it's noise, not a corner
@@ -105,7 +110,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
 
   -- STRAIGHT-ROAD FREEZE: measure the real curvature ahead. If none of the
   -- samples exceeds the recording-noise floor, there is no corner to
-  -- optimize for — hold the current lateral offset and do NOT run the DP.
+  -- optimize for — anchor the plan at the BASE offset and do NOT run the DP.
   local maxAbsK = 0
   for i = 1, n do
     local ak = math.abs(safe(samples[i].k))
@@ -121,11 +126,13 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       offsets[i]=clamp(desired,bounds[i][1],bounds[i][2])
     end
   elseif straightFreeze then
-    -- No corner anywhere in the horizon: the best racing line on a straight
-    -- is the one the car is already on. A constant-offset target cannot
-    -- jump sides between rebuilds, so the steering has a stationary aim.
+    -- No corner anywhere in the horizon: the target is the BASE offset —
+    -- the recorded racing line — a FIXED anchor that never moves between
+    -- rebuilds. Never the car's current position: a target that follows
+    -- the car produces near-zero steering error while the real drift
+    -- accumulates, and that is exactly the 170+ km/h weave (see header).
     for i=1,n do
-      offsets[i]=clamp(initial,bounds[i][1],bounds[i][2])
+      offsets[i]=clamp(preferred,bounds[i][1],bounds[i][2])
     end
   else
     -- Dynamic programming over pairs of lateral candidates. Each transition
