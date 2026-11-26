@@ -97,12 +97,31 @@ local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, d
   refreshRouteMetrics()
   if not state.routeGeometry then return nil end
   local locked=allowGlobal ~= true and hintProgress ~= nil
-  local result = Geometry.project(state.routeGeometry, car.position,
-    hintProgress, car.look, speed or safeNumber(car.speedMs), dt or 0.05, locked)
-  if not result then return nil end
-  if not locked and not initialProjectionValid(result,car.look) then return nil end
-  return result.s, result.lateral, result.seg, result.t, result.distance,
-    result.tx, result.tz
+  local projectionSpeed=speed or safeNumber(car.speedMs)
+  local projectionDt=dt or 0.05
+  local result=Geometry.project(state.routeGeometry,car.position,
+    hintProgress,car.look,projectionSpeed,projectionDt,locked)
+
+  -- A locked projection is intentionally local. If the car falls outside
+  -- that narrow progress window, retry against the complete route instead
+  -- of leaving routeLocked latched forever. The global candidate must still
+  -- be close to the car and point in a compatible direction.
+  if locked and (not result or not initialProjectionValid(result,car.look)) then
+    local recovered=Geometry.project(state.routeGeometry,car.position,
+      nil,car.look,projectionSpeed,projectionDt,false)
+    if initialProjectionValid(recovered,car.look) then
+      result=recovered
+    else
+      return nil
+    end
+  elseif not result then
+    return nil
+  elseif not locked and not initialProjectionValid(result,car.look) then
+    return nil
+  end
+
+  return result.s,result.lateral,result.seg,result.t,result.distance,
+    result.tx,result.tz
 end
 
 -- Signed distance from own progress to another car. Positive means ahead.
