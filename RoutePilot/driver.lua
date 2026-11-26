@@ -858,8 +858,6 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
             gap,actualLateral=relativeToRoute(other.position,ownSample)
           end
         end
-        local halfLengths=(safeNumber(car.aabbSize and car.aabbSize.z,4.5)+
-          safeNumber(other.aabbSize and other.aabbSize.z,4.5))*0.5
         local lateralSeparation=(math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))+
           math.max(1.5,safeNumber(other.aabbSize and other.aabbSize.x,2.0)))*0.5+0.4
         local otherSpeed=math.max(0,safeNumber(other.speedMs))
