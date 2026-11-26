@@ -984,7 +984,7 @@ end
 -- return to the original line. A candidate is accepted only when the whole
 -- swept vehicle footprint remains inside the road and clear of every car.
 local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
-    passDistance,speed)
+    passDistance,speed,leaderTargetOffset)
   local route=state.routeGeometry
   if not route or p.routeProgress==nil then return false,"no_route" end
   local ownHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
@@ -994,8 +994,9 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   local sim=ac.getSim()
   if not sim then return false,"no_sim" end
 
-  -- The target leader remains in its source lane while the overtaker uses
-  -- the adjacent lane. Other active vehicles are checked across the full path.
+  -- The target leader moves to its assigned lane at the same time as the
+  -- overtaker. Both swept paths are predicted together; other active vehicles
+  -- and existing lane reservations remain in the conflict set.
   local currentSample=Geometry.sample(route,p.routeProgress)
   for i=0,sim.carsCount-1 do
     if i~=carIndex then
@@ -1007,9 +1008,8 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           not (otherState and otherState.routeLocked),
           otherState and otherState.routeProgress,other.speedMs,0.05)
         if op==nil then
-          -- A failed projection is not an automatic collision. The target
-          -- leader is checked only for immediate body overlap during the
-          -- initial lane transition; a leader farther ahead is still safe.
+          -- Keep an unprojected target in the prediction using the local route
+          -- frame. Its assigned lane transition is still simulated over time.
           if currentSample then
             local longitudinal,lateral=relativeToRoute(other.position,currentSample)
             local otherHalfWidth=math.max(0.75,
@@ -1024,6 +1024,23 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
             if i==leaderIndex then
               if lateralNear and math.abs(longitudinal)<longitudinalLimit then
                 return false,"leader_unprojected_conflict"
+              end
+              local dx=other.position.x-car.position.x
+              local dz=other.position.z-car.position.z
+              if longitudinal~=nil and lateral~=nil and dx*dx+dz*dz<60.0*60.0 then
+                local dir=other.look.x*currentSample.tx+other.look.z*currentSample.tz
+                local signedSpeed=math.max(0,safeNumber(other.speedMs))
+                if dir < -0.25 then signedSpeed=-signedSpeed end
+                local leaderState=state.p[leaderIndex]
+                local limit=clamp(safeNumber(leaderState and leaderState.lateralAccelLimit,
+                  CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+                local transition=math.max(22.0,
+                  math.max(0,signedSpeed)*math.sqrt(
+                    6.0*math.abs(safeNumber(leaderTargetOffset,lateral)-lateral)/limit))
+                traffic[#traffic+1]={index=i,progress=p.routeProgress+longitudinal,
+                  lateral=lateral,speed=signedSpeed,halfWidth=otherHalfWidth,
+                  halfLength=otherHalfLength,yieldOffset=leaderTargetOffset,
+                  transitionDistance=transition}
               end
             else
               local longitudinalNear=longitudinal>=-18.0 and
@@ -1044,13 +1061,27 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           local otherHalfLength=math.max(1.5,
             safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
           local otherOffset=ol or 0
-          if otherState and
+          local otherYieldOffset=nil
+          if i==leaderIndex and leaderTargetOffset~=nil then
+            otherYieldOffset=leaderTargetOffset
+          elseif otherState and otherState.yieldRequestBy~=nil then
+            otherYieldOffset=otherState.yieldOffset
+          elseif otherState and
              (otherState.overtakeSide~=0 or otherState.returningFromPass) then
             otherOffset=safeNumber(otherState.laneOffset,otherOffset)
           end
+          local yieldTransition=nil
+          if otherYieldOffset~=nil then
+            local limit=clamp(safeNumber(otherState and otherState.lateralAccelLimit,
+              CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+            yieldTransition=math.max(22.0,
+              math.max(0,signedSpeed)*math.sqrt(
+                6.0*math.abs(otherYieldOffset-otherOffset)/limit))
+          end
           traffic[#traffic+1]={
             index=i,progress=op,lateral=otherOffset,speed=signedSpeed,
-            halfWidth=otherHalfWidth,halfLength=otherHalfLength
+            halfWidth=otherHalfWidth,halfLength=otherHalfLength,
+            yieldOffset=otherYieldOffset,transitionDistance=yieldTransition
           }
         end
       end
@@ -1103,7 +1134,14 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
     for _,other in ipairs(traffic) do
       local predictedOther=other.progress+other.speed*time
       local longitudinal=routeGap(ownProgress,predictedOther)
-      local lateralGap=math.abs(offset-other.lateral)
+      local otherLateral=other.lateral
+      if other.yieldOffset~=nil and other.transitionDistance and other.transitionDistance>0 then
+        local travel=math.max(0,other.speed)*time
+        local yieldT=clamp(travel/other.transitionDistance,0,1)
+        yieldT=yieldT*yieldT*(3.0-2.0*yieldT)
+        otherLateral=other.lateral+(other.yieldOffset-other.lateral)*yieldT
+      end
+      local lateralGap=math.abs(offset-otherLateral)
       local longitudinalClearance=ownHalfLength+other.halfLength+
         math.max(1.0,math.abs(speed-other.speed)*0.15)
       local lateralClearance=ownHalfWidth+other.halfWidth+0.45
