@@ -2047,6 +2047,8 @@ function Driver.prepareFrame(sim,dt)
       if progress~=nil then
         p.routeLocked=true
         p.routeProgress=progress
+        p.routeTx=tx or p.routeTx
+        p.routeTz=tz or p.routeTz
         if lateral~=nil then p.latOff=lateral end
         if seg then p.segIdx=seg end
       end
