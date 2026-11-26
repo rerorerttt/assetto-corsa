@@ -1580,13 +1580,18 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       estimatedPassDistance=speed*passTime+
         0.5*acceleration*passTime*passTime
     end
-    local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
+    -- The user-defined traffic rule: initiate the two-car split at a
+    -- five-metre longitudinal gap. The yielding car moves first; the
+    -- requester remains behind it until the complete yielding footprint is
+    -- physically clear, then passes in the opposite corridor.
+    local triggerGap=5.0
     local canActuallyPass=(stronger or faster) and estimatedPassDistance<=260.0 and
       speed>=(leaderSpeed or 0)-8.0
-    local urgent=canActuallyPass and gap<=urgentGap
-    local passWindow=math.max(70.0,32.0+speed*2.0)
+    local urgent=canActuallyPass and gap<=triggerGap
+    local passWindow=triggerGap
     p.followTimer=p.followTimer+dt
-    local passRequestReady=(p.pendingYieldTarget==leaderIndex or (canActuallyPass and gap<=passWindow)) and
+    local passRequestReady=(p.pendingYieldTarget==leaderIndex or
+      (canActuallyPass and gap<=passWindow)) and
       p.overtakeSide==0 and p.overtakeRetryT<=0
     if passRequestReady then
       -- Requests are ranked by urgency before cars are updated. The next
