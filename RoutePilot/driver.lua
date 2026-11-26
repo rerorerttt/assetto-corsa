@@ -820,6 +820,11 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local previousAdvance=previousPlan and p.racingPlanStartProgress and
     math.max(0,routeGap(p.racingPlanStartProgress,p.routeProgress)) or 0
   local nextPlan
+  -- If a reserved PASS/RETURN/YIELD path cannot be optimized, first hold the
+  -- car's measured current corridor. This is still a full-body swept-path
+  -- validation; it does not jump to another lane or relax road boundaries.
+  -- A planner search failure therefore cannot strand a car when its present
+  -- corridor remains physically drivable.
   -- In OPEN mode the preferred offset is the physical road midpoint, not
   -- the legacy left-lane slot. Discrete lane slots are traffic reservations
   -- for passing/yielding only; they must not bias ordinary racing-line speed.
@@ -847,6 +852,21 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
       fallbackKind="ROAD_CENTRE"
     else
       planFailure=fallbackFailure or originalFailure or "NO_SAFE_FALLBACK"
+    end
+  end
+
+  if not nextPlan and mode~="OPEN" then
+    local holdOffset=safeNumber(p.latOff,base)
+    local holdFailure=nil
+    nextPlan,holdFailure=RacingLine.plan(
+      state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+      holdOffset,holdOffset,holdOffset,horizon,7.5,
+      nil,0,fixedTransitionDistance,p.lateralAccelLimit)
+    if nextPlan then
+      fallbackKind="HOLD_CURRENT_CORRIDOR"
+      planFailure=nil
+    else
+      planFailure=holdFailure or planFailure or "NO_SAFE_CURRENT_CORRIDOR"
     end
   end
 
@@ -1400,7 +1420,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
          listContains(pendingOwnerState.passGroupTargets,p.pendingYieldTarget))))
     local ownerAvailable=pendingOwner==nil and p.pendingYieldTarget==leaderIndex
     local reservationValid=pendingState and pendingCar and pendingCar.isActive and
-      (ownerStillOwnsRequest or ownerAvailable) and pendingGap and pendingGap>0
+      (ownerStillOwnsRequest or ownerAvailable) and pendingGap and
+      pendingGap>0 and pendingGap<math.max(120.0,speed*5.0+50.0)
     if not reservationValid then
       releaseYieldGroup(carIndex,p.pendingYieldGroup or {p.pendingYieldTarget})
       p.pendingYieldGroup=nil
@@ -2076,8 +2097,28 @@ function Driver.update(carIndex, car, dt)
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   local previousRouteProgress=p.routeProgress
-  local progress, projectedLateral, projectedSeg, _, projectionDistance =
-    routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
+  local prepared=p.framePreparedFrame==(state.trafficFrame or -1) and p.frameProjection or nil
+  local progress, projectedLateral, projectedSeg, _, projectionDistance
+  if prepared then
+    if prepared.valid then
+      progress,projectedLateral,projectedSeg,_,projectionDistance=
+        prepared.progress,prepared.lateral,prepared.seg,prepared.parameter,prepared.distance
+    end
+  else
+    progress,projectedLateral,projectedSeg,_,projectionDistance=
+      routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
+  end
+  -- A locked projection can fail after a small transient departure. Permit a
+  -- topology reacquisition only when the global candidate is still within the
+  -- existing 8 m acquisition radius and points in the vehicle's travel
+  -- direction; never jump to a distant parallel section.
+  if progress==nil and p.routeLocked then
+    local rp,rl,rs,_,rd=routeProjection(car,p.segIdx,true,nil,speed,dt)
+    if rp~=nil and rd~=nil and rd<=8.0 then
+      progress,projectedLateral,projectedSeg,projectionDistance=rp,rl,rs,rd
+      H.log("ROUTE_REACQUIRE id=%d distance=%.2f seg=%d",carIndex,rd,rs or -1)
+    end
+  end
   if p.spawnSeeded and
      (projectionDistance==nil or projectionDistance>8.0) then
     progress=nil
@@ -2101,9 +2142,18 @@ function Driver.update(carIndex, car, dt)
   else
     p.stuck=0
   end
-  -- Traffic ahead is not a reason to disable recovery forever. A car that
-  -- cannot make progress for ten seconds gets one safe respawn attempt.
-  if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 then
+  -- A low-speed car in an active traffic transaction is waiting, not stuck.
+  -- Recovery is reserved for a genuine no-progress condition with no current
+  -- lane leader, no outstanding yield/pass reservation and a valid route plan.
+  local trafficWait=p.trafficAction=="WAIT_QUEUE" or
+    p.trafficAction=="WAIT_YIELD" or p.trafficAction=="YIELDING" or
+    p.pendingYieldTarget~=nil or p.yieldRequestBy~=nil or
+    p.overtakeSide~=0 or p.returningFromPass
+  local nearbyLaneLeader=p.trafficGap>=0 and
+    p.trafficGap<math.max(30.0,speed*2.0+10.0)
+  if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 and
+     not trafficWait and not nearbyLaneLeader and
+     not p.projectionLost and not p.racingPlanBlocked then
     p.stuck=0
     p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
