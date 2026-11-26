@@ -853,8 +853,15 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
         local ownHalf=math.max(1.5,
           safeNumber(owner.car.aabbSize and owner.car.aabbSize.z,4.5)*0.5)
+        local lateralDelta=math.abs(center-
+          safeNumber(owner.p.latOff,owner.p.coordinatorOffset or center))
+        local lateralLimit=clamp(
+          safeNumber(owner.p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+        local transitionDistance=math.max(22.0,
+          owner.speed*math.sqrt(6.0*lateralDelta/lateralLimit))
+        local transitionTime=transitionDistance/math.max(8.0,owner.speed)
         local dynamicWindow=math.max(window or 8.0,
-          ownHalf+otherHalf+math.abs(owner.speed-other.speed)*1.35+4.0)
+          ownHalf+otherHalf+math.abs(owner.speed-other.speed)*transitionTime+5.0)
         local otherLane=other.p.coordinatedLane
         if otherLane==targetLane and math.abs(gap)<dynamicWindow then
           return false
@@ -1043,7 +1050,20 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         else follower,leader,distance=b,a,-gap end
         local closing=follower.speed-leader.speed+
           math.max(0.0,follower.accel-leader.accel)*0.35
-        local trigger=math.max(5.0,closing*2.5+5.0)
+        local followerHalf=math.max(1.5,
+          safeNumber(follower.car.aabbSize and follower.car.aabbSize.z,4.5)*0.5)
+        local leaderHalf=math.max(1.5,
+          safeNumber(leader.car.aabbSize and leader.car.aabbSize.z,4.5)*0.5)
+        local slotWidth=math.max(2.8,safeNumber(follower.lanes.slotWidth,3.5))
+        local function transitionTime(rec)
+          local limit=clamp(
+            safeNumber(rec.p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+          local distance=math.max(22.0,rec.speed*math.sqrt(6.0*slotWidth/limit))
+          return distance/math.max(8.0,rec.speed)
+        end
+        local maneuverTime=math.max(transitionTime(follower),transitionTime(leader))
+        local trigger=followerHalf+leaderHalf+
+          math.max(5.0,math.max(0,closing)*maneuverTime+5.0)
         local sameDirection=coordinatorSameDirection(follower,leader)
         local sameLane=follower.p.coordinatedLane==leader.p.coordinatedLane
         local conflictDistance=sameDirection and distance<trigger or
