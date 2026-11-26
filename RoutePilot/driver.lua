@@ -152,6 +152,8 @@ local function newPersonality(carIndex)
     coordinatorOffset = nil, coordinatorTargetLane = nil,
     coordinatorFromLane = nil, coordinatorChangeT = 0,
     yieldingFor = nil, coordinatorReturn = false,
+    emergencyEscape = false, emergencyTargetOffset = nil,
+    emergencyObstacleIndex = nil, emergencySteerFullLock = false,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -546,12 +548,42 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.yawStabilitySteer=yawStabilitySteer
   p.yawRateTarget=yawTarget
   p.yawRateFeedbackError=yawError
+  if p.emergencyEscape and p.emergencyTargetOffset~=nil then
+    local escapeError=p.emergencyTargetOffset-projection.lateral
+    local escapeDirection=escapeError>=0 and 1 or -1
+    local towardSpeed=lateralVelocity*escapeDirection
+    if math.abs(escapeError)<=0.45 then
+      p.emergencyEscape=false
+      p.emergencyTargetOffset=nil
+      p.emergencyObstacleIndex=nil
+      p.emergencySteerFullLock=false
+      p.emergencyUntil=0
+      p.racingPlan=nil
+      p.racingPlanTimer=0
+    elseif towardSpeed<1.0 then
+      rawSteer=escapeDirection*CFG.STEER_LIMIT
+      p.emergencySteerFullLock=true
+    else
+      p.emergencySteerFullLock=false
+      rawSteer=clamp(rawSteer,-0.35,0.35)
+    end
+  else
+    p.emergencySteerFullLock=false
+  end
   p.rawSteer=rawSteer
   p.deadbandActive=deadbandActive
   return clamp(rawSteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
+  if p.emergencyEscape and p.emergencySteerFullLock then
+    p.steerFiltered=target
+    p.steer=clamp(target,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
+    p.steerRateLimited=false
+    p.steerRateLimitDemand=0
+    p.steerRateLimitApplied=0
+    return p.steer
+  end
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
   -- Emergency evasion temporarily increases steering slew rate; the normal
@@ -646,6 +678,14 @@ end
 
 local function updateRacingPlan(carIndex,car,p,speed,dt)
   refreshRouteMetrics()
+  if p.emergencyEscape then
+    p.racingPlan=nil
+    p.racingPlanBlocked=false
+    p.racingPlanTrafficBlocked=false
+    p.racingPlanBlockedDistance=nil
+    p.racingPlanTargetOffset=nil
+    return
+  end
   if not state.routeGeometry or p.routeProgress==nil then
     p.racingPlan=nil
     p.racingPlanBlocked=false
@@ -791,6 +831,14 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficLeaderIndex=leaderIndex or -1
   p.trafficGap=gap or -1
   p.trafficLeaderSpeed=leaderSpeed or 0
+  if p.emergencyEscape then
+    p.trafficAction="EMERGENCY_ESCAPE"
+    p.trafficReason="physical_lateral_clearance"
+    p.trafficPriority=1100000
+    -- FOLLOW braking against the obstacle being escaped would prevent any
+    -- lateral movement. Keep a controlled crawl until the target line is met.
+    return clamp(math.max(0,safeNumber(gap,8.0))*0.55,2.5,5.0)
+  end
   if p.passTargetIndex~=nil then
     p.trafficAction="PASSING"
     p.trafficReason="coordinator_lane_reserved"
@@ -897,6 +945,12 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   p.coordinatorOffset=record.lanes.centers[targetLane]
   p.baseLaneOffset=p.coordinatorOffset
   p.laneOffset=p.coordinatorOffset
+  -- A separate physical escape controller owns steering until the adjacent
+  -- lane is reached; ordinary racing-line smoothing must not cancel it.
+  p.emergencyEscape=true
+  p.emergencyTargetOffset=p.coordinatorOffset
+  p.emergencyObstacleIndex=otherIndex
+  p.emergencySteerFullLock=false
   p.coordinatorChangeT=0.10
   p.emergencyUntil=1.25
   p.emergencyBlockedT=0
@@ -1175,10 +1229,16 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
       for _,other in ipairs(records) do
         if other.index~=rec.index and
-            other.p.coordinatedLane==current and
             coordinatorSameDirection(rec,other) then
           local gap=coordinatorGap(rec,other)
-          if gap and gap>=-2.0 and
+          local ownHalf=math.max(0.75,
+            safeNumber(rec.car.aabbSize and rec.car.aabbSize.x,2.0)*0.5)
+          local otherHalf=math.max(0.75,
+            safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
+          local lateralOverlap=math.abs(
+            safeNumber(other.p.latOff)-safeNumber(p.latOff))<
+            ownHalf+otherHalf+0.35
+          if lateralOverlap and gap and gap>=-2.0 and
               (not nearestGap or gap<nearestGap) then
             nearestGap=gap
             nearestIndex=other.index
