@@ -637,11 +637,9 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
           local dz=safeNumber(other.position.z)-ownSample.z
           local nearby=dx*dx+dz*dz<=120.0*120.0
           if math.abs(routeGapValue)<120.0 or nearby then
-            local otherRouteSample=Geometry.sample(state.routeGeometry,progress)
-            if otherRouteSample then
-              local otherFx,otherFz=normalize2(other.look.x,other.look.z)
-              directionDot=otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz
-            end
+            local otherFx,otherFz=normalize2(other.look.x,other.look.z)
+            directionDot=otherState.routeTx and otherState.routeTz and
+              (otherFx*otherState.routeTx+otherFz*otherState.routeTz) or 1.0
           end
           if directionDot>=-0.25 then
             longitudinal=routeGapValue
@@ -861,11 +859,9 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         local directionDot=1.0
         local actualLateral=lateral
         if gap>0.5 and gap<math.max(110.0,detectionHorizon) then
-          local otherSample=Geometry.sample(state.routeGeometry,progress)
-          if otherSample then
-            local otherFx,otherFz=normalize2(other.look.x,other.look.z)
-            directionDot=otherFx*otherSample.tx+otherFz*otherSample.tz
-          end
+          local otherFx,otherFz=normalize2(other.look.x,other.look.z)
+          directionDot=otherState.routeTx and otherState.routeTz and
+            (otherFx*otherState.routeTx+otherFz*otherState.routeTz) or 1.0
         else
           -- Opposing-direction cars may have unrelated loop progress. Only
           -- pay for local geometric projection when the cars are physically near.
@@ -873,9 +869,8 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
           local dz=safeNumber(other.position.z)-ownSample.z
           if dx*dx+dz*dz<=120.0*120.0 then
             local otherFx,otherFz=normalize2(other.look.x,other.look.z)
-            local otherSample=Geometry.sample(state.routeGeometry,progress)
-            directionDot=otherSample and
-              (otherFx*otherSample.tx+otherFz*otherSample.tz) or -1.0
+            directionDot=otherState.routeTx and otherState.routeTz and
+              (otherFx*otherState.routeTx+otherFz*otherState.routeTz) or -1.0
             if directionDot < -0.25 then
               gap,actualLateral=relativeToRoute(other.position,ownSample)
             end
@@ -2078,14 +2073,14 @@ function Driver.update(carIndex, car, dt)
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   local prepared=p.framePreparedFrame==(state.trafficFrame or -1) and p.frameProjection or nil
   local previousRouteProgress=prepared and p.framePreviousRouteProgress or p.routeProgress
-  local progress, projectedLateral, projectedSeg, projectionParameter, projectionDistance
+  local progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance,projectionTx,projectionTz
   if prepared then
     if prepared.valid then
-      progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance=
-        prepared.progress,prepared.lateral,prepared.seg,prepared.parameter,prepared.distance
+      progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance,projectionTx,projectionTz=
+        prepared.progress,prepared.lateral,prepared.seg,prepared.parameter,prepared.distance,prepared.tx,prepared.tz
     end
   else
-    progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance=
+    progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance,projectionTx,projectionTz=
       routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
   end
   -- A locked projection can fail after a small transient departure. Permit a
@@ -2093,9 +2088,9 @@ function Driver.update(carIndex, car, dt)
   -- existing 8 m acquisition radius and points in the vehicle's travel
   -- direction; never jump to a distant parallel section.
   if progress==nil and p.routeLocked then
-    local rp,rl,rs,_,rd=routeProjection(car,p.segIdx,true,nil,speed,dt)
+    local rp,rl,rs,_,rd,rtx,rtz=routeProjection(car,p.segIdx,true,nil,speed,dt)
     if rp~=nil and rd~=nil and rd<=8.0 then
-      progress,projectedLateral,projectedSeg,projectionDistance=rp,rl,rs,rd
+      progress,projectedLateral,projectedSeg,projectionDistance,projectionTx,projectionTz=rp,rl,rs,rd,rtx,rtz
       H.log("ROUTE_REACQUIRE id=%d distance=%.2f seg=%d",carIndex,rd,rs or -1)
     end
   end
@@ -2108,6 +2103,8 @@ function Driver.update(carIndex, car, dt)
     p.routeLocked = true
     p.routeProgress = progress
     p.latOff = projectedLateral or p.latOff
+    p.routeTx=projectionTx or p.routeTx
+    p.routeTz=projectionTz or p.routeTz
     p.projectionLost = false
     if projectedSeg then p.segIdx = projectedSeg end
   else
