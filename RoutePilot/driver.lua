@@ -1000,6 +1000,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           p.homeLane=clamp(p.homeLane or p.coordinatedLane,1,lanes.count)
           p.coordinatorOffset=lanes.centers[p.coordinatedLane]
         end
+        if p.emergencyMode and p.emergencyTargetLane~=nil then
+          p.emergencyTargetLane=clamp(p.emergencyTargetLane,1,lanes.count)
+          p.emergencyTargetOffset=lanes.centers[p.emergencyTargetLane]
+        end
         p.coordinatorLaneCount=lanes.count
         p.coordinatorChangeT=math.max(0,safeNumber(p.coordinatorChangeT)-dt)
         records[#records+1]={index=index,car=car,p=p,lanes=lanes,
@@ -1616,7 +1620,7 @@ function Driver.update(carIndex, car, dt)
   local rescueReason=nil
   if p.stuck>=RESCUE_TIME then rescueReason="stuck_5s"
   elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_10s" end
-  if rescueReason and p.rescueRetryT<=0 then
+  if rescueReason and not p.emergencyMode and p.rescueRetryT<=0 then
     p.stuck=0;p.offTrackT=0;p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
     H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s",
