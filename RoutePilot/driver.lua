@@ -812,7 +812,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
-  p.racingPlanBlocked=planFailure=="NO_FIT"
+  p.racingPlanBlocked=planFailure=="NO_FIT" or planFailure=="NO_PATH"
   p.racingPlanTrafficBlocked=false
   p.racingPlanTrafficBlockedDistance=nil
   p.racingPlanBlockedDistance=p.racingPlan and
