@@ -154,6 +154,7 @@ local function newPersonality(carIndex)
     yieldingFor = nil, coordinatorReturn = false,
     emergencyMode = false, emergencyTargetLane = nil,
     emergencyObstacleIndex = nil,
+    emergencyFromOffset = nil,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -808,7 +809,19 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   end
   if gap~=nil then
     local safeSpeed=safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)
-    return math.min(targetSpeed,safeSpeed)
+    targetSpeed=math.min(targetSpeed,safeSpeed)
+  end
+  -- Until the car has physically left its old lane, continue braking for the
+  -- obstacle that triggered the escape. The destination lane being clear does
+  -- not mean the swept lateral transition is already collision-free.
+  if p.emergencyMode and p.emergencyFromOffset~=nil then
+    local oldGap,oldLeaderSpeed=carAheadInLane(
+      carIndex,car,p.emergencyFromOffset)
+    if oldGap~=nil then
+      local oldLaneSafeSpeed=safeFollowingSpeed(
+        oldGap,oldLeaderSpeed or 0,p.brakeAccelEstimate)
+      targetSpeed=math.min(targetSpeed,oldLaneSafeSpeed)
+    end
   end
   return targetSpeed
 end
@@ -904,6 +917,7 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   p.emergencyMode=true
   p.emergencyTargetLane=targetLane
   p.emergencyObstacleIndex=otherIndex
+  p.emergencyFromOffset=record.lanes.centers[current]
   p.emergencyBlockedT=0
   p.emergencyRescueReady=false
   p.passTargetIndex=nil
@@ -1195,14 +1209,16 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             obstacle.car.aabbSize.z,4.5)*0.5+3.0)
         local obstacleCleared=not obstacle or (gap~=nil and gap < -clearance)
         if reached and obstacleCleared then
+          local clearedObstacle=p.emergencyObstacleIndex or -1
           p.emergencyMode=false
           p.emergencyTargetLane=nil
           p.emergencyObstacleIndex=nil
+          p.emergencyFromOffset=nil
           p.emergencyBlockedT=0
           p.emergencyRescueReady=false
           p.emergencyWaitLogged=false
           H.log("TRAFFIC_EMERGENCY_RELEASE id=%d lane=%d obstacle=%d",
-            rec.index,target,p.emergencyObstacleIndex or -1)
+            rec.index,target,clearedObstacle)
         end
       end
 
