@@ -59,6 +59,7 @@ function Driver.setup(cfg, st, helpers)
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
+  state.trafficRequestSerial=state.trafficRequestSerial or 0
 end
 
 local function refreshRouteMetrics()
@@ -1120,7 +1121,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
       math.max(8.0,speed))*2.0+4.0)
   p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
-  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
   p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
@@ -1328,6 +1329,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   if not gap or not leaderIndex then
     if p.pendingYieldTarget~=nil then
       local targetIndex=p.pendingYieldTarget
+      if not p.pendingYieldOrder then state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1;p.pendingYieldOrder=state.trafficRequestSerial end
       local targetState=state.p[targetIndex]
       local targetCar=ac.getCar(targetIndex)
       if targetState and targetCar and targetCar.isActive then
@@ -1427,6 +1429,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         p.lastPassDeniedReason="leader_not_yield_capable"
       elseif leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
         p.pendingYieldTarget=leaderIndex;p.pendingYieldGap=gap
+        if not p.pendingYieldOrder then state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1;p.pendingYieldOrder=state.trafficRequestSerial end
         p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
         p.trafficAction="WAIT_QUEUE";p.trafficReason="earlier_pass_has_slot"
         p.trafficLeaderIndex=leaderIndex
@@ -1442,6 +1445,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
                 leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
                 p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
+                state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1
+                p.pendingYieldOrder=state.trafficRequestSerial
                 p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
                 H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,leaderIndex,yieldOffset,passOffset)
               else
