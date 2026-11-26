@@ -1509,7 +1509,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
           if pendingOffset~=nil and yieldOffset==nil then p.overtakeRetryT=0.25 end
           if yieldOffset~=nil then
             targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
-            targetState.yieldReady=true;targetState.yieldRequestTimer=0
+            targetState.yieldReady=false;targetState.yieldRequestTimer=0
             H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,targetIndex,yieldOffset,safeNumber(p.pendingPassOffset))
           end
         end
@@ -1625,7 +1625,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
               local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,carIndex,estimatedPassDistance)
               if yieldOffset~=nil then
                 leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
-                leaderState.yieldReady=true;leaderState.yieldRequestTimer=0
+                leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
                 p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
                 if not p.pendingYieldOrder then
                   state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1
