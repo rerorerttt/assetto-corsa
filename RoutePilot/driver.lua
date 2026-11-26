@@ -1078,8 +1078,6 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
     defaultCenter or ((bl+br)*0.5))
   local target=ac.getCar(leaderIndex)
-  local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
-  local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
   local candidates={}
   -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
   -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
@@ -1123,7 +1121,7 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   return nil
 end
 
-local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
+local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,requesterIndex)
   if not leaderCar or not leaderState or leaderState.routeProgress==nil then return nil end
   local seg=leaderState.segIdx or 1
   local bl,br=H.boundsAt(seg)
@@ -1153,7 +1151,7 @@ local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
   local corridorLow,corridorHigh=safeCorridorForPreview(state.routeGeometry,
     leaderState.routeProgress,22.0,leaderCar,fx,fz)
   if not corridorLow or not corridorHigh or desired<corridorLow or desired>corridorHigh then return nil end
-  if laneOccupied(leaderIndex,leaderCar,desired,nil) then return nil end
+  if laneOccupied(leaderIndex,leaderCar,desired,requesterIndex) then return nil end
   return desired
 end
 local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
@@ -1428,7 +1426,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
             if pendingOffset==nil then p.overtakeRetryT=0.25 end
           end
           p.pendingPassOffset=pendingOffset
-          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset) or nil
+          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset,carIndex) or nil
           if pendingOffset~=nil and yieldOffset==nil then p.overtakeRetryT=0.25 end
           if yieldOffset~=nil then
             targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
@@ -1538,7 +1536,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         if passOffset~=nil then
           if leaderState.yieldRequestBy==nil or leaderState.yieldRequestBy==carIndex then
             if leaderState.yieldRequestBy==nil then
-              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
+              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,carIndex)
               if yieldOffset~=nil then
                 leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
                 leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
