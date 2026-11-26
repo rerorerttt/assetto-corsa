@@ -226,7 +226,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       if bodyFitsAt(step*0.5,mid,hx,hz) and
          bodyFitsAt(step,pointB,hx,hz) then
         local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
-        local cost=(off1-off0)^2*0.02+
+        local laneBias=(off1-preferred)*(off1-preferred)*0.75
+        local cost=(off1-off0)^2*0.02+laneBias+
           0.00008/math.max(0.12,clearance+0.12)+
           stabilityCost(2,off1)
         firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
@@ -266,9 +267,10 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
             math.sqrt(lateralGrip/math.max(math.abs(k),0.0008)),8.0,90.0)
           local segmentTime=segmentLength/estimatedCornerSpeed
           local extraLength=math.max(0,segmentLength-step)
+          local laneBias=(offC-preferred)*(offC-preferred)*0.75
           local cost=node.cost+segmentTime*8.0+k*k*45.0+
             excess*excess*200000.0+second*second*0.18+
-            slope*slope*0.075+extraLength*0.35+
+            slope*slope*0.075+extraLength*0.35+laneBias+
             0.00008/math.max(0.12,clearance+0.12)+
             stabilityCost(station+1,offC)
           local key=node.b*100+c
