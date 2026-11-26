@@ -1315,7 +1315,13 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   if p.yieldRequestBy~=nil then
     local requester=state.p[p.yieldRequestBy]
     local requesterCar=ac.getCar(p.yieldRequestBy)
-    if not requester or not requesterCar or not requesterCar.isActive or requester.pendingYieldTarget~=carIndex or requester.overtakeSide~=0 or p.overtakeSide~=0 or p.returningFromPass then
+    local requestedByPending=requester and requester.pendingYieldTarget==carIndex
+    local requestedByActivePass=requester and requester.overtakeSide~=0 and
+      listContains(requester.passGroupTargets,carIndex)
+    if not requester or not requesterCar or not requesterCar.isActive or
+       (not requestedByPending and not requestedByActivePass) or
+       (requester.overtakeSide~=0 and not requestedByActivePass) or
+       p.overtakeSide~=0 or p.returningFromPass then
       p.yieldRequestBy=nil;p.yieldOffset=nil;p.yieldReady=false;p.yieldRequestTimer=0
     else
       p.yieldRequestTimer=safeNumber(p.yieldRequestTimer)+dt
@@ -1514,7 +1520,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
             H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,targetIndex,yieldOffset,safeNumber(p.pendingPassOffset))
           end
         end
-        if targetState.yieldRequestBy==carIndex and targetState.yieldReady then
+        if targetState.yieldRequestBy==carIndex and pendingGroupReady(p,carIndex) then
           p.emergencyPassRequest=false
           if beginOvertake(carIndex,car,p,safeNumber(p.pendingYieldGap,12.0),targetIndex,targetState.latOff,speed,p.pendingPassDistance,p.pendingPassOffset) then
             p.trafficPriority=1000000;p.trafficAction="PASSING"
@@ -1616,37 +1622,87 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         if passOffset~=nil then
           if leaderState.yieldRequestBy==nil or leaderState.yieldRequestBy==carIndex then
             if leaderState.yieldRequestBy==nil then
-              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
-              if yieldOffset~=nil then
-                leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
-                leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
+              local group,farGap=collectYieldGroup(carIndex,car,p,leaderIndex,
+                math.min(110.0,math.max(45.0,estimatedPassDistance+20.0)))
+              local groupPassDistance=estimatedPassDistance
+              if #group>1 then
+                local farState=state.p[group[#group]]
+                local farCar=ac.getCar(group[#group])
+                local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
+                local farLength=math.max(3.0,safeNumber(farCar and farCar.aabbSize and farCar.aabbSize.z,4.5))
+                local required=farGap+ownLength+farLength+6.0
+                local relative=math.max(1.0,speed-(farCar and safeNumber(farCar.speedMs) or leaderPace))
+                local accel=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
+                local t=relative>=1.0 and required/relative or
+                  (-relative+math.sqrt(relative*relative+2.0*accel*required))/accel
+                groupPassDistance=math.max(groupPassDistance,
+                  speed*t+0.5*accel*t*t)
+                local groupOffset=findPassingOffset(carIndex,car,p,leaderIndex,
+                  leaderLateral,speed,groupPassDistance)
+                if groupOffset~=nil then passOffset=groupOffset
+                else group={leaderIndex};groupPassDistance=estimatedPassDistance end
+              end
+              local assigned={}
+              local groupOK=true
+              for gi=1,#group do
+                local memberIndex=group[gi]
+                local member=state.p[memberIndex]
+                local memberCar=ac.getCar(memberIndex)
+                local memberYield=member and memberCar and
+                  chooseYieldOffset(memberIndex,memberCar,member,passOffset) or nil
+                if not member or not memberCar or not memberCar.isActive or
+                   (member.yieldRequestBy~=nil and member.yieldRequestBy~=carIndex) or
+                   memberYield==nil then
+                  groupOK=false
+                  break
+                end
+                assigned[#assigned+1]={index=memberIndex,offset=memberYield}
+              end
+              if groupOK then
+                for gi=1,#assigned do
+                  local item=assigned[gi]
+                  local member=state.p[item.index]
+                  member.yieldRequestBy=carIndex;member.yieldOffset=item.offset
+                  member.yieldReady=false;member.yieldRequestTimer=0
+                  H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f group=%d",
+                    carIndex,item.index,item.offset,passOffset,#group)
+                end
+                p.pendingYieldGroup=group
                 p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
                 if not p.pendingYieldOrder then
                   state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1
                   p.pendingYieldOrder=state.trafficRequestSerial
                 end
-                p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
-                H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,leaderIndex,yieldOffset,passOffset)
+                p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0
+                p.pendingPassDistance=groupPassDistance
               else
-                p.lastPassDeniedReason="leader_has_no_safe_yield_space";p.overtakeRetryT=0.25
+                releaseYieldGroup(carIndex,assigned and (function()
+                  local ids={} for _,v in ipairs(assigned) do ids[#ids+1]=v.index end return ids
+                end)() or group)
+                p.pendingYieldGroup=nil
+                p.lastPassDeniedReason="group_yield_unavailable";p.overtakeRetryT=0.25
               end
             end
             if leaderState.yieldRequestBy==carIndex then
               p.pendingYieldTimer=safeNumber(p.pendingYieldTimer)+dt
-              if leaderState.yieldReady then
+              if pendingGroupReady(p,carIndex) then
                 p.emergencyPassRequest=urgent
-                if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,estimatedPassDistance,p.pendingPassOffset) then
+                if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,p.pendingPassDistance or estimatedPassDistance,p.pendingPassOffset) then
                   p.trafficPriority=1000000;p.trafficAction="PASSING"
                   p.trafficReason="yield_confirmed";p.trafficLeaderIndex=leaderIndex
                   p.trafficTargetOffset=safeNumber(p.passLat)
                   return targetSpeed
                 end
+                releaseYieldGroup(carIndex,p.pendingYieldGroup)
+                p.pendingYieldGroup=nil
                 leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
                 p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
               else
                 p.trafficAction="WAIT_YIELD";p.trafficReason="leader_not_yet_clear"
                 p.trafficLeaderIndex=leaderIndex;p.trafficTargetOffset=safeNumber(p.pendingPassOffset)
                 if p.pendingYieldTimer>8.5 then
+                  releaseYieldGroup(carIndex,p.pendingYieldGroup)
+                  p.pendingYieldGroup=nil
                   leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
                   p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
                   p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
