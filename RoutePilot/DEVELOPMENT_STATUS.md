@@ -328,3 +328,5 @@ This directly addresses the trace's false stops and the GDD's requirements that 
 
 ### Steering fallback alignment
 The steering controller's non-plan fallback previously targeted the legacy left-lane centre, which could reintroduce a lane change whenever a preview sample was unavailable even after OPEN planning had been moved to the road midpoint. It now targets the road midpoint for ordinary driving, the explicitly reserved yield offset while yielding, the pass offset while passing, and the saved pre-pass racing-line offset while returning. This keeps the geometric planner and steering fallback on the same target policy.
+
+The per-car baseline return offset is also initialized from the physical road midpoint, rather than the left logical lane centre. This ensures a new car, a missing preview sample, and a completed pass all share the same neutral baseline; discrete lane centres remain reserved for explicit passing/yielding.
