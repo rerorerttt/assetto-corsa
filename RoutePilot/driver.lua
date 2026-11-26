@@ -1163,7 +1163,14 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           handled[follower.index..":"..leader.index]=true
           local lane=follower.p.coordinatedLane
           local moved=false
-          if not sameDirection then
+          local emergencyCandidate=sameDirection and
+            distance<math.max(9.0,follower.speed*0.95+3.0) and
+            (leader.speed<math.max(1.0,follower.speed-0.8) or distance<6.0)
+          if emergencyCandidate then
+            -- Let the dedicated escape controller below own stopped obstacles;
+            -- ordinary PASS/YIELD must not seize the lane first.
+            moved=true
+          elseif not sameDirection then
             -- Oncoming cars are separated laterally before the meeting point.
             if follower.managed and follower.p.coordinatorChangeT<=0 and
                 lane<follower.lanes.count then
@@ -1253,7 +1260,8 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         local chosen=nil
         local bestCost=math.huge
         for lane=1,rec.lanes.count do
-          if lane~=current and coordinatorLaneFree(rec,lane,records,4.0) then
+          if math.abs(lane-current)==1 and
+              coordinatorLaneFree(rec,lane,records,4.0) then
             local cost=math.abs(lane-current)*10.0+
               math.abs(rec.lanes.centers[lane]-safeNumber(p.latOff,rec.lanes.centers[current]))
             if cost<bestCost then bestCost=cost;chosen=lane end
