@@ -1,4 +1,4 @@
--- RoutePilot/driver.lua — v0.9.1 (CSP 0.3.2-preview2)
+-- RoutePilot/driver.lua — v0.9.3 (CSP 0.3.2-preview2)
 -- FUNDAMENTAL RETHINK:
 --  * The user trace showed ZERO CAR_INIT lines: the main script never adopted
 --    the cars (spawn gate blocked driving forever), so the cars drove on the
@@ -764,8 +764,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   local bl,br=H.boundsAt(p.segIdx)
   local mid=(bl+br)*0.5
-  -- The saved return target is the neutral racing corridor. Lane centres
-  -- are selected only by the explicit passing/yield state machine.
+  -- The saved return target is the assigned base lane. Adjacent lanes are
+  -- selected only by the explicit passing state machine.
   local base=p.baseLaneOffset
   if base==nil then
     local laneCount
@@ -1121,9 +1121,8 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     local b=math.abs((bl+(sourceSlot-0.5)*slotWidth)-source)
     if a<b then sourceSlot=i end
   end
-  -- Change lanes as one coordinated manoeuvre: the overtaker takes the
-  -- adjacent lane while the leader moves to the outside edge of its own lane.
-  -- Do not require the cars to be separated before issuing that manoeuvre.
+  -- The overtaker moves to the adjacent lane; the target remains in its
+  -- assigned lane. The predicted path check includes the target vehicle.
   for i=1,laneCount do
     if math.abs(i-sourceSlot)==1 then
       candidates[#candidates+1]=bl+(i-0.5)*slotWidth
@@ -1179,7 +1178,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
     local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
       p.latOff or p.laneOffsetCurrent or 0,offset,passDistance or 60.0,speed)
     if reserved or laneOccupied(carIndex,car,offset,leaderIndex) or not clear then
-      p.lastPassDeniedReason=reason or "yielded_corridor_no_longer_clear"
+      p.lastPassDeniedReason=reason or "pass_lane_no_longer_clear"
       return false
     end
   end
