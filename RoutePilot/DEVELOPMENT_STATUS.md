@@ -38,7 +38,7 @@ The supplied `routepilot_trace.txt` showed:
 
 ## Validation status
 
-Source review and GitHub consistency checks only. The new Lua has not been run in Assetto Corsa/CSP, so actual overtakes, collision-free lane changes, corner transitions, and stop-free operation are not yet runtime-verified. The next test must use this exact 0.9.3 branch and capture a fresh trace with **Трафик лог** enabled. Verify first that cars 1/3/5 settle at 40 km/h in the left lane, cars 2/4 use the adjacent lane to pass, and no `RACE_LINE_BLOCKED mode=PASS` or `OVERTAKE_ABORT reason=pass_plan_no_path` loop occurs.
+Source review and GitHub consistency checks only. The new Lua has not been run in Assetto Corsa/CSP, so actual overtakes, collision-free lane changes, corner transitions, and stop-free operation are not yet runtime-verified. The next test must use this exact 0.9.3 branch and capture a fresh trace with **Трафик лог** enabled. Verify that cars keep the full-width racing line on clear road; when a slower AI is ahead, both cars enter separate adjacent slots in the same manoeuvre; the overtaker returns to its original line only after the target is clear. The trace should show measured `accel`, `potentialV`, and `speedAdv`, with no repeated `RACE_LINE_BLOCKED mode=PASS` or `OVERTAKE_ABORT reason=pass_plan_no_path` loop.
 
 Historical notes below describe earlier revisions and are superseded wherever they conflict with the active 0.9.3 model.
 
