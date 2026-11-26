@@ -1044,7 +1044,7 @@ function windowMain(dt)
           flushLog()
         end
         ui.text(state.trafficDiagnostics and
-          "Запись трафика 5 Гц: положение, скорость, роли PASS/YIELD, смещения, причины отказа, таймеры и управление. Файл routepilot_trace.txt." or
+          "Запись трафика 5 Гц: полосы, обгоны, занятость коридора, скорость и причины отказа. Файл routepilot_trace.txt." or
           "Подробный лог трафика выключен. Обычные логи продолжают записываться; подробная запись включается только этой кнопкой.")
 
         if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
