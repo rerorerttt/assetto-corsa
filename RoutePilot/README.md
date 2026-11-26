@@ -1,4 +1,4 @@
-# RoutePilot 0.9.1 — experimental traffic avoidance 9_Обгон_обе_линии
+# RoutePilot 0.9.2 — coordinated passing diagnostics
 
 CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
 
@@ -38,6 +38,15 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 - 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
 - 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
+
+## Coordinated passing experiment (2026-11-26)
+
+Branch: `routepilot/continuous-overtake-traffic-logs-2026-11-26`.
+
+- The yielding car now moves toward the outer edge of its own available lane, away from the selected passing corridor. This replaces the previous 0.42 m nudge, which often produced no clearly separated two-car manoeuvre.
+- The Dev tab has a `ЛогиТрафик` switch. Enable it before or during a traffic test. It writes 5 Hz snapshots for every active car plus event-transition records to `routepilot_trace.txt`.
+- Traffic records include world position, speed, route projection, lateral position, requested offsets, pass/yield roles, target IDs, gap, leader speed, pass timers, yield readiness, retry timer, denial reason, steering/throttle/brake, target speed, projection status, and control-write status.
+- This is an experimental source change, not a claim of collision-free behaviour. Validate on a wide straight, a narrow section, a corner, and with several cars requesting passes simultaneously. Send the resulting `routepilot_trace.txt` after reproducing a failed or unsafe pass.
 
 ## Traffic behavior (multi-offset passing)
 
