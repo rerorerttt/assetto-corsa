@@ -705,6 +705,11 @@ function script.update(dt)
         local priorityA=safeNumber(pa and pa.trafficPriority)
         local priorityB=safeNumber(pb and pb.trafficPriority)
         if priorityA~=priorityB then return priorityA>priorityB end
+        local queueA=pa and pa.pendingYieldOrder
+        local queueB=pb and pb.pendingYieldOrder
+        if queueA and queueB and queueA~=queueB then return queueA<queueB end
+        if queueA and not queueB then return true end
+        if queueB and not queueA then return false end
         local progressA=pa and pa.routeProgress
         local progressB=pb and pb.routeProgress
         if progressA~=nil and progressB~=nil and progressA~=progressB then
