@@ -257,7 +257,9 @@ local function planTargetSpeed(p,speed)
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
-  if p.racingPlanBlockedDistance then
+  -- Lua treats numeric zero as true. A zero blocked distance means that no
+  -- obstacle distance was supplied, not that an obstacle is directly ahead.
+  if p.racingPlanBlockedDistance and p.racingPlanBlockedDistance>0 then
     local stoppingRoom=math.max(0,p.racingPlanBlockedDistance-10.0)
     local corridorSpeed=math.sqrt(2.0*brakeAccel*stoppingRoom)
     target=math.min(target,corridorSpeed)
@@ -906,8 +908,21 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local transitionDistance=math.max(22.0,
           owner.speed*math.sqrt(6.0*lateralDelta/lateralLimit))
         local transitionTime=transitionDistance/math.max(8.0,owner.speed)
+        -- Reserve space only for traffic that can actually close the gap
+        -- during this manoeuvre. A faster car ahead is pulling away; a slower
+        -- car behind is falling back. Using absolute speed difference here
+        -- falsely marks distant, non-conflicting cars as occupying the lane.
+        local sameDirection=coordinatorSameDirection(owner,other)
+        local closingSpeed
+        if not sameDirection then
+          closingSpeed=owner.speed+other.speed
+        elseif gap>=0 then
+          closingSpeed=math.max(0,owner.speed-other.speed)
+        else
+          closingSpeed=math.max(0,other.speed-owner.speed)
+        end
         local dynamicWindow=math.max(window or 8.0,
-          ownHalf+otherHalf+math.abs(owner.speed-other.speed)*transitionTime+5.0)
+          ownHalf+otherHalf+closingSpeed*transitionTime+5.0)
         local otherLane=other.p.coordinatedLane
         if otherLane==targetLane and math.abs(gap)<dynamicWindow then
           return false
@@ -1677,12 +1692,19 @@ function Driver.update(carIndex, car, dt)
   -- while yaw/slip/lateral-load feedback prevents holding full lock into a spin.
   p.emergencySteerActive=false
   if p.emergencyMode and p.emergencyTargetOffset~=nil and not p.projectionLost then
-    local lateralError=p.emergencyTargetOffset-safeNumber(p.latOff)
+    local actualError=p.emergencyTargetOffset-safeNumber(p.latOff)
+    local lateralVelocity=safeNumber(p.lateralVelocityFiltered)
+    -- Predict where the body will be shortly, not just where it is now.
+    -- This makes the controller counter-steer before lateral momentum carries
+    -- the car through the target lane and over the road boundary.
+    local predictionTime=clamp(0.35+math.abs(lateralVelocity)*0.08,0.35,0.60)
+    local predictedOffset=safeNumber(p.latOff)+lateralVelocity*predictionTime
+    local lateralError=p.emergencyTargetOffset-predictedOffset
     local direction=lateralError>=0 and 1 or -1
     local errorAbs=math.abs(lateralError)
-    if errorAbs>0.55 then
+    if math.abs(actualError)>0.35 then
       local steerLimit=clamp(safeNumber(CFG.STEER_LIMIT,1.0),0.1,1.0)
-      local magnitude=steerLimit*0.96
+      local magnitude=clamp(errorAbs*0.42,0.0,steerLimit*0.82)
       local yaw=safeNumber(p.yawRate)
       local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)
       local lateralLoad=math.abs(safeNumber(p.lateralAccel))/grip
