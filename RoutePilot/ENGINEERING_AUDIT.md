@@ -72,3 +72,32 @@ The same trace shows a further diagnostic limitation: the old telemetry logged s
 The supplied traffic trace contains five `OVERTAKE_BEGIN` events but only three matching `OVERTAKE_END` events. Two passes remain active at the end of the trace. The code also declared `PASS_TIMEOUT=8.0` but never used it, and an active pass had no blocked-progress exit. The pass state now tracks a deadline scaled to the estimated pass distance and a sustained near-zero-progress timer. It aborts and returns to the original lane only after that lane passes the live occupancy check; otherwise it retains the safety hold rather than cutting across another car. Aborts are logged as `OVERTAKE_ABORT reason=blocked|timeout`, with `PASS_BLOCKED` and `PASS_TIME` in telemetry.
 
 These are source-level corrections, not proof of in-game stability. The next Drag run should confirm that steering remains close to the path-following demand on the straight and that yaw rate/slip no longer grow into alternating full corrections. The next traffic run should show every `OVERTAKE_BEGIN` ending in either `OVERTAKE_END` or a safe `OVERTAKE_ABORT`; an abort can still wait if the original lane is occupied.
+
+
+## 2026-11-26 full source audit and straight-line stability correction
+
+The user's report confirmed that removing the direct body-slip steering term did not remove the oscillation. A broader audit against GAME_DESIGN_DOCUMENT.md identified additional control-loop defects that the previous change did not touch:
+
+- Pure-pursuit curvature was added to a second feed-forward term from the same planned path. This can double-count the bend and over-command steering. The duplicate term has been removed; pure pursuit is now the sole path-curvature demand.
+- The racing-line optimizer could change its selected lateral offsets at each replan without any cost for departing from the previous plan. A temporal path-continuity penalty now discourages plan-to-plan lateral jumps.
+- The preview used a plan-origin advance clamped to 30 m, while a car at 500 km/h can travel about 90 m in 0.65 s. This could make the controller aim at a stale point behind the car. Plan advance is now used in full, the planner refresh interval scales with speed to keep the plan origin within 20 m, and samples beyond the plan horizon return nil rather than silently clamping to the final point.
+- The old fixed 28 m maximum preview was too short at extreme speed. The speed-scaled preview now reaches 85 m.
+- Emergency passing could apply a 180 ms full-lock steering pulse and multiply steering gain by 2.6. Both interventions have been removed. Passing uses the same bounded steering authority as normal path following.
+- Passing offset selection used arbitrary 0.30 m candidates rather than the GDD's discrete lane slots. It now selects among 1/2/3/4 logical slots for 3/7/11/15 m corridors.
+- Passing transitions previously used a fixed 6/22 m path regardless of speed. The transition now expands with speed and lateral-acceleration allowance; a pass is rejected if the transition cannot be completed before the target.
+- When traffic blocked every candidate offset, the optimiser manufactured an edge candidate even if it remained inside a blocked interval. It now fails closed with NO_PATH; the driver does not convert this traffic-only result into an unconditional full stop. A blocked-plan retry is rate-limited rather than recalculated every frame.
+- The old STEER_DEAD constant was declared but unused. It now suppresses only tiny steering residue when cross-track, heading and lateral-velocity errors are already settled.
+- p.laneOffsetCurrent previously recorded the preview offset as if it were the car's current path offset. It now samples the plan at the car's current progress, separating current lane occupancy from the future preview target.
+- Unused stability calculations and the unused local racing-line cost helper were removed. The axle/yaw/slip measurements remain for diagnostics; no unvalidated axle countersteer law has been enabled.
+
+The current steering law still uses a fixed curvature-to-normalized-steer gain. The repository SDK exposes steering-lock metadata, but the relationship between that value and front-wheel steering angle is not sufficiently established here to replace the gain with a bicycle-model conversion safely. That calibration remains an explicit limitation, not a guessed formula.
+
+## GDD compliance findings still open
+
+- RoutePilot.lua still silently creates default symmetric bounds when a bounds file is absent, and addPoint() initializes new points with the default width preset. This conflicts with GDD §4.2 unless the preset is treated as an explicit user-confirmed corridor. Existing route files and user-selected presets must be preserved while this is corrected.
+- The racing-line optimiser remains a geometric short-horizon curvature/smoothness optimiser, not the GDD's full time-optimal coupled path/speed solver.
+- Traffic arbitration is still distributed through per-car update state rather than a dedicated deterministic coordinator. Discrete lane slots are now used, but a full atomic space-time reservation coordinator remains unfinished.
+- Route-loss handling still applies immediate full braking. The GDD calls for controlled last-safe-path continuation and cautious reacquisition where verified.
+- Per-frame performance has not been benchmarked with 1/5/10/20+ cars. The speed-scaled replan interval increases planner work at very high speed and must be profiled in CSP.
+
+Static checks only. No Lua/LuaJIT compiler or Assetto Corsa/CSP runtime is available in this environment. None of the steering, high-speed preview, lane-transition, collision-avoidance or FPS changes is claimed as in-game verified. The next test must begin with one car on a genuinely straight Drag route, then repeat at increasing speed, and only after that test corners and traffic.
