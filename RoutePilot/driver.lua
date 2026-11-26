@@ -1490,38 +1490,6 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
   if ownLateral~=nil then p.latOff=ownLateral end
-  if p.yieldRequestBy~=nil then
-    local requester=state.p[p.yieldRequestBy]
-    local requesterCar=ac.getCar(p.yieldRequestBy)
-    local requestedByPending=requester and
-      (requester.pendingYieldTarget==carIndex or
-       listContains(requester.pendingYieldGroup,carIndex))
-    local requestedByActivePass=requester and requester.overtakeSide~=0 and
-      listContains(requester.passGroupTargets,carIndex)
-    if not requester or not requesterCar or not requesterCar.isActive or
-       (not requestedByPending and not requestedByActivePass) or
-       (requester.overtakeSide~=0 and not requestedByActivePass) or
-       p.overtakeSide~=0 or p.returningFromPass then
-      p.yieldRequestBy=nil;p.yieldOffset=nil;p.yieldReady=false;p.yieldRequestTimer=0
-    else
-      p.yieldRequestTimer=safeNumber(p.yieldRequestTimer)+dt
-      p.laneOffset=p.yieldOffset
-      local lateralError=math.abs(safeNumber(p.latOff)-safeNumber(p.yieldOffset))
-      local lateralSpeed=math.abs(safeNumber(p.lateralVelocityFiltered))
-      p.yieldReady=lateralError<=0.28 and lateralSpeed<=0.65
-      p.trafficAction="YIELDING"
-      p.trafficReason=p.yieldReady and "yield_position_confirmed" or "moving_to_yield_position"
-      p.trafficLeaderIndex=p.yieldRequestBy;p.trafficTargetOffset=safeNumber(p.yieldOffset)
-      if p.yieldRequestTimer>8.0 and not requestedByActivePass then
-        releaseYieldGroup(p.yieldRequestBy,requester.pendingYieldGroup)
-        requester.pendingYieldGroup=nil
-        requester.pendingYieldTarget=nil;requester.pendingPassOffset=nil;requester.pendingYieldTimer=0;requester.pendingYieldOrder=nil
-        requester.pendingYieldGap=nil;requester.pendingYieldSpeed=nil;requester.pendingPassDistance=nil
-        p.yieldRequestBy=nil;p.yieldOffset=nil;p.yieldReady=false;p.yieldRequestTimer=0
-        H.log("CAR=%d YIELD_ABORT reason=timeout",carIndex)
-      end
-    end
-  end
   if p.returningFromPass then
     p.trafficPriority=900000
     return targetSpeed
@@ -1536,76 +1504,6 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   p.trafficLeaderIndex=leaderIndex or -1
   p.trafficGap=gap or -1
   p.trafficLeaderSpeed=leaderSpeed or 0
-  if p.pendingYieldTarget~=nil then
-    local pendingState=state.p[p.pendingYieldTarget]
-    local pendingCar=ac.getCar(p.pendingYieldTarget)
-    local pendingGap=pendingState and pendingState.routeProgress and
-      routeGap(p.routeProgress,pendingState.routeProgress) or nil
-    local pendingOwner=pendingState and pendingState.yieldRequestBy
-    local pendingOwnerState=pendingOwner~=nil and state.p[pendingOwner] or nil
-    local ownerStillOwnsRequest=pendingOwner==carIndex or
-      (pendingOwnerState and
-       (pendingOwnerState.pendingYieldTarget==p.pendingYieldTarget or
-        (pendingOwnerState.overtakeSide~=0 and
-         listContains(pendingOwnerState.passGroupTargets,p.pendingYieldTarget))))
-    local ownerAvailable=pendingOwner==nil and p.pendingYieldTarget==leaderIndex
-    local reservationValid=pendingState and pendingCar and pendingCar.isActive and
-      (ownerStillOwnsRequest or ownerAvailable) and pendingGap and
-      pendingGap>0 and pendingGap<math.max(120.0,speed*5.0+50.0)
-    if not reservationValid then
-      releaseYieldGroup(carIndex,p.pendingYieldGroup or {p.pendingYieldTarget})
-      p.pendingYieldGroup=nil
-      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
-      p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
-    end
-  end
-  if p.yieldRequestBy~=nil and p.yieldOffset~=nil then
-    p.trafficAction="YIELDING"
-    p.trafficReason=p.yieldReady and "yield_position_confirmed" or "moving_to_yield_position"
-    if gap~=nil then return math.min(targetSpeed,safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)) end
-    return targetSpeed
-  end
-
-  -- Once a convoy has accepted a group yield request, keep that transaction
-  -- alive even after the first car moves out of the original lane and is no
-  -- longer returned by the lane-leader query.
-  if p.pendingYieldTarget~=nil and p.pendingYieldTarget~=leaderIndex then
-    local targetIndex=p.pendingYieldTarget
-    local targetState=state.p[targetIndex]
-    local targetCar=ac.getCar(targetIndex)
-    if targetState and targetCar and targetCar.isActive then
-      local pendingProgress=targetState.routeProgress
-      local pendingGap=pendingProgress and routeGap(p.routeProgress,pendingProgress) or
-        safeNumber(p.pendingYieldGap,12.0)
-      if targetState.yieldRequestBy==carIndex then
-        if pendingGroupReady(p,carIndex) then
-          if beginOvertake(carIndex,car,p,safeNumber(p.pendingYieldGap,12.0),
-            targetIndex,targetState.latOff,speed,p.pendingPassDistance,p.pendingPassOffset) then
-            p.trafficPriority=1000000;p.trafficAction="PASSING"
-            p.trafficReason="group_yield_confirmed";p.trafficLeaderIndex=targetIndex
-            p.trafficTargetOffset=safeNumber(p.passLat)
-            return targetSpeed
-          end
-          releaseYieldGroup(carIndex,p.pendingYieldGroup)
-          p.pendingYieldGroup=nil
-          p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
-          p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil
-          p.pendingPassDistance=nil
-        else
-          p.trafficAction="WAIT_YIELD";p.trafficReason="group_not_yet_clear"
-          p.trafficLeaderIndex=targetIndex;p.trafficGap=pendingGap
-          return math.min(targetSpeed,safeFollowingSpeed(pendingGap,
-            targetCar.speedMs,p.brakeAccelEstimate))
-        end
-      else
-        p.trafficAction="WAIT_QUEUE";p.trafficReason="earlier_pass_has_slot"
-        p.trafficLeaderIndex=targetIndex;p.trafficGap=pendingGap
-        return math.min(targetSpeed,safeFollowingSpeed(pendingGap,
-          targetCar.speedMs,p.brakeAccelEstimate))
-      end
-    end
-  end
-
   if p.overtakeSide ~= 0 then
     p.passT = p.passT + dt
     local rightGap,rightLeaderSpeed=carAheadInLane(
