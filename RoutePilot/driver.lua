@@ -385,6 +385,11 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.baseLaneOffset or roadCenter)
   p.laneOffset=p.baseLaneOffset
   local laneTarget=p.laneOffset or roadCenter
+  local corridorMin,corridorMax=safeCorridorForPreview(
+    route,projection.s,ahead,car,fx,fz)
+  if corridorMin and corridorMax then
+    laneTarget=clamp(laneTarget,corridorMin,corridorMax)
+  end
   local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
   local currentRace=p.racingPlan and planAdvance<=p.racingPlan.horizon and
     RacingLine.sample(p.racingPlan,math.max(0,planAdvance)) or nil
@@ -1426,7 +1431,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         if gap>=0 then follower,leader,distance=a,b,gap
         else follower,leader,distance=b,a,-gap end
         local closing=follower.speed-leader.speed+
-          math.min(2.0,follower.accel*0.35)
+          math.max(0.0,follower.accel-leader.accel)*0.35
         local trigger=math.max(5.0,closing*2.5+5.0)
         local sameDirection=coordinatorSameDirection(follower,leader)
         local sameLane=follower.p.coordinatedLane==leader.p.coordinatedLane
@@ -1447,6 +1452,14 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
                 lane<leader.lanes.count then
               moved=coordinatorMove(leader,lane+1,records,"PASS",follower.index)
+            end
+            if not moved and follower.managed and follower.p.coordinatorChangeT<=0 and
+                lane>1 then
+              moved=coordinatorMove(follower,lane-1,records,"YIELD",leader.index)
+            end
+            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
+                lane>1 then
+              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
             end
           elseif follower.managed and leader.managed then
             -- A slower leading car yields right; otherwise the faster follower
