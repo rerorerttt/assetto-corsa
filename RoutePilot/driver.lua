@@ -128,6 +128,7 @@ local function newPersonality(carIndex)
     pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
     stuck = 0, blockedT = 0, passT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0, freeTargetSpeed = 0,
+    passScanTimer = 0,
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
@@ -1457,6 +1458,7 @@ end
 
 local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   p.overtakeRetryT=math.max(0,safeNumber(p.overtakeRetryT)-dt)
+  p.passScanTimer=math.max(0,safeNumber(p.passScanTimer)-dt)
   p.trafficAction="OPEN"
   p.trafficReason="clear_path"
   p.trafficLeaderIndex=-1
@@ -1792,7 +1794,14 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     -- Recheck in 0.10 s. No yield negotiation, queue token, acknowledgement,
     -- or cooperation from the car being passed.
     p.overtakeRetryT=0.10
-    p.lastPassDeniedReason="no_immediate_safe_corridor"
+    p.lastPassDeniedReason=p.lastPassDeniedReason or "no_immediate_safe_corridor"
+    if p.passScanTimer<=0 then
+      H.log("CAR=%d OVERTAKE_SCAN gap=%.1f free=%.1f leader_free=%.1f advantage=%.2f accel=%.2f leader_accel=%.2f pass_dist=%.1f result=DENIED reason=%s",
+        carIndex,safeNumber(gap),ownFreeSpeed,leaderFreeSpeed,potentialAdvantage,
+        ownAccel,leaderAccel,safeNumber(estimatedPassDistance,-1),
+        tostring(p.lastPassDeniedReason))
+      p.passScanTimer=0.50
+    end
   end
   p.followTimer=0;p.blockedT=0;p.trafficPriority=0
   local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
