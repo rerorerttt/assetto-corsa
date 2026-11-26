@@ -809,7 +809,10 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     p.trafficReason=gap and "same_lane_vehicle" or "assigned_lane_clear"
     p.trafficPriority=0
   end
-  if gap~=nil then
+  -- carAheadInLane also reports a short negative gap when another car is
+  -- beside/behind our rear bumper. That is useful for collision diagnostics,
+  -- but it is NOT a vehicle ahead and must never clamp forward speed to zero.
+  if gap~=nil and gap>=0 then
     local safeSpeed=safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)
     targetSpeed=math.min(targetSpeed,safeSpeed)
   end
@@ -819,7 +822,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   if p.emergencyMode and p.emergencyFromOffset~=nil then
     local oldGap,oldLeaderSpeed=carAheadInLane(
       carIndex,car,p.emergencyFromOffset)
-    if oldGap~=nil then
+    if oldGap~=nil and oldGap>=0 then
       local oldLaneSafeSpeed=safeFollowingSpeed(
         oldGap,oldLeaderSpeed or 0,p.brakeAccelEstimate)
       targetSpeed=math.min(targetSpeed,oldLaneSafeSpeed)
@@ -1611,7 +1614,7 @@ function Driver.update(carIndex, car, dt)
       blockingGap=physicalGap
     end
   end
-  local trafficBlocked=blockingGap~=nil and blockingGap<18.0
+  local trafficBlocked=blockingGap~=nil and blockingGap>=0 and blockingGap<18.0
   if speed<RESCUE_SPEED and not trafficBlocked and not p.projectionLost then
     p.stuck=p.stuck+dt
   else
