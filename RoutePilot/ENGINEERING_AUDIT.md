@@ -45,7 +45,7 @@ Added `vehicle_dynamics.lua` and connected it to `driver.lua`. It measures, per 
 - front/rear tyre slip angles and normalised slip, weighted by wheel load;
 - local yaw rate, wheelbase, and steering-lock metadata.
 
-The module is measurement-only. It does not change steering, throttle, braking, path selection, overtaking, or recovery. New fields are appended to the existing telemetry as `AXLE_VALID`, `FRONT_AXLE`, `REAR_AXLE`, `FRONT_TIRE`, `REAR_TIRE`, `FRONT_NDSLIP`, `REAR_NDSLIP`, `YAW_RATE`, `WHEELBASE`, and `STEER_LOCK`.
+The module is measurement-only. It does not change steering, throttle, braking, path selection, overtaking, or recovery. New fields are appended to the existing telemetry as `AXLE_VALID`, `FRONT_AXLE_RAD`, `REAR_AXLE_RAD`, `FRONT_TIRE_DEG`, `REAR_TIRE_DEG`, `FRONT_NDSLIP`, `REAR_NDSLIP`, `YAW_RATE_RAD`, `WHEELBASE_M`, and `STEER_LOCK_DEG`.
 
 The module uses fields verified in the repository's CSP SDK definitions: `ac.StateCar.transform`, `worldToLocal`/matrix point transforms, `localVelocity`, `localAngularVelocity`, `steerLock`, and `ac.StateWheel.position`, `load`, `slipAngle`, and `ndSlip`. It follows AGA's physical calculation `v(point) = v(CG) + omega × r`. No AGA steering correction has been enabled yet.
 
