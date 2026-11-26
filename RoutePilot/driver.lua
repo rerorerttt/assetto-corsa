@@ -1029,9 +1029,14 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
                   transitionDistance=transition,yieldDelay=0.12}
               end
             else
+              local dx=other.position.x-car.position.x
+              local dz=other.position.z-car.position.z
+              local physicalLimit=math.max(25.0,
+                math.min(45.0,safeNumber(passDistance,60.0)*0.25))
+              local physicalNear=dx*dx+dz*dz<=physicalLimit*physicalLimit
               local longitudinalNear=longitudinal>=-18.0 and
-                longitudinal<=math.max(35.0,safeNumber(passDistance,60.0)+25.0)
-              if lateralNear and longitudinalNear then
+                longitudinal<=math.max(25.0,safeNumber(passDistance,60.0)*0.25)
+              if lateralNear and physicalNear and longitudinalNear then
                 return false,"near_vehicle_unprojected"
               end
             end
