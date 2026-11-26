@@ -85,11 +85,35 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       previousOffsets[i]=previous and previous.offset or nil
     end
   end
+  -- Preserve the previous path strongly on an open straight. The previous
+  -- offset is also inserted into each candidate set below, so the optimizer
+  -- can actually retain it instead of choosing the nearest coarse grid point.
+  local straightOpen=previousPlan~=nil
+  if straightOpen then
+    for i=1,n do
+      local sample=samples[i]
+      if math.abs(safe(sample and sample.k))>=0.0012 then
+        straightOpen=false
+        break
+      end
+      if i>1 and previousOffsets[i]~=nil and obstacleAt then
+        local forbidden=obstacleAt(sample,(i-1)*step) or {}
+        for _,interval in ipairs(forbidden) do
+          if previousOffsets[i]>interval[1] and previousOffsets[i]<interval[2] then
+            straightOpen=false
+            break
+          end
+        end
+        if not straightOpen then break end
+      end
+    end
+  end
+  local stabilityWeight=straightOpen and 3.0 or 0.35
   local function stabilityCost(index,value)
     local previous=previousOffsets[index]
     if previous==nil then return 0 end
     local delta=value-previous
-    return delta*delta*0.08
+    return delta*delta*stabilityWeight
   end
 
   if fixedOffset ~= nil then
@@ -130,6 +154,12 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
         if not isBlocked(value) then addCandidate(list,value,lo,hi) end
       end
       if not isBlocked(preferred) then addCandidate(list,preferred,lo,hi) end
+      -- Keep the exact previous lateral position available. Without this
+      -- candidate, temporal cost alone cannot prevent hopping between grid slots.
+      local previousOffset=previousOffsets[i]
+      if previousOffset~=nil and not isBlocked(previousOffset) then
+        addCandidate(list,previousOffset,lo,hi)
+      end
       if #list==0 then
         -- Fail closed: never manufacture an edge candidate inside an
         -- occupied corridor. Longitudinal following handles the blocked road.
