@@ -599,7 +599,13 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
   local ownSpeed=math.max(0,safeNumber(car.speedMs))
   local ownHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
   for i=0,sim.carsCount-1 do
-    if i~=carIndex and i~=ignoreIndex then
+    local ignored=i==ignoreIndex
+    if type(ignoreIndex)=="table" then
+      for j=1,#ignoreIndex do
+        if ignoreIndex[j]==i then ignored=true;break end
+      end
+    end
+    if i~=carIndex and not ignored then
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
@@ -1114,7 +1120,7 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   return nil
 end
 
-local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,requesterIndex)
+local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,requesterIndex,ignoreGroup)
   if not leaderCar or not leaderState or leaderState.routeProgress==nil then return nil end
   local seg=leaderState.segIdx or 1
   local bl,br=H.boundsAt(seg)
@@ -1146,7 +1152,7 @@ local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,re
   local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
   local corridorLow,corridorHigh=safeCorridorForPreview(state.routeGeometry,leaderState.routeProgress,18.0,leaderCar,fx,fz)
   if not corridorLow or not corridorHigh or desired<corridorLow or desired>corridorHigh then return nil end
-  if laneOccupied(leaderIndex,leaderCar,desired,requesterIndex) then return nil end
+  if laneOccupied(leaderIndex,leaderCar,desired,ignoreGroup or requesterIndex) then return nil end
   return desired
 end
 local function listContains(list,value)
@@ -1716,7 +1722,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 local member=state.p[memberIndex]
                 local memberCar=ac.getCar(memberIndex)
                 local memberYield=member and memberCar and
-                  chooseYieldOffset(memberIndex,memberCar,member,passOffset,carIndex) or nil
+                  chooseYieldOffset(memberIndex,memberCar,member,passOffset,carIndex,group) or nil
                 if not member or not memberCar or not memberCar.isActive or
                    (member.yieldRequestBy~=nil and member.yieldRequestBy~=carIndex) or
                    memberYield==nil then
@@ -1736,7 +1742,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 local member=state.p[leaderIndex]
                 local memberCar=ac.getCar(leaderIndex)
                 local memberYield=passOffset and member and memberCar and
-                  chooseYieldOffset(leaderIndex,memberCar,member,passOffset,carIndex) or nil
+                  chooseYieldOffset(leaderIndex,memberCar,member,passOffset,carIndex,group) or nil
                 groupOK=member~=nil and memberCar~=nil and memberCar.isActive and
                   member.yieldRequestBy==nil and memberYield~=nil
                 if groupOK then assigned[1]={index=leaderIndex,offset=memberYield} end
