@@ -1354,19 +1354,59 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   p.trafficLeaderIndex=leaderIndex or -1
   p.trafficGap=gap or -1
   p.trafficLeaderSpeed=leaderSpeed or 0
-  if p.pendingYieldTarget~=nil and p.pendingYieldTarget~=leaderIndex then
-    local oldLeader=state.p[p.pendingYieldTarget]
-    if oldLeader and oldLeader.yieldRequestBy==carIndex then
-      oldLeader.yieldRequestBy=nil;oldLeader.yieldOffset=nil;oldLeader.yieldReady=false;oldLeader.yieldRequestTimer=0
+  if p.pendingYieldTarget~=nil then
+    local pendingState=state.p[p.pendingYieldTarget]
+    local pendingCar=ac.getCar(p.pendingYieldTarget)
+    local pendingGap=pendingState and pendingState.routeProgress and
+      routeGap(p.routeProgress,pendingState.routeProgress) or nil
+    local reservationValid=pendingState and pendingCar and pendingCar.isActive and
+      pendingState.yieldRequestBy==carIndex and pendingGap and pendingGap>0
+    if not reservationValid then
+      releaseYieldGroup(carIndex,p.pendingYieldGroup or {p.pendingYieldTarget})
+      p.pendingYieldGroup=nil
+      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
+      p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
     end
-    p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
-    p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
   end
   if p.yieldRequestBy~=nil and p.yieldOffset~=nil then
     p.trafficAction="YIELDING"
     p.trafficReason=p.yieldReady and "yield_position_confirmed" or "moving_to_yield_position"
     if gap~=nil then return math.min(targetSpeed,safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)) end
     return targetSpeed
+  end
+
+  -- Once a convoy has accepted a group yield request, keep that transaction
+  -- alive even after the first car moves out of the original lane and is no
+  -- longer returned by the lane-leader query.
+  if p.pendingYieldTarget~=nil and p.pendingYieldTarget~=leaderIndex then
+    local targetIndex=p.pendingYieldTarget
+    local targetState=state.p[targetIndex]
+    local targetCar=ac.getCar(targetIndex)
+    if targetState and targetCar and targetCar.isActive and
+       targetState.yieldRequestBy==carIndex then
+      if pendingGroupReady(p,carIndex) then
+        if beginOvertake(carIndex,car,p,safeNumber(p.pendingYieldGap,12.0),
+          targetIndex,targetState.latOff,speed,p.pendingPassDistance,p.pendingPassOffset) then
+          p.trafficPriority=1000000;p.trafficAction="PASSING"
+          p.trafficReason="group_yield_confirmed";p.trafficLeaderIndex=targetIndex
+          p.trafficTargetOffset=safeNumber(p.passLat)
+          return targetSpeed
+        end
+        releaseYieldGroup(carIndex,p.pendingYieldGroup)
+        p.pendingYieldGroup=nil
+        p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+        p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil
+        p.pendingPassDistance=nil
+      else
+        local pendingProgress=targetState.routeProgress
+        local pendingGap=pendingProgress and routeGap(p.routeProgress,pendingProgress) or
+          safeNumber(p.pendingYieldGap,12.0)
+        p.trafficAction="WAIT_YIELD";p.trafficReason="group_not_yet_clear"
+        p.trafficLeaderIndex=targetIndex;p.trafficGap=pendingGap
+        return math.min(targetSpeed,safeFollowingSpeed(pendingGap,
+          targetCar.speedMs,p.brakeAccelEstimate))
+      end
+    end
   end
 
   if p.overtakeSide ~= 0 then
