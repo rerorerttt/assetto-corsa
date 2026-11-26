@@ -979,11 +979,30 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           otherState and otherState.segIdx or p.segIdx,
           not (otherState and otherState.routeLocked),
           otherState and otherState.routeProgress,other.speedMs,0.05)
+        local otherHalfWidth=math.max(0.75,
+          safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+        local otherHalfLength=math.max(1.5,
+          safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
         if op==nil then
-          local dx=other.position.x-car.position.x
-          local dz=other.position.z-car.position.z
-          if dx*dx+dz*dz<80.0*80.0 then
-            return false,"near_vehicle_unprojected"
+          -- An unprojected player/car outside the recorded road is not a
+          -- blocker. Only retain it as an obstacle when its physical body
+          -- actually overlaps the road corridor near the planned pass.
+          local longitudinal,otherOffset=relativeToRoute(other.position,
+            Geometry.sample(route,p.routeProgress))
+          local roadSample=Geometry.sample(route,p.routeProgress)
+          local roadLeft,roadRight=routeBoundsAtSample(roadSample)
+          local nearRoad=longitudinal~=nil and otherOffset~=nil and
+            otherOffset>=roadLeft-otherHalfWidth-0.75 and
+            otherOffset<=roadRight+otherHalfWidth+0.75
+          if nearRoad and math.abs(longitudinal)<80.0 then
+            local ofx,ofz=normalize2(other.look.x,other.look.z)
+            local direction=ofx*fx+ofz*fz
+            local signedSpeed=math.max(0,safeNumber(other.speedMs))
+            if direction < -0.25 then signedSpeed=-signedSpeed end
+            traffic[#traffic+1]={
+              index=i,progress=p.routeProgress+longitudinal,lateral=otherOffset,
+              speed=signedSpeed,halfWidth=otherHalfWidth,halfLength=otherHalfLength
+            }
           end
         else
           local os=Geometry.sample(route,op)
@@ -991,10 +1010,6 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           local direction=os and (ofx*os.tx+ofz*os.tz) or 1.0
           local signedSpeed=math.max(0,safeNumber(other.speedMs))
           if direction < -0.25 then signedSpeed=-signedSpeed end
-          local otherHalfWidth=math.max(0.75,
-            safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
-          local otherHalfLength=math.max(1.5,
-            safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
           local otherOffset=ol or 0
           if otherState and
              (otherState.overtakeSide~=0 or otherState.returningFromPass or otherState.yieldRequestBy~=nil) then
