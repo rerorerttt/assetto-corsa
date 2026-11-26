@@ -47,8 +47,7 @@ The supplied traffic trace exposed four connected faults in the previous control
 
 The current traffic controller uses a simple two-class, adjacent-lane rule:
 
-- Odd AI indices (1, 3, 5, ...) are slow traffic with a 40 km/h target cap.
-- Even AI indices (2, 4, 6, ...) are fast traffic with no fixed cruise-speed cap; only these cars initiate overtakes.
+- All AI retain their physics-limited speed; no arbitrary 40 km/h cap or odd/even car-index classes are imposed. Overtake eligibility is calculated from measured acceleration, current speed, leader speed, and the distance needed to complete the pass. A car starts only when its predicted speed advantage is sufficient.
 - Outside an overtake, every AI keeps the normal full-width racing-line optimizer; there is no permanent lane assignment or lane-centre bias. When a pass is reserved, the slower target is assigned to the logical slot nearest its current racing line and the faster car is assigned to an adjacent slot.
 - When a fast car catches a slower car, it checks the immediately adjacent lane and reserves it directly. The target stays in its own lane; there is no yield request, yield timeout, or waiting for the leader to move.
 - Both cars begin their lane changes in the same update; the fast car does not wait for a yield-ready flag. The complete paired manoeuvre is checked against road boundaries and every active vehicle, including the target's predicted lane transition. The exact fixed-offset racing-line planner is run for both cars before the pass is accepted.
