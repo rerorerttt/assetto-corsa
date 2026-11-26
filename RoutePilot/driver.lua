@@ -52,6 +52,12 @@ local function carRand(i, s)
   return n - math.floor(n)
 end
 
+local function trafficLog(...)
+  if state and state.trafficDiagnostics and H and H.log then
+    H.log(...)
+  end
+end
+
 function Driver.setup(cfg, st, helpers)
   CFG, state, H = cfg, st, helpers
   state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
@@ -1300,7 +1306,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   if offset==nil then
     p.overtakeRetryT=0.25
     if not p.overtakeDeniedLogged then
-      H.log("CAR=%d OVERTAKE_DENIED reason=%s reserved_by=%d gap=%.1f",
+      trafficLog("CAR=%d OVERTAKE_DENIED reason=%s reserved_by=%d gap=%.1f",
         carIndex,tostring(p.lastPassDeniedReason or "no_free_passing_offset"),
         safeNumber(p.lastPassReservationOwner,-1),gap or -1)
       p.overtakeDeniedLogged=true
@@ -1331,7 +1337,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
       math.max(8.0,speed))*2.0+4.0)
   p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
-  H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
+  trafficLog("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
   return true
@@ -1564,7 +1570,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       p.trafficAction="RETURNING"
       p.trafficReason="target_clear_and_return_line_free"
       p.trafficTargetOffset=returnOffset
-      H.log("CAR=%d OVERTAKE_END return=%.2f clearance=2_car_lengths",
+      trafficLog("CAR=%d OVERTAKE_END return=%.2f clearance=2_car_lengths",
         carIndex,returnOffset)
       return targetSpeed
     end
@@ -1581,7 +1587,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       p.returningFromPass=true
       p.laneOffset=returnOffset
       p.overtakeRetryT=1.5
-      H.log("CAR=%d OVERTAKE_ABORT reason=%s return=%.2f",
+      trafficLog("CAR=%d OVERTAKE_ABORT reason=%s return=%.2f",
         carIndex,passDeadlocked and "pass_lane_blocked" or "timeout",returnOffset)
       return targetSpeed
     end
@@ -1680,7 +1686,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
         p.trafficLeaderIndex=leaderIndex
         p.trafficTargetOffset=safeNumber(p.passLat)
         p.trafficPriority=1000000
-        H.log("CAR=%d PASS_IMMEDIATE target=%d passLane=%.2f targetLane=%.2f gap=%.1f",
+        trafficLog("CAR=%d PASS_IMMEDIATE target=%d passLane=%.2f targetLane=%.2f gap=%.1f",
           carIndex,leaderIndex,safeNumber(p.passLat),safeNumber(leaderLaneOffset),gap)
         return targetSpeed
       else
@@ -1991,7 +1997,7 @@ function Driver.update(carIndex, car, dt)
       p.overtakeRetryT=1.5
       p.trafficAction="FOLLOW"
       p.trafficReason="pass_path_rejected_return_to_racing_line"
-      H.log("CAR=%d OVERTAKE_ABORT reason=pass_plan_no_path target=%d return=%.2f",
+      trafficLog("CAR=%d OVERTAKE_ABORT reason=pass_plan_no_path target=%d return=%.2f",
         carIndex,targetIndex or -1,returnOffset)
       updateRacingPlan(carIndex,car,p,speed,dt)
       targetSpeed=p.racingPlanBlocked and 0 or planTargetSpeed(p,speed)
@@ -2001,7 +2007,7 @@ function Driver.update(carIndex, car, dt)
       -- a geometry-validated continuation.
       p.trafficAction="PASSING"
       p.trafficReason="pass_plan_failed_source_lane_occupied"
-      H.log("CAR=%d PASS_PATH_BLOCKED source_lane_occupied target=%d",
+      trafficLog("CAR=%d PASS_PATH_BLOCKED source_lane_occupied target=%d",
         carIndex,targetIndex or -1)
     end
   end
