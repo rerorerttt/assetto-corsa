@@ -1508,18 +1508,16 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   else
     p.trafficPriority=0
   end
-  local ownProgress, ownLateral, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
-  if ownProgress == nil then
-    p.projectionLost = true
+  -- Driver.update() has already projected this car for the current tick.
+  -- Reuse that result instead of running a second route search here.
+  local ownProgress,ownLateral,ownSeg=p.routeProgress,p.latOff,p.segIdx
+  if ownProgress==nil then
+    p.projectionLost=true
     p.trafficPriority=0
     p.trafficAction="ROUTE_LOST"
     p.trafficReason="projection_failed"
     return 0
   end
-  p.routeLocked = true
-  if ownSeg then p.segIdx = ownSeg end
-  p.routeProgress = ownProgress
-  if ownLateral~=nil then p.latOff=ownLateral end
   if p.returningFromPass then
     p.trafficPriority=900000
     return targetSpeed
@@ -1689,15 +1687,6 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
   p.trafficAction="FOLLOW";p.trafficReason="leader_in_path"
-  local leaderState=state.p[leaderIndex]
-  local leaderFreeSpeed=math.max(0,safeNumber(
-    leaderState and leaderState.freeTargetSpeed,leaderSpeed or 0))
-  local ownFreeSpeed=math.max(0,safeNumber(targetSpeed))
-  local ownAccel=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
-  local leaderAccel=clamp(safeNumber(
-    leaderState and leaderState.accelEstimate,4.0),0.5,18.0)
-  local relativeSpeed=speed-(leaderSpeed or 0)
-  local relativeAccel=ownAccel-leaderAccel
   -- Overtake opportunities are evaluated only by the 10-second global
   -- coordinator. Per-car control performs no independent pass scan or ETA
   -- calculation; it follows the current corridor until a batch order arrives.
@@ -2159,10 +2148,18 @@ function Driver.update(carIndex, car, dt)
   -- uses its curvature instead of commanding a stationary vehicle.
   local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
   p.freeTargetSpeed=targetSpeed
+  local passStateBefore=p.overtakeSide
+  local returnStateBefore=p.returningFromPass
+  local yieldOwnerBefore=p.yieldRequestBy
+  local yieldOffsetBefore=p.yieldOffset
   targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
-  -- Overtake state can change in this frame; rebuild the steering path before
-  -- issuing controls so the first lateral movement follows the reserved side.
-  if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
+  -- Rebuild the optimizer only when the traffic state actually changed this
+  -- tick (pass completion/abort or yield release), not on every physics frame.
+  if not p.projectionLost and
+     (passStateBefore~=p.overtakeSide or returnStateBefore~=p.returningFromPass or
+      yieldOwnerBefore~=p.yieldRequestBy or yieldOffsetBefore~=p.yieldOffset) then
+    updateRacingPlan(carIndex,car,p,speed,dt)
+  end
   p.targetSpeed = targetSpeed
 
   p.boundaryEmergency=false
