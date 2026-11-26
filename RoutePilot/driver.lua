@@ -1165,47 +1165,79 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     p.lastPassDeniedReason="leader_lateral_unknown"
     return nil
   end
-  local defaultCenter=laneCenters(p.segIdx)
+  local leaderCar=ac.getCar(leaderIndex)
+  if not leaderCar or not leaderCar.isActive or not leaderCar.isAIControlled then
+    p.lastPassDeniedReason="leader_not_ai"
+    return nil
+  end
+  local leaderState=state.p[leaderIndex]
+  if not leaderState then
+    newPersonality(leaderIndex)
+    leaderState=state.p[leaderIndex]
+  end
+  if not leaderState or leaderState.overtakeSide~=0 or
+     leaderState.returningFromPass or leaderState.yieldRequestBy~=nil then
+    p.lastPassDeniedReason="leader_already_maneuvering"
+    return nil
+  end
+  local leaderProgress=leaderState.routeProgress
+  if leaderProgress==nil then
+    leaderProgress=routeProjection(leaderCar,leaderState.segIdx,
+      not leaderState.routeLocked,leaderState.routeProgress,leaderCar.speedMs,0.05)
+    leaderState.routeProgress=leaderProgress
+    leaderState.routeLocked=leaderProgress~=nil
+  end
+  if leaderProgress==nil then
+    p.lastPassDeniedReason="leader_route_unprojected"
+    return nil
+  end
+  leaderState.latOff=leaderLateral
+
   local bl,br=H.boundsAt(p.segIdx)
-  local source=safeNumber(p.latOff,
-    p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
-    defaultCenter or ((bl+br)*0.5))
-  local candidates={}
-  -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
-  -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
   local corridorWidth=br-bl
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
+  local leaderWidth=math.max(1.5,
+    safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.x,2.0))
   local laneCount=math.max(1,math.floor((corridorWidth+1.0)/4.0))
   local slotWidth=corridorWidth/laneCount
-  if laneCount<2 or slotWidth<ownWidth+0.55 then
+  if laneCount<2 or slotWidth<math.max(ownWidth,leaderWidth)+0.55 then
     p.lastPassDeniedReason="no_adjacent_lane"
     return nil
   end
+
+  -- Assign the target to the lane nearest its current racing line, then put
+  -- the overtaker in an adjacent slot. Both lane changes begin together.
   local sourceSlot=1
   for i=2,laneCount do
-    local a=math.abs((bl+(i-0.5)*slotWidth)-source)
-    local b=math.abs((bl+(sourceSlot-0.5)*slotWidth)-source)
+    local a=math.abs((bl+(i-0.5)*slotWidth)-leaderLateral)
+    local b=math.abs((bl+(sourceSlot-0.5)*slotWidth)-leaderLateral)
     if a<b then sourceSlot=i end
   end
-  -- The overtaker moves to the adjacent lane; the target remains in its
-  -- assigned lane. The predicted path check includes the target vehicle.
+  local leaderLaneOffset=bl+(sourceSlot-0.5)*slotWidth
+  if laneOccupied(leaderIndex,leaderCar,leaderLaneOffset,carIndex) then
+    p.lastPassDeniedReason="target_lane_occupied"
+    return nil
+  end
+
+  local source=safeNumber(p.latOff,p.laneOffsetCurrent or 0)
+  local candidates={}
   for i=1,laneCount do
     if math.abs(i-sourceSlot)==1 then
       candidates[#candidates+1]=bl+(i-0.5)*slotWidth
     end
   end
-  table.sort(candidates,function(a,b)return math.abs(a-source)<math.abs(b-source) end)
+  table.sort(candidates,function(a,b)
+    return math.abs(a-source)<math.abs(b-source)
+  end)
+
   local lastReason="no_candidate"
   p.lastPassReservationOwner=nil
   for _,offset in ipairs(candidates) do
     local reserved,reservationOwner=passingReservationBlocked(carIndex,p,offset,speed)
     if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then
       local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
-        source,offset,passDistance or 60.0,speed)
+        source,offset,passDistance or 60.0,speed,leaderLaneOffset)
       if clear then
-        -- Validate with the exact same fixed-lane planner used after the
-        -- reservation. This prevents a pass from starting when the racing
-        -- planner would immediately reject its swept vehicle footprint.
         local lateralLimit=clamp(
           safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
         local transitionDistance=math.max(22.0,
@@ -1213,14 +1245,32 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
         local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
         local horizon=clamp(math.max(CFG.PLAN_HORIZON,
           speed*speed/(2.0*brakeAccel)+speed*1.5+35.0),CFG.PLAN_HORIZON,135.0)
-        local validated,planReason=RacingLine.plan(
+        local passPlan,passReason=RacingLine.plan(
           state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
           source,offset,offset,horizon,7.5,nil,0,transitionDistance,p.lateralAccelLimit)
-        if validated then
-          p.lastPassDeniedReason=nil
-          return offset
+        if passPlan then
+          local leaderSpeed=math.max(0,safeNumber(leaderCar.speedMs))
+          local leaderLimit=clamp(
+            safeNumber(leaderState.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+          local leaderTransition=math.max(22.0,
+            leaderSpeed*math.sqrt(6.0*math.abs(leaderLaneOffset-leaderLateral)/leaderLimit))
+          local leaderBrake=clamp(
+            safeNumber(leaderState.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+          local leaderHorizon=clamp(math.max(CFG.PLAN_HORIZON,
+            leaderSpeed*leaderSpeed/(2.0*leaderBrake)+leaderSpeed*1.5+35.0),
+            CFG.PLAN_HORIZON,135.0)
+          local leaderPlan,leaderReason=RacingLine.plan(
+            state.routeGeometry,Geometry.sample,leaderProgress,leaderCar,
+            routeBoundsAtSample,leaderLateral,leaderLaneOffset,leaderLaneOffset,
+            leaderHorizon,7.5,nil,0,leaderTransition,leaderState.lateralAccelLimit)
+          if leaderPlan then
+            p.lastPassDeniedReason=nil
+            return offset,leaderLaneOffset
+          end
+          lastReason="leader_lane_plan_"..tostring(leaderReason or "NO_PATH")
+        else
+          lastReason="pass_plan_"..tostring(passReason or "NO_PATH")
         end
-        lastReason="pass_plan_"..tostring(planReason or "NO_PATH")
       else
         lastReason=reason or lastReason
       end
@@ -1231,12 +1281,6 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   end
   p.lastPassDeniedReason=lastReason
   return nil
-end
-
-local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
-  -- Follow only the leader in the car's current corridor. A vehicle in a
-  -- separate usable lane must never reduce this car's target speed.
-  return safeFollowingSpeed(currentGap,currentSpeed,p.brakeAccelEstimate)
 end
 
 local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,passDistance,forcedOffset)
