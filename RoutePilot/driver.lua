@@ -1464,7 +1464,10 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 end
               end
             else
-              p.lastPassDeniedReason="yield_slot_owned_by_other_car"
+              p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset
+p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
+p.trafficAction="WAIT_QUEUE";p.trafficReason="earlier_pass_has_slot"
+return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
             end
           else
             p.lastPassDeniedReason="yield_slot_owned_by_other_car"
