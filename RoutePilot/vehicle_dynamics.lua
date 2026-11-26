@@ -16,20 +16,21 @@ local function safe(v, fallback)
 end
 
 local function rearAxleOffset(car, p)
-  if p.rearAxleZ then return p.rearAxleZ end
-  local ok, z = pcall(function()
+  if p.rearAxleZ and p.rearAxleY then return p.rearAxleY, p.rearAxleZ end
+  local ok, y, z = pcall(function()
     local inverse = car.transform:inverse()
     local left = inverse:transformPoint(car.wheels[2].position)
     local right = inverse:transformPoint(car.wheels[3].position)
-    return (left.z + right.z) * 0.5
+    return (left.y + right.y) * 0.5, (left.z + right.z) * 0.5
   end)
-  if ok and type(z) == "number" and z == z then
-    p.rearAxleZ = z
+  if ok and type(y) == "number" and y == y and type(z) == "number" and z == z then
+    p.rearAxleY, p.rearAxleZ = y, z
   else
     -- Conservative fallback only for cars whose wheel transforms are absent.
+    p.rearAxleY = 0
     p.rearAxleZ = -math.max(0.7, safe(car.aabbSize and car.aabbSize.z, 4.5) * 0.25)
   end
-  return p.rearAxleZ
+  return p.rearAxleY, p.rearAxleZ
 end
 
 function M.correctSteering(car, p, pathSteer, speed, dt)
@@ -45,9 +46,11 @@ function M.correctSteering(car, p, pathSteer, speed, dt)
 
   -- AGA obtains axle velocity from rigid-body point velocity:
   -- v(point) = v(COM) + angularVelocity x pointOffset.
-  local rearZ = rearAxleOffset(car, p)
-  local rearVx = safe(localVelocity.x) + safe(angular.y) * rearZ
-  local rearVz = safe(localVelocity.z)
+  local rearY, rearZ = rearAxleOffset(car, p)
+  local omegaX, omegaY, omegaZ =
+    safe(angular.x), safe(angular.y), safe(angular.z)
+  local rearVx = safe(localVelocity.x) + omegaY * rearZ - omegaZ * rearY
+  local rearVz = safe(localVelocity.z) + omegaX * rearY
   local rearSpeed = math.sqrt(rearVx * rearVx + rearVz * rearVz)
   local rearAngle = 0
   if rearSpeed > 1.5 then
