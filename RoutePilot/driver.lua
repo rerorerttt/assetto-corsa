@@ -780,8 +780,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   local bl,br=H.boundsAt(p.segIdx)
   local mid=(bl+br)*0.5
-  -- The saved return target is the assigned base lane. Adjacent lanes are
-  -- selected only by the explicit passing state machine.
+  -- The return target is the overtaker's original racing-line offset. Lane
+  -- slots are temporary and exist only for the paired pass manoeuvre.
   local base=mid
 
   p.racingPlanTimer=math.max(0,safeNumber(p.racingPlanTimer)-dt)
@@ -793,9 +793,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local mode=forcedMode or "OPEN"
   local fixedOffset=nil
   local fixedTransitionDistance=22.0
-  -- Normal racing uses the complete physical corridor but is biased toward
-  -- the assigned left lane. Only a reserved PASS/RETURN manoeuvre fixes the
-  -- offset; traffic occupancy is handled separately by updateTrafficControl().
+  -- Normal racing uses the complete physical corridor. PASS/RETURN/YIELD
+  -- modes temporarily fix offsets only for the cars in the active manoeuvre.
   if p.racingPlanTimer>0 and p.racingPlanMode==mode then
     return
   end
@@ -813,8 +812,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedTransitionDistance=math.max(22.0,
       math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
   end
-  -- OPEN mode retains the full corridor and a preferred base-lane offset.
-  -- PASS/RETURN use a fixed, prevalidated lane transition.
+  -- OPEN mode retains the full corridor. PASS/RETURN/YIELD use fixed,
+  -- prevalidated temporary lane transitions.
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
@@ -1378,17 +1377,17 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   if p.yieldRequestBy~=nil and p.yieldOffset~=nil then
     local requester=state.p[p.yieldRequestBy]
     p.yieldAssignedTimer=safeNumber(p.yieldAssignedTimer)+dt
-    if not requester or p.yieldAssignedTimer>30.0 or
+    if not requester or
        (requester.overtakeSide==0 and not requester.returningFromPass) then
-      if requester and p.yieldAssignedTimer>30.0 then
-        requester.passTargetLaneFailed=true
-      end
       p.yieldRequestBy=nil
       p.yieldOffset=nil
       p.yieldPlanBlocked=false
       p.yieldAssignedTimer=0
       p.laneOffset=nil
     else
+      if p.yieldAssignedTimer>30.0 and requester.overtakeSide~=0 then
+        requester.passTargetLaneFailed=true
+      end
       p.laneOffset=p.yieldOffset
       p.trafficPriority=900000
       p.trafficAction="LANE_ASSIGN"
