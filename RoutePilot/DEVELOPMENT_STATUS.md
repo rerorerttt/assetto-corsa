@@ -32,7 +32,7 @@ The supplied `routepilot_trace.txt` showed:
 ## Files changed in 0.9.3
 
 - `RoutePilot/driver.lua`: deterministic slow/fast classes; base-lane assignment; immediate adjacent-lane passing without leader-yield state; target-inclusive predicted collision checks; exact pass-plan prevalidation; pass abort and base-lane replanning on runtime plan failure.
-- `RoutePilot/racing_line.lua`: lane-preference cost in the optimizer.
+- `RoutePilot/racing_line.lua` remains full-width and unchanged; temporary lane-slot assignments are handled by `driver.lua` only during an overtake.
 - `RoutePilot/RoutePilot.lua`: traffic diagnostics now record speed class, base lane, pass target, plan failure, stuck time, and control status; obsolete yield-queue scheduling removed; app version string updated.
 - `RoutePilot/manifest.ini`: version 0.9.3.
 - `RoutePilot/README.md`: current traffic model and validation requirements.
