@@ -852,7 +852,14 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   end
   if gap~=nil then
     local safeSpeed=safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)
-    return math.min(targetSpeed,safeSpeed)
+    targetSpeed=math.min(targetSpeed,safeSpeed)
+  end
+  -- Keep the coordinator's no-slot decision authoritative even if the
+  -- ordinary lane-based detector misses an off-line or partially displaced car.
+  if p.coordinatorConflictSpeed~=nil then
+    targetSpeed=math.min(targetSpeed,p.coordinatorConflictSpeed)
+    p.trafficAction="CONFLICT_BRAKE"
+    p.trafficReason="no_safe_lane_reserved"
   end
   return targetSpeed
 end
@@ -1082,6 +1089,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
     end
   end
   if #records==0 then return end
+  -- Clear the per-frame coordinator safety cap before resolving this frame.
+  for _,rec in ipairs(records) do
+    if rec.managed then rec.p.coordinatorConflictSpeed=nil end
+  end
 
   -- Initialise the field by measured acceleration rank, then place nearby
   -- cars in the least-conflicted slot. This is not tied to car IDs or spawn order.
@@ -1229,6 +1240,15 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
                 moved=coordinatorMove(leader,lane+1,records,"YIELD",follower.index)
               end
             end
+          end
+          if not moved and sameDirection and follower.managed then
+            -- A failed lane reservation is a mandatory braking decision,
+            -- not permission to continue at the previous target speed.
+            local safeSpeed=safeFollowingSpeed(distance,leader.speed,
+              follower.p.brakeAccelEstimate)
+            follower.p.coordinatorConflictSpeed=math.min(
+              safeNumber(follower.p.coordinatorConflictSpeed,math.huge),
+              safeSpeed)
           end
           if not moved and math.abs(gap)<5.0 then
             H.log("TRAFFIC_CONFLICT_NO_SLOT follower=%d leader=%d gap=%.2f lane=%d",
