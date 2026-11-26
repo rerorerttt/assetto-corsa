@@ -145,7 +145,7 @@ local function newPersonality(carIndex)
     yawRateFiltered = 0,
     raceOffsetRaw = 0, raceOffsetCurrent = 0,
     pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
-    stuck = 0, blockedT = 0, passT = 0,
+    stuck = 0, blockedT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0,
     overtakeSide = 0, passTargetIndex = nil, retireT = 2.0,
     trafficPriority = 0, coordinatedLane = nil, homeLane = nil,
@@ -416,13 +416,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.raceOffsetCurrent=currentRace and currentRace.offset or raceTarget.offset
     p.laneOffsetCurrent=p.raceOffsetCurrent
   else
-    local maxStep=(p.emergencyPass and 12.0 or 1.8)*math.max(0,dt or 0)
+    local maxStep=1.8*math.max(0,dt or 0)
     local previousOffset=p.laneOffsetCurrent or laneTarget
     p.laneOffsetCurrent=previousOffset+
       clamp(laneTarget-previousOffset,-maxStep,maxStep)
-  end
-  if p.returningFromPass and math.abs(projection.lateral-laneTarget)<0.35 then
-    p.returningFromPass=false
   end
 
   local targetX=raceTarget and raceTarget.x or
@@ -1289,7 +1286,6 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
   if p.steerRateLimited then flag("STEER_RATE_LIMITED") end
   if p.projectionLost then flag("PROJECTION_LOST") end
   if p.overtakeSide and p.overtakeSide~=0 then flag("OVERTAKE_STEERING_CONTEXT") end
-  if p.returningFromPass then flag("RETURN_FROM_OVERTAKE") end
   if not controlWriteOk then flag("CONTROL_WRITE_FAILED") end
   if math.abs(safeNumber(p.pursuitSteer))>0.01 then flag("PURE_PURSUIT_ACTIVE") end
   if math.abs(safeNumber(p.boundaryCurvatureSteer))>0.01 then flag("BOUNDARY_CURVATURE_ACTIVE") end
@@ -1337,7 +1333,7 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
        p.deadbandActive and 1 or 0,target,
       safeNumber(p.steerFiltered),safeNumber(p.steerRateLimitDemand),safeNumber(p.steerRateLimitApplied),
       p.steerRateLimited and 1 or 0,final,safeNumber(p.laneOffsetCurrent),safeNumber(p.raceOffsetRaw),
-      safeNumber(p.overtakeSide),p.returningFromPass and 1 or 0,controlWriteOk and 1 or 0)
+      safeNumber(p.overtakeSide),0,controlWriteOk and 1 or 0)
   end
   p.diagPreviousTarget=target
   p.diagPreviousFinal=final
