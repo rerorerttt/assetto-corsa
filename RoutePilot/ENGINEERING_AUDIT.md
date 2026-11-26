@@ -117,3 +117,16 @@ The current correction separates them in OPEN mode by trying the current lateral
 This closes the specific false-stop path identified in the supplied trace at source level. It does not close the broader GDD route-loss requirement: projection loss still invokes the existing immediate brake fail-safe pending a separately validated last-safe-path/reacquisition state machine. It also does not establish a globally time-optimal racing line; the current optimizer remains a local short-horizon approximation.
 
 Static validation only. The new driver source was fetched back from GitHub after commit. No Lua compiler, Assetto Corsa session, CSP runtime, or FPS benchmark was available. In-game acceptance must verify that fallback events occur on passable OPEN road, that hard stops remain when the full-body corridor is genuinely infeasible, and that PASS/YIELD/RETURN reservations are unchanged.
+
+
+## 2026-11-26 follow-up: remove false traffic hold and restore full-road racing
+
+The latest trace disproved the previous fallback's coverage: the cars were entering `TRAFFIC_HOLD`, so the OPEN-only fallback never ran. There were 342 hard-stop events in a 49.6-second trace. The traffic-lock predicate considered any AI with route-progress separation below `max(35 m, speed * 1.5 + 15 m)`; it did not test lateral/body overlap. Thus the start-grid spacing alone could lock every car into a fixed legacy lane offset. That fixed-offset path then failed the full-body validator and stopped the car. Followers subsequently stopped behind it.
+
+The correction removes this second, conflicting traffic planner. The racing-line planner no longer creates `TRAFFIC_HOLD` based on proximity. Ordinary `OPEN` driving uses the complete physical road corridor and a road-midpoint preference. The traffic controller remains the sole owner of leader detection, following speed, pass requests and reservations. This matches GDD §§6.1, 7.2 and 8: normal driving is not assigned to a fixed lane; traffic speed changes only for a real conflict in the current corridor; and arbitration/reservations remain centralized.
+
+The OPEN fallback is now a single road-midpoint plan generated through the existing full-body swept-path validator. The optimizer is not permitted to bypass physical boundaries. PASS/RETURN/YIELD remain fixed to their reserved paths; fallback cannot move them into another corridor.
+
+The trace's `TARGET_SPEED=13.7 m/s` for the first cars was consistent with the following-speed envelope at a 25 m gap behind a stationary leader, not a global speed cap. The actual zero-speed failure was isolated to cars whose plan was marked blocked. Once those false planner stops are removed, the queue should clear as each leader accelerates; the next trace must verify that this happens.
+
+Source-level validation only; no Assetto Corsa/CSP runtime or Lua compiler was available. This change is intended to remove an internally contradictory control path, not to claim that the vehicles have already been observed accelerating correctly in-game.
