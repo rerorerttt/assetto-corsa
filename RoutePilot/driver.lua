@@ -122,6 +122,7 @@ local function newPersonality(carIndex)
     slipAngle = 0, lateralAccel = 0, yawRate = 0,
     previousFx = nil, previousFz = nil,
     lateralVelocityFiltered = 0,
+    yawRateFiltered = 0,
     raceOffsetRaw = 0, raceOffsetCurrent = 0,
     pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
     stuck = 0, blockedT = 0, passT = 0,
@@ -491,16 +492,31 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.boundaryDeficit=boundaryDeficit
   p.boundaryEmergency=math.abs(boundaryError)>0.45 or boundaryDeficit>0.15
 
-  -- Small slip-angle damping is secondary; the spline preview is the
-  -- primary steering signal.
-  -- Do not feed body slip angle directly into the steering command.
-  -- This term is not yaw damping: during a growing slide it can reinforce
-  -- the deviation and create a left/right steering feedback loop. The
-  -- autonomous path controller owns steering; axle-based stability control
-  -- will be added separately after its signs and gains are validated.
+  -- Body slip angle is deliberately not fed directly into steering:
+  -- its sign depends on the velocity convention and can reinforce a slide.
+  -- Yaw-rate feedback below uses the explicitly aligned physical yaw signal.
+  -- Close the yaw-rate feedback loop around the path-following controller.
+  -- route curvature and signedAngle use the X/Z convention; CSP's measured
+  -- localAngularVelocity.y has the opposite sign, so convert it once here.
+  -- When axle telemetry is unavailable, use the heading-derived estimate,
+  -- which already uses the route convention.
+  local yawActual=p.vehicleDynamicsValid and
+    -safeNumber(p.measuredYawRate) or safeNumber(p.yawRate)
+  local yawAlpha=clamp(dt/(0.08+math.max(0,dt)),0,1)
+  p.yawRateFiltered=lerp(safeNumber(p.yawRateFiltered),yawActual,yawAlpha)
+  local yawTarget=desiredCurvature*math.max(0,speed)
+  local yawError=yawTarget-p.yawRateFiltered
+  local yawSpeedFade=clamp((speed-8.0)/12.0,0,1)
+  local yawFeedbackCurvature=0
+  if yawSpeedFade>0 then
+    yawFeedbackCurvature=clamp(
+      yawError*1.6/math.max(12.0,speed)*yawSpeedFade,-0.055,0.055)
+  end
   local pursuitSteer=pursuitCurvature*CFG.CURVATURE_STEER_GAIN
   local boundaryCurvatureSteer=boundaryCurvature*CFG.CURVATURE_STEER_GAIN
-  local rawSteer=pursuitSteer+boundaryCurvatureSteer+boundarySteer
+  local yawStabilitySteer=yawFeedbackCurvature*CFG.CURVATURE_STEER_GAIN
+  local rawSteer=pursuitSteer+boundaryCurvatureSteer+
+    yawStabilitySteer+boundarySteer
   local deadbandActive=false
   if math.abs(rawSteer)<STEER_DEAD and
      math.abs(p.crossTrackError or 0)<0.03 and
@@ -511,6 +527,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   end
   p.pursuitSteer=pursuitSteer
   p.boundaryCurvatureSteer=boundaryCurvatureSteer
+  p.yawStabilitySteer=yawStabilitySteer
+  p.yawRateTarget=yawTarget
+  p.yawRateFeedbackError=yawError
   p.rawSteer=rawSteer
   p.deadbandActive=deadbandActive
   return clamp(rawSteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
@@ -1396,6 +1415,7 @@ end
 -- High-rate dynamics trace. This is observation-only: it never changes controls.
 -- Stable running is sampled at 10 Hz; suspected instability is sampled at 20 Hz.
 local function logDynamicsTrace(carIndex,car,p,dt,controlWriteOk)
+  if not state.steeringDiagnostics then return end
   local speed=math.max(0,safeNumber(car.speedMs))
   if speed<15.0 then return end
   local velocity=car.velocity
@@ -1436,6 +1456,7 @@ local function logDynamicsTrace(carIndex,car,p,dt,controlWriteOk)
 end
 
 local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
+  if not state.steeringDiagnostics then return end
   dt=math.max(0,safeNumber(dt))
   p.steerDiagTimer=(p.steerDiagTimer or 0)+dt
   p.steerEventCooldown=math.max(0,(p.steerEventCooldown or 0)-dt)
@@ -1503,7 +1524,7 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
   elseif math.abs(target)>0.004 or math.abs(final)>0.004 then interval=0.25 end
   if p.steerDiagTimer>=interval then
     p.steerDiagTimer=p.steerDiagTimer-interval
-    H.log("STEER_DIAG id=%d v=%.2f dt=%.3f straight=%d k0=%.6f k15=%.6f k30=%.6f k50=%.6f progress=%.2f projDist=%.3f routeDelta=%.3f steerProjDelta=%.3f lateral=%.3f cross=%.3f head=%.5f latV=%.3f slip=%.4f yawEst=%.4f yawPhys=%.4f yawTarget=%.4f yawErr=%.4f axleF=%.4f axleR=%.4f look=%.1f targetSrc=%s targetXY=(%.2f,%.2f) targetDist=%.2f alpha=%.5f targetOffset=%.3f planGen=%d planMode=%s ppK=%.6f ppSteer=%.5f boundErr=%.4f boundK=%.6f boundKSteer=%.5f boundSteer=%.5f raw=%.5f deadband=%d target=%.5f filtered=%.5f rateDemand=%.5f rateApplied=%.5f rateLimited=%d final=%.5f lane=%.3f raceOffset=%.3f pass=%d returning=%d controlOK=%d",
+    H.log("STEER_DIAG id=%d v=%.2f dt=%.3f straight=%d k0=%.6f k15=%.6f k30=%.6f k50=%.6f progress=%.2f projDist=%.3f routeDelta=%.3f steerProjDelta=%.3f lateral=%.3f cross=%.3f head=%.5f latV=%.3f slip=%.4f yawEst=%.4f yawPhys=%.4f yawTarget=%.4f yawErr=%.4f axleF=%.4f axleR=%.4f look=%.1f targetSrc=%s targetXY=(%.2f,%.2f) targetDist=%.2f alpha=%.5f targetOffset=%.3f planGen=%d planMode=%s ppK=%.6f ppSteer=%.5f boundErr=%.4f boundK=%.6f boundKSteer=%.5f boundSteer=%.5f yawFB=%.5f yawErr=%.4f raw=%.5f deadband=%d target=%.5f filtered=%.5f rateDemand=%.5f rateApplied=%.5f rateLimited=%d final=%.5f lane=%.3f raceOffset=%.3f pass=%d returning=%d controlOK=%d",
       carIndex,safeNumber(car.speedMs),dt,p.roadStraight and 1 or 0,
       safeNumber(p.roadCurvature0),safeNumber(p.roadCurvature15),safeNumber(p.roadCurvature30),safeNumber(p.roadCurvature50),
       safeNumber(p.routeProgress),safeNumber(p.lineDist),progressDelta,steerProjectionDelta,
@@ -1514,7 +1535,9 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
       safeNumber(p.steeringTargetDistance),targetAlpha,targetOffset,safeNumber(p.racingPlanGeneration),
       tostring(p.racingPlanMode or "NONE"),safeNumber(p.pursuitCurvature),safeNumber(p.pursuitSteer),
       safeNumber(p.boundaryError),safeNumber(p.boundaryCurvature),safeNumber(p.boundaryCurvatureSteer),
-      safeNumber(p.boundarySteer),safeNumber(p.rawSteer),p.deadbandActive and 1 or 0,target,
+      safeNumber(p.boundarySteer),safeNumber(p.yawStabilitySteer),
+       safeNumber(p.yawRateFeedbackError),safeNumber(p.rawSteer),
+       p.deadbandActive and 1 or 0,target,
       safeNumber(p.steerFiltered),safeNumber(p.steerRateLimitDemand),safeNumber(p.steerRateLimitApplied),
       p.steerRateLimited and 1 or 0,final,safeNumber(p.laneOffsetCurrent),safeNumber(p.raceOffsetRaw),
       safeNumber(p.overtakeSide),p.returningFromPass and 1 or 0,controlWriteOk and 1 or 0)
