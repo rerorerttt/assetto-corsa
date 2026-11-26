@@ -652,8 +652,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   local bl,br=H.boundsAt(p.segIdx)
   local mid=(bl+br)*0.5
-  -- The saved return target is the neutral racing corridor. Lane centres
-  -- are selected only by the explicit passing/yield state machine.
+  -- The coordinator supplies a discrete lane centre for every managed car.
+  -- The trajectory planner smooths the transition but does not choose lanes.
   local base=safeNumber(p.coordinatorOffset,p.baseLaneOffset or mid)
   p.baseLaneOffset=base
   p.laneOffset=base
@@ -688,21 +688,17 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local previousAdvance=previousPlan and p.racingPlanStartProgress and
     math.max(0,routeGap(p.racingPlanStartProgress,p.routeProgress)) or 0
   local nextPlan
-  -- In OPEN mode the preferred offset is the physical road midpoint, not
-  -- the legacy left-lane slot. Discrete lane slots are traffic reservations
-  -- for passing/yielding only; they must not bias ordinary racing-line speed.
+  -- Fixed lane offset is the preferred path; the optimiser may smooth its
+  -- geometry but cannot move the car into another logical lane.
   local preferredOffset=base
   nextPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),preferredOffset,fixedOffset,horizon,7.5,
     previousPlan,previousAdvance,fixedTransitionDistance,p.lateralAccelLimit)
 
-  -- A failed dynamic-programming search is not proof that the road is
-  -- physically blocked. In ordinary OPEN running, retry on the road centre
-  -- (the GDD's neutral fallback) using the same oriented full-body swept-path
-  -- validation. Do not retry on a stale lane offset: lane slots exist only
-  -- during explicit passing/yield manoeuvres. Reserved PASS/RETURN/YIELD
-  -- paths are never moved to another corridor by this fallback.
+  -- A failed dynamic-programming search is not proof that the road is blocked.
+  -- The controller falls back to the recorded route spline and the lane target
+  -- is clamped to the full-body safe corridor in calculateSteering().
   local originalFailure=planFailure or (not nextPlan and "NO_PLAN" or nil)
   local fallbackKind=nil
   if not nextPlan then
