@@ -842,9 +842,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
-  -- A hard stop is reserved for the case where the optimizer AND both
-  -- geometry-validated OPEN fallbacks failed, or a reserved corridor itself
-  -- cannot contain the complete vehicle body.
+  -- A hard stop is reserved for the case where the optimizer and its
+  -- geometry-validated OPEN road-centre fallback both fail, or an explicitly
+  -- reserved PASS/RETURN/YIELD corridor cannot contain the complete vehicle body.
   p.racingPlanBlocked=nextPlan==nil
   p.racingPlanFailure=p.racingPlanBlocked and
     (planFailure or originalFailure or "NO_SAFE_PATH") or nil
