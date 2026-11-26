@@ -1130,15 +1130,15 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local moved=false
           if not sameDirection then
             -- Oncoming cars are separated laterally before the meeting point.
-            if follower.managed and follower.p.coordinatorChangeT<=0 and
+            if follower.managed and not follower.p.emergencyMode and follower.p.coordinatorChangeT<=0 and
                 lane<follower.lanes.count then
               moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
             end
-            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
+            if not moved and leader.managed and not leader.p.emergencyMode and leader.p.coordinatorChangeT<=0 and
                 lane<leader.lanes.count then
               moved=coordinatorMove(leader,lane+1,records,"PASS",follower.index)
             end
-            if not moved and follower.managed and follower.p.coordinatorChangeT<=0 and
+            if not moved and follower.managed and not follower.p.emergencyMode and follower.p.coordinatorChangeT<=0 and
                 lane>1 then
               moved=coordinatorMove(follower,lane-1,records,"YIELD",leader.index)
             end
@@ -1149,25 +1149,26 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           elseif follower.managed and leader.managed then
             -- A slower leading car yields right; otherwise the faster follower
             -- takes the adjacent left lane. Only one adjacent slot is changed.
-            if closing>0.5 and lane>1 and leader.p.coordinatorChangeT<=0 then
+            if closing>0.5 and lane>1 and not leader.p.emergencyMode and leader.p.coordinatorChangeT<=0 then
               moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
             end
             if not moved and lane<follower.lanes.count and
-                follower.p.coordinatorChangeT<=0 then
+                not follower.p.emergencyMode and follower.p.coordinatorChangeT<=0 then
               moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
             end
-            if not moved and lane>1 and leader.p.coordinatorChangeT<=0 then
+            if not moved and lane>1 and not leader.p.emergencyMode and leader.p.coordinatorChangeT<=0 then
               moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
             end
           elseif follower.managed then
             -- The leading obstacle is not controlled by RoutePilot.
-            if lane<follower.lanes.count and follower.p.coordinatorChangeT<=0 then
+            if lane<follower.lanes.count and not follower.p.emergencyMode and
+                follower.p.coordinatorChangeT<=0 then
               moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
             end
           elseif leader.managed then
             -- A non-managed faster vehicle behind: RoutePilot's car yields
             -- into any available adjacent slot, never by controlling the player.
-            if leader.p.coordinatorChangeT<=0 then
+            if not leader.p.emergencyMode and leader.p.coordinatorChangeT<=0 then
               if lane>1 then
                 moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
               elseif lane<leader.lanes.count then
