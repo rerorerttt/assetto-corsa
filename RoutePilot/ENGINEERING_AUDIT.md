@@ -128,7 +128,7 @@ The source inspection found the corresponding causes:
 
 The active branch `routepilot/two-lane-traffic-rework-2026-11-26` replaces the yield handshake with a discrete lane policy:
 
-- Odd AI indices are slow class with a 40 km/h cruise target. Even AI indices are fast class with no fixed cruise cap and are the only cars that initiate overtakes.
+- All AI retain physics-limited speed with no arbitrary 40 km/h cap or index-based class. Overtake eligibility is calculated from measured acceleration, current speed, leader speed, and the estimated distance required to clear the target.
 - Normal driving remains on the full-width optimized racing line; there is no permanent lane assignment or lane-centre cost. During a pass, the target is assigned to the logical slot nearest its current racing line and the overtaker is assigned to an adjacent slot. Lane centres use the saved bounds and the 3/7/11/15 m → 1/2/3/4 slot rule.
 - A fast car does not wait for a yield-ready signal. It reserves both lane targets in one transaction; the target and overtaker start their lane changes together. The complete paired swept manoeuvre is predicted against every active vehicle, including the target's moving lane offset, and the exact fixed-offset path is validated for both cars using the same `RacingLine.plan()` routine used at runtime.
 - The target holds its temporary slot until the overtaker has cleared it by two vehicle lengths and returned to its original racing line. Only then is the target's lane assignment released.
