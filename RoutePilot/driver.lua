@@ -947,8 +947,12 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   local sim=ac.getSim()
   if not sim then return false,"no_sim" end
 
+  -- The leader is deliberately excluded from static occupancy prediction:
+  -- it must first move to the outer edge of its own lane, and the pass starts
+  -- only after chooseYieldOffset() confirms that position is reached.
+  local currentSample=Geometry.sample(route,p.routeProgress)
   for i=0,sim.carsCount-1 do
-    if i~=carIndex then
+    if i~=carIndex and i~=leaderIndex then
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
@@ -957,10 +961,22 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           not (otherState and otherState.routeLocked),
           otherState and otherState.routeProgress,other.speedMs,0.05)
         if op==nil then
-          local dx=other.position.x-car.position.x
-          local dz=other.position.z-car.position.z
-          if dx*dx+dz*dz<80.0*80.0 then
-            return false,"near_vehicle_unprojected"
+          -- A failed route projection alone is not a collision. Check the
+          -- vehicle against the actual swept passing corridor in our local
+          -- route frame; cars on a nearby, separate track section are ignored.
+          if currentSample then
+            local longitudinal,lateral=relativeToRoute(other.position,currentSample)
+            local otherHalfWidth=math.max(0.75,
+              safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+            local sweepLow=math.min(source,targetOffset)
+            local sweepHigh=math.max(source,targetOffset)
+            local lateralNear=lateral>=sweepLow-ownHalfWidth-otherHalfWidth-0.8 and
+              lateral<=sweepHigh+ownHalfWidth+otherHalfWidth+0.8
+            local longitudinalNear=longitudinal>=-18.0 and
+              longitudinal<=math.max(35.0,safeNumber(passDistance,60.0)+25.0)
+            if lateralNear and longitudinalNear then
+              return false,"near_vehicle_unprojected"
+            end
           end
         else
           local os=Geometry.sample(route,op)
@@ -1056,13 +1072,6 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     p.lastPassDeniedReason="leader_lateral_unknown"
     return nil
   end
-  local fx,fz=normalize2(car.look.x,car.look.z)
-  local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
-    math.max(18.0,math.max(0,speed)*0.8+12.0),car,fx,fz)
-  if not safeMin or not safeMax or safeMax-safeMin<1.15 then
-    p.lastPassDeniedReason="insufficient_safe_road_width"
-    return nil
-  end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
   local source=safeNumber(p.latOff,
@@ -1071,7 +1080,6 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
-  local separation=(ownWidth+targetWidth)*0.5+0.55
   local candidates={}
   -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
   -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
@@ -1088,10 +1096,12 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     local b=math.abs((bl+(sourceSlot-0.5)*slotWidth)-source)
     if a<b then sourceSlot=i end
   end
+  -- Change lanes as one coordinated manoeuvre: the overtaker takes the
+  -- adjacent lane while the leader moves to the outside edge of its own lane.
+  -- Do not require the cars to be separated before issuing that manoeuvre.
   for i=1,laneCount do
-    local offset=bl+(i-0.5)*slotWidth
-    if i~=sourceSlot and math.abs(offset-leaderLateral)>=separation then
-      candidates[#candidates+1]=offset
+    if math.abs(i-sourceSlot)==1 then
+      candidates[#candidates+1]=bl+(i-0.5)*slotWidth
     end
   end
   table.sort(candidates,function(a,b)return math.abs(a-source)<math.abs(b-source) end)
