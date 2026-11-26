@@ -1343,6 +1343,8 @@ local function releaseYieldGroup(ownerIndex,group)
     if member and member.yieldRequestBy==ownerIndex then
       member.yieldRequestBy=nil;member.yieldOffset=nil
       member.yieldReady=false;member.yieldRequestTimer=0
+      member.yieldFromOffset=nil;member.yieldStartProgress=nil
+      member.yieldTransitionDistance=nil
     end
   end
 end
