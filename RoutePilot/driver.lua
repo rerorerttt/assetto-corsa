@@ -948,7 +948,10 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   if not sim then return false,"no_sim" end
 
   for i=0,sim.carsCount-1 do
-    if i~=carIndex then
+    if i~=carIndex and i~=leaderIndex then
+      -- The designated target has an explicit yield command. It must not be
+      -- treated as a stationary obstacle in the attacker's planned pass path;
+      -- the attacker is released only after the target reaches its yield offset.
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
@@ -1113,31 +1116,24 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   return nil
 end
 
-local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
+local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,requesterIndex)
   if not leaderCar or not leaderState or leaderState.routeProgress==nil then return nil end
-  local seg=leaderState.segIdx or 1
-  local bl,br=H.boundsAt(seg)
-  local width=br-bl
-  local laneCount=math.max(1,math.floor((width+1.0)/4.0))
-  local slotWidth=width/laneCount
   local lateral=safeNumber(leaderState.latOff,leaderState.laneOffsetCurrent or 0)
-  local slot=1
-  for i=2,laneCount do
-    if math.abs(bl+(i-0.5)*slotWidth-lateral)<math.abs(bl+(slot-0.5)*slotWidth-lateral) then slot=i end
-  end
-  local slotLow=bl+(slot-1)*slotWidth
-  local slotHigh=slotLow+slotWidth
-  local halfWidth=math.max(0.75,safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.x,2.0)*0.5)
-  local safeLow=math.max(bl+halfWidth+BOUND_MARGIN,slotLow+halfWidth+0.12)
-  local safeHigh=math.min(br-halfWidth-BOUND_MARGIN,slotHigh-halfWidth-0.12)
-  if safeHigh-safeLow<0.24 then return nil end
-  local direction=passOffset>lateral and -1 or 1
-  local desired=direction<0 and safeLow or safeHigh
-  if math.abs(desired-lateral)<0.22 then return nil end
   local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
-  local corridorLow,corridorHigh=safeCorridorForPreview(state.routeGeometry,leaderState.routeProgress,18.0,leaderCar,fx,fz)
-  if not corridorLow or not corridorHigh or desired<corridorLow or desired>corridorHigh then return nil end
-  if laneOccupied(leaderIndex,leaderCar,desired,nil) then return nil end
+  local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,
+    leaderState.routeProgress,math.max(22.0,safeNumber(leaderCar.speedMs)*0.8+12.0),
+    leaderCar,fx,fz)
+  if not safeMin or not safeMax or safeMax-safeMin<1.0 then return nil end
+
+  -- The yielding car must move to the road edge opposite the attacker's
+  -- reserved passing corridor, not merely to the other edge of its old slot.
+  local desired=passOffset>lateral and safeMin or safeMax
+  local requester=ac.getCar(requesterIndex)
+  local ownHalf=math.max(0.75,safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.x,2.0)*0.5)
+  local passHalf=math.max(0.75,safeNumber(requester and requester.aabbSize and requester.aabbSize.x,2.0)*0.5)
+  if math.abs(desired-passOffset)<ownHalf+passHalf+0.45 then return nil end
+  if math.abs(desired-lateral)<0.30 then return nil end
+  if laneOccupied(leaderIndex,leaderCar,desired,requesterIndex) then return nil end
   return desired
 end
 local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
@@ -1412,7 +1408,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
             if pendingOffset==nil then p.overtakeRetryT=0.25 end
           end
           p.pendingPassOffset=pendingOffset
-          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset) or nil
+          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset,carIndex) or nil
           if pendingOffset~=nil and yieldOffset==nil then p.overtakeRetryT=0.25 end
           if yieldOffset~=nil then
             targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
@@ -1454,11 +1450,14 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   p.trafficReason="leader_in_path"
 
   local leaderPace=math.max(0,leaderSpeed or 0)
-  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
-  -- Predict one second of available acceleration rather than treating an
-  -- unbounded cruise target as an instantaneous speed advantage.
-  local speedAdvantage=speed-leaderPace+acceleration
-  local slower=speedAdvantage>=3.0
+  local ownPower=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
+  local leaderState=state.p[leaderIndex]
+  local leaderPower=clamp(safeNumber(leaderState and leaderState.accelEstimate,4.0),0.5,18.0)
+  -- Measured longitudinal acceleration is the available in-session proxy
+  -- for usable power-to-weight. A faster car is not automatically stronger.
+  local powerAdvantage=ownPower-leaderPower
+  local speedAdvantage=speed-leaderPace
+  local slower=powerAdvantage>=0.35
   if slower then
     local targetCar=ac.getCar(leaderIndex)
     local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
@@ -1482,10 +1481,10 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         0.5*acceleration*passTime*passTime
     end
     local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
-    local canActuallyPass=speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
-      speed>=(leaderSpeed or 0)-4.0
+    local canActuallyPass=powerAdvantage>=0.35 and estimatedPassDistance<=260.0 and
+      speed>=(leaderSpeed or 0)-8.0
     local urgent=canActuallyPass and gap<=urgentGap
-    local passWindow=math.max(45.0,32.0+speed*1.5)
+    local passWindow=math.max(70.0,32.0+speed*2.0)
     p.followTimer=p.followTimer+dt
     local passRequestReady=(p.pendingYieldTarget==leaderIndex or (canActuallyPass and gap<=passWindow)) and
       p.overtakeSide==0 and p.overtakeRetryT<=0
@@ -1496,7 +1495,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       -- whichever car happens to have the lowest simulation index.
       p.trafficPriority=10000+
         clamp(passWindow-gap,0,passWindow)*10+
-        clamp(speedAdvantage,0,50)*2+
+        clamp(powerAdvantage,0,10)*120+
+        clamp(speedAdvantage,-10,50)*2+
         (urgent and 1000 or 0)
     else
       p.trafficPriority=0
@@ -1522,7 +1522,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         if passOffset~=nil then
           if leaderState.yieldRequestBy==nil or leaderState.yieldRequestBy==carIndex then
             if leaderState.yieldRequestBy==nil then
-              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
+              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,carIndex)
               if yieldOffset~=nil then
                 leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
                 leaderState.yieldReady=true;leaderState.yieldRequestTimer=0
