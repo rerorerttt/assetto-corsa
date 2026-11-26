@@ -1398,7 +1398,7 @@ local function collectYieldGroup(carIndex,car,p,leaderIndex,maxRange)
     if i~=carIndex and i~=leaderIndex then
       local other=ac.getCar(i)
       local os=state.p[i]
-      if other and other.isActive and other.isAIControlled and os and
+      if i>0 and other and other.isActive and os and
          os.overtakeSide==0 and not os.returningFromPass and
          os.yieldRequestBy==nil and os.pendingYieldTarget==nil and
          #candidates<8 then
@@ -1892,7 +1892,7 @@ local function coordinateTrafficFrame(sim,dt,frame)
   -- keep the expensive all-car arbitration out of the per-car physics loop.
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i);local p=state.p[i]
-    if car and car.isActive and car.isAIControlled and p and
+    if i>0 and car and car.isActive and p and
        p.framePreparedFrame==frame and p.frameProjection and p.frameProjection.valid then
       p.freeTargetSpeed=safeNumber(p.freeTargetSpeed,p.targetSpeed or 0)
     end
@@ -1900,7 +1900,7 @@ local function coordinateTrafficFrame(sim,dt,frame)
   local requests={}
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i);local p=state.p[i]
-    if car and car.isActive and car.isAIControlled and p and
+    if i>0 and car and car.isActive and p and
        p.framePreparedFrame==frame and p.frameProjection and p.frameProjection.valid and
        p.overtakeSide==0 and not p.returningFromPass and p.yieldRequestBy==nil and
        p.overtakeRetryT<=0 then
@@ -2107,7 +2107,7 @@ function Driver.prepareFrame(sim,dt)
   refreshRouteMetrics()
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
-    if car and car.isActive and car.isAIControlled then
+    if i>0 and car and car.isActive then
       local p=state.p[i]
       if not p then newPersonality(i);p=state.p[i] end
       local progress,lateral,seg,parameter,distance,tx,tz=
