@@ -305,6 +305,19 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   for i = 1, n do
     points[i] = pointAt(samples[i], offsets[i])
   end
+  -- Fixed pass/yield/return corridors bypass the dynamic-programming search,
+  -- but they are held to the same full-body swept-path test.
+  if fixedOffset ~= nil then
+    for i=1,n-1 do
+      local a,b=points[i],points[i+1]
+      local hx,hz=b.x-a.x,b.z-a.z
+      local mid={x=(a.x+b.x)*0.5,z=(a.z+b.z)*0.5}
+      if not bodyFitsAt((i-0.5)*step,mid,hx,hz) or
+         not bodyFitsAt(i*step,b,hx,hz) then
+        return nil,"NO_PATH",i*step
+      end
+    end
+  end
   local curvatures = {}
   for i = 2, n - 1 do
     curvatures[i] = curvature(points[i - 1], points[i], points[i + 1])
