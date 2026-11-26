@@ -492,13 +492,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.boundaryDeficit=boundaryDeficit
   p.boundaryEmergency=math.abs(boundaryError)>0.45 or boundaryDeficit>0.15
 
-  -- Small slip-angle damping is secondary; the spline preview is the
-  -- primary steering signal.
-  -- Do not feed body slip angle directly into the steering command.
-  -- This term is not yaw damping: during a growing slide it can reinforce
-  -- the deviation and create a left/right steering feedback loop. The
-  -- autonomous path controller owns steering; axle-based stability control
-  -- will be added separately after its signs and gains are validated.
+  -- Body slip angle is deliberately not fed directly into steering:
+  -- its sign depends on the velocity convention and can reinforce a slide.
+  -- Yaw-rate feedback below uses the explicitly aligned physical yaw signal.
   -- Close the yaw-rate feedback loop around the path-following controller.
   -- route curvature and signedAngle use the X/Z convention; CSP's measured
   -- localAngularVelocity.y has the opposite sign, so convert it once here.
