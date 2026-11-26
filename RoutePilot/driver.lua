@@ -1391,8 +1391,16 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     local pendingCar=ac.getCar(p.pendingYieldTarget)
     local pendingGap=pendingState and pendingState.routeProgress and
       routeGap(p.routeProgress,pendingState.routeProgress) or nil
+    local pendingOwner=pendingState and pendingState.yieldRequestBy
+    local pendingOwnerState=pendingOwner~=nil and state.p[pendingOwner] or nil
+    local ownerStillOwnsRequest=pendingOwner==carIndex or
+      (pendingOwnerState and
+       (pendingOwnerState.pendingYieldTarget==p.pendingYieldTarget or
+        (pendingOwnerState.overtakeSide~=0 and
+         listContains(pendingOwnerState.passGroupTargets,p.pendingYieldTarget))))
+    local ownerAvailable=pendingOwner==nil and p.pendingYieldTarget==leaderIndex
     local reservationValid=pendingState and pendingCar and pendingCar.isActive and
-      pendingState.yieldRequestBy==carIndex and pendingGap and pendingGap>0
+      (ownerStillOwnsRequest or ownerAvailable) and pendingGap and pendingGap>0
     if not reservationValid then
       releaseYieldGroup(carIndex,p.pendingYieldGroup or {p.pendingYieldTarget})
       p.pendingYieldGroup=nil
@@ -1414,26 +1422,32 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     local targetIndex=p.pendingYieldTarget
     local targetState=state.p[targetIndex]
     local targetCar=ac.getCar(targetIndex)
-    if targetState and targetCar and targetCar.isActive and
-       targetState.yieldRequestBy==carIndex then
-      if pendingGroupReady(p,carIndex) then
-        if beginOvertake(carIndex,car,p,safeNumber(p.pendingYieldGap,12.0),
-          targetIndex,targetState.latOff,speed,p.pendingPassDistance,p.pendingPassOffset) then
-          p.trafficPriority=1000000;p.trafficAction="PASSING"
-          p.trafficReason="group_yield_confirmed";p.trafficLeaderIndex=targetIndex
-          p.trafficTargetOffset=safeNumber(p.passLat)
-          return targetSpeed
+    if targetState and targetCar and targetCar.isActive then
+      local pendingProgress=targetState.routeProgress
+      local pendingGap=pendingProgress and routeGap(p.routeProgress,pendingProgress) or
+        safeNumber(p.pendingYieldGap,12.0)
+      if targetState.yieldRequestBy==carIndex then
+        if pendingGroupReady(p,carIndex) then
+          if beginOvertake(carIndex,car,p,safeNumber(p.pendingYieldGap,12.0),
+            targetIndex,targetState.latOff,speed,p.pendingPassDistance,p.pendingPassOffset) then
+            p.trafficPriority=1000000;p.trafficAction="PASSING"
+            p.trafficReason="group_yield_confirmed";p.trafficLeaderIndex=targetIndex
+            p.trafficTargetOffset=safeNumber(p.passLat)
+            return targetSpeed
+          end
+          releaseYieldGroup(carIndex,p.pendingYieldGroup)
+          p.pendingYieldGroup=nil
+          p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+          p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil
+          p.pendingPassDistance=nil
+        else
+          p.trafficAction="WAIT_YIELD";p.trafficReason="group_not_yet_clear"
+          p.trafficLeaderIndex=targetIndex;p.trafficGap=pendingGap
+          return math.min(targetSpeed,safeFollowingSpeed(pendingGap,
+            targetCar.speedMs,p.brakeAccelEstimate))
         end
-        releaseYieldGroup(carIndex,p.pendingYieldGroup)
-        p.pendingYieldGroup=nil
-        p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
-        p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil
-        p.pendingPassDistance=nil
       else
-        local pendingProgress=targetState.routeProgress
-        local pendingGap=pendingProgress and routeGap(p.routeProgress,pendingProgress) or
-          safeNumber(p.pendingYieldGap,12.0)
-        p.trafficAction="WAIT_YIELD";p.trafficReason="group_not_yet_clear"
+        p.trafficAction="WAIT_QUEUE";p.trafficReason="earlier_pass_has_slot"
         p.trafficLeaderIndex=targetIndex;p.trafficGap=pendingGap
         return math.min(targetSpeed,safeFollowingSpeed(pendingGap,
           targetCar.speedMs,p.brakeAccelEstimate))
