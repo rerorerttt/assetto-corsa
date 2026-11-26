@@ -632,8 +632,10 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
           local separation=ownHalfWidth+otherHalfWidth+0.35
           local actualGap=math.abs(actualLateral-laneOffset)
           local otherTarget=otherState and
-            (otherState.overtakeSide~=0 or otherState.returningFromPass or otherState.yieldRequestBy~=nil) and
-            safeNumber(otherState.yieldOffset or otherState.laneOffset,actualLateral) or actualLateral
+            (otherState.coordinatorOffset~=nil or otherState.overtakeSide~=0 or
+             otherState.returningFromPass or otherState.yieldRequestBy~=nil) and
+            safeNumber(otherState.coordinatorOffset or otherState.yieldOffset or
+              otherState.laneOffset,actualLateral) or actualLateral
           local reservedGap=math.abs(otherTarget-laneOffset)
           local currentOffset=own and safeNumber(own.laneOffsetCurrent,
             own.laneOffset or laneOffset) or laneOffset
