@@ -806,7 +806,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   nextPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
-    previousPlan,previousAdvance,fixedTransitionDistance)
+    previousPlan,previousAdvance,fixedTransitionDistance,p.lateralAccelLimit)
   if nextPlan ~= p.racingPlan then
     p.racingPlanGeneration = (p.racingPlanGeneration or 0) + 1
   end
