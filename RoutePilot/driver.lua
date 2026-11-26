@@ -1188,7 +1188,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       end
       local dangerDistance=math.max(9.0,rec.speed*0.95+3.0)
       local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
-        (nearestSpeed<rec.speed-0.8 or nearestGap<6.0)
+        (nearestSpeed<math.max(1.0,rec.speed-0.8) or nearestGap<6.0)
       if emergencyDanger then
         local chosen=nil
         local bestCost=math.huge
