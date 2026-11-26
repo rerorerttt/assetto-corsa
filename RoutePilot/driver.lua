@@ -579,24 +579,6 @@ local function laneSlotCenter(seg, slot)
   slot=clamp(math.floor(safeNumber(slot,count)),1,count)
   return bl+(slot-0.5)*laneWidth,count,laneWidth
 end
-local function laneCenters(seg)
-  local left,count=laneSlotCenter(seg)
-  if count<2 then return nil,nil end
-  local _,_,laneWidth=laneSlotCenter(seg)
-  local right=left-laneWidth
-  return left,right
-end
-
--- Checks traffic in a specified lane, both ahead and behind. This is used
--- before entering the passing lane and before returning to the left lane.
-local function relativeToRoute(position, sample)
-  if not position or not sample then return nil, nil end
-  local dx=safeNumber(position.x)-sample.x
-  local dz=safeNumber(position.z)-sample.z
-  local longitudinal=dx*sample.tx+dz*sample.tz
-  local lateral=dx*(-sample.tz)+dz*sample.tx
-  return longitudinal,lateral
-end
 
 local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
   local sim=ac.getSim()
@@ -889,9 +871,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   if not holdPreviousPlan then
     p.racingPlanStartProgress=p.routeProgress
   end
-  -- A hard stop is reserved for the case where the optimizer, base-lane
-  -- fallback, and validated road-centre fallback all fail, or a reserved
-  -- PASS/RETURN corridor cannot contain the complete vehicle body.
+  -- A hard stop is reserved for the case where the optimizer and the
+  -- unoccupied, geometry-validated road-centre fallback both fail, or a
+  -- reserved PASS/RETURN/YIELD corridor cannot contain the complete body.
   p.racingPlanBlocked=nextPlan==nil
   p.racingPlanFailure=p.racingPlanBlocked and
     (planFailure or originalFailure or "NO_SAFE_PATH") or nil
@@ -995,7 +977,7 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   local sim=ac.getSim()
   if not sim then return false,"no_sim" end
 
-  -- The target leader moves to its assigned lane at the same time as the
+  -- The target leader moves to its assigned slot at the same time as the
   -- overtaker. Both swept paths are predicted together; other active vehicles
   -- and existing lane reservations remain in the conflict set.
   local currentSample=Geometry.sample(route,p.routeProgress)
@@ -1320,10 +1302,8 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
     end
     return false
   end
-  local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
-  local source=p.latOff or p.laneOffsetCurrent or p.laneOffset or
-    defaultCenter or ((bl+br)*0.5)
+  local source=p.latOff or p.laneOffsetCurrent or p.laneOffset or ((bl+br)*0.5)
   p.overtakeDeniedLogged=false
   local leaderState=state.p[leaderIndex]
   if not leaderState then
