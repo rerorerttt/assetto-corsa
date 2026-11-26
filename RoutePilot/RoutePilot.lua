@@ -1,27 +1,22 @@
--- RoutePilot.lua — v0.9.1 (CSP 0.3.2-preview2)
--- THE TRACE SAID IT ALL: 184 s of session, ZERO CAR_INIT/CAR= lines — the
--- cars were never adopted (the spawn gate blocked driving forever) and drove
--- on the STOCK game AI: that is where the zigzags, burnouts, wall-hunting
--- and ignoring the player came from. Fixes:
---  * INSTANT ADOPTION: every active AI car is adopted from the very first
---    update, unconditionally. Spawn teleport runs in parallel and never
---    blocks driving. Telemetry (CAR= lines) returns to the trace.
---  * UI errors are LOGGED now (were silently swallowed) — any windowMain
---    failure lands in routepilot_trace.txt as UI_ERROR.
---  * Recording render: line/bounds shown 30 m AHEAD of the player only
---    (data still written only under the car); loop closing segment is
---    never drawn far away. Finished track ("Показать линии"): the whole
---    route renders at long distance (600 m from camera).
---  * Map: bigger scale (padding 16 -> 6), thicker lines (3 px), bounds
---    drawn with a minimum 10 px offset from the AI line so they are
---    clearly separate. Every AI car is also drawn as a labeled dot.
---  * Bounds re-record button "Запись границ" works from anywhere (denied
---    only if the player starts outside the current bounds), smooth joints.
+-- RoutePilot.lua — v0.9.2-aga (CSP 0.3.2-preview2)
+-- v0.9.2-aga: integrated the Advanced Gamepad Assist steering stabilizer
+-- (aga_steer.lua) into the main driving loop. The driver computes the
+-- path-following steering command (racing line, boundary guard, overtakes,
+-- speed planning — all unchanged); then the stabilizer refines HOW that
+-- command is executed, exactly like AGA refines a player's input:
+--   1) rear-axle self-steer — holds the requested angle through slides;
+--   2) yaw damping — kills left/right oscillation;
+--   3) front-slip limit — keeps the front axle inside its grip budget,
+--      so the car never crosses into understeer-no-control territory.
+-- The stabilizer never changes WHERE the car is going.
+-- Everything else from v0.9.1 is retained verbatim.
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
+local okAGA, AGA = pcall(require, "aga_steer")
+if not okAGA or type(AGA) ~= "table" or not AGA.stabilize then AGA = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=12.0, LOOKAHEAD_SPEED=0.35, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=28.0,
@@ -323,6 +318,7 @@ local function boundsAt(index)
   elseif i<1 or i>n then i=clamp(i,1,n) end
   return safeNumber(state.boundsL[i],-1.5),safeNumber(state.boundsR[i],1.5)
 end
+
 local function carAheadFull(carIndex,car,lateralWidth)
   local fx,fz=normalize2(car.look.x,car.look.z)
   local sim=ac.getSim()
@@ -618,6 +614,9 @@ local function applyWidthPreset(preset)
   writeLog("WIDTH_PRESET preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
 end
 local function releaseCar(carIndex)
+  if AGA and state.p[carIndex] then
+    pcall(AGA.reset, state.p[carIndex])
+  end
   local ok,controls=pcall(ac.overrideCarControls,carIndex)
   if ok and controls then
     controls.combineAxis=false
@@ -692,7 +691,26 @@ function script.update(dt)
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
           local okc,erc=pcall(Driver.update,i,car,dt)
-          if not okc then
+          if okc then
+            -- AGA steering stabilizer: after the driver has issued its
+            -- path-following command, hold that command through slides
+            -- (rear-axle self-steer), damp yaw oscillation, and keep the
+            -- front axle inside its slip budget. Additive only.
+            local p=state.p[i]
+            if AGA and p then
+              local okS,steer=pcall(AGA.stabilize,car,safeNumber(p.steer),dt,p)
+              if okS and type(steer)=="number" and steer==steer then
+                p.steer=steer
+                local okC2,controls=pcall(ac.overrideCarControls,i)
+                if okC2 and controls then
+                  controls.combineAxis=false
+                  controls.steer=steer
+                end
+              elseif not okS then
+                writeLog("AGA_ERROR id=%d err=%s",i,tostring(steer))
+              end
+            end
+          else
             writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
             releaseCar(i)
           end
@@ -969,5 +987,6 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.9.2-AGA INITIALIZED track=%s points=%d aga=%s",
+  getTrackTag(),#state.nodes,AGA and "ON" or "MISSING")
 flushLog()
