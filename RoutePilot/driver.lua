@@ -1362,17 +1362,20 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   local leaderLength=math.max(3.0,
     safeNumber(leaderCar and leaderCar.aabbSize and leaderCar.aabbSize.z,4.5))
   local requiredClosure=math.max(0,safeNumber(gap))+ownLength+leaderLength+5.0
-  local relativeSpeed=math.max(0,speedAdvantage)
+  -- Predict closure from measured current speed and acceleration, not the
+  -- eventual cruise target. Treating the target speed as instantaneous made
+  -- the old planner underestimate the distance needed to reach a slower car.
+  local relativeSpeed=speed-leaderPace
   local passTime
   local estimatedPassDistance
   if relativeSpeed>=3.0 then
     passTime=requiredClosure/relativeSpeed
-    estimatedPassDistance=potentialSpeed*passTime
+    estimatedPassDistance=speed*passTime
   else
     passTime=(-relativeSpeed+
       math.sqrt(relativeSpeed*relativeSpeed+2.0*acceleration*requiredClosure))/
       acceleration
-    estimatedPassDistance=potentialSpeed*passTime+
+    estimatedPassDistance=speed*passTime+
       0.5*acceleration*passTime*passTime
   end
   local passLateralLimit=clamp(
