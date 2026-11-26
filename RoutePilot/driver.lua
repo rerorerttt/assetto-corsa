@@ -1697,14 +1697,15 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
                 local farLength=math.max(3.0,safeNumber(farCar and farCar.aabbSize and farCar.aabbSize.z,4.5))
                 local required=farGap+ownLength+farLength+6.0
-                local relative=math.max(1.0,speed-(farCar and safeNumber(farCar.speedMs) or leaderPace))
+                local relative=speed-(farCar and safeNumber(farCar.speedMs) or leaderPace)
                 local accel=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
                 local t=relative>=1.0 and required/relative or
                   (-relative+math.sqrt(relative*relative+2.0*accel*required))/accel
                 groupPassDistance=math.max(groupPassDistance,
                   speed*t+0.5*accel*t*t)
-                local groupOffset=findPassingOffset(carIndex,car,p,leaderIndex,
-                  leaderLateral,speed,groupPassDistance)
+                local groupOffset=groupPassDistance<=300.0 and
+                  findPassingOffset(carIndex,car,p,leaderIndex,
+                    leaderLateral,speed,groupPassDistance) or nil
                 if groupOffset~=nil then passOffset=groupOffset
                 else group={leaderIndex};groupPassDistance=estimatedPassDistance end
               end
@@ -1723,6 +1724,22 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                   break
                 end
                 assigned[#assigned+1]={index=memberIndex,offset=memberYield}
+              end
+              if not groupOK and #group>1 then
+                -- If the full pack cannot yield into one common safe slot,
+                -- downgrade to the nearest leader instead of abandoning a
+                -- valid ordinary one-car overtake.
+                group={leaderIndex};groupPassDistance=estimatedPassDistance
+                passOffset=findPassingOffset(carIndex,car,p,leaderIndex,
+                  leaderLateral,speed,groupPassDistance)
+                assigned={}
+                local member=state.p[leaderIndex]
+                local memberCar=ac.getCar(leaderIndex)
+                local memberYield=passOffset and member and memberCar and
+                  chooseYieldOffset(leaderIndex,memberCar,member,passOffset) or nil
+                groupOK=member~=nil and memberCar~=nil and memberCar.isActive and
+                  member.yieldRequestBy==nil and memberYield~=nil
+                if groupOK then assigned[1]={index=leaderIndex,offset=memberYield} end
               end
               if groupOK then
                 for gi=1,#assigned do
