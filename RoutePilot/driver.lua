@@ -1949,12 +1949,13 @@ local function coordinateTrafficFrame(sim,dt,frame)
         local relativeSpeed=safeNumber(car.speedMs)-(leaderSpeed or 0)
         local relativeAccel=ownAccel-clamp(safeNumber(lp and lp.accelEstimate,4),0.5,18)
         local advantage=math.max(ownFree-leaderFree,relativeAccel*2+relativeSpeed)
-        local length=math.max(3,safeNumber(car.aabbSize and car.aabbSize.z,4.5))+
+        local closure=math.max(0,gap)+
+          math.max(3,safeNumber(car.aabbSize and car.aabbSize.z,4.5))+
           math.max(3,safeNumber(leader and leader.aabbSize and leader.aabbSize.z,4.5))+5
         local eta=math.huge
-        if relativeSpeed>0.5 then eta=length/math.max(0.1,relativeSpeed)
+        if relativeSpeed>0.5 then eta=closure/math.max(0.1,relativeSpeed)
         elseif relativeAccel>0.2 then
-          local disc=relativeSpeed^2+2*relativeAccel*length
+          local disc=relativeSpeed^2+2*relativeAccel*closure
           if disc>=0 then eta=(-relativeSpeed+math.sqrt(disc))/relativeAccel end
         end
         local distance=eta<math.huge and
@@ -1992,8 +1993,17 @@ local function coordinateTrafficFrame(sim,dt,frame)
            math.abs(bl+(sourceSlot-0.5)*slotWidth-lateral) then sourceSlot=s end
       end
       local ignore={i};for k=1,#group do ignore[#ignore+1]=group[k] end
-      local passOffset=findPassingOffset(i,car,p,q.leader,q.leaderLateral,
-        safeNumber(car.speedMs),q.distance,true,ignore)
+      local ownBl,ownBr=H.boundsAt(p.segIdx or lp.segIdx)
+      local ownCount=math.max(1,math.floor(((ownBr-ownBl)+1)/4))
+      local ownWidth=(ownBr-ownBl)/ownCount
+      local ownSlot=1
+      for s=2,ownCount do
+        if math.abs(ownBl+(s-0.5)*ownWidth-safeNumber(p.latOff))<
+           math.abs(ownBl+(ownSlot-0.5)*ownWidth-safeNumber(p.latOff)) then ownSlot=s end
+      end
+      local passOffset=ownSlot==sourceSlot and
+        findPassingOffset(i,car,p,q.leader,q.leaderLateral,
+          safeNumber(car.speedMs),q.distance,true,ignore) or nil
       local yieldOffset=bl+(sourceSlot-0.5)*slotWidth
       local passSlot=passOffset and clamp(math.floor((passOffset-bl)/math.max(0.1,slotWidth))+1,1,count) or sourceSlot
       local valid=passOffset~=nil and count>=2 and passSlot~=sourceSlot
