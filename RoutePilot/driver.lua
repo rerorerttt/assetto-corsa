@@ -1122,10 +1122,18 @@ local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
   local laneCount=math.max(1,math.floor((width+1.0)/4.0))
   local slotWidth=width/laneCount
   local lateral=safeNumber(leaderState.latOff,leaderState.laneOffsetCurrent or 0)
-  local slot=1
-  for i=2,laneCount do
-    if math.abs(bl+(i-0.5)*slotWidth-lateral)<math.abs(bl+(slot-0.5)*slotWidth-lateral) then slot=i end
+  -- The passing slot is authoritative. When a racing-line car sits on the
+  -- boundary between logical slots, nearest-centre rounding is ambiguous;
+  -- choose the closest different slot as the yielding slot, never the
+  -- already-reserved passing slot.
+  local passSlot=clamp(math.floor((passOffset-bl)/math.max(0.1,slotWidth))+1,1,laneCount)
+  local slot=nil
+  for i=1,laneCount do
+    if i~=passSlot and (slot==nil or
+       math.abs(bl+(i-0.5)*slotWidth-lateral)<
+       math.abs(bl+(slot-0.5)*slotWidth-lateral)) then slot=i end
   end
+  if slot==nil then return nil end
   local slotLow=bl+(slot-1)*slotWidth
   local slotHigh=slotLow+slotWidth
   local halfWidth=math.max(0.75,safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.x,2.0)*0.5)
