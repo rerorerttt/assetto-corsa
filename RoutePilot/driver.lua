@@ -1396,11 +1396,12 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       p.trafficAction="LANE_ASSIGN"
       p.trafficReason="paired_overtake_lane_assignment"
       p.trafficTargetOffset=p.yieldOffset
-      local gap,leaderSpeed=carAheadInLane(
+      local gap,leaderSpeed,laneLeader=carAheadInLane(
         carIndex,car,p.yieldOffset,p.yieldRequestBy)
+      p.trafficLeaderIndex=laneLeader or -1
+      p.trafficGap=gap or -1
+      p.trafficLeaderSpeed=leaderSpeed or 0
       if gap~=nil then
-        p.trafficGap=gap
-        p.trafficLeaderSpeed=leaderSpeed or 0
         return math.min(targetSpeed,
           safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
       end
