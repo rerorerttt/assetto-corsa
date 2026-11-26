@@ -24,7 +24,7 @@ local CFG, state, H
 
 local BOUND_MARGIN = 0.4
 local RESCUE_SPEED = 1.5
-local RESCUE_TIME  = 5.0
+local RESCUE_TIME  = 10.0
 local OFFTRACK_TIME = 10.0
 local STEER_DEAD   = 0.002  -- suppress only sub-resolution steering noise
 
@@ -146,7 +146,7 @@ local function newPersonality(carIndex)
     yawRateFiltered = 0,
     raceOffsetRaw = 0, raceOffsetCurrent = 0,
     pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
-    stuck = 0, blockedT = 0,
+    stuck = 0, blockedT = 0, throttleBlockedT = 0, rolloverT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0,
     overtakeSide = 0, passTargetIndex = nil, retireT = 2.0,
     trafficPriority = 0, coordinatedLane = nil, homeLane = nil,
@@ -1679,6 +1679,30 @@ function Driver.update(carIndex, car, dt)
       safeNumber(p.coordinatorOffset,p.latOff or 0)))
   end
   local trafficBlocked=blockingGap~=nil and blockingGap<18.0
+
+  -- Detect a sustained rollover from the chassis up-vector. A brief jump,
+  -- kerb strike or transient body roll must not trigger a rescue.
+  local upY=safeNumber(car.up and car.up.y,1.0)
+  if upY<0.55 then
+    p.rolloverT=safeNumber(p.rolloverT)+dt
+  else
+    p.rolloverT=0
+  end
+
+  -- A car pushing into a wall/obstacle has throttle but makes no physical
+  -- progress. Use world velocity as well as speed to reject wheelspin noise.
+  local velocity=car.velocity
+  local worldSpeed=math.sqrt(
+    safeNumber(velocity and velocity.x)^2+
+    safeNumber(velocity and velocity.y)^2+
+    safeNumber(velocity and velocity.z)^2)
+  local throttleBlocked=p.gas>=0.65 and speed<1.0 and worldSpeed<1.25
+  if throttleBlocked then
+    p.throttleBlockedT=safeNumber(p.throttleBlockedT)+dt
+  else
+    p.throttleBlockedT=0
+  end
+
   if speed<RESCUE_SPEED and not trafficBlocked and not p.projectionLost and
       not p.offTrackRecovering and safeNumber(p.emergencyBlockedT)<=0 then
     p.stuck=p.stuck+dt
@@ -1686,17 +1710,26 @@ function Driver.update(carIndex, car, dt)
     p.stuck=0
   end
   local rescueReason=nil
-  if safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
+  if p.rolloverT>=0.75 then rescueReason="rollover"
+  elseif safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
   elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_recovery_failed_10s"
+  elseif p.throttleBlockedT>=10.0 then rescueReason="throttle_blocked_10s"
   elseif p.stuck>=RESCUE_TIME and not p.offTrackRecovering and
-      safeNumber(p.emergencyBlockedT)<=0 then rescueReason="stuck_5s" end
+      safeNumber(p.emergencyBlockedT)<=0 then rescueReason="stuck_10s" end
   if rescueReason and p.rescueRetryT<=0 then
     p.stuck=0
+    p.throttleBlockedT=0
+    p.rolloverT=0
     p.rescueRetryT=5.0
-    local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
+    local rescued=H.teleportForward and H.teleportForward(carIndex,car,rescueReason) or false
+    local elapsed=0
+    if rescueReason=="rollover" then elapsed=0.75
+    elseif rescueReason=="traffic_blocked_10s" then elapsed=safeNumber(p.emergencyBlockedT)
+    elseif rescueReason=="offtrack_recovery_failed_10s" then elapsed=safeNumber(p.offTrackT)
+    elseif rescueReason=="throttle_blocked_10s" then elapsed=10.0
+    else elapsed=safeNumber(p.stuck) end
     H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s elapsed=%.2f",
-      carIndex,rescueReason,tostring(rescued),
-      rescueReason=="traffic_blocked_10s" and safeNumber(p.emergencyBlockedT) or safeNumber(p.offTrackT))
+      carIndex,rescueReason,tostring(rescued),elapsed)
     if rescued then return end
   end
 
