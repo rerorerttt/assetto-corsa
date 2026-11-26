@@ -1645,6 +1645,13 @@ function Driver.observePlayer(car, dt, steerInput)
   p.targetSpeed=-1 -- not applicable to a manually driven car
   p.overtakeSide=0
   p.laneOffsetCurrent=0
+  p.trafficPriority=0
+  p.trafficAction="PLAYER"
+  p.trafficReason="manual_control"
+  p.trafficLeaderIndex=-1
+  p.trafficGap=-1
+  p.trafficLeaderSpeed=0
+  p.trafficTargetOffset=safeNumber(p.latOff)
   p.pace=0
   p.player=true
 
