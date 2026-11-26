@@ -843,46 +843,52 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   for i=0,sim.carsCount-1 do
     if i~=carIndex and i~=ignoreIndex then
       local other=ac.getCar(i)
-      if other and other.isActive then
-        local otherState=state.p[i]
-        local progress,lateral,otherSeg=trafficFrameProjection(
-          other,otherState,own and own.segIdx or 1)
-        if otherState then
-          if progress~=nil then otherState.routeProgress=progress end
-          otherState.routeLocked=progress~=nil
-          if otherSeg then otherState.segIdx=otherSeg end
-        end
-        local gap,actualLateral
-        local otherFx,otherFz=normalize2(other.look.x,other.look.z)
-        local otherRouteSample=progress and Geometry.sample(state.routeGeometry,progress)
-        local directionDot=otherRouteSample and
-          (otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz) or 1.0
-        if progress~=nil and directionDot>=-0.25 then
-          gap=routeGap(ownProgress,progress);actualLateral=lateral
+      local otherState=state.p[i]
+      -- Neighbour states are refreshed by their own controller every physics
+      -- tick. Do not project every other car again from every caller.
+      if other and other.isActive and otherState and otherState.routeProgress~=nil then
+        local progress=otherState.routeProgress
+        local lateral=safeNumber(otherState.latOff)
+        local gap=routeGap(ownProgress,progress)
+        local otherSpeed=math.max(0,safeNumber(other.speedMs))
+        local detectionHorizon=ownSpeed*3.0+30.0
+        local directionDot=1.0
+        local actualLateral=lateral
+        if gap>0.5 and gap<math.max(110.0,detectionHorizon) then
+          local otherSample=Geometry.sample(state.routeGeometry,progress)
+          if otherSample then
+            local otherFx,otherFz=normalize2(other.look.x,other.look.z)
+            directionDot=otherFx*otherSample.tx+otherFz*otherSample.tz
+          end
         else
+          -- Opposing-direction cars may have unrelated loop progress. Only
+          -- pay for local geometric projection when the cars are physically near.
           local dx=safeNumber(other.position.x)-ownSample.x
           local dz=safeNumber(other.position.z)-ownSample.z
           if dx*dx+dz*dz<=120.0*120.0 then
-            gap,actualLateral=relativeToRoute(other.position,ownSample)
+            local otherFx,otherFz=normalize2(other.look.x,other.look.z)
+            local otherSample=Geometry.sample(state.routeGeometry,progress)
+            directionDot=otherSample and
+              (otherFx*otherSample.tx+otherFz*otherSample.tz) or -1.0
+            if directionDot < -0.25 then
+              gap,actualLateral=relativeToRoute(other.position,ownSample)
+            end
+          else
+            gap=nil
           end
         end
         local lateralSeparation=(math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))+
           math.max(1.5,safeNumber(other.aabbSize and other.aabbSize.x,2.0)))*0.5+0.4
-        local otherSpeed=math.max(0,safeNumber(other.speedMs))
-        local detectionHorizon=directionDot < -0.25 and
-          (ownSpeed+otherSpeed)*2.0+30.0 or ownSpeed*3.0+30.0
-        -- Same-direction traffic is a leader only when it is genuinely
-        -- ahead. The former negative-gap allowance made two overlapping cars
-        -- select each other as leaders, producing reciprocal zero-speed locks.
-        -- Oncoming traffic uses local forward projection and must also be ahead.
-        if gap and actualLateral and gap>0.5 and
-           gap<math.max(110.0,detectionHorizon) and
+        local signedSpeed=directionDot < -0.25 and -otherSpeed or otherSpeed
+        local detection=directionDot < -0.25 and
+          (ownSpeed+otherSpeed)*2.0+30.0 or math.max(110.0,detectionHorizon)
+        if gap and actualLateral and gap>0.5 and gap<detection and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or gap<bestGap) then
           bestGap=gap
-          local measuredOtherSpeed=math.max(0,safeNumber(other.speedMs))
-          bestSpeed=directionDot < -0.25 and -measuredOtherSpeed or measuredOtherSpeed
-          bestIndex=i;bestLateral=actualLateral
+          bestSpeed=signedSpeed
+          bestIndex=i
+          bestLateral=actualLateral
         end
       end
     end
