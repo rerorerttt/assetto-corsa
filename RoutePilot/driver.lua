@@ -1077,7 +1077,6 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   local source=safeNumber(p.latOff,
     p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
     defaultCenter or ((bl+br)*0.5))
-  local target=ac.getCar(leaderIndex)
   local candidates={}
   -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
   -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
