@@ -1456,6 +1456,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   -- Measured longitudinal acceleration is the available in-session proxy
   -- for usable power-to-weight. A faster car is not automatically stronger.
   local powerAdvantage=ownPower-leaderPower
+  local acceleration=math.max(0.35,powerAdvantage)
   local speedAdvantage=speed-leaderPace
   local slower=powerAdvantage>=0.35
   if slower then
