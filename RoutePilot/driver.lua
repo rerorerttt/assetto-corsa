@@ -117,7 +117,7 @@ local function newPersonality(carIndex)
   -- determine speed. Curvature and measured braking capability remain limits.
   local p = {
     segIdx = 1, cruiseSpeed = math.huge, brakeAccelEstimate = CFG.BRAKE_ACCEL,
-    accelEstimate = 4.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
+    accelEstimate = 4.0, accelSamples = 0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
     previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
     vehicleDynamicsState = VehicleDynamics and VehicleDynamics.newState() or nil,
@@ -208,6 +208,7 @@ local function readVehicleDynamics(car, p, dt)
       if measured >= 0.3 and measured <= 18.0 then
         local estimate = clamp(measured, 0.5, 18.0)
         p.accelEstimate = lerp(safeNumber(p.accelEstimate,4.0),estimate,0.08)
+        p.accelSamples = (p.accelSamples or 0) + 1
       end
     end
   end
@@ -697,6 +698,30 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
   return false
 end
 
+local function preferredLaneByAcceleration(carIndex,car,p,count)
+  local sim=ac.getSim()
+  if not sim or count<2 or safeNumber(p.accelSamples)<8 then return nil end
+  local faster,total=0,0
+  local ownAccel=safeNumber(p.accelEstimate,4.0)
+  for i=1,sim.carsCount-1 do
+    if i~=carIndex then
+      local other=ac.getCar(i)
+      local op=state.p[i]
+      if other and other.isActive and other.isAIControlled and op and
+          safeNumber(op.accelSamples)>=8 then
+        total=total+1
+        local otherAccel=safeNumber(op.accelEstimate,4.0)
+        if otherAccel>ownAccel+0.12 or
+            (math.abs(otherAccel-ownAccel)<=0.12 and i<carIndex) then
+          faster=faster+1
+        end
+      end
+    end
+  end
+  local population=total+1
+  return clamp(count-math.floor(faster*count/population),1,count)
+end
+
 local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   local sim=ac.getSim()
   local own=state.p[carIndex]
@@ -787,6 +812,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   if p.overtakeSide~=0 then forcedMode="PASS"
   elseif p.returningFromPass then forcedMode="RETURN"
   elseif p.offTrackT>0 and p.recoveryLaneOffset~=nil then forcedMode="RECOVER"
+  elseif p.laneAssigned then forcedMode="LANE"
   elseif p.yieldRequestBy~=nil and p.yieldOffset~=nil then forcedMode="YIELD" end
   local mode=forcedMode or "OPEN"
   local fixedOffset=nil
@@ -808,6 +834,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedOffset=safeNumber(p.yieldOffset,base)
   elseif mode=="RECOVER" then
     fixedOffset=safeNumber(p.recoveryLaneOffset,base)
+  elseif mode=="LANE" then
+    fixedOffset=safeNumber(p.baseLaneOffset,base)
   end
   if fixedOffset~=nil then
     local lateralDelta=math.abs(fixedOffset-safeNumber(p.latOff,base))
@@ -1246,6 +1274,32 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   local leftCenter,rightCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
   local defaultOffset=p.baseLaneOffset or leftCenter or ((bl+br)*0.5)
+  local laneCount=laneCountForBounds(bl,br)
+  if not p.laneAssigned then
+    local initialLane=((carIndex-1)%laneCount)+1
+    p.laneIndex=initialLane
+    p.baseLaneOffset=laneCenter(p.segIdx,initialLane)
+    p.laneOffset=p.baseLaneOffset
+    p.laneAssigned=true
+    defaultOffset=p.baseLaneOffset
+    H.log("CAR=%d LANE_ASSIGN initial=%d count=%d offset=%.2f",
+      carIndex,initialLane,laneCount,p.baseLaneOffset)
+  end
+  local preferred=preferredLaneByAcceleration(carIndex,car,p,laneCount)
+  if preferred and preferred~=p.laneIndex and p.overtakeSide==0 and
+      not p.returningFromPass and not p.offTrackT or
+      (preferred and preferred~=p.laneIndex and p.overtakeSide==0 and
+       not p.returningFromPass and p.offTrackT<=0) then
+    local preferredOffset=laneCenter(p.segIdx,preferred)
+    if not laneOccupied(carIndex,car,preferredOffset,nil) then
+      p.laneIndex=preferred
+      p.baseLaneOffset=preferredOffset
+      p.laneOffset=preferredOffset
+      p.returningFromPass=true
+      H.log("CAR=%d LANE_REASSIGN accel=%.2f lane=%d offset=%.2f",
+        carIndex,safeNumber(p.accelEstimate),preferred,preferredOffset)
+    end
+  end
   local currentLaneOffset=p.overtakeSide~=0 and (p.passLat or p.laneOffset) or
     (p.laneOffsetCurrent or p.laneOffset or defaultOffset)
   local gap,leaderSpeed,leaderIndex,leaderLateral=carAheadInLane(
