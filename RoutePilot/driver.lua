@@ -540,12 +540,15 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   return clamp(rawSteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
-local function filterSteering(p, target, dt)
+local function filterSteering(p, target, dt, collisionEmergency)
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
-  p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  -- Emergency passing changes the target path, not the steering authority.
-  -- No full-lock pulse or emergency gain is permitted at high speed.
-  local maxChange=CFG.STEER_RATE*dt
+  p.steerFiltered = collisionEmergency and target or
+    lerp(p.steerFiltered, target, alpha)
+  -- A predicted collision needs faster steering authority than an ordinary
+  -- lane change. The input remains bounded by STEER_LIMIT and the emergency
+  -- slew is capped per frame to avoid an instantaneous full-lock snap.
+  local maxChange=collisionEmergency and math.max(CFG.STEER_RATE*dt,
+    math.min(0.45,16.0*dt)) or CFG.STEER_RATE*dt
   local requestedChange=p.steerFiltered-p.steer
   local appliedChange=clamp(requestedChange,-maxChange,maxChange)
   p.steerRateLimited=math.abs(requestedChange)>maxChange+1e-6
@@ -689,6 +692,111 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
   return false
 end
 
+-- Detect an imminent physical overlap independently from lane following.
+-- A car that is already alongside/behind must never become a longitudinal
+-- leader; it is handled here as a short emergency steering manoeuvre instead.
+local function collisionEvasion(carIndex,car,p,speed)
+  local sim=ac.getSim()
+  if not sim or not state.routeGeometry or p.routeProgress==nil then return nil end
+  local fx,fz=normalize2(car.look.x,car.look.z)
+  local rx,rz=-fz,fx
+  local ownHalfLength=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
+  local ownHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+  local ownVelocity=car.velocity or {x=fx*speed,z=fz*speed}
+  local ovx,ovz=safeNumber(ownVelocity.x),safeNumber(ownVelocity.z)
+  local nearestTime=nil
+  local nearestIndex=nil
+  local nearestLateral=0
+  local nearestLongitudinal=0
+  local nearestHalfWidth=0
+  local nearestHalfLength=0
+  for i=0,sim.carsCount-1 do
+    if i~=carIndex then
+      local other=ac.getCar(i)
+      if other and other.isActive then
+        local dx=safeNumber(other.position.x)-safeNumber(car.position.x)
+        local dz=safeNumber(other.position.z)-safeNumber(car.position.z)
+        local otherVelocity=other.velocity or {x=0,z=0}
+        local rvx=safeNumber(otherVelocity.x)-ovx
+        local rvz=safeNumber(otherVelocity.z)-ovz
+        local longitudinal=dx*fx+dz*fz
+        local lateral=dx*rx+dz*rz
+        local relativeSpeedSq=rvx*rvx+rvz*rvz
+        local closestTime=relativeSpeedSq>0.25 and
+          clamp(-(dx*rvx+dz*rvz)/relativeSpeedSq,0,0.90) or 0
+        local predictedLongitudinal=(dx+rvx*closestTime)*fx+
+          (dz+rvz*closestTime)*fz
+        local predictedLateral=(dx+rvx*closestTime)*rx+
+          (dz+rvz*closestTime)*rz
+        local otherHalfLength=math.max(1.5,
+          safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
+        local otherHalfWidth=math.max(0.75,
+          safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+        local longitudinalLimit=ownHalfLength+otherHalfLength+0.65
+        local lateralLimit=ownHalfWidth+otherHalfWidth+0.45
+        local currentOverlap=math.abs(longitudinal)<longitudinalLimit and
+          math.abs(lateral)<lateralLimit
+        local predictedOverlap=math.abs(predictedLongitudinal)<longitudinalLimit and
+          math.abs(predictedLateral)<lateralLimit
+        local closing=-(dx*rvx+dz*rvz)
+        if predictedOverlap and (currentOverlap or closing>0.5) and
+           (nearestTime==nil or closestTime<nearestTime) then
+          nearestTime=closestTime
+          nearestIndex=i
+          nearestLateral=predictedLateral
+          nearestLongitudinal=predictedLongitudinal
+          nearestHalfWidth=otherHalfWidth
+          nearestHalfLength=otherHalfLength
+        end
+      end
+    end
+  end
+  if nearestIndex==nil then return nil end
+
+  local sample=Geometry.sample(state.routeGeometry,p.routeProgress)
+  if not sample then return nil end
+  local leftBound,rightBound=routeBoundsAtSample(sample)
+  local currentLateral=safeNumber(p.latOff)
+  local leftRoom=rightBound-currentLateral-ownHalfWidth-0.35
+  local rightRoom=currentLateral-leftBound-ownHalfWidth-0.35
+  local requiredShift=ownHalfWidth+nearestHalfWidth+0.55
+  local canLeft=leftRoom>=requiredShift and
+    not laneOccupied(carIndex,car,currentLateral+requiredShift,nearestIndex)
+  local canRight=rightRoom>=requiredShift and
+    not laneOccupied(carIndex,car,currentLateral-requiredShift,nearestIndex)
+  if not canLeft and not canRight then
+    p.collisionEvasionSide=0
+    p.collisionEvasionTarget=nearestIndex
+    return nil
+  end
+
+  local side
+  if canLeft and canRight then
+    if nearestLateral>0.15 then side=-1
+    elseif nearestLateral< -0.15 then side=1
+    else side=leftRoom>=rightRoom and 1 or -1 end
+  else
+    side=canLeft and 1 or -1
+  end
+  local severity=clamp(1.0-nearestTime/0.90,0,1)
+  local magnitude=clamp(0.62+severity*0.24,0.62,0.86)
+  p.collisionEvasionSide=side
+  p.collisionEvasionTarget=nearestIndex
+  p.collisionEvasionTTC=nearestTime
+  p.collisionEvasionOffset=currentLateral+side*requiredShift
+  if not p.collisionEvasionLogged or
+     p.collisionEvasionLoggedTarget~=nearestIndex or
+     p.collisionEvasionLoggedSide~=side then
+    H.log("COLLISION_EVASION id=%d other=%d side=%s ttc=%.3f long=%.2f lat=%.2f target=%.2f",
+      carIndex,nearestIndex,side>0 and "LEFT" or "RIGHT",nearestTime,
+      nearestLongitudinal,nearestLateral,p.collisionEvasionOffset)
+    p.collisionEvasionLogged=true
+    p.collisionEvasionLoggedTarget=nearestIndex
+    p.collisionEvasionLoggedSide=side
+  end
+  return side*magnitude
+end
+
 local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   local sim=ac.getSim()
   local own=state.p[carIndex]
@@ -739,7 +847,11 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         local otherSpeed=math.max(0,safeNumber(other.speedMs))
         local detectionHorizon=directionDot < -0.25 and
           (ownSpeed+otherSpeed)*2.0+30.0 or ownSpeed*3.0+30.0
-        if gap and actualLateral and gap>-halfLengths-2.0 and
+        -- Same-direction traffic is a leader only when it is genuinely
+        -- ahead. The former negative-gap allowance made two overlapping cars
+        -- select each other as leaders, producing reciprocal zero-speed locks.
+        -- Oncoming traffic uses local forward projection and must also be ahead.
+        if gap and actualLateral and gap>0.5 and
            gap<math.max(110.0,detectionHorizon) and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or gap<bestGap) then
@@ -2231,6 +2343,14 @@ function Driver.update(carIndex, car, dt)
 
   p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
+  local evasiveSteer=collisionEvasion(carIndex,car,p,speed)
+  p.collisionEvasionActive=evasiveSteer~=nil
+  if evasiveSteer~=nil then steerTarget=evasiveSteer
+  else
+    p.collisionEvasionLogged=false
+    p.collisionEvasionTarget=nil
+    p.collisionEvasionSide=0
+  end
   p.steerTarget = steerTarget
   if p.projectionLost then targetSpeed=0 end
   -- Boundary correction is a steering task, not a reason to stop.
@@ -2238,7 +2358,7 @@ function Driver.update(carIndex, car, dt)
   -- the corridor. Do not convert lateral correction magnitude into a speed
   -- cap: that caused repeated full stops even with zero corridor deficit.
   p.targetSpeed=targetSpeed
-  local steer = filterSteering(p, steerTarget, dt)
+  local steer = filterSteering(p, steerTarget, dt,p.collisionEvasionActive)
 
   calculateThrottle(p, speed, targetSpeed, dt)
   if p.projectionLost then p.gas=0; p.brake=1 end
