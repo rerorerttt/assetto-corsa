@@ -832,6 +832,13 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   p.racingPlanTimer=math.min(0.65,20.0/math.max(30.0,speed))
   if p.racingPlan then
     p.racingPlanCurvature=safeNumber(p.racingPlan.curvature[2])
+    local feature=p.racingPlan.feature and p.racingPlan.feature[2] or "UNKNOWN"
+    if feature~=p.racingPlanFeature then
+      p.racingPlanFeature=feature
+      H.log("RACE_FEATURE id=%d type=%s curvature=%.5f horizon=%.1f",
+        carIndex,tostring(feature),p.racingPlanCurvature,
+        safeNumber(p.racingPlan.horizon))
+    end
   end
 end
 
