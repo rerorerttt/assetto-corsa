@@ -1444,55 +1444,11 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   end
 
   if not gap or not leaderIndex then
-    if p.pendingYieldTarget~=nil then
-      local targetIndex=p.pendingYieldTarget
-      if not p.pendingYieldOrder then state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1;p.pendingYieldOrder=state.trafficRequestSerial end
-      local targetState=state.p[targetIndex]
-      local targetCar=ac.getCar(targetIndex)
-      if targetState and targetCar and targetCar.isActive then
-        if targetState.yieldRequestBy==nil then
-          local pendingOffset=p.pendingPassOffset
-          if pendingOffset==nil and p.overtakeRetryT<=0 then
-            pendingOffset=findPassingOffset(carIndex,car,p,targetIndex,targetState.latOff,speed,p.pendingPassDistance)
-            if pendingOffset==nil then p.overtakeRetryT=0.25 end
-          end
-          p.pendingPassOffset=pendingOffset
-          local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset) or nil
-          if pendingOffset~=nil and yieldOffset==nil then p.overtakeRetryT=0.25 end
-          if yieldOffset~=nil then
-            targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
-            targetState.yieldReady=false;targetState.yieldRequestTimer=0
-            H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,targetIndex,yieldOffset,safeNumber(p.pendingPassOffset))
-          end
-        end
-        if targetState.yieldRequestBy==carIndex and targetState.yieldReady then
-          p.emergencyPassRequest=false
-          if beginOvertake(carIndex,car,p,safeNumber(p.pendingYieldGap,12.0),targetIndex,targetState.latOff,speed,p.pendingPassDistance,p.pendingPassOffset) then
-            p.trafficPriority=1000000;p.trafficAction="PASSING"
-            p.trafficReason="yield_confirmed";p.trafficLeaderIndex=targetIndex
-            p.trafficTargetOffset=safeNumber(p.passLat)
-            return targetSpeed
-          end
-          targetState.yieldRequestBy=nil;targetState.yieldOffset=nil;targetState.yieldReady=false
-        else
-          local targetProgress=routeProjection(targetCar,targetState.segIdx,not targetState.routeLocked,targetState.routeProgress,targetCar.speedMs,dt)
-          local queueGap=targetProgress and routeGap(p.routeProgress,targetProgress) or safeNumber(p.pendingYieldGap,12.0)
-          p.trafficAction=targetState.yieldRequestBy==carIndex and "WAIT_YIELD" or
-            (targetState.yieldRequestBy~=nil and "WAIT_QUEUE" or "FOLLOW")
-          p.trafficReason=targetState.yieldRequestBy==carIndex and "leader_not_yet_clear" or
-            (targetState.yieldRequestBy~=nil and "earlier_pass_has_slot" or "no_safe_pass_corridor")
-          p.trafficLeaderIndex=targetIndex;p.trafficGap=queueGap
-          return math.min(targetSpeed,safeFollowingSpeed(queueGap,targetCar.speedMs,p.brakeAccelEstimate))
-        end
-      end
-      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
-      p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
-    end
-    p.followTimer = 0
-    p.blockedT = 0
+    p.followTimer=0
+    p.blockedT=0
     p.trafficPriority=0
     p.trafficAction="OPEN"
-    p.trafficReason="no_leader_in_path"
+    p.trafficReason="no_leader_in_current_lane"
     return targetSpeed
   end
   p.trafficAction="FOLLOW"
@@ -1532,7 +1488,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     local urgent=canActuallyPass and gap<=urgentGap
     local passWindow=math.max(45.0,32.0+speed*1.5)
     p.followTimer=p.followTimer+dt
-    local passRequestReady=(p.pendingYieldTarget==leaderIndex or (canActuallyPass and gap<=passWindow)) and
+    local passRequestReady=(canActuallyPass and gap<=passWindow) and
       p.overtakeSide==0 and p.overtakeRetryT<=0
     if passRequestReady then
       p.trafficPriority=10000+
