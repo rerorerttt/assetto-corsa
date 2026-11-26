@@ -731,8 +731,15 @@ local function collisionEvasion(carIndex,car,p,speed)
           safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
         local otherHalfWidth=math.max(0.75,
           safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
-        local longitudinalLimit=ownHalfLength+otherHalfLength+0.65
-        local lateralLimit=ownHalfWidth+otherHalfWidth+0.45
+        local ofx,ofz=normalize2(other.look.x,other.look.z)
+        local orx,orz=-ofz,ofx
+        -- Project the other vehicle's oriented rectangle into our local frame.
+        local otherLongExtent=otherHalfLength*math.abs(ofx*fx+ofz*fz)+
+          otherHalfWidth*math.abs(orx*fx+orz*fz)
+        local otherLatExtent=otherHalfLength*math.abs(ofx*rx+ofz*rz)+
+          otherHalfWidth*math.abs(orx*rx+orz*rz)
+        local longitudinalLimit=ownHalfLength+otherLongExtent+0.65
+        local lateralLimit=ownHalfWidth+otherLatExtent+0.45
         local currentOverlap=math.abs(longitudinal)<longitudinalLimit and
           math.abs(lateral)<lateralLimit
         local predictedOverlap=math.abs(predictedLongitudinal)<longitudinalLimit and
@@ -744,7 +751,7 @@ local function collisionEvasion(carIndex,car,p,speed)
           nearestIndex=i
           nearestLateral=predictedLateral
           nearestLongitudinal=predictedLongitudinal
-          nearestHalfWidth=otherHalfWidth
+          nearestHalfWidth=otherLatExtent
         end
       end
     end
@@ -2335,7 +2342,7 @@ function Driver.update(carIndex, car, dt)
     trafficGap<math.max(30.0,speed*2.0+10.0)
   if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 and
      not trafficWait and not nearbyLaneLeader and
-     not p.projectionLost and not p.racingPlanBlocked then
+     not p.projectionLost then
     p.stuck=0
     p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
@@ -2344,9 +2351,11 @@ function Driver.update(carIndex, car, dt)
   end
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
-  local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
+  -- A failed optimizer is not a physical obstacle. If route projection is
+  -- still valid, steering falls back to the recorded spline and speed planning
+  -- uses its curvature instead of commanding a stationary vehicle.
+  local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
-  if p.racingPlanBlocked then targetSpeed=0 end
   -- Overtake state can change in this frame; rebuild the steering path before
   -- issuing controls so the first lateral movement follows the reserved side.
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
