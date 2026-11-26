@@ -130,6 +130,9 @@ local function newPersonality(carIndex)
     lineDist = 0, latOff = 0, targetSpeed = 0,
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
+    speedClass = carIndex%2==0 and "FAST" or "SLOW",
+    canOvertake = carIndex%2==0,
+    cruiseSpeed = carIndex%2==0 and math.huge or (40.0/3.6),
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
     trafficPriority = 0,
     yieldRequestBy = nil, yieldOffset = nil, yieldReady = false,
@@ -155,8 +158,9 @@ local function newPersonality(carIndex)
     state.spawnHints[carIndex]=nil
   end
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT cruise=PHYSICS_LIMITED",
-    carIndex)
+  H.log("CAR_INIT id=%d lane=LEFT class=%s cruise=%.2f canOvertake=%d",
+    carIndex,p.speedClass,safeNumber(p.cruiseSpeed,999.0),
+    p.canOvertake and 1 or 0)
 end
 
 local function readVehicleDynamics(car, p, dt)
@@ -1227,7 +1231,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   local currentLaneOffset=p.overtakeSide~=0 and
     safeNumber(p.passLat,baseOffset) or
     safeNumber(p.laneOffsetCurrent,baseOffset)
-  local gap,leaderSpeed,leaderIndex=carAheadInLane(
+  local gap,leaderSpeed,leaderIndex,leaderLateral=carAheadInLane(
     carIndex,car,currentLaneOffset,p.overtakeSide~=0 and p.passTargetIndex or nil)
 
   if p.overtakeSide~=0 then
@@ -1361,15 +1365,21 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       0.5*acceleration*passTime*passTime
   end
   local passWindow=math.max(35.0,25.0+potentialSpeed*1.25)
-  local canActuallyPass=speedAdvantage>=3.0 and
-    estimatedPassDistance<=180.0 and potentialSpeed>=leaderPace+2.0
+  local laneSettled=math.abs(safeNumber(p.laneOffsetCurrent,baseOffset)-baseOffset)<=0.55 and
+    math.abs(safeNumber(p.latOff,baseOffset)-baseOffset)<=0.90
+  local canActuallyPass=p.canOvertake==true and laneSettled and
+    speedAdvantage>=3.0 and estimatedPassDistance<=180.0 and
+    potentialSpeed>=leaderPace+2.0
   local urgent=canActuallyPass and gap<=clamp(12.0+potentialSpeed*0.8,20.0,60.0)
 
   -- No leader-yield handshake: the overtaker reserves the adjacent lane and
   -- starts moving immediately. The target stays in its own lane. Whole-path
   -- geometry, lane occupancy and other active reservations are checked before
   -- the state changes, so a denied pass remains ordinary safe following.
-  if canActuallyPass and gap<=passWindow and p.overtakeRetryT<=0 then
+  if p.canOvertake and not laneSettled then
+    p.trafficReason="settling_assigned_lane"
+    p.trafficPriority=0
+  elseif canActuallyPass and gap<=passWindow and p.overtakeRetryT<=0 then
     p.trafficPriority=10000+clamp(passWindow-gap,0,passWindow)*10+
       clamp(speedAdvantage,0,50)*2+(urgent and 1000 or 0)
     local passOffset=findPassingOffset(carIndex,car,p,leaderIndex,
