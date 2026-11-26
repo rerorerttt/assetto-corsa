@@ -152,6 +152,8 @@ local function newPersonality(carIndex)
     coordinatorOffset = nil, coordinatorTargetLane = nil,
     coordinatorFromLane = nil, coordinatorChangeT = 0,
     yieldingFor = nil, coordinatorReturn = false,
+    emergencyMode = false, emergencyTargetLane = nil,
+    emergencyObstacleIndex = nil,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -416,7 +418,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.raceOffsetCurrent=currentRace and currentRace.offset or raceTarget.offset
     p.laneOffsetCurrent=p.raceOffsetCurrent
   else
-    local maxStep=1.8*math.max(0,dt or 0)
+    local maxStep=(p.emergencyMode and 4.5 or 1.8)*math.max(0,dt or 0)
     local previousOffset=p.laneOffsetCurrent or laneTarget
     p.laneOffsetCurrent=previousOffset+
       clamp(laneTarget-previousOffset,-maxStep,maxStep)
@@ -899,6 +901,9 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   p.laneOffset=p.coordinatorOffset
   p.coordinatorChangeT=0.10
   p.emergencyUntil=1.25
+  p.emergencyMode=true
+  p.emergencyTargetLane=targetLane
+  p.emergencyObstacleIndex=otherIndex
   p.emergencyBlockedT=0
   p.emergencyRescueReady=false
   p.passTargetIndex=nil
@@ -1165,57 +1170,90 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
     end
   end
 
-  -- Emergency escape has priority over ordinary passing/yielding. It checks
-  -- every lane, not only the adjacent one, and never waits for the 3 s normal
-  -- lane-change cooldown. A stopped/slow leader triggers the escape early.
+  -- Emergency escape is a latched manoeuvre. Once a free destination lane
+  -- is selected, do not reconsider it every frame: that caused 2->1->2->1
+  -- lane oscillation before the car could physically move sideways.
   for _,rec in ipairs(records) do
     if rec.managed then
       local p=rec.p
-      local current=p.coordinatedLane or 1
-      local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
-      for _,other in ipairs(records) do
-        if other.index~=rec.index and
-            other.p.coordinatedLane==current and
-            coordinatorSameDirection(rec,other) then
-          local gap=coordinatorGap(rec,other)
-          if gap and gap>=-2.0 and
-              (not nearestGap or gap<nearestGap) then
-            nearestGap=gap
-            nearestIndex=other.index
-            nearestSpeed=other.speed
+      if p.emergencyMode then
+        local obstacle=nil
+        for _,other in ipairs(records) do
+          if other.index==p.emergencyObstacleIndex then
+            obstacle=other
+            break
           end
+        end
+        local gap=obstacle and coordinatorGap(rec,obstacle) or nil
+        local target=p.emergencyTargetLane or p.coordinatedLane or 1
+        local targetOffset=rec.lanes.centers[target]
+        local reached=targetOffset~=nil and not p.coordinatorFromLane and
+          math.abs(safeNumber(p.latOff,targetOffset)-targetOffset)<0.45
+        local clearance=math.max(8.0,
+          safeNumber(rec.car.aabbSize and rec.car.aabbSize.z,4.5)*0.5+
+          safeNumber(obstacle and obstacle.car.aabbSize and
+            obstacle.car.aabbSize.z,4.5)*0.5+3.0)
+        local obstacleCleared=not obstacle or (gap~=nil and gap < -clearance)
+        if reached and obstacleCleared then
+          p.emergencyMode=false
+          p.emergencyTargetLane=nil
+          p.emergencyObstacleIndex=nil
+          p.emergencyBlockedT=0
+          p.emergencyRescueReady=false
+          p.emergencyWaitLogged=false
+          H.log("TRAFFIC_EMERGENCY_RELEASE id=%d lane=%d obstacle=%d",
+            rec.index,target,p.emergencyObstacleIndex or -1)
         end
       end
-      local dangerDistance=math.max(9.0,rec.speed*0.95+3.0)
-      local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
-        (nearestSpeed<math.max(1.0,rec.speed-0.8) or nearestGap<6.0)
-      if emergencyDanger then
-        local chosen=nil
-        local bestCost=math.huge
-        for lane=1,rec.lanes.count do
-          if lane~=current and coordinatorLaneFree(rec,lane,records,4.0) then
-            local cost=math.abs(lane-current)*10.0+
-              math.abs(rec.lanes.centers[lane]-safeNumber(p.latOff,rec.lanes.centers[current]))
-            if cost<bestCost then bestCost=cost;chosen=lane end
+
+      if not p.emergencyMode then
+        local current=p.coordinatedLane or 1
+        local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
+        for _,other in ipairs(records) do
+          if other.index~=rec.index and
+              other.p.coordinatedLane==current and
+              coordinatorSameDirection(rec,other) then
+            local gap=coordinatorGap(rec,other)
+            if gap and gap>=-2.0 and
+                (not nearestGap or gap<nearestGap) then
+              nearestGap=gap
+              nearestIndex=other.index
+              nearestSpeed=other.speed
+            end
           end
         end
-        if chosen then
-          coordinatorEmergencyMove(rec,chosen,records,nearestIndex)
+        local dangerDistance=math.max(9.0,rec.speed*0.95+3.0)
+        local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
+          (nearestSpeed<math.max(1.0,rec.speed-0.8) or nearestGap<6.0)
+        if emergencyDanger then
+          local chosen=nil
+          local bestCost=math.huge
+          for lane=1,rec.lanes.count do
+            if lane~=current and coordinatorLaneFree(rec,lane,records,4.0) then
+              local cost=math.abs(lane-current)*10.0+
+                math.abs(rec.lanes.centers[lane]-
+                  safeNumber(p.latOff,rec.lanes.centers[current]))
+              if cost<bestCost then bestCost=cost;chosen=lane end
+            end
+          end
+          if chosen then
+            coordinatorEmergencyMove(rec,chosen,records,nearestIndex)
+          else
+            p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
+            p.emergencyRescueReady=p.emergencyBlockedT>=5.0
+            p.trafficAction="EMERGENCY_WAIT"
+            p.trafficReason="all_lanes_occupied"
+            if not p.emergencyWaitLogged then
+              p.emergencyWaitLogged=true
+              H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f",
+                rec.index,nearestIndex or -1,nearestGap)
+            end
+          end
         else
-          p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
-          p.emergencyRescueReady=p.emergencyBlockedT>=5.0
-          p.trafficAction="EMERGENCY_WAIT"
-          p.trafficReason="all_lanes_occupied"
-          if not p.emergencyWaitLogged then
-            p.emergencyWaitLogged=true
-            H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f",
-              rec.index,nearestIndex or -1,nearestGap)
-          end
+          p.emergencyBlockedT=0
+          p.emergencyRescueReady=false
+          p.emergencyWaitLogged=false
         end
-      else
-        p.emergencyBlockedT=0
-        p.emergencyRescueReady=false
-        p.emergencyWaitLogged=false
       end
     end
   end
