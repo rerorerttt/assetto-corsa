@@ -1361,7 +1361,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.trafficAction="YIELDING"
       p.trafficReason=p.yieldReady and "yield_position_confirmed" or "moving_to_yield_position"
       p.trafficLeaderIndex=p.yieldRequestBy;p.trafficTargetOffset=safeNumber(p.yieldOffset)
-      if p.yieldRequestTimer>8.0 then
+      if p.yieldRequestTimer>8.0 and not requestedByActivePass then
         releaseYieldGroup(p.yieldRequestBy,requester.pendingYieldGroup)
         requester.pendingYieldGroup=nil
         requester.pendingYieldTarget=nil;requester.pendingPassOffset=nil;requester.pendingYieldTimer=0;requester.pendingYieldOrder=nil
