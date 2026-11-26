@@ -405,6 +405,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   end
   if p.returningFromPass and math.abs(projection.lateral-laneTarget)<0.35 then
     p.returningFromPass=false
+    p.returnFromOffset=nil
+    p.returnTargetIndex=nil
+    p.passLat=nil
+    p.passTargetIndex=nil
   end
 
   local targetX=raceTarget and raceTarget.x or
@@ -1270,6 +1274,32 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   end
 
   if p.returningFromPass then
+    local returnTarget=p.returnTargetIndex
+    if laneOccupied(carIndex,car,baseOffset,returnTarget) then
+      local passOffset=safeNumber(p.returnFromOffset,p.passLat or baseOffset)
+      if not laneOccupied(carIndex,car,passOffset,returnTarget) then
+        -- A vehicle entered the base lane during our return transition.
+        -- Re-enter the previously reserved passing lane rather than merge
+        -- into it; retry the return after that lane becomes clear.
+        p.overtakeSide=1
+        p.passLat=passOffset
+        p.passTargetIndex=returnTarget
+        p.passT=0
+        p.passBlockedT=0
+        p.passDeadline=PASS_TIMEOUT
+        p.returningFromPass=false
+        p.laneOffset=passOffset
+        p.trafficPriority=1000000
+        p.trafficAction="PASSING"
+        p.trafficReason="return_lane_reoccupied"
+        p.trafficTargetOffset=passOffset
+        return targetSpeed
+      end
+      p.trafficAction="WAIT_CLEAR"
+      p.trafficReason="both_lanes_occupied"
+      p.trafficTargetOffset=passOffset
+      return math.min(targetSpeed,safeFollowingSpeed(8.0,0,p.brakeAccelEstimate))
+    end
     p.trafficPriority=900000
     p.trafficAction="RETURNING"
     p.trafficReason="pass_completed"
@@ -1337,9 +1367,12 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
 
     if passedClearance and
        not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
+      local targetIndex=p.passTargetIndex
+      local passOffset=p.passLat
       p.overtakeSide=0
       p.passTargetIndex=nil
-      p.passLat=nil
+      p.returnFromOffset=passOffset
+      p.returnTargetIndex=targetIndex
       p.passFromOffset=nil
       p.passT=0
       p.passBlockedT=0
@@ -1356,12 +1389,14 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       return targetSpeed
     end
 
-    if (passExpired or passDeadlocked) and
+    if (passExpired or passDeadlocked) and passedClearance and
        not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
       local targetIndex=p.passTargetIndex
+      local passOffset=p.passLat
       p.overtakeSide=0
       p.passTargetIndex=nil
-      p.passLat=nil
+      p.returnFromOffset=passOffset
+      p.returnTargetIndex=targetIndex
       p.passFromOffset=nil
       p.passT=0
       p.passBlockedT=0
