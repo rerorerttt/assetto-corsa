@@ -152,6 +152,13 @@ local function newPersonality(carIndex)
     coordinatorOffset = nil, coordinatorTargetLane = nil,
     coordinatorFromLane = nil, coordinatorChangeT = 0,
     yieldingFor = nil, coordinatorReturn = false,
+    emergencyMode = false, emergencyTargetLane = nil,
+    emergencyObstacleIndex = nil,
+    emergencyFromOffset = nil,
+    emergencyTargetOffset = nil,
+    emergencySteerActive = false,
+    emergencyWait = false, emergencyWaitGap = nil,
+    emergencyWaitSpeed = nil, emergencyWaitObstacle = nil,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -252,7 +259,9 @@ local function planTargetSpeed(p,speed)
   local currentSpeed=math.max(0,safeNumber(speed))
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
-  if p.racingPlanBlockedDistance then
+  -- Lua treats numeric zero as true. A zero blocked distance means that no
+  -- obstacle distance was supplied, not that an obstacle is directly ahead.
+  if p.racingPlanBlockedDistance and p.racingPlanBlockedDistance>0 then
     local stoppingRoom=math.max(0,p.racingPlanBlockedDistance-10.0)
     local corridorSpeed=math.sqrt(2.0*brakeAccel*stoppingRoom)
     target=math.min(target,corridorSpeed)
@@ -416,7 +425,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.raceOffsetCurrent=currentRace and currentRace.offset or raceTarget.offset
     p.laneOffsetCurrent=p.raceOffsetCurrent
   else
-    local maxStep=1.8*math.max(0,dt or 0)
+    local maxStep=(p.emergencyMode and 4.5 or 1.8)*math.max(0,dt or 0)
     local previousOffset=p.laneOffsetCurrent or laneTarget
     p.laneOffsetCurrent=previousOffset+
       clamp(laneTarget-previousOffset,-maxStep,maxStep)
@@ -554,9 +563,13 @@ end
 local function filterSteering(p, target, dt)
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  -- Emergency passing changes the target path, not the steering authority.
-  -- No full-lock pulse or emergency gain is permitted at high speed.
-  local maxChange=CFG.STEER_RATE*dt
+  -- Emergency evasion temporarily increases steering slew rate; the normal
+  -- steering target, stability limits and absolute steering limit remain active.
+  local emergencyActive=safeNumber(p.emergencyUntil)>0
+  if emergencyActive then
+    p.emergencyUntil=math.max(0,safeNumber(p.emergencyUntil)-dt)
+  end
+  local maxChange=CFG.STEER_RATE*dt*(emergencyActive and 2.5 or 1.0)
   local requestedChange=p.steerFiltered-p.steer
   local appliedChange=clamp(requestedChange,-maxChange,maxChange)
   p.steerRateLimited=math.abs(requestedChange)>maxChange+1e-6
@@ -670,8 +683,10 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     local lateralDelta=math.abs(fixedOffset-safeNumber(p.latOff,base))
     local lateralLimit=clamp(
       safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
-    fixedTransitionDistance=math.max(22.0,
-      math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
+    fixedTransitionDistance=math.max(
+      safeNumber(p.emergencyUntil)>0 and 4.0 or 22.0,
+      math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit)*
+        (safeNumber(p.emergencyUntil)>0 and 0.45 or 1.0))
   end
   -- In OPEN running the optimizer uses the complete road width.
   -- Only explicit PASS/RETURN/YIELD reservations constrain the path.
@@ -785,7 +800,15 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficLeaderIndex=leaderIndex or -1
   p.trafficGap=gap or -1
   p.trafficLeaderSpeed=leaderSpeed or 0
-  if p.passTargetIndex~=nil then
+  if p.emergencyMode then
+    p.trafficAction="EMERGENCY_ESCAPE"
+    p.trafficReason="leaving_blocking_vehicle"
+    p.trafficPriority=1100000
+  elseif p.emergencyWait then
+    p.trafficAction="EMERGENCY_WAIT"
+    p.trafficReason="adjacent_lane_blocked_braking"
+    p.trafficPriority=1050000
+  elseif p.passTargetIndex~=nil then
     p.trafficAction="PASSING"
     p.trafficReason="coordinator_lane_reserved"
     p.trafficPriority=1000000
@@ -798,9 +821,47 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     p.trafficReason=gap and "same_lane_vehicle" or "assigned_lane_clear"
     p.trafficPriority=0
   end
-  if gap~=nil then
+  -- carAheadInLane also reports a short negative gap when another car is
+  -- beside/behind our rear bumper. That is useful for collision diagnostics,
+  -- but it is NOT a vehicle ahead and must never clamp forward speed to zero.
+  if gap~=nil and gap>=0 then
     local safeSpeed=safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)
-    return math.min(targetSpeed,safeSpeed)
+    targetSpeed=math.min(targetSpeed,safeSpeed)
+  end
+  -- Emergency waiting is an active braking state, not just a log label.
+  if p.emergencyWait then
+    local waitGap=math.max(0,safeNumber(p.emergencyWaitGap,gap or 0))
+    local waitSpeed=safeNumber(p.emergencyWaitSpeed,0)
+    targetSpeed=math.min(targetSpeed,
+      safeFollowingSpeed(waitGap,waitSpeed,p.brakeAccelEstimate))
+  end
+  -- Keep checking the lane being vacated during the transition. The specific
+  -- obstacle that triggered this emergency escape is exempt from longitudinal
+  -- following-distance braking (otherwise a stopped car at followGap cannot
+  -- move sideways); any other vehicle in the old lane remains a braking hazard.
+  -- The destination lane is checked independently above and must be reserved.
+  if p.emergencyMode and p.emergencyFromOffset~=nil then
+    local oldGap,oldLeaderSpeed,oldLeaderIndex=carAheadInLane(
+      carIndex,car,p.emergencyFromOffset)
+    if oldGap~=nil and oldGap>=0 then
+      if oldLeaderIndex==p.emergencyObstacleIndex then
+        -- This is the vehicle the emergency manoeuvre is specifically escaping.
+        -- Applying normal following-distance braking here creates a deadlock:
+        -- at the required 8 m gap the target speed becomes zero, so the car
+        -- cannot build the lateral motion needed to leave the lane.
+        -- Keep the destination-lane reservation/check authoritative instead.
+        if not p.emergencyOldLaneReleaseLogged then
+          p.emergencyOldLaneReleaseLogged=true
+          H.log("TRAFFIC_ESCAPE_RELEASE_OLD_LANE id=%d obstacle=%d gap=%.2f",
+            carIndex,oldLeaderIndex,oldGap)
+        end
+      else
+        -- A second vehicle in the lane being vacated remains a real hazard.
+        local oldLaneSafeSpeed=safeFollowingSpeed(
+          oldGap,oldLeaderSpeed or 0,p.brakeAccelEstimate)
+        targetSpeed=math.min(targetSpeed,oldLaneSafeSpeed)
+      end
+    end
   end
   return targetSpeed
 end
@@ -813,9 +874,9 @@ local function coordinatorLaneGeometry(seg,car)
   local width=right-left
   if width<=0.1 then return {left=(left+right)*0.5,right=(left+right)*0.5,
     count=1,centers={(left+right)*0.5}} end
+  -- Lane topology belongs to the road, not to an individual vehicle.
+  -- Per-car lane counts gave wide and narrow cars incompatible lane IDs.
   local count=clamp(math.floor((width+1.0)/4.0),1,4)
-  local carWidth=math.max(1.5,safeNumber(car and car.aabbSize and car.aabbSize.x,2.0))
-  while count>1 and width/count<carWidth+0.55 do count=count-1 end
   local slotWidth=width/count
   local centers={}
   for lane=1,count do centers[lane]=left+(lane-0.5)*slotWidth end
@@ -860,21 +921,77 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local transitionDistance=math.max(22.0,
           owner.speed*math.sqrt(6.0*lateralDelta/lateralLimit))
         local transitionTime=transitionDistance/math.max(8.0,owner.speed)
+        -- Reserve space only for traffic that can actually close the gap
+        -- during this manoeuvre. A faster car ahead is pulling away; a slower
+        -- car behind is falling back. Using absolute speed difference here
+        -- falsely marks distant, non-conflicting cars as occupying the lane.
+        local sameDirection=coordinatorSameDirection(owner,other)
+        local closingSpeed
+        if not sameDirection then
+          closingSpeed=owner.speed+other.speed
+        elseif gap>=0 then
+          closingSpeed=math.max(0,owner.speed-other.speed)
+        else
+          closingSpeed=math.max(0,other.speed-owner.speed)
+        end
         local dynamicWindow=math.max(window or 8.0,
-          ownHalf+otherHalf+math.abs(owner.speed-other.speed)*transitionTime+5.0)
+          ownHalf+otherHalf+closingSpeed*transitionTime+5.0)
         local otherLane=other.p.coordinatedLane
         if otherLane==targetLane and math.abs(gap)<dynamicWindow then
-          return false
+          return false,other.index,gap,"occupied_destination"
         end
         -- Reserve both the destination and the lane being vacated until the
         -- full vehicle body has completed its lateral transition.
         if other.p.coordinatorFromLane==targetLane and
-            math.abs(gap)<dynamicWindow+4.0 then return false end
+            math.abs(gap)<dynamicWindow+4.0 then
+          return false,other.index,gap,"crossing_destination"
+        end
         if other.p.coordinatorTargetLane==targetLane and
-            math.abs(gap)<dynamicWindow+4.0 then return false end
+            math.abs(gap)<dynamicWindow+4.0 then
+          return false,other.index,gap,"reserved_destination"
+        end
       end
     end
   end
+  return true
+end
+
+local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
+  local p=record.p
+  local current=p.coordinatedLane or 1
+  if targetLane<1 or targetLane>record.lanes.count or targetLane==current then
+    return false
+  end
+  if not coordinatorLaneFree(record,targetLane,records,4.0) then return false end
+  p.coordinatorFromLane=current
+  p.coordinatorTargetLane=targetLane
+  p.coordinatedLane=targetLane
+  p.coordinatorOffset=record.lanes.centers[targetLane]
+  p.baseLaneOffset=p.coordinatorOffset
+  p.laneOffset=p.coordinatorOffset
+  p.coordinatorChangeT=0.10
+  p.emergencyUntil=1.25
+  p.emergencyMode=true
+  p.emergencyOldLaneReleaseLogged=false
+  p.emergencyTargetLane=targetLane
+  p.emergencyObstacleIndex=otherIndex
+  p.emergencyTargetOffset=record.lanes.centers[targetLane]
+  p.emergencyFromOffset=record.lanes.centers[current]
+  p.emergencyBlockedT=0
+  p.emergencyRescueReady=false
+  p.emergencyWait=false
+  p.emergencyWaitGap=nil
+  p.emergencyWaitSpeed=nil
+  p.emergencyWaitObstacle=nil
+  p.passTargetIndex=nil
+  p.yieldingFor=nil
+  p.coordinatorReturn=false
+  p.overtakeSide=targetLane>current and 1 or -1
+  p.racingPlanTimer=0
+  p.racingPlanTargetOffset=nil
+  p.racingPlan=nil
+  H.log("TRAFFIC_EMERGENCY_EVASION id=%d from=%d to=%d obstacle=%d speed=%.2f",
+    record.index,current,targetLane,otherIndex or -1,record.speed)
   return true
 end
 
@@ -942,6 +1059,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           p.coordinatedLane=clamp(p.coordinatedLane,1,lanes.count)
           p.homeLane=clamp(p.homeLane or p.coordinatedLane,1,lanes.count)
           p.coordinatorOffset=lanes.centers[p.coordinatedLane]
+        end
+        if p.emergencyMode and p.emergencyTargetLane~=nil then
+          p.emergencyTargetLane=clamp(p.emergencyTargetLane,1,lanes.count)
+          p.emergencyTargetOffset=lanes.centers[p.emergencyTargetLane]
         end
         p.coordinatorLaneCount=lanes.count
         p.coordinatorChangeT=math.max(0,safeNumber(p.coordinatorChangeT)-dt)
@@ -1076,15 +1197,15 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local moved=false
           if not sameDirection then
             -- Oncoming cars are separated laterally before the meeting point.
-            if follower.managed and follower.p.coordinatorChangeT<=0 and
+            if follower.managed and not follower.p.emergencyMode and follower.p.coordinatorChangeT<=0 and
                 lane<follower.lanes.count then
               moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
             end
-            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
+            if not moved and leader.managed and not leader.p.emergencyMode and leader.p.coordinatorChangeT<=0 and
                 lane<leader.lanes.count then
               moved=coordinatorMove(leader,lane+1,records,"PASS",follower.index)
             end
-            if not moved and follower.managed and follower.p.coordinatorChangeT<=0 and
+            if not moved and follower.managed and not follower.p.emergencyMode and follower.p.coordinatorChangeT<=0 and
                 lane>1 then
               moved=coordinatorMove(follower,lane-1,records,"YIELD",leader.index)
             end
@@ -1095,25 +1216,26 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           elseif follower.managed and leader.managed then
             -- A slower leading car yields right; otherwise the faster follower
             -- takes the adjacent left lane. Only one adjacent slot is changed.
-            if closing>0.5 and lane>1 and leader.p.coordinatorChangeT<=0 then
+            if closing>0.5 and lane>1 and not leader.p.emergencyMode and leader.p.coordinatorChangeT<=0 then
               moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
             end
             if not moved and lane<follower.lanes.count and
-                follower.p.coordinatorChangeT<=0 then
+                not follower.p.emergencyMode and follower.p.coordinatorChangeT<=0 then
               moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
             end
-            if not moved and lane>1 and leader.p.coordinatorChangeT<=0 then
+            if not moved and lane>1 and not leader.p.emergencyMode and leader.p.coordinatorChangeT<=0 then
               moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
             end
           elseif follower.managed then
             -- The leading obstacle is not controlled by RoutePilot.
-            if lane<follower.lanes.count and follower.p.coordinatorChangeT<=0 then
+            if lane<follower.lanes.count and not follower.p.emergencyMode and
+                follower.p.coordinatorChangeT<=0 then
               moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
             end
           elseif leader.managed then
             -- A non-managed faster vehicle behind: RoutePilot's car yields
             -- into any available adjacent slot, never by controlling the player.
-            if leader.p.coordinatorChangeT<=0 then
+            if not leader.p.emergencyMode and leader.p.coordinatorChangeT<=0 then
               if lane>1 then
                 moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
               elseif lane<leader.lanes.count then
@@ -1125,6 +1247,117 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             H.log("TRAFFIC_CONFLICT_NO_SLOT follower=%d leader=%d gap=%.2f lane=%d",
               follower.index,leader.index,math.abs(gap),lane)
           end
+        end
+      end
+    end
+  end
+
+  -- Emergency escape is a latched manoeuvre. Once a free destination lane
+  -- is selected, do not reconsider it every frame: that caused 2->1->2->1
+  -- lane oscillation before the car could physically move sideways.
+  for _,rec in ipairs(records) do
+    if rec.managed then
+      local p=rec.p
+      if p.emergencyMode then
+        local obstacle=nil
+        for _,other in ipairs(records) do
+          if other.index==p.emergencyObstacleIndex then
+            obstacle=other
+            break
+          end
+        end
+        local gap=obstacle and coordinatorGap(rec,obstacle) or nil
+        local target=p.emergencyTargetLane or p.coordinatedLane or 1
+        local targetOffset=rec.lanes.centers[target]
+        local reached=targetOffset~=nil and not p.coordinatorFromLane and
+          math.abs(safeNumber(p.latOff,targetOffset)-targetOffset)<0.45
+        local clearance=math.max(8.0,
+          safeNumber(rec.car.aabbSize and rec.car.aabbSize.z,4.5)*0.5+
+          safeNumber(obstacle and obstacle.car.aabbSize and
+            obstacle.car.aabbSize.z,4.5)*0.5+3.0)
+        local obstacleCleared=not obstacle or (gap~=nil and gap < -clearance)
+        if reached and obstacleCleared then
+          local clearedObstacle=p.emergencyObstacleIndex or -1
+          p.emergencyMode=false
+          p.emergencyTargetLane=nil
+          p.emergencyObstacleIndex=nil
+          p.emergencyTargetOffset=nil
+          p.emergencyFromOffset=nil
+          p.emergencySteerActive=false
+          p.emergencyBlockedT=0
+          p.emergencyRescueReady=false
+          p.emergencyWaitLogged=false
+          H.log("TRAFFIC_EMERGENCY_RELEASE id=%d lane=%d obstacle=%d",
+            rec.index,target,clearedObstacle)
+        end
+      end
+
+      if not p.emergencyMode then
+        local current=p.coordinatedLane or 1
+        local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
+        for _,other in ipairs(records) do
+          if other.index~=rec.index and
+              other.p.coordinatedLane==current and
+              coordinatorSameDirection(rec,other) then
+            local gap=coordinatorGap(rec,other)
+            if gap and gap>=-2.0 and
+                (not nearestGap or gap<nearestGap) then
+              nearestGap=gap
+              nearestIndex=other.index
+              nearestSpeed=other.speed
+            end
+          end
+        end
+        local dangerDistance=math.max(9.0,rec.speed*0.95+3.0)
+        local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
+          (nearestSpeed<math.max(1.0,rec.speed-0.8) or nearestGap<6.0)
+        if emergencyDanger then
+          p.emergencyWait=true
+          p.emergencyWaitGap=nearestGap
+          p.emergencyWaitSpeed=nearestSpeed
+          p.emergencyWaitObstacle=nearestIndex
+          local chosen=nil
+          local bestCost=math.huge
+          local blockedBy,blockedGap,blockedReason=nil,nil,nil
+          for lane=1,rec.lanes.count do
+            if lane~=current then
+              local free,blocker,blockerGap,reason=coordinatorLaneFree(rec,lane,records,4.0)
+              if free then
+                local cost=math.abs(lane-current)*10.0+
+                  math.abs(rec.lanes.centers[lane]-
+                    safeNumber(p.latOff,rec.lanes.centers[current]))
+                if cost<bestCost then bestCost=cost;chosen=lane end
+              elseif blockerGap~=nil and
+                  (blockedGap==nil or math.abs(blockerGap)<math.abs(blockedGap)) then
+                blockedBy,blockedGap,blockedReason=blocker,blockerGap,reason
+              end
+            end
+          end
+          if chosen and coordinatorEmergencyMove(rec,chosen,records,nearestIndex) then
+            p.emergencyWait=false
+            p.emergencyWaitGap=nil
+            p.emergencyWaitSpeed=nil
+            p.emergencyWaitObstacle=nil
+          else
+            p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
+            p.emergencyRescueReady=p.emergencyBlockedT>=5.0
+            p.trafficAction="EMERGENCY_WAIT"
+            p.trafficReason="adjacent_lane_blocked_braking"
+            if not p.emergencyWaitLogged then
+              p.emergencyWaitLogged=true
+              H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f blocker=%d blocker_gap=%.2f reason=%s",
+                rec.index,nearestIndex or -1,nearestGap,
+                blockedBy or -1,blockedGap or -1,tostring(blockedReason or "no_adjacent_lane"))
+            end
+          end
+        else
+          p.emergencyWait=false
+          p.emergencyWaitGap=nil
+          p.emergencyWaitSpeed=nil
+          p.emergencyWaitObstacle=nil
+          p.emergencyBlockedT=0
+          p.emergencyRescueReady=false
+          p.emergencyWaitLogged=false
         end
       end
     end
@@ -1436,12 +1669,28 @@ function Driver.update(carIndex, car, dt)
   end
 
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
+  if p.emergencyRescueReady and not p.emergencyMode then
+    p.emergencyRescueReady=false
+    p.emergencyBlockedT=0
+    p.emergencyWaitLogged=false
+    p.rescueRetryT=1.0
+    local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
+    H.log("RESCUE_ATTEMPT id=%d reason=all_lanes_blocked_5s success=%s",
+      carIndex,tostring(rescued))
+    if rescued then return end
+  end
   local blockingGap=nil
   if not p.projectionLost then
-    blockingGap=select(1,carAheadInLane(carIndex,car,
+    local assignedGap=select(1,carAheadInLane(carIndex,car,
       safeNumber(p.coordinatorOffset,p.latOff or 0)))
+    local physicalGap=select(1,carAheadInLane(carIndex,car,
+      safeNumber(p.latOff,p.coordinatorOffset or 0)))
+    if assignedGap~=nil then blockingGap=assignedGap end
+    if physicalGap~=nil and (blockingGap==nil or physicalGap<blockingGap) then
+      blockingGap=physicalGap
+    end
   end
-  local trafficBlocked=blockingGap~=nil and blockingGap<18.0
+  local trafficBlocked=blockingGap~=nil and blockingGap>=0 and blockingGap<18.0
   if speed<RESCUE_SPEED and not trafficBlocked and not p.projectionLost then
     p.stuck=p.stuck+dt
   else
@@ -1450,7 +1699,7 @@ function Driver.update(carIndex, car, dt)
   local rescueReason=nil
   if p.stuck>=RESCUE_TIME then rescueReason="stuck_5s"
   elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_10s" end
-  if rescueReason and p.rescueRetryT<=0 then
+  if rescueReason and not p.emergencyMode and p.rescueRetryT<=0 then
     p.stuck=0;p.offTrackT=0;p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
     H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s",
@@ -1478,7 +1727,59 @@ function Driver.update(carIndex, car, dt)
   p.targetSpeed=targetSpeed
   local steer = filterSteering(p, steerTarget, dt)
 
+  -- Emergency lane escape owns the final steering command. Bypass both the
+  -- normal low-pass filter and slew limiter so the car starts turning now,
+  -- while yaw/slip/lateral-load feedback prevents holding full lock into a spin.
+  p.emergencySteerActive=false
+  if p.emergencyMode and p.emergencyTargetOffset~=nil and not p.projectionLost then
+    local actualError=p.emergencyTargetOffset-safeNumber(p.latOff)
+    local lateralVelocity=safeNumber(p.lateralVelocityFiltered)
+    -- Predict where the body will be shortly, not just where it is now.
+    -- This makes the controller counter-steer before lateral momentum carries
+    -- the car through the target lane and over the road boundary.
+    local predictionTime=clamp(0.35+math.abs(lateralVelocity)*0.08,0.35,0.60)
+    local predictedOffset=safeNumber(p.latOff)+lateralVelocity*predictionTime
+    local lateralError=p.emergencyTargetOffset-predictedOffset
+    local direction=lateralError>=0 and 1 or -1
+    local errorAbs=math.abs(lateralError)
+    if math.abs(actualError)>0.35 then
+      local steerLimit=clamp(safeNumber(CFG.STEER_LIMIT,1.0),0.1,1.0)
+      local magnitude=clamp(errorAbs*0.42,0.0,steerLimit*0.82)
+      local yaw=safeNumber(p.yawRate)
+      local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)
+      local lateralLoad=math.abs(safeNumber(p.lateralAccel))/grip
+      local slip=math.abs(safeNumber(p.slipAngle))
+      -- Once the chassis is already rotating toward the escape lane, ease
+      -- steering rather than adding more yaw. This is the key anti-spin loop.
+      if yaw*direction>0.45 then
+        magnitude=math.min(magnitude,steerLimit*0.58)
+      end
+      if lateralLoad>0.78 then
+        magnitude=magnitude*clamp(1.0-(lateralLoad-0.78)*1.8,0.32,1.0)
+      end
+      if slip>0.10 then
+        magnitude=magnitude*clamp(1.0-(slip-0.10)*3.0,0.30,1.0)
+      end
+      if safeNumber(p.wheelSlip)>0.35 then
+        magnitude=magnitude*0.75
+      end
+      steer=direction*magnitude
+      p.steer=steer
+      p.steerFiltered=steer
+      p.steerRateLimited=false
+      p.steerRateLimitDemand=steer-steerTarget
+      p.steerRateLimitApplied=steer-steerTarget
+      p.steerTarget=steer
+      p.emergencySteerActive=true
+    end
+  end
+
   calculateThrottle(p, speed, targetSpeed, dt)
+  if p.emergencySteerActive then
+    -- Keep enough drive to complete the lateral escape, but do not add full
+    -- throttle while the tyres are already working near their grip limit.
+    p.gas=math.min(p.gas,0.55)
+  end
   if p.projectionLost then p.gas=0; p.brake=1 end
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
