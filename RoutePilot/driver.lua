@@ -1255,9 +1255,6 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   local source=safeNumber(p.latOff,
     p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
     defaultCenter or ((bl+br)*0.5))
-  local target=ac.getCar(leaderIndex)
-  local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
-  local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
   local candidates={}
   -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
   -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
@@ -1936,7 +1933,7 @@ local function coordinateTrafficFrame(sim,dt,frame)
         local distance=eta<math.huge and
           math.max(0,safeNumber(car.speedMs))*eta+0.5*ownAccel*eta*eta or math.huge
         local window=clamp(28+math.max(0,safeNumber(car.speedMs))*1.6,45,95)
-        if leader and leader.isActive and advantage>=1 and distance<=280 and gap<=window then
+        if leader and leader.isActive and advantage>=0.35 and distance<=360 and gap<=window then
           requests[#requests+1]={index=i,leader=leaderIndex,gap=gap,
             leaderLateral=leaderLateral,distance=distance,eta=eta,
             advantage=advantage,priority=clamp(window-gap,0,window)*10+clamp(advantage,0,50)*5}
@@ -1958,7 +1955,7 @@ local function coordinateTrafficFrame(sim,dt,frame)
     if car and leader and p and lp and p.overtakeSide==0 and
        p.yieldRequestBy==nil and lp.yieldRequestBy==nil then
       local group=collectYieldGroup(i,car,p,q.leader,
-        math.min(280,clamp(28+math.max(0,safeNumber(car.speedMs))*1.6,45,95)))
+        math.min(360,clamp(28+math.max(0,safeNumber(car.speedMs))*1.6,45,95)))
       if type(group)~="table" or #group==0 then group={q.leader} end
       local bl,br=H.boundsAt(lp.segIdx or p.segIdx)
       local count=math.max(1,math.floor(((br-bl)+1)/4))
