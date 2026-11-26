@@ -1223,7 +1223,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   -- every lane, not only the adjacent one, and never waits for the 3 s normal
   -- lane-change cooldown. A stopped/slow leader triggers the escape early.
   for _,rec in ipairs(records) do
-    if rec.managed then
+    if rec.managed and not rec.p.emergencyEscape then
       local p=rec.p
       local current=p.coordinatedLane or 1
       local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
