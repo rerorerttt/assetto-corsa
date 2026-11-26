@@ -346,3 +346,16 @@ Implemented in `driver.lua` and `RoutePilot.lua`:
 The group pass is intentionally limited to compact same-slot trains; it does not force a multi-lane pack into one side or invent a passing lane. Source was checked for balanced Lua blocks/delimiters and obvious undefined local references in the new group-selection path. No Lua compiler or Assetto Corsa runtime was available, so behaviour, pass timing, vehicle stability and FPS remain unverified in-game.
 
 A follow-up correction makes the pass prediction use relative acceleration (our measured acceleration minus the leader's measured acceleration), rather than assuming the leader is stationary. Equal cars travelling at equal speed therefore do not trigger needless passes solely because both can accelerate. Closure-distance estimates now reject a group pass if the farthest member cannot be caught within the bounded planning distance.
+
+
+## 2026-11-26 synchronized frame-wide passing corridor allocation
+
+Implemented on `routepilot/instant-pass-initiative-2026-11-26-v2`:
+
+- Moved pass commitment out of individual `Driver.update()` calls. `Driver.prepareFrame()` now builds all AI route projections, refreshes free-running route speed targets, ranks all pass requests deterministically, and commits corridor reservations before any car receives controls.
+- A committed pass reserves a discrete adjacent slot and gathers the compact same-lane train ahead. Every member is assigned the source slot under one transaction owner; the faster car receives the adjacent pass slot. Per-car updates cannot independently claim the same corridor.
+- Added predicted lateral-transition state for yielding cars. The pass swept-path check interpolates their planned movement from current offset to reserved slot rather than treating a reservation as an instantaneous position change.
+- Yielding cars use an explicit `YIELDING` control state, hold their assigned slot, and retain free-running speed unless a real vehicle occupies that slot ahead. The group reservation is released by the existing pass-clearance/return logic.
+- Added `TRAFFIC_BATCH_COMMIT` and `TRAFFIC_BATCH_DENY` diagnostics. Updated `TRAFFIC_STATE_COORDINATOR.md` to describe the actual frame transaction and physical limits.
+
+Validation status: source review only. No Lua/LuaJIT compiler or Assetto Corsa/CSP runtime is available in this environment. No claim is made that collision-free behavior, one-second decision latency, handling at the grip limit, throughput or FPS is verified. Required in-game test: 2/3/4-slot track widths, a compact pack, simultaneous faster cars, occupied passing slot, lane narrowing, and opposing traffic. Inspect batch decisions and full per-car telemetry before accepting the build.

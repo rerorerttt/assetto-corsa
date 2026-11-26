@@ -1,30 +1,19 @@
-# RoutePilot frame-wide traffic state coordination
+# RoutePilot frame-wide traffic coordination and immediate passing
 
-This branch introduces a frame-wide coordination pass while retaining the existing geometric path planner and full-body safety checks.
+## Frame transaction
 
-## Frame order
+Every simulation update uses one immutable roster/projection snapshot. Before any AI receives controls, RoutePilot refreshes route progress for every active AI, updates each car's free-running racing plan and free target speed, then builds all feasible pass requests. Requests are ranked deterministically by predicted pass ETA, pace advantage, route progress and stable car ID. The coordinator commits corridor reservations in one batch; a later request sees every earlier reservation from the same frame. Per-car controller updates cannot independently start a pass.
 
-1. `RoutePilot.lua` gathers the complete active AI roster.
-2. `Driver.prepareFrame()` projects every active AI car onto the recorded route before any car receives new controls. The resulting progress, lateral position and segment are stored for the current frame.
-3. The roster is arbitrated deterministically. Already active PASS/RETURN reservations remain ahead of new requests. New pending pass requests are ranked by measured longitudinal acceleration and current speed; FIFO request age is no longer allowed to outrank vehicle performance.
-4. The normal per-car controller consumes the common frame projection and performs its state transition and control write.
+## Synchronized pack dispersal
 
-This removes the most important order dependency: a car processed early no longer sees a mixture of current-frame and previous-frame route projections for the other cars.
+A pass request identifies the slower leader and the compact same-direction train occupying its discrete logical lane. The coordinator assigns the train to the source slot and the faster car to a different adjacent slot. All train members receive the same transaction owner, a fixed slot target, their actual starting offset and a predicted smooth transition distance. The pass is committed only after the complete swept path is checked against the road bounds, vehicle footprints, opposing traffic and every other reservation. The path prediction models the yielding cars moving from their current offsets toward the assigned slot; it does not assume an instantaneous lateral teleport.
 
-## Traffic states and reservation rules
+A successful transaction emits `TRAFFIC_BATCH_COMMIT` and `OVERTAKE_BEGIN`. A denied transaction emits `TRAFFIC_BATCH_DENY` with the denial reason. Yielding members report `TRAFFIC_STATE=YIELDING`; the passing car reports `TRAFFIC_STATE=PASSING`. The group reservation is released only after the passing car has cleared the final group member and the return corridor is safe.
 
-The controller's observable states remain `OPEN`, `FOLLOW`, `WAIT_QUEUE`, `WAIT_YIELD`, `YIELDING`, `PASSING`, `RETURNING` and `ROUTE_LOST`. A car in `OPEN` receives the racing-line target speed without a traffic speed cap. `FOLLOW` is entered only when a vehicle overlaps the current driving corridor under the existing route-progress, direction and physical lateral-separation checks. A car in a separate usable lane must not reduce the subject car's speed. Same-direction cars with zero or negative longitudinal gap are never treated as leaders; that prevents reciprocal FOLLOW decisions when cars are side-by-side or their projections overlap.
+## Physical limits
 
-A pending yield reservation can be pre-empted by a materially stronger eligible requester before the pass begins. An active pass is never pre-empted. Stale pending reservations are invalidated when the target is no longer active, is no longer ahead, or has moved beyond the bounded request horizon. This prevents a distant former target from keeping a car in `WAIT_QUEUE`.
+The one-second target is the decision/allocation deadline, not a command to teleport a vehicle sideways. Lateral movement remains smooth and is bounded by the existing grip-aware transition planner. The road uses only the fixed discrete slots derived from the recorded width; a one-slot road cannot generate a passing slot. If a legal adjacent slot or a fully clear predicted swept path does not exist, the car follows predictably rather than squeezing through. Engine output remains governed by the existing speed and tyre-slip controller; grip loss or a real occupied corridor can still require throttle reduction or braking.
 
-## Planner failure and recovery
+## Validation status
 
-When a reserved PASS/RETURN/YIELD path cannot be optimized, the planner now tries a stationary path in the car's measured current corridor. It uses the same full-body swept-path and recorded road-boundary checks as every other path. It does not jump lanes or widen the road envelope. An optimizer failure by itself no longer sets target speed to zero: while route projection remains valid, steering and speed planning fall back to the recorded route spline. A hard stop is reserved for lost route projection or an imminent physical overlap for which neither escape side is available.
-
-A short-horizon world-velocity collision predictor checks conservative projections of the vehicles' oriented footprints independently of lane following. If overlap is predicted, it selects a road-bounded and currently unoccupied escape side, temporarily raises steering slew authority, and lets normal path following recover after the threat clears. If neither side is safe, emergency braking takes priority. A locked route projection may be reacquired globally only inside the existing 8 m acquisition radius and with the existing heading-direction validation. The stuck-recovery timer no longer triggers a teleport while the car is in a known queue/yield/pass transaction, has a nearby current-lane leader, has lost route projection, or has a blocked geometric plan.
-
-## Validation status and acceptance tests
-
-Static source review confirms that the frame preparation call precedes sorting and control updates, the FIFO comparator is removed, pending reservations can be performance-pre-empted, optimizer failure no longer forces a stop while route projection is valid, and the collision response uses bounded road/traffic checks. The environment used for this change does not contain Lua/LuaJIT or the Assetto Corsa/CSP runtime, so syntax compilation, runtime behavior, collision clearance and FPS have not been verified here.
-
-In-game acceptance must cover: one car on Drag at increasing speed; two cars with the slower car ahead; a faster car requesting the same leader after a weaker requester; a vehicle in an adjacent lane that must not affect following speed; PASS-to-RETURN when the target corridor narrows; a blocked yield corridor; route projection loss and reacquisition; and 1/5/10/20-car FPS measurements. Every run should inspect `TRAFFIC_STATE`, `TRAFFIC_GAP`, `TARGET_SPEED`, `BRAKE`, `PLAN_BLOCKED`, `YIELD_PREEMPT`, `COLLISION_EVASION`, `COLLISION_EVASION_BLOCKED`, `ROUTE_REACQUIRE` and `RESCUE_ATTEMPT` in the trace.
+Source changes are committed on this experimental branch. This environment has no Lua/LuaJIT compiler and no Assetto Corsa/CSP runtime, so syntax compilation and in-game collision clearance, steering response, throughput and FPS are not verified. The first in-game test must capture `TRAFFIC_BATCH_COMMIT`, `TRAFFIC_BATCH_DENY`, `OVERTAKE_BEGIN`, `YIELDING`, `OVERTAKE_END`, speed, throttle, brake, lane/offset and route progress for 2-, 3- and 4-slot widths, including simultaneous pass requests and an occupied adjacent lane.
