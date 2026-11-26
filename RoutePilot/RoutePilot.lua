@@ -395,16 +395,16 @@ local function recordTrafficDiagnostics(sim,dt)
         state.trafficDiagLast[i]=signature
       end
       active[#active+1]=i
-      writeLog("TRAFFIC car=%d class=%s cruise=%.2f v=%.2f pos=(%.2f,%.2f,%.2f) route=%.2f seg=%d lat=%.2f baseLane=%.2f lane=%.2f targetOff=%.2f action=%s reason=%s leader=%d gap=%.2f leaderV=%.2f passTarget=%d passSide=%d passT=%.2f passBlocked=%.2f passFrom=%.2f passTo=%.2f retry=%.2f denied=%s targetV=%.2f planBlocked=%d planFailure=%s stuck=%.1f steer=%.3f gas=%.3f brake=%.3f projLost=%d controlOK=%d",
+      writeLog("TRAFFIC car=%d class=%s cruise=%s v=%.2f pos=(%.2f,%.2f,%.2f) route=%.2f seg=%d lat=%.2f baseLane=%.2f lane=%.2f targetOff=%.2f action=%s reason=%s leader=%d gap=%.2f leaderV=%.2f passTarget=%d passSide=%d passT=%.2f passBlocked=%.2f passFrom=%.2f passTo=%.2f retry=%.2f denied=%s targetV=%.2f planBlocked=%d planFailure=%s stuck=%.1f steer=%.3f gas=%.3f brake=%.3f projLost=%d controlOK=%d",
         i,p and tostring(p.speedClass or "UNKNOWN") or "NO_STATE",
-        p and safeNumber(p.cruiseSpeed,999.0) or 0,safeNumber(car.speedMs),
+        p and (p.canOvertake and "UNLIMITED" or "40KMH") or "NO_STATE",safeNumber(car.speedMs),
         safeNumber(car.position.x),safeNumber(car.position.y),safeNumber(car.position.z),
         p and safeNumber(p.routeProgress) or -1,p and safeNumber(p.segIdx,-1) or -1,
         p and safeNumber(p.latOff) or 0,p and safeNumber(p.baseLaneOffset) or 0,
         p and safeNumber(p.laneOffsetCurrent) or 0,p and safeNumber(p.trafficTargetOffset) or 0,
         action,reason,p and safeNumber(p.trafficLeaderIndex,-1) or -1,
         p and safeNumber(p.trafficGap,-1) or -1,p and safeNumber(p.trafficLeaderSpeed) or 0,
-        p and safeNumber(p.passTargetIndex,-1) or -1,p and safeNumber(p.overtakeSide) or 0,
+        p and safeNumber(p.passTargetIndex,p.returnTargetIndex or -1) or -1,p and safeNumber(p.overtakeSide) or 0,
         p and safeNumber(p.passT) or 0,p and safeNumber(p.passBlockedT) or 0,
         p and safeNumber(p.passFromOffset) or 0,p and safeNumber(p.passLat) or 0,
         p and safeNumber(p.overtakeRetryT) or 0,p and tostring(p.lastPassDeniedReason or "-") or "-",
