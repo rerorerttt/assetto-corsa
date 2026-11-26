@@ -156,7 +156,7 @@ local function newPersonality(carIndex)
     state.spawnHints[carIndex]=nil
   end
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT class=%s cruise=%s canOvertake=%d",
+  H.log("CAR_INIT id=%d line=RACING class=%s cruise=%s canOvertake=%d",
     carIndex,p.speedClass,p.canOvertake and "UNLIMITED" or "40KMH",
     p.canOvertake and 1 or 0)
 end
@@ -1319,7 +1319,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
-  local source=p.latOff or p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
+  local source=p.latOff or p.laneOffsetCurrent or p.laneOffset or
     defaultCenter or ((bl+br)*0.5)
   p.overtakeDeniedLogged=false
   local leaderState=state.p[leaderIndex]
