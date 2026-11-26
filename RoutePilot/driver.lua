@@ -1387,8 +1387,9 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   end
   local passLateralLimit=clamp(
     safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+  local _,_,passLaneWidth=laneSlotCenter(p.segIdx)
   local transitionOut=math.max(22.0,
-    speed*math.sqrt(6.0*math.abs(baseOffset-currentLaneOffset)/passLateralLimit))
+    speed*math.sqrt(6.0*passLaneWidth/passLateralLimit))
   estimatedPassDistance=math.max(estimatedPassDistance,transitionOut+12.0)
   local passWindow=math.max(45.0,25.0+potentialSpeed*1.25)
   local laneSettled=math.abs(safeNumber(p.laneOffsetCurrent,baseOffset)-baseOffset)<=0.55 and
