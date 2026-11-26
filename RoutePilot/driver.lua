@@ -126,7 +126,7 @@ local function newPersonality(carIndex)
     pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
     stuck = 0, blockedT = 0, passT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0,
-remove unused stability state    overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
+    overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
   }
