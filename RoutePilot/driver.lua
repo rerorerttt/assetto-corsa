@@ -1315,7 +1315,9 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   if p.yieldRequestBy~=nil then
     local requester=state.p[p.yieldRequestBy]
     local requesterCar=ac.getCar(p.yieldRequestBy)
-    local requestedByPending=requester and requester.pendingYieldTarget==carIndex
+    local requestedByPending=requester and
+      (requester.pendingYieldTarget==carIndex or
+       listContains(requester.pendingYieldGroup,carIndex))
     local requestedByActivePass=requester and requester.overtakeSide~=0 and
       listContains(requester.passGroupTargets,carIndex)
     if not requester or not requesterCar or not requesterCar.isActive or
