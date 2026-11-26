@@ -1369,8 +1369,10 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         else
           local targetProgress=routeProjection(targetCar,targetState.segIdx,not targetState.routeLocked,targetState.routeProgress,targetCar.speedMs,dt)
           local queueGap=targetProgress and routeGap(p.routeProgress,targetProgress) or safeNumber(p.pendingYieldGap,12.0)
-          p.trafficAction=targetState.yieldRequestBy==carIndex and "WAIT_YIELD" or "WAIT_QUEUE"
-          p.trafficReason=targetState.yieldRequestBy==carIndex and "leader_not_yet_clear" or "earlier_pass_has_slot"
+          p.trafficAction=targetState.yieldRequestBy==carIndex and "WAIT_YIELD" or
+            (targetState.yieldRequestBy~=nil and "WAIT_QUEUE" or "FOLLOW")
+          p.trafficReason=targetState.yieldRequestBy==carIndex and "leader_not_yet_clear" or
+            (targetState.yieldRequestBy~=nil and "earlier_pass_has_slot" or "no_safe_pass_corridor")
           p.trafficLeaderIndex=targetIndex;p.trafficGap=queueGap
           return math.min(targetSpeed,safeFollowingSpeed(queueGap,targetCar.speedMs,p.brakeAccelEstimate))
         end
@@ -1480,7 +1482,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                   return targetSpeed
                 end
                 leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
-                p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+                p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
               else
                 p.trafficAction="WAIT_YIELD";p.trafficReason="leader_not_yet_clear"
                 p.trafficLeaderIndex=leaderIndex;p.trafficTargetOffset=safeNumber(p.pendingPassOffset)
@@ -1493,10 +1495,9 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 end
               end
             else
-              p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset
-p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
-p.trafficAction="WAIT_QUEUE";p.trafficReason="earlier_pass_has_slot"
-return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
+              p.lastPassDeniedReason="leader_has_no_safe_yield_space"
+              p.trafficAction="FOLLOW";p.trafficReason="leader_has_no_safe_yield_space"
+              return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
             end
           else
             p.lastPassDeniedReason="yield_slot_owned_by_other_car"
