@@ -759,9 +759,11 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   local bl,br=H.boundsAt(p.segIdx)
   local mid=(bl+br)*0.5
+  -- The saved return target is the neutral racing corridor. Lane centres
+  -- are selected only by the explicit passing/yield state machine.
   local base=p.baseLaneOffset
   if base==nil then
-    base=(br-bl)>=5.4 and ((mid+br)*0.5) or mid
+    base=mid
     p.baseLaneOffset=base
   end
 
