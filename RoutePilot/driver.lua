@@ -1283,15 +1283,25 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   return nil
 end
 
-local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,passDistance,forcedOffset)
+local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,passDistance,forcedOffset,leaderLaneOffset)
   if p.overtakeRetryT>0 then return false end
   local offset=forcedOffset or findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,passDistance)
   if forcedOffset~=nil then
+    local leaderState=state.p[leaderIndex]
+    local leaderCar=ac.getCar(leaderIndex)
+    if not leaderState or not leaderCar or
+       leaderState.overtakeSide~=0 or leaderState.returningFromPass or
+       leaderState.yieldRequestBy~=nil then
+      p.lastPassDeniedReason="leader_already_maneuvering"
+      return false
+    end
     local reserved=passingReservationBlocked(carIndex,p,offset,speed)
     local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
-      p.latOff or p.laneOffsetCurrent or 0,offset,passDistance or 60.0,speed)
-    if reserved or laneOccupied(carIndex,car,offset,leaderIndex) or not clear then
-      p.lastPassDeniedReason=reason or "pass_lane_no_longer_clear"
+      p.latOff or p.laneOffsetCurrent or 0,offset,passDistance or 60.0,speed,
+      leaderLaneOffset)
+    if reserved or laneOccupied(carIndex,car,offset,leaderIndex) or
+       laneOccupied(leaderIndex,leaderCar,leaderLaneOffset,carIndex) or not clear then
+      p.lastPassDeniedReason=reason or "paired_lane_no_longer_clear"
       return false
     end
   end
@@ -1310,6 +1320,15 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   local source=p.latOff or p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
     defaultCenter or ((bl+br)*0.5)
   p.overtakeDeniedLogged=false
+  local leaderState=state.p[leaderIndex]
+  if not leaderState then
+    newPersonality(leaderIndex)
+    leaderState=state.p[leaderIndex]
+  end
+  leaderState.yieldRequestBy=carIndex
+  leaderState.yieldOffset=leaderLaneOffset
+  leaderState.yieldPlanBlocked=false
+  leaderState.laneOffset=leaderLaneOffset
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex
