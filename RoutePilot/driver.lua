@@ -554,8 +554,8 @@ end
 local function filterSteering(p, target, dt)
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  -- Emergency passing changes the target path, not the steering authority.
-  -- No full-lock pulse or emergency gain is permitted at high speed.
+  -- Emergency evasion temporarily increases steering slew rate; the normal
+  -- steering target, stability limits and absolute steering limit remain active.
   local emergencyActive=safeNumber(p.emergencyUntil)>0
   if emergencyActive then
     p.emergencyUntil=math.max(0,safeNumber(p.emergencyUntil)-dt)
@@ -1526,7 +1526,7 @@ function Driver.update(carIndex, car, dt)
   end
 
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
-  if p.emergencyRescueReady and p.rescueRetryT<=0 then
+  if p.emergencyRescueReady then
     p.emergencyRescueReady=false
     p.emergencyBlockedT=0
     p.emergencyWaitLogged=false
