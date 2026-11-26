@@ -1710,7 +1710,7 @@ function Driver.update(carIndex, car, dt)
     p.stuck=0
   end
   local rescueReason=nil
-  if p.rolloverT>=0.75 then rescueReason="rollover"
+  if p.rolloverT>=10.0 then rescueReason="rollover_10s"
   elseif safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
   elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_recovery_failed_10s"
   elseif p.throttleBlockedT>=10.0 then rescueReason="throttle_blocked_10s"
@@ -1718,7 +1718,7 @@ function Driver.update(carIndex, car, dt)
       safeNumber(p.emergencyBlockedT)<=0 then rescueReason="stuck_10s" end
   if rescueReason and p.rescueRetryT<=0 then
     local elapsed=0
-    if rescueReason=="rollover" then elapsed=safeNumber(p.rolloverT)
+    if rescueReason=="rollover_10s" then elapsed=safeNumber(p.rolloverT)
     elseif rescueReason=="traffic_blocked_10s" then elapsed=safeNumber(p.emergencyBlockedT)
     elseif rescueReason=="offtrack_recovery_failed_10s" then elapsed=safeNumber(p.offTrackT)
     elseif rescueReason=="throttle_blocked_10s" then elapsed=safeNumber(p.throttleBlockedT)
