@@ -1734,7 +1734,7 @@ function Driver.telemetryLine(i, car, p)
   local mode=p.player and " MODE=PLAYER" or
     (p.playerAutopilot and " MODE=AI_AUTOPILOT" or "")
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f YAW=%.3f YAW_F=%.3f SLIP=%.3f LAT_V=%.2f LOOKAHEAD=%.1f PASS_LANE=%d PASS_TARGET=%d PLAN_MODE=%s STUCK=%.1f%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f YAW=%.3f YAW_F=%.3f SLIP=%.3f LAT_V=%.2f AGA_CORR=%.3f REAR_SLIP=%.3f REAR_SPEED=%.2f LOOKAHEAD=%.1f PASS_LANE=%d PASS_TARGET=%d PLAN_MODE=%s STUCK=%.1f%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -1749,6 +1749,7 @@ function Driver.telemetryLine(i, car, p)
     safeNumber(p.accelEstimate,0),safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),
     safeNumber(p.yawRate),safeNumber(p.yawRateFiltered),
     safeNumber(p.slipAngle),safeNumber(p.lateralVelocity),
+    safeNumber(p.agaCorrection),safeNumber(p.rearAxleSlip),safeNumber(p.rearAxleSpeed),
     safeNumber(p.lookaheadDistance),safeNumber(p.passLaneIndex,-1),
     safeNumber(p.passTargetIndex,-1),tostring(p.racingPlanMode or "OPEN"),
     safeNumber(p.stuck),mode)
