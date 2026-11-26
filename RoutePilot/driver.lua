@@ -630,7 +630,8 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   local bestGap,bestSpeed,bestIndex,bestLateral=nil,nil,nil,nil
   local ownSpeed=math.max(0,safeNumber(car.speedMs))
   for i=0,sim.carsCount-1 do
-    if i~=carIndex and i~=ignoreIndex then
+    if i~=carIndex and i~=ignoreIndex and
+       not (state.rescueWatch and state.rescueWatch[i] and state.rescueWatch[i].disabled) then
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
@@ -1079,7 +1080,8 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   -- Include the manually controlled player and any non-managed active car as
   -- read-only obstacles. The coordinator may route AI around them, never move them.
   for index=0,sim.carsCount-1 do
-    if not managedSet[index] then
+    if not managedSet[index] and
+       not (state.rescueWatch and state.rescueWatch[index] and state.rescueWatch[index].disabled) then
       local car=ac.getCar(index)
       if car and car.isActive then
         local progress,lateral,seg=routeProjection(car,1,true,nil,
@@ -1682,12 +1684,8 @@ function Driver.update(carIndex, car, dt)
 
   -- Detect a sustained rollover from the chassis up-vector. A brief jump,
   -- kerb strike or transient body roll must not trigger a rescue.
-  local upY=safeNumber(car.up and car.up.y,1.0)
-  if upY<0.55 then
-    p.rolloverT=safeNumber(p.rolloverT)+dt
-  else
-    p.rolloverT=0
-  end
+  -- The top-level watchdog owns rollover timing and recovery.
+  p.rolloverT=0
 
   -- A car pushing into a wall/obstacle has throttle but makes no physical
   -- progress. Use world velocity as well as speed to reject wheelspin noise.
@@ -1710,9 +1708,7 @@ function Driver.update(carIndex, car, dt)
     p.stuck=0
   end
   local rescueReason=nil
-  if p.rolloverT>=10.0 then rescueReason="rollover_10s"
-  elseif safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
-  elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_recovery_failed_10s"
+  if safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
   elseif p.throttleBlockedT>=10.0 then rescueReason="throttle_blocked_10s"
   elseif p.stuck>=RESCUE_TIME and not p.offTrackRecovering and
       safeNumber(p.emergencyBlockedT)<=0 then rescueReason="stuck_10s" end
