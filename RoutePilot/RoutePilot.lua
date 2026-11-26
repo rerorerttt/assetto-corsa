@@ -351,12 +351,24 @@ local function carAheadFull(carIndex,car,lateralWidth)
 end
 local function recordSecondTelemetry(sim)
   local any=false
+  local activeCount,aiCount=0,0
+  local roster={}
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
-    local p=state.p[i]
-    if car and car.isActive and car.isAIControlled and p then
-      if Driver and Driver.telemetryLine then writeLog(Driver.telemetryLine(i,car,p)) end
-      any=true
+    if car then
+      if car.isActive then activeCount=activeCount+1 end
+      if car.isActive and car.isAIControlled then
+        aiCount=aiCount+1
+        local p=state.p[i]
+        if p then
+          if Driver and Driver.telemetryLine then writeLog(Driver.telemetryLine(i,car,p)) end
+          any=true
+        end
+      end
+      if state.spawnHints[i] then
+        roster[#roster+1]=string.format("%d:%s/%s",i,
+          tostring(car.isActive==true),tostring(car.isAIControlled==true))
+      end
     end
   end
 
@@ -369,7 +381,11 @@ local function recordSecondTelemetry(sim)
   end
 
   if not any and logger and logger.heartbeat then
-    pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes).." ai=0 player=0")
+    local playerFlags=player and string.format("%s/%s",tostring(player.isActive==true),
+      tostring(player.isAIControlled==true)) or "nil"
+    pcall(logger.heartbeat,logger,string.format(
+      "nodes=%d cars=%d active=%d ai=%d player=%s spawned=[%s]",
+      #state.nodes,sim.carsCount,activeCount,aiCount,playerFlags,table.concat(roster,",")))
   end
   flushLog()
 end
