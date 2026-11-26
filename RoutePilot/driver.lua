@@ -1372,7 +1372,11 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       local targetCar=ac.getCar(targetIndex)
       if targetState and targetCar and targetCar.isActive then
         if targetState.yieldRequestBy==nil then
-          local pendingOffset=p.pendingPassOffset or findPassingOffset(carIndex,car,p,targetIndex,targetState.latOff,speed,p.pendingPassDistance)
+          local pendingOffset=p.pendingPassOffset
+          if pendingOffset==nil and p.overtakeRetryT<=0 then
+            pendingOffset=findPassingOffset(carIndex,car,p,targetIndex,targetState.latOff,speed,p.pendingPassDistance)
+            if pendingOffset==nil then p.overtakeRetryT=0.25 end
+          end
           p.pendingPassOffset=pendingOffset
           local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset) or nil
           if yieldOffset~=nil then
@@ -1475,8 +1479,11 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         p.trafficLeaderIndex=leaderIndex
         return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
       else
-        local passOffset=p.pendingYieldTarget==leaderIndex and p.pendingPassOffset or
-          findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,estimatedPassDistance)
+        local passOffset=p.pendingYieldTarget==leaderIndex and p.pendingPassOffset or nil
+        if passOffset==nil and p.overtakeRetryT<=0 then
+          passOffset=findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,estimatedPassDistance)
+          if passOffset==nil then p.overtakeRetryT=0.25 end
+        end
         if passOffset~=nil then
           if leaderState.yieldRequestBy==nil or leaderState.yieldRequestBy==carIndex then
             if leaderState.yieldRequestBy==nil then
@@ -1492,7 +1499,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
                 H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,leaderIndex,yieldOffset,passOffset)
               else
-                p.lastPassDeniedReason="leader_has_no_safe_yield_space"
+                p.lastPassDeniedReason="leader_has_no_safe_yield_space";p.overtakeRetryT=0.25
               end
             end
             if leaderState.yieldRequestBy==carIndex then
