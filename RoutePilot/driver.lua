@@ -28,7 +28,7 @@ local TRIGGER_TIME = 0.5
 local FORCE_TIME   = 2.0
 local PASS_TIMEOUT = 8.0
 local RESCUE_SPEED = 1.5
-local RESCUE_TIME  = 10.0
+local RESCUE_TIME  = 5.0
 local STEER_DEAD   = 0.002  -- suppress only sub-resolution steering noise
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -1758,13 +1758,33 @@ function Driver.update(carIndex, car, dt)
   else
     p.stuck=0
   end
-  -- Traffic ahead is not a reason to disable recovery forever. A car that
-  -- cannot make progress for ten seconds gets one safe respawn attempt.
-  if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 then
+
+  -- A car outside the recorded road corridor gets ten seconds to recover
+  -- naturally. Projection loss is also treated as off-track, but does not
+  -- trigger an immediate teleport while the car is still moving.
+  local outsideRoad=p.projectionLost
+  if not outsideRoad and p.segIdx then
+    local left,right=H.boundsAt(p.segIdx)
+    local halfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+    outsideRoad=safeNumber(p.latOff)<left+halfWidth or
+      safeNumber(p.latOff)>right-halfWidth
+  end
+  if outsideRoad then
+    p.offTrackT=safeNumber(p.offTrackT)+dt
+  else
+    p.offTrackT=0
+  end
+
+  local stuckExpired=p.stuck>=RESCUE_TIME
+  local offTrackExpired=p.offTrackT>=10.0
+  if (stuckExpired or offTrackExpired) and p.rescueRetryT<=0 then
     p.stuck=0
+    p.offTrackT=0
     p.rescueRetryT=5.0
+    local reason=offTrackExpired and "OFF_TRACK_10S" or "STUCK_5S"
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
-    H.log("RESCUE_ATTEMPT id=%d success=%s",carIndex,tostring(rescued))
+    H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s",
+      carIndex,reason,tostring(rescued))
     if rescued then return end
   end
 
