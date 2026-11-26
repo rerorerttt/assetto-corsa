@@ -1131,11 +1131,17 @@ local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
   local safeLow=math.max(bl+halfWidth+BOUND_MARGIN,slotLow+halfWidth+0.12)
   local safeHigh=math.min(br-halfWidth-BOUND_MARGIN,slotHigh-halfWidth-0.12)
   if safeHigh-safeLow<0.24 then return nil end
-  local direction=passOffset>lateral and -1 or 1
-  local desired=clamp(lateral+direction*0.42,safeLow,safeHigh)
-  if math.abs(desired-lateral)<0.22 then return nil end
+
+  -- Move the yielding car to the OUTER edge of its own lane, away from the
+  -- passing lane. The previous 0.42 m nudge was too small to create a clear,
+  -- visible two-car manoeuvre on wide roads.
+  local desired=passOffset>lateral and safeLow or safeHigh
+  if math.abs(desired-lateral)<0.30 then
+    desired=clamp((safeLow+safeHigh)*0.5,lateral-0.75,lateral+0.75)
+  end
   local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
-  local corridorLow,corridorHigh=safeCorridorForPreview(state.routeGeometry,leaderState.routeProgress,18.0,leaderCar,fx,fz)
+  local corridorLow,corridorHigh=safeCorridorForPreview(state.routeGeometry,
+    leaderState.routeProgress,22.0,leaderCar,fx,fz)
   if not corridorLow or not corridorHigh or desired<corridorLow or desired>corridorHigh then return nil end
   if laneOccupied(leaderIndex,leaderCar,desired,nil) then return nil end
   return desired
