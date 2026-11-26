@@ -155,6 +155,8 @@ local function newPersonality(carIndex)
     emergencyMode = false, emergencyTargetLane = nil,
     emergencyObstacleIndex = nil,
     emergencyFromOffset = nil,
+    emergencyTargetOffset = nil,
+    emergencySteerActive = false,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -917,6 +919,7 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   p.emergencyMode=true
   p.emergencyTargetLane=targetLane
   p.emergencyObstacleIndex=otherIndex
+  p.emergencyTargetOffset=record.lanes.centers[targetLane]
   p.emergencyFromOffset=record.lanes.centers[current]
   p.emergencyBlockedT=0
   p.emergencyRescueReady=false
@@ -1214,7 +1217,9 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           p.emergencyMode=false
           p.emergencyTargetLane=nil
           p.emergencyObstacleIndex=nil
+          p.emergencyTargetOffset=nil
           p.emergencyFromOffset=nil
+          p.emergencySteerActive=false
           p.emergencyBlockedT=0
           p.emergencyRescueReady=false
           p.emergencyWaitLogged=false
@@ -1581,7 +1586,7 @@ function Driver.update(carIndex, car, dt)
   end
 
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
-  if p.emergencyRescueReady then
+  if p.emergencyRescueReady and not p.emergencyMode then
     p.emergencyRescueReady=false
     p.emergencyBlockedT=0
     p.emergencyWaitLogged=false
@@ -1593,8 +1598,14 @@ function Driver.update(carIndex, car, dt)
   end
   local blockingGap=nil
   if not p.projectionLost then
-    blockingGap=select(1,carAheadInLane(carIndex,car,
+    local assignedGap=select(1,carAheadInLane(carIndex,car,
       safeNumber(p.coordinatorOffset,p.latOff or 0)))
+    local physicalGap=select(1,carAheadInLane(carIndex,car,
+      safeNumber(p.latOff,p.coordinatorOffset or 0)))
+    if assignedGap~=nil then blockingGap=assignedGap end
+    if physicalGap~=nil and (blockingGap==nil or physicalGap<blockingGap) then
+      blockingGap=physicalGap
+    end
   end
   local trafficBlocked=blockingGap~=nil and blockingGap<18.0
   if speed<RESCUE_SPEED and not trafficBlocked and not p.projectionLost then
@@ -1633,7 +1644,52 @@ function Driver.update(carIndex, car, dt)
   p.targetSpeed=targetSpeed
   local steer = filterSteering(p, steerTarget, dt)
 
+  -- Emergency lane escape owns the final steering command. Bypass both the
+  -- normal low-pass filter and slew limiter so the car starts turning now,
+  -- while yaw/slip/lateral-load feedback prevents holding full lock into a spin.
+  p.emergencySteerActive=false
+  if p.emergencyMode and p.emergencyTargetOffset~=nil and not p.projectionLost then
+    local lateralError=p.emergencyTargetOffset-safeNumber(p.latOff)
+    local direction=lateralError>=0 and 1 or -1
+    local errorAbs=math.abs(lateralError)
+    if errorAbs>0.55 then
+      local steerLimit=clamp(safeNumber(CFG.STEER_LIMIT,1.0),0.1,1.0)
+      local magnitude=steerLimit*0.96
+      local yaw=safeNumber(p.yawRate)
+      local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)
+      local lateralLoad=math.abs(safeNumber(p.lateralAccel))/grip
+      local slip=math.abs(safeNumber(p.slipAngle))
+      -- Once the chassis is already rotating toward the escape lane, ease
+      -- steering rather than adding more yaw. This is the key anti-spin loop.
+      if yaw*direction>0.45 then
+        magnitude=math.min(magnitude,steerLimit*0.58)
+      end
+      if lateralLoad>0.78 then
+        magnitude=magnitude*clamp(1.0-(lateralLoad-0.78)*1.8,0.32,1.0)
+      end
+      if slip>0.10 then
+        magnitude=magnitude*clamp(1.0-(slip-0.10)*3.0,0.30,1.0)
+      end
+      if safeNumber(p.wheelSlip)>0.35 then
+        magnitude=magnitude*0.75
+      end
+      steer=direction*magnitude
+      p.steer=steer
+      p.steerFiltered=steer
+      p.steerRateLimited=false
+      p.steerRateLimitDemand=steer-steerTarget
+      p.steerRateLimitApplied=steer-steerTarget
+      p.steerTarget=steer
+      p.emergencySteerActive=true
+    end
+  end
+
   calculateThrottle(p, speed, targetSpeed, dt)
+  if p.emergencySteerActive then
+    -- Keep enough drive to complete the lateral escape, but do not add full
+    -- throttle while the tyres are already working near their grip limit.
+    p.gas=math.min(p.gas,0.55)
+  end
   if p.projectionLost then p.gas=0; p.brake=1 end
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
