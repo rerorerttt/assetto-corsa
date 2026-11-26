@@ -1307,19 +1307,66 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.trafficPriority=0
     end
     if passRequestReady then
-      p.emergencyPassRequest=urgent
-      if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,estimatedPassDistance) then
-        p.trafficPriority=1000000
-        p.trafficAction="PASSING"
-        p.trafficReason="reservation_granted"
-        p.trafficLeaderIndex=leaderIndex
-        p.trafficTargetOffset=safeNumber(p.passLat)
-        return targetSpeed
+      local leaderState=state.p[leaderIndex]
+      local leaderCar=ac.getCar(leaderIndex)
+      if not leaderState or not leaderCar or not leaderCar.isActive or leaderState.overtakeSide~=0 or leaderState.returningFromPass then
+        p.lastPassDeniedReason="leader_not_yield_capable"
+      else
+        local passOffset=p.pendingYieldTarget==leaderIndex and p.pendingPassOffset or
+          findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,estimatedPassDistance)
+        if passOffset~=nil then
+          if leaderState.yieldRequestBy==nil or leaderState.yieldRequestBy==carIndex then
+            if leaderState.yieldRequestBy==nil then
+              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
+              if yieldOffset~=nil then
+                leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
+                leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
+                p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
+                H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,leaderIndex,yieldOffset,passOffset)
+              else
+                p.lastPassDeniedReason="leader_has_no_safe_yield_space"
+              end
+            end
+            if leaderState.yieldRequestBy==carIndex then
+              p.pendingYieldTimer=safeNumber(p.pendingYieldTimer)+dt
+              if leaderState.yieldReady then
+                p.emergencyPassRequest=urgent
+                if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,estimatedPassDistance,p.pendingPassOffset) then
+                  p.trafficPriority=1000000;p.trafficAction="PASSING"
+                  p.trafficReason="yield_confirmed";p.trafficLeaderIndex=leaderIndex
+                  p.trafficTargetOffset=safeNumber(p.passLat)
+                  return targetSpeed
+                end
+                leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
+                p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+              else
+                p.trafficAction="WAIT_YIELD";p.trafficReason="leader_not_yet_clear"
+                p.trafficLeaderIndex=leaderIndex;p.trafficTargetOffset=safeNumber(p.pendingPassOffset)
+                if p.pendingYieldTimer>8.5 then
+                  leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
+                  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+                  p.lastPassDeniedReason="yield_timeout"
+                else
+                  return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
+                end
+              end
+            else
+              p.lastPassDeniedReason="yield_slot_owned_by_other_car"
+            end
+          else
+            p.lastPassDeniedReason="yield_slot_owned_by_other_car"
+          end
+        end
       end
       p.trafficAction="FOLLOW"
-      p.trafficReason=safeNumber(p.overtakeRetryT)>0 and
-        (p.lastPassDeniedReason or "pass_not_available") or "pass_not_started"
+      p.trafficReason=p.lastPassDeniedReason or "yield_not_available"
       p.emergencyPassRequest=false
+    elseif p.pendingYieldTarget~=nil then
+      local oldLeader=state.p[p.pendingYieldTarget]
+      if oldLeader and oldLeader.yieldRequestBy==carIndex then
+        oldLeader.yieldRequestBy=nil;oldLeader.yieldOffset=nil;oldLeader.yieldReady=false;oldLeader.yieldRequestTimer=0
+      end
+      p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
     end
     local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
     return math.min(targetSpeed,safe)
