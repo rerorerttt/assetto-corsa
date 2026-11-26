@@ -1223,6 +1223,13 @@ local function coordinatorGap(a,b)
   return longitudinal
 end
 
+local function coordinatorSameDirection(a,b)
+  local sample=Geometry.sample(state.routeGeometry,a.p.routeProgress)
+  if not sample then return true end
+  local fx,fz=normalize2(b.car.look.x,b.car.look.z)
+  return fx*sample.tx+fz*sample.tz>=-0.25
+end
+
 local function coordinatorLaneFree(owner,targetLane,records,window)
   local center=owner.lanes.centers[targetLane]
   if center==nil then return false end
@@ -1286,6 +1293,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   refreshRouteMetrics()
   if not sim or not state.routeGeometry then return end
   local records={}
+  local managedSet={}
+  for _,index in ipairs(driveOrder or {}) do
+    managedSet[index]=true
+  end
   for _,index in ipairs(driveOrder or {}) do
     local car=ac.getCar(index)
     if car and car.isActive then
@@ -1312,11 +1323,37 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         p.coordinatorLaneCount=lanes.count
         p.coordinatorChangeT=math.max(0,safeNumber(p.coordinatorChangeT)-dt)
         records[#records+1]={index=index,car=car,p=p,lanes=lanes,
-          speed=speed,accel=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)}
+          speed=speed,accel=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0),
+          managed=true}
       else
         p.projectionLost=true
         p.trafficAction="ROUTE_LOST"
         p.trafficReason="coordinator_projection_failed"
+      end
+    end
+  end
+  -- Include the manually controlled player and any non-managed active car as
+  -- read-only obstacles. The coordinator may route AI around them, never move them.
+  for index=0,sim.carsCount-1 do
+    if not managedSet[index] then
+      local car=ac.getCar(index)
+      if car and car.isActive then
+        local progress,lateral,seg=routeProjection(car,1,true,nil,
+          math.max(0,safeNumber(car.speedMs)),dt)
+        if progress~=nil then
+          local lanes=coordinatorLaneGeometry(seg or 1,car)
+          local lane,best=1,math.huge
+          for n=1,lanes.count do
+            local error=math.abs(lanes.centers[n]-(lateral or 0))
+            if error<best then best=error;lane=n end
+          end
+          records[#records+1]={index=index,car=car,
+            p={routeProgress=progress,routeLocked=true,segIdx=seg or 1,
+              latOff=lateral or 0,coordinatedLane=lane,
+              coordinatorTargetLane=lane},
+            lanes=lanes,speed=math.max(0,safeNumber(car.speedMs)),
+            accel=0,managed=false}
+        end
       end
     end
   end
@@ -1326,13 +1363,20 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   -- cars in the least-conflicted slot. This is not tied to car IDs or spawn order.
   local unassigned={}
   for _,rec in ipairs(records) do
-    if rec.p.coordinatedLane==nil then unassigned[#unassigned+1]=rec end
+    if rec.managed and rec.p.coordinatedLane==nil then
+      unassigned[#unassigned+1]=rec
+    end
   end
   table.sort(unassigned,function(a,b)
     if math.abs(a.accel-b.accel)>0.08 then return a.accel>b.accel end
     return a.p.routeProgress<b.p.routeProgress
   end)
   local assigned={}
+  for _,rec in ipairs(records) do
+    if not rec.managed or rec.p.coordinatedLane~=nil then
+      assigned[#assigned+1]=rec
+    end
+  end
   for rank,rec in ipairs(unassigned) do
     local preferred=rec.lanes.count
     if #unassigned>1 then
@@ -1384,26 +1428,54 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         local closing=follower.speed-leader.speed+
           math.min(2.0,follower.accel*0.35)
         local trigger=math.max(5.0,closing*2.5+5.0)
-        if follower.p.coordinatedLane==leader.p.coordinatedLane and
-            distance<trigger and not handled[follower.index..":"..leader.index] then
+        local sameDirection=coordinatorSameDirection(follower,leader)
+        local sameLane=follower.p.coordinatedLane==leader.p.coordinatedLane
+        local conflictDistance=sameDirection and distance<trigger or
+          (not sameDirection and math.abs(gap)<math.max(5.0,
+            (follower.speed+leader.speed)*1.5+5.0))
+        if sameLane and conflictDistance and
+            not handled[follower.index..":"..leader.index] then
           handled[follower.index..":"..leader.index]=true
           local lane=follower.p.coordinatedLane
           local moved=false
-          -- A slower leading car yields right; otherwise the faster follower
-          -- takes the adjacent left lane. Only one adjacent slot is changed.
-          if closing>0.5 and lane>1 and leader.p.coordinatorChangeT<=0 then
-            moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
+          if not sameDirection then
+            -- Oncoming cars are separated laterally before the meeting point.
+            if follower.managed and follower.p.coordinatorChangeT<=0 and
+                lane<follower.lanes.count then
+              moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
+            end
+            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
+                lane<leader.lanes.count then
+              moved=coordinatorMove(leader,lane+1,records,"PASS",follower.index)
+            end
+          elseif follower.managed and leader.managed then
+            -- A slower leading car yields right; otherwise the faster follower
+            -- takes the adjacent left lane. Only one adjacent slot is changed.
+            if closing>0.5 and lane>1 and leader.p.coordinatorChangeT<=0 then
+              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
+            end
+            if not moved and lane<follower.lanes.count and
+                follower.p.coordinatorChangeT<=0 then
+              moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
+            end
+            if not moved and lane>1 and leader.p.coordinatorChangeT<=0 then
+              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
+            end
+          elseif follower.managed then
+            -- The leading obstacle is not controlled by RoutePilot.
+            if lane<follower.lanes.count and follower.p.coordinatorChangeT<=0 then
+              moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
+            end
+          elseif leader.managed then
+            -- A non-managed faster vehicle behind: RoutePilot's car yields
+            -- before the encounter rather than trying to control the player.
+            if lane>1 and leader.p.coordinatorChangeT<=0 then
+              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
+            end
           end
-          if not moved and lane<follower.lanes.count and
-              follower.p.coordinatorChangeT<=0 then
-            moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
-          end
-          if not moved and lane>1 and leader.p.coordinatorChangeT<=0 then
-            moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
-          end
-          if not moved and distance<5.0 then
+          if not moved and math.abs(gap)<5.0 then
             H.log("TRAFFIC_CONFLICT_NO_SLOT follower=%d leader=%d gap=%.2f lane=%d",
-              follower.index,leader.index,distance,lane)
+              follower.index,leader.index,math.abs(gap),lane)
           end
         end
       end
@@ -1414,7 +1486,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   -- has cleared the full pair of vehicle lengths and the home slot is free.
   for _,rec in ipairs(records) do
     local p=rec.p
-    if p.passTargetIndex~=nil then
+    if rec.managed and p.passTargetIndex~=nil then
       local target
       for _,other in ipairs(records) do
         if other.index==p.passTargetIndex then target=other;break end
@@ -1428,7 +1500,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         p.coordinatorReturn=true
       end
     end
-    if p.yieldingFor~=nil then
+    if rec.managed and p.yieldingFor~=nil then
       local faster
       for _,other in ipairs(records) do
         if other.index==p.yieldingFor then faster=other;break end
@@ -1438,7 +1510,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         p.yieldingFor=nil;p.coordinatorReturn=true
       end
     end
-    if p.coordinatorReturn and p.homeLane and
+    if rec.managed and p.coordinatorReturn and p.homeLane and
         p.coordinatedLane~=p.homeLane and p.coordinatorChangeT<=0 then
       local step=p.homeLane>p.coordinatedLane and 1 or -1
       if coordinatorLaneFree(rec,p.coordinatedLane+step,records,8.0) then
@@ -1446,9 +1518,11 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       end
       if p.coordinatedLane==p.homeLane then p.coordinatorReturn=false end
     end
-    p.coordinatorOffset=rec.lanes.centers[p.coordinatedLane] or p.coordinatorOffset
-    p.baseLaneOffset=p.coordinatorOffset
-    p.laneOffset=p.coordinatorOffset
+    if rec.managed then
+      p.coordinatorOffset=rec.lanes.centers[p.coordinatedLane] or p.coordinatorOffset
+      p.baseLaneOffset=p.coordinatorOffset
+      p.laneOffset=p.coordinatorOffset
+    end
   end
 end
 
