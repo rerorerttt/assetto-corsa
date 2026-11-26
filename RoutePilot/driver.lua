@@ -1112,9 +1112,13 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             end
           elseif leader.managed then
             -- A non-managed faster vehicle behind: RoutePilot's car yields
-            -- before the encounter rather than trying to control the player.
-            if lane>1 and leader.p.coordinatorChangeT<=0 then
-              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
+            -- into any available adjacent slot, never by controlling the player.
+            if leader.p.coordinatorChangeT<=0 then
+              if lane>1 then
+                moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
+              elseif lane<leader.lanes.count then
+                moved=coordinatorMove(leader,lane+1,records,"YIELD",follower.index)
+              end
             end
           end
           if not moved and math.abs(gap)<5.0 then
