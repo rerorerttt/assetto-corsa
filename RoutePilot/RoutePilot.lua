@@ -385,34 +385,34 @@ local function recordTrafficDiagnostics(sim,dt)
       local p=state.p[i]
       local action=p and tostring(p.trafficAction or "NO_STATE") or "NO_STATE"
       local reason=p and tostring(p.trafficReason or "-") or "-"
-      local signature=action.."|"..reason.."|"..tostring(p and p.passTargetIndex or -1).."|"..tostring(p and p.yieldRequestBy or -1)
+      local signature=action.."|"..reason.."|"..tostring(p and p.passTargetIndex or -1)
       if state.trafficDiagLast[i]~=signature then
-        writeLog("TRAFFIC_EVENT id=%d prev=%s now=%s reason=%s leader=%d passTarget=%d yieldBy=%d denied=%s",
+        writeLog("TRAFFIC_EVENT id=%d prev=%s now=%s reason=%s leader=%d passTarget=%d denied=%s",
           i,tostring(state.trafficDiagLast[i] or "INIT"),action,reason,
           p and safeNumber(p.trafficLeaderIndex,-1) or -1,
           p and safeNumber(p.passTargetIndex,-1) or -1,
-          p and safeNumber(p.yieldRequestBy,-1) or -1,
           p and tostring(p.lastPassDeniedReason or "-") or "-")
         state.trafficDiagLast[i]=signature
       end
       active[#active+1]=i
-      writeLog("TRAFFIC car=%d ai=%d v=%.2f pos=(%.2f,%.2f,%.2f) route=%.2f seg=%d lat=%.2f lane=%.2f targetOff=%.2f action=%s reason=%s leader=%d gap=%.2f leaderV=%.2f passTarget=%d passSide=%d passT=%.2f passBlocked=%.2f passFrom=%.2f passTo=%.2f pendingYield=%d yieldBy=%d yieldOff=%.2f yieldReady=%d yieldT=%.2f retry=%.2f denied=%s steer=%.3f gas=%.3f brake=%.3f targetV=%.2f projLost=%d controlOK=%d",
-        i,car.isAIControlled and 1 or 0,safeNumber(car.speedMs),
+      writeLog("TRAFFIC car=%d class=%s cruise=%.2f v=%.2f pos=(%.2f,%.2f,%.2f) route=%.2f seg=%d lat=%.2f baseLane=%.2f lane=%.2f targetOff=%.2f action=%s reason=%s leader=%d gap=%.2f leaderV=%.2f passTarget=%d passSide=%d passT=%.2f passBlocked=%.2f passFrom=%.2f passTo=%.2f retry=%.2f denied=%s targetV=%.2f planBlocked=%d planFailure=%s stuck=%.1f steer=%.3f gas=%.3f brake=%.3f projLost=%d controlOK=%d",
+        i,p and tostring(p.speedClass or "UNKNOWN") or "NO_STATE",
+        p and safeNumber(p.cruiseSpeed,999.0) or 0,safeNumber(car.speedMs),
         safeNumber(car.position.x),safeNumber(car.position.y),safeNumber(car.position.z),
         p and safeNumber(p.routeProgress) or -1,p and safeNumber(p.segIdx,-1) or -1,
-        p and safeNumber(p.latOff) or 0,p and safeNumber(p.laneOffsetCurrent) or 0,
-        p and safeNumber(p.trafficTargetOffset) or 0,action,reason,
-        p and safeNumber(p.trafficLeaderIndex,-1) or -1,p and safeNumber(p.trafficGap,-1) or -1,
-        p and safeNumber(p.trafficLeaderSpeed) or 0,p and safeNumber(p.passTargetIndex,-1) or -1,
-        p and safeNumber(p.overtakeSide) or 0,p and safeNumber(p.passT) or 0,
-        p and safeNumber(p.passBlockedT) or 0,p and safeNumber(p.passFromOffset) or 0,
-        p and safeNumber(p.passLat) or 0,p and safeNumber(p.pendingYieldTarget,-1) or -1,
-        p and safeNumber(p.yieldRequestBy,-1) or -1,p and safeNumber(p.yieldOffset) or 0,
-        p and p.yieldReady and 1 or 0,p and safeNumber(p.yieldRequestTimer) or 0,
+        p and safeNumber(p.latOff) or 0,p and safeNumber(p.baseLaneOffset) or 0,
+        p and safeNumber(p.laneOffsetCurrent) or 0,p and safeNumber(p.trafficTargetOffset) or 0,
+        action,reason,p and safeNumber(p.trafficLeaderIndex,-1) or -1,
+        p and safeNumber(p.trafficGap,-1) or -1,p and safeNumber(p.trafficLeaderSpeed) or 0,
+        p and safeNumber(p.passTargetIndex,-1) or -1,p and safeNumber(p.overtakeSide) or 0,
+        p and safeNumber(p.passT) or 0,p and safeNumber(p.passBlockedT) or 0,
+        p and safeNumber(p.passFromOffset) or 0,p and safeNumber(p.passLat) or 0,
         p and safeNumber(p.overtakeRetryT) or 0,p and tostring(p.lastPassDeniedReason or "-") or "-",
+        p and safeNumber(p.targetSpeed) or 0,p and p.racingPlanBlocked and 1 or 0,
+        p and tostring(p.racingPlanFailure or "-") or "-",p and safeNumber(p.stuck) or 0,
         p and safeNumber(p.steer) or 0,p and safeNumber(p.gas) or 0,
-        p and safeNumber(p.brake) or 0,p and safeNumber(p.targetSpeed) or 0,
-        p and p.projectionLost and 1 or 0,p and p.controlWriteOk and 1 or 0)
+        p and safeNumber(p.brake) or 0,p and p.projectionLost and 1 or 0,
+        p and p.controlWriteOk and 1 or 0)
     end
   end
   writeLog("TRAFFIC_FRAME cars=%d routePoints=%d loaded=%d",#active,#state.nodes,state.loaded and 1 or 0)
@@ -749,16 +749,11 @@ function script.update(dt)
         local pa,pb=state.p[a],state.p[b]
         local priorityA=safeNumber(pa and pa.trafficPriority)
         local priorityB=safeNumber(pb and pb.trafficPriority)
-        -- Active pass/return reservations always run first. Among waiting
-        -- requests, preserve FIFO order rather than re-ranking by closing speed.
+        -- Active pass/return reservations have priority; otherwise the
+        -- current closing-speed priority is followed by route progress.
         if priorityA>=900000 or priorityB>=900000 then
           if priorityA~=priorityB then return priorityA>priorityB end
         end
-        local queueA=pa and pa.pendingYieldOrder
-        local queueB=pb and pb.pendingYieldOrder
-        if queueA and queueB and queueA~=queueB then return queueA<queueB end
-        if queueA and not queueB then return true end
-        if queueB and not queueA then return false end
         if priorityA~=priorityB then return priorityA>priorityB end
         local progressA=pa and pa.routeProgress
         local progressB=pb and pb.routeProgress
@@ -1078,5 +1073,5 @@ if ac.onRelease then
 end
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.9.3 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
