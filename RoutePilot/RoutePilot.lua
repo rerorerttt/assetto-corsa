@@ -47,7 +47,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  playerAutopilotLast=false,
+  playerAutopilotLast=false, steeringDiagnostics=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -885,6 +885,8 @@ local function drawMapInRect(q0,q1)
 end
 function windowMain(dt)
   local okDraw,errDraw=pcall(function()
+    ui.tabBar("RoutePilotTabs", function()
+      ui.tabItem("Маршрут", function()
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
     for idx=1,4 do
       local label=string.format("%d %s",idx,idx==1 and "машина" or "машины")
@@ -947,6 +949,20 @@ function windowMain(dt)
     else
       ui.text("Нет линии — нажмите «Запись линии»")
     end
+      end)
+      ui.tabItem("Dev", function()
+        ui.text("Диагностика контроллера RoutePilot")
+        ui.text("Подробная телеметрия рулевого управления и динамики автомобиля.")
+        if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
+          state.steeringDiagnostics=not state.steeringDiagnostics
+          writeLog("STEERING_DIAGNOSTICS %s",state.steeringDiagnostics and "ON" or "OFF")
+          flushLog()
+        end
+        ui.text(state.steeringDiagnostics and
+          "Подробные STEER_DIAG, STEER_EVENT и DYN_TRACE включены для всех управляемых ботов." or
+          "Подробная диагностика выключена. Для всех ботов продолжается запись обычных логов.")
+      end)
+    end)
   end)
   if not okDraw then
     if logger then
