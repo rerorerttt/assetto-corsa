@@ -139,3 +139,14 @@ The active branch `routepilot/two-lane-traffic-rework-2026-11-26` replaces the y
 
 This is a source-level correction, not proof of runtime behaviour. No Assetto Corsa/CSP session was executed during the revision. In particular, the paired lane prediction, target-inclusive collision check, and transition/return timing require in-game validation on 7 m and wider corridors, single-lane corridors, bends, and simultaneous pass requests. A fresh trace from this exact branch is required before describing the system as collision-free or stop-free.
 
+
+
+## Follow-up audit: impossible passes and return-lane deadlock
+
+The supplied trace shows a specific failed pass at 36.94 s: car 4 starts an urgent pass of car 5 with a 20.7 m gap, but the contemporaneous telemetry has car 4's target speed falling to about 22 m/s while car 5's target speed rises above 57 m/s. The previous gate treated an unrestricted car as having a generic 90 m/s potential and compared it only with the leader's current speed. It therefore approved a pass against a car that could accelerate away. The pass never clears; car 4 remains in PASS mode, repeatedly reports `NO_PATH`, and is hard-stopped.
+
+The current gate compares both cars' reachable speed envelopes using each car's measured acceleration and current racing-line target speed. It also solves the relative-acceleration closure estimate before reserving a pass. A pass is rejected when the overtaker has less than a 3 m/s predicted advantage or cannot clear the target within the validated distance. Both the overtaker's lane plan and the target's lane-assignment plan are prevalidated before either car starts moving.
+
+A second deadlock was in `laneOccupied()`: a target's `yieldRequestBy` assignment was treated as a broad pass reservation out to `max(22 m, ownSpeed * 1.2 + 7 m)`. At 25 m/s that could block a return for roughly 37 m even when the target was more than the physical front-overlap window ahead. The target's reservation is now arbitrated by `passingReservationBlocked()`; `laneOccupied()` uses actual body overlap, the near-field swept transition, and active pass/return reservations. This permits a safe return behind a target without ignoring physical collision risk.
+
+Finally, when a pass plan is rejected, the driver now rebuilds the normal racing-line plan and recalculates its target speed in the same update. A failed return-offset plan re-enters the reserved passing lane only if it remains clear. These changes remove the two avoidable sources of a stationary AI observed in the trace; a runtime test is still required to validate the new paired manoeuvre on the user's tracks.
