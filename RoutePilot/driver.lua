@@ -1028,7 +1028,10 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
               end
               local dx=other.position.x-car.position.x
               local dz=other.position.z-car.position.z
-              if longitudinal~=nil and lateral~=nil and dx*dx+dz*dz<60.0*60.0 then
+              local leaderRange=math.max(80.0,
+                math.min(200.0,safeNumber(passDistance,60.0)+40.0))
+              if longitudinal~=nil and lateral~=nil and
+                 dx*dx+dz*dz<leaderRange*leaderRange then
                 local dir=other.look.x*currentSample.tx+other.look.z*currentSample.tz
                 local signedSpeed=math.max(0,safeNumber(other.speedMs))
                 if dir < -0.25 then signedSpeed=-signedSpeed end
@@ -1413,7 +1416,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
       if not laneOccupied(carIndex,car,passOffset,nil) then
         -- Another vehicle entered the original racing line during the return.
         -- Re-enter the reserved passing lane rather than merge into it.
-        p.overtakeSide=1
+        p.overtakeSide=passOffset<returnOffset and -1 or 1
         p.passTargetIndex=p.returnTargetIndex
         p.passLat=passOffset
         p.passT=0
