@@ -704,12 +704,17 @@ function script.update(dt)
         local pa,pb=state.p[a],state.p[b]
         local priorityA=safeNumber(pa and pa.trafficPriority)
         local priorityB=safeNumber(pb and pb.trafficPriority)
-        if priorityA~=priorityB then return priorityA>priorityB end
+        -- Active pass/return reservations always run first. Among waiting
+        -- requests, preserve FIFO order rather than re-ranking by closing speed.
+        if priorityA>=900000 or priorityB>=900000 then
+          if priorityA~=priorityB then return priorityA>priorityB end
+        end
         local queueA=pa and pa.pendingYieldOrder
         local queueB=pb and pb.pendingYieldOrder
         if queueA and queueB and queueA~=queueB then return queueA<queueB end
         if queueA and not queueB then return true end
         if queueB and not queueA then return false end
+        if priorityA~=priorityB then return priorityA>priorityB end
         local progressA=pa and pa.routeProgress
         local progressB=pb and pb.routeProgress
         if progressA~=nil and progressB~=nil and progressA~=progressB then
