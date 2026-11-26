@@ -47,7 +47,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  playerAutopilotLast=false, steeringDiagnostics=false,
+  playerAutopilotLast=false, steeringDiagnostics=false, trafficDiagnostics=false, trafficDiagTimer=0, trafficDiagLast={},
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -371,6 +371,51 @@ local function recordSecondTelemetry(sim)
   if not any and logger and logger.heartbeat then
     pcall(logger.heartbeat,logger,"nodes="..tostring(#state.nodes).." ai=0 player=0")
   end
+  flushLog()
+end
+local function recordTrafficDiagnostics(sim,dt)
+  if not state.trafficDiagnostics then return end
+  state.trafficDiagTimer=(state.trafficDiagTimer or 0)+math.max(0,safeNumber(dt))
+  if state.trafficDiagTimer<0.20 then return end
+  state.trafficDiagTimer=state.trafficDiagTimer-0.20
+  local active={}
+  for i=0,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive then
+      local p=state.p[i]
+      local action=p and tostring(p.trafficAction or "NO_STATE") or "NO_STATE"
+      local reason=p and tostring(p.trafficReason or "-") or "-"
+      local signature=action.."|"..reason.."|"..tostring(p and p.passTargetIndex or -1).."|"..tostring(p and p.yieldRequestBy or -1)
+      if state.trafficDiagLast[i]~=signature then
+        writeLog("TRAFFIC_EVENT id=%d prev=%s now=%s reason=%s leader=%d passTarget=%d yieldBy=%d denied=%s",
+          i,tostring(state.trafficDiagLast[i] or "INIT"),action,reason,
+          p and safeNumber(p.trafficLeaderIndex,-1) or -1,
+          p and safeNumber(p.passTargetIndex,-1) or -1,
+          p and safeNumber(p.yieldRequestBy,-1) or -1,
+          p and tostring(p.lastPassDeniedReason or "-") or "-")
+        state.trafficDiagLast[i]=signature
+      end
+      active[#active+1]=i
+      writeLog("TRAFFIC car=%d ai=%d v=%.2f pos=(%.2f,%.2f,%.2f) route=%.2f seg=%d lat=%.2f lane=%.2f targetOff=%.2f action=%s reason=%s leader=%d gap=%.2f leaderV=%.2f passTarget=%d passSide=%d passT=%.2f passBlocked=%.2f passFrom=%.2f passTo=%.2f pendingYield=%d yieldBy=%d yieldOff=%.2f yieldReady=%d yieldT=%.2f retry=%.2f denied=%s steer=%.3f gas=%.3f brake=%.3f targetV=%.2f projLost=%d controlOK=%d",
+        i,car.isAIControlled and 1 or 0,safeNumber(car.speedMs),
+        safeNumber(car.position.x),safeNumber(car.position.y),safeNumber(car.position.z),
+        p and safeNumber(p.routeProgress) or -1,p and safeNumber(p.segIdx,-1) or -1,
+        p and safeNumber(p.latOff) or 0,p and safeNumber(p.laneOffsetCurrent) or 0,
+        p and safeNumber(p.trafficTargetOffset) or 0,action,reason,
+        p and safeNumber(p.trafficLeaderIndex,-1) or -1,p and safeNumber(p.trafficGap,-1) or -1,
+        p and safeNumber(p.trafficLeaderSpeed) or 0,p and safeNumber(p.passTargetIndex,-1) or -1,
+        p and safeNumber(p.overtakeSide) or 0,p and safeNumber(p.passT) or 0,
+        p and safeNumber(p.passBlockedT) or 0,p and safeNumber(p.passFromOffset) or 0,
+        p and safeNumber(p.passLat) or 0,p and safeNumber(p.pendingYieldTarget,-1) or -1,
+        p and safeNumber(p.yieldRequestBy,-1) or -1,p and safeNumber(p.yieldOffset) or 0,
+        p and p.yieldReady and 1 or 0,p and safeNumber(p.yieldRequestTimer) or 0,
+        p and safeNumber(p.overtakeRetryT) or 0,p and tostring(p.lastPassDeniedReason or "-") or "-",
+        p and safeNumber(p.steer) or 0,p and safeNumber(p.gas) or 0,
+        p and safeNumber(p.brake) or 0,p and safeNumber(p.targetSpeed) or 0,
+        p and p.projectionLost and 1 or 0,p and p.controlWriteOk and 1 or 0)
+    end
+  end
+  writeLog("TRAFFIC_FRAME cars=%d routePoints=%d loaded=%d",#active,#state.nodes,state.loaded and 1 or 0)
   flushLog()
 end
 local function buildSpawnRouteMetrics()
@@ -737,6 +782,7 @@ function script.update(dt)
     else
       for idx in pairs(state.p) do releaseCar(idx) end
     end
+    recordTrafficDiagnostics(sim,dt)
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
       state.logAccum=state.logAccum-CFG.LOG_INTERVAL
@@ -988,6 +1034,19 @@ function windowMain(dt)
       ui.tabItem("Dev", function()
         ui.text("Диагностика контроллера RoutePilot")
         ui.text("Подробная телеметрия рулевого управления и динамики автомобиля.")
+        if ui.button(state.trafficDiagnostics and "ЛогиТрафик: ВКЛ" or "ЛогиТрафик",vec2(-0.5,30)) then
+          state.trafficDiagnostics=not state.trafficDiagnostics
+          state.trafficDiagTimer=0
+          state.trafficDiagLast={}
+          writeLog("TRAFFIC_DIAGNOSTICS %s track=%s cars=%d",
+            state.trafficDiagnostics and "ON" or "OFF",getTrackTag(),
+            (ac.getSim() and ac.getSim().carsCount or 0))
+          flushLog()
+        end
+        ui.text(state.trafficDiagnostics and
+          "Запись трафика 5 Гц: положение, скорость, роли PASS/YIELD, смещения, причины отказа, таймеры и управление. Файл routepilot_trace.txt." or
+          "Нажмите кнопку во время движения для подробного лога обгонов.")
+
         if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
           state.steeringDiagnostics=not state.steeringDiagnostics
           writeLog("STEERING_DIAGNOSTICS %s",state.steeringDiagnostics and "ON" or "OFF")
