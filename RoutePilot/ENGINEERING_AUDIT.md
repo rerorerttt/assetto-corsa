@@ -130,3 +130,7 @@ The OPEN fallback is now a single road-midpoint plan generated through the exist
 The trace's `TARGET_SPEED=13.7 m/s` for the first cars was consistent with the following-speed envelope at a 25 m gap behind a stationary leader, not a global speed cap. The actual zero-speed failure was isolated to cars whose plan was marked blocked. Once those false planner stops are removed, the queue should clear as each leader accelerates; the next trace must verify that this happens.
 
 Source-level validation only; no Assetto Corsa/CSP runtime or Lua compiler was available. This change is intended to remove an internally contradictory control path, not to claim that the vehicles have already been observed accelerating correctly in-game.
+
+
+### Steering fallback alignment
+The steering controller's non-plan fallback previously targeted the legacy left-lane centre, which could reintroduce a lane change whenever a preview sample was unavailable even after OPEN planning had been moved to the road midpoint. It now targets the road midpoint for ordinary driving, the explicitly reserved yield offset while yielding, the pass offset while passing, and the saved pre-pass racing-line offset while returning. This keeps the geometric planner and steering fallback on the same target policy.
