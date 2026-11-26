@@ -1215,7 +1215,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.trafficReason=p.yieldReady and "yield_position_confirmed" or "moving_to_yield_position"
       p.trafficLeaderIndex=p.yieldRequestBy;p.trafficTargetOffset=safeNumber(p.yieldOffset)
       if p.yieldRequestTimer>8.0 then
-        requester.pendingYieldTarget=nil;requester.pendingPassOffset=nil;requester.pendingYieldTimer=0
+        requester.pendingYieldTarget=nil;requester.pendingPassOffset=nil;requester.pendingYieldTimer=0;requester.pendingYieldOrder=nil
+        requester.pendingYieldGap=nil;requester.pendingYieldSpeed=nil;requester.pendingPassDistance=nil
         p.yieldRequestBy=nil;p.yieldOffset=nil;p.yieldReady=false;p.yieldRequestTimer=0
         H.log("CAR=%d YIELD_ABORT reason=timeout",carIndex)
       end
@@ -1388,6 +1389,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
           end
           p.pendingPassOffset=pendingOffset
           local yieldOffset=pendingOffset and chooseYieldOffset(targetIndex,targetCar,targetState,pendingOffset) or nil
+          if pendingOffset~=nil and yieldOffset==nil then p.overtakeRetryT=0.25 end
           if yieldOffset~=nil then
             targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
             targetState.yieldReady=false;targetState.yieldRequestTimer=0
@@ -1528,7 +1530,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 p.trafficLeaderIndex=leaderIndex;p.trafficTargetOffset=safeNumber(p.pendingPassOffset)
                 if p.pendingYieldTimer>8.5 then
                   leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
-                  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+                  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
+                  p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
                   p.lastPassDeniedReason="yield_timeout"
                 else
                   return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
