@@ -871,10 +871,14 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
       fallbackKind="BASE_LANE"
     else
       local centreFailure=nil
-      nextPlan,centreFailure=RacingLine.plan(
-        state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-        safeNumber(p.latOff,base),mid,mid,horizon,7.5,
-        nil,0,laneTransition,p.lateralAccelLimit)
+      if not laneOccupied(carIndex,car,mid,nil) then
+        nextPlan,centreFailure=RacingLine.plan(
+          state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+          safeNumber(p.latOff,base),mid,mid,horizon,7.5,
+          nil,0,laneTransition,p.lateralAccelLimit)
+      else
+        centreFailure="ROAD_CENTRE_OCCUPIED"
+      end
       if nextPlan then
         fallbackKind="ROAD_CENTRE"
       else
