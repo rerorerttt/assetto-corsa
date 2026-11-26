@@ -786,6 +786,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local forcedMode=nil
   if p.overtakeSide~=0 then forcedMode="PASS"
   elseif p.returningFromPass then forcedMode="RETURN"
+  elseif p.offTrackT>0 and p.recoveryLaneOffset~=nil then forcedMode="RECOVER"
   elseif p.yieldRequestBy~=nil and p.yieldOffset~=nil then forcedMode="YIELD" end
   local mode=forcedMode or "OPEN"
   local fixedOffset=nil
@@ -805,6 +806,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedOffset=safeNumber(p.baseLaneOffset,base)
   elseif mode=="YIELD" then
     fixedOffset=safeNumber(p.yieldOffset,base)
+  elseif mode=="RECOVER" then
+    fixedOffset=safeNumber(p.recoveryLaneOffset,base)
   end
   if fixedOffset~=nil then
     local lateralDelta=math.abs(fixedOffset-safeNumber(p.latOff,base))
@@ -1738,25 +1741,61 @@ function Driver.update(carIndex, car, dt)
   readWheelSlip(car,p)
 
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
-  if speed<RESCUE_SPEED then
-    p.stuck=p.stuck+dt
-  else
-    p.stuck=0
+  if speed<RESCUE_SPEED then p.stuck=p.stuck+dt else p.stuck=0 end
+  local offRoute=false
+  if progress~=nil and projectedLateral~=nil then
+    local sample=Geometry.sample(state.routeGeometry,progress)
+    if sample then
+      local bl,br=routeBoundsAtSample(sample)
+      offRoute=projectedLateral<bl-0.8 or projectedLateral>br+0.8
+      if offRoute then
+        local count=laneCountForBounds(H.boundsAt(projectedSeg or p.segIdx))
+        local best,bestLane=math.huge,1
+        for lane=1,count do
+          local center=laneCenter(projectedSeg or p.segIdx,lane)
+          local d=math.abs(center-projectedLateral)
+          if d<best then best,bestLane=d,lane end
+        end
+        p.recoveryLaneOffset=laneCenter(projectedSeg or p.segIdx,bestLane)
+        p.baseLaneOffset=p.recoveryLaneOffset
+        p.laneOffset=p.recoveryLaneOffset
+        p.offTrackT=safeNumber(p.offTrackT)+dt
+        p.overtakeSide=0;p.passTargetIndex=nil;p.returningFromPass=true
+        p.pendingYieldTarget=nil;p.pendingPassOffset=nil
+        if p.offTrackT<=dt then
+          H.log("OFFTRACK_RECOVERY_BEGIN id=%d lateral=%.2f target=%.2f",
+            carIndex,projectedLateral,p.recoveryLaneOffset)
+        end
+      end
+    end
   end
-  -- Traffic ahead is not a reason to disable recovery forever. A car that
-  -- cannot make progress for ten seconds gets one safe respawn attempt.
-  if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 then
-    p.stuck=0
-    p.rescueRetryT=5.0
+  if not offRoute then
+    p.offTrackT=0
+    p.recoveryLaneOffset=nil
+  end
+  if (p.stuck>=RESCUE_TIME or p.offTrackT>=OFFTRACK_RESPAWN_TIME) and
+      p.rescueRetryT<=0 then
+    local reason=p.offTrackT>=OFFTRACK_RESPAWN_TIME and "OFFTRACK_10S" or "STUCK_5S"
+    p.stuck=0;p.offTrackT=0;p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
-    H.log("RESCUE_ATTEMPT id=%d success=%s",carIndex,tostring(rescued))
+    H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s",
+      carIndex,reason,tostring(rescued))
     if rescued then return end
   end
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
-  local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
+  local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
-  if p.racingPlanBlocked then targetSpeed=0 end
+  -- A transient racing-line optimizer failure is not itself a traffic hazard.
+  -- Keep a projected car moving when its current lane has no close leader.
+  if p.racingPlanBlocked and not p.projectionLost then
+    local currentLane=p.laneOffsetCurrent or p.baseLaneOffset or p.latOff or 0
+    local gap=select(1,carAheadInLane(carIndex,car,currentLane))
+    if gap==nil or gap>12.0 then
+      targetSpeed=math.max(targetSpeed,math.max(8.0,math.min(35.0,speed+3.0)))
+      p.trafficReason="PLAN_FAILURE_FREE_LANE_CONTINUE"
+    end
+  end
   -- Overtake state can change in this frame; rebuild the steering path before
   -- issuing controls so the first lateral movement follows the reserved side.
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
