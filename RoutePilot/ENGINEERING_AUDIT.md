@@ -101,3 +101,41 @@ The current steering law still uses a fixed curvature-to-normalized-steer gain. 
 - Per-frame performance has not been benchmarked with 1/5/10/20+ cars. The speed-scaled replan interval increases planner work at very high speed and must be profiled in CSP.
 
 Static checks only. No Lua/LuaJIT compiler or Assetto Corsa/CSP runtime is available in this environment. None of the steering, high-speed preview, lane-transition, collision-avoidance or FPS changes is claimed as in-game verified. The next test must begin with one car on a genuinely straight Drag route, then repeat at increasing speed, and only after that test corners and traffic.
+
+
+## Trace-driven traffic rework — 2026-11-26
+
+### Evidence from the supplied trace
+
+The supplied `routepilot_trace.txt` was read from the linked branch. It contains detailed traffic samples and state transitions. The key sequence is:
+
+- At 36.94 s, car 4 enters `OVERTAKE_BEGIN` against car 5.
+- At 37.28 s, the fixed-offset racing-line planner reports `RACE_LINE_BLOCKED ... cause=NO_PATH`.
+- The same hard-stop condition is emitted 38 times through 49.48 s.
+- At 49.80 s, `RESCUE_ATTEMPT id=4 success=true` teleports the car.
+- Earlier, two yield requests time out (`YIELD_ABORT reason=timeout` at 19.68 s and 29.18 s). The sampled traffic states include 23 `WAIT_YIELD` and 34 `YIELDING` records.
+- Traffic denial samples are dominated by `leader_has_no_safe_yield_space` (149), `predicted_vehicle_conflict` (135), `yielded_corridor_no_longer_clear` (97), `leader_not_yield_capable` (63), and `occupied_corridor` (28).
+
+The source inspection found the corresponding causes:
+
+1. `newPersonality()` assigned `cruiseSpeed = math.huge` to every AI, despite the development notes describing slow/fast classes. Consequently, the active source had no designed speed differential to generate repeatable passes.
+2. `updateRacingPlan()` initialized `baseLaneOffset` to the road midpoint, and the optimizer had no meaningful cost for staying in a logical lane. The lane-slot helper existed, but ordinary traffic was not actually assigned to those slots. Cars at the route centre were therefore treated as overlapping both logical lanes by occupancy checks.
+3. The old traffic state machine required a target-side yield request and waited for `yieldReady`. This introduced `WAIT_YIELD` states and timeout cycles before the overtaking car could begin moving.
+4. A pass changed the planner to a fixed lateral offset. If the fixed swept-body validation returned `NO_PATH`, `Driver.update()` set target speed to zero. There was no pass-specific rollback to the valid base lane, so a failed optional manoeuvre became a stationary car.
+5. The old pass-path prediction excluded the target leader from the predicted vehicle set, which was inconsistent with a design where the leader remains in its source lane.
+
+### 0.9.3 traffic architecture
+
+The active branch `routepilot/two-lane-traffic-rework-2026-11-26` replaces the yield handshake with a discrete lane policy:
+
+- Odd AI indices are slow class with a 40 km/h cruise target. Even AI indices are fast class with no fixed cruise cap and are the only cars that initiate overtakes.
+- Each AI is assigned to the outermost left logical lane. Lane centres are computed from the saved road bounds using the same 3/7/11/15 m → 1/2/3/4 slot rule used by pass selection. The racing-line optimizer now includes a cost for drifting away from the assigned lane.
+- A fast car requests no cooperation from the target. It selects only the immediately adjacent lane, checks lane occupancy and reservations, predicts the complete swept manoeuvre against every active vehicle (including the target), and validates the exact fixed-offset path using the same `RacingLine.plan()` routine that will be used at runtime.
+- The target remains in its own lane. The overtaker stays in the passing lane until the target is behind by two vehicle lengths and returns only when the base lane is clear.
+- If the runtime pass plan nevertheless fails, `Driver.update()` cancels the optional pass and rebuilds the base-lane plan. It does not leave the car in a PASS-mode hard stop. Normal driving has a base-lane fallback followed by a road-centre fallback; a hard stop remains only when no geometry-validated route can be found.
+- The 5 Hz Dev traffic logger now records speed class, base lane, actual lane, pass target, plan-block status/failure, stuck time, and control-write status. It remains disabled by default; ordinary `CAR=` telemetry continues independently.
+
+### Validation limits
+
+This is a source-level correction, not proof of runtime behaviour. No Assetto Corsa/CSP session was executed during the revision. In particular, the lane-preference cost, target-inclusive pass prediction, and transition/return timing require in-game validation on 7 m and wider corridors, single-lane corridors, bends, and simultaneous pass requests. A fresh trace from this exact branch is required before describing the system as collision-free or stop-free.
+
