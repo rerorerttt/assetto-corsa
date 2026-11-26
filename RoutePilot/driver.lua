@@ -378,13 +378,16 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local bodyEnvelope=halfWidth+BOUND_MARGIN
   local laneLeft,laneRight=H.boundsAt(p.segIdx)
   local roadCenter=(laneLeft+laneRight)*0.5
-  -- Every AI has a stable logical base lane. Passing temporarily reserves
-  -- only the adjacent lane; the target car is not asked to yield.
+  -- Ordinary driving follows the racing-line optimizer. During an overtake,
+  -- both cars receive separate temporary lane-slot targets.
   if p.overtakeSide~=0 then
     p.laneOffset=p.passLat
+  elseif p.returningFromPass then
+    p.laneOffset=p.passFromOffset
+  elseif p.yieldRequestBy~=nil then
+    p.laneOffset=p.yieldOffset
   else
-    p.baseLaneOffset=p.baseLaneOffset or select(1,laneSlotCenter(p.segIdx))
-    p.laneOffset=p.baseLaneOffset
+    p.laneOffset=nil
   end
   local laneTarget=p.laneOffset or roadCenter
   local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
@@ -770,18 +773,13 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local mid=(bl+br)*0.5
   -- The saved return target is the assigned base lane. Adjacent lanes are
   -- selected only by the explicit passing state machine.
-  local base=p.baseLaneOffset
-  if base==nil then
-    local laneCount
-    base,laneCount=laneSlotCenter(p.segIdx)
-    p.baseLaneOffset=base
-    H.log("LANE_ASSIGN id=%d slot=%d/%d center=%.2f",carIndex,laneCount,laneCount,base)
-  end
+  local base=mid
 
   p.racingPlanTimer=math.max(0,safeNumber(p.racingPlanTimer)-dt)
   local forcedMode=nil
   if p.overtakeSide~=0 then forcedMode="PASS"
   elseif p.returningFromPass then forcedMode="RETURN"
+  elseif p.yieldRequestBy~=nil and p.yieldOffset~=nil then forcedMode="YIELD"
   end
   local mode=forcedMode or "OPEN"
   local fixedOffset=nil
@@ -795,7 +793,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   if mode=="PASS" then
     fixedOffset=safeNumber(p.passLat,p.laneOffset or base)
   elseif mode=="RETURN" then
-    fixedOffset=safeNumber(p.baseLaneOffset,base)
+    fixedOffset=safeNumber(p.passFromOffset,mid)
+  elseif mode=="YIELD" then
+    fixedOffset=safeNumber(p.yieldOffset,mid)
   end
   if fixedOffset~=nil then
     local lateralDelta=math.abs(fixedOffset-safeNumber(p.latOff,base))
@@ -819,18 +819,16 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local previousAdvance=previousPlan and p.racingPlanStartProgress and
     math.max(0,routeGap(p.racingPlanStartProgress,p.routeProgress)) or 0
   local nextPlan
-  -- Keep ordinary traffic in its assigned left lane. The optimizer may still
-  -- move within the physical corridor to negotiate bends, but lane preference
-  -- is part of its cost rather than an ignored hint.
-  local preferredOffset=base
+  -- Ordinary driving retains the full-width racing line. Discrete lane slots
+  -- are imposed only during a paired pass manoeuvre.
+  local preferredOffset=mid
   nextPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),preferredOffset,fixedOffset,horizon,7.5,
     previousPlan,previousAdvance,fixedTransitionDistance,p.lateralAccelLimit)
 
-  -- If the optimizer cannot find a route, first try the assigned base lane
-  -- with the same full-body swept-path validator. Only if that also fails do
-  -- we use the physical road centre as a neutral recovery corridor.
+  -- If the OPEN optimizer cannot find a route, retry the physical road
+  -- centre. Reserved PASS/RETURN/YIELD paths keep their assigned offsets.
   local originalFailure=planFailure or (not nextPlan and "NO_PLAN" or nil)
   local fallbackKind=nil
   local holdPreviousPlan=false
@@ -857,33 +855,22 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     end
   end
   if not nextPlan and mode=="OPEN" then
-    local fallbackFailure=nil
-    local laneDelta=math.abs(base-safeNumber(p.latOff,base))
-    local laneLimit=clamp(
-      safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
-    local laneTransition=math.max(22.0,
-      math.max(0,speed)*math.sqrt(6.0*laneDelta/laneLimit))
-    nextPlan,fallbackFailure=RacingLine.plan(
-      state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-      safeNumber(p.latOff,base),base,base,horizon,7.5,
-      nil,0,laneTransition,p.lateralAccelLimit)
-    if nextPlan then
-      fallbackKind="BASE_LANE"
+    local centreFailure=nil
+    if not laneOccupied(carIndex,car,mid,nil) then
+      local centreTransition=math.max(22.0,
+        math.max(0,speed)*math.sqrt(6.0*math.abs(mid-safeNumber(p.latOff,mid))/
+          clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)))
+      nextPlan,centreFailure=RacingLine.plan(
+        state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+        safeNumber(p.latOff,mid),mid,mid,horizon,7.5,
+        nil,0,centreTransition,p.lateralAccelLimit)
     else
-      local centreFailure=nil
-      if not laneOccupied(carIndex,car,mid,nil) then
-        nextPlan,centreFailure=RacingLine.plan(
-          state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-          safeNumber(p.latOff,base),mid,mid,horizon,7.5,
-          nil,0,laneTransition,p.lateralAccelLimit)
-      else
-        centreFailure="ROAD_CENTRE_OCCUPIED"
-      end
-      if nextPlan then
-        fallbackKind="ROAD_CENTRE"
-      else
-        planFailure=centreFailure or fallbackFailure or originalFailure or "NO_SAFE_FALLBACK"
-      end
+      centreFailure="ROAD_CENTRE_OCCUPIED"
+    end
+    if nextPlan then
+      fallbackKind="ROAD_CENTRE"
+    else
+      planFailure=centreFailure or originalFailure or "NO_SAFE_FALLBACK"
     end
   end
 
