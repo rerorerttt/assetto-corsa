@@ -12,12 +12,12 @@ The current implementation replaces that chain with a direct adjacent-lane polic
 
 - Odd AI indices (1, 3, 5, ...) are slow-class cars capped at 40 km/h.
 - Even AI indices (2, 4, 6, ...) are fast-class cars with no fixed cruise cap; only fast-class cars initiate overtakes.
-- Every AI is assigned to the outermost left logical lane. The racing-line optimizer now penalizes deviation from that lane and the recovery fallback tries the base lane before the road centre.
+- Outside overtakes, every AI continues to use the full-width racing-line optimizer; no permanent lane assignment or lane-centre bias is applied. For an overtake, the target is assigned to the logical slot nearest its current racing line and the faster car takes an adjacent slot.
 - Lane slots are derived from measured bounds: widths 3/7/11/15 m yield 1/2/3/4 slots. On a single-lane corridor there is no pass.
-- A fast car detecting a slower leader checks the adjacent lane and reserves it immediately. The target does not have to yield or change its own lane.
-- The full transition, target interaction, pass phase, and return are checked against the road bounds and all active cars. The target leader is included in predicted collision checks rather than ignored.
+- A fast car detecting a slower AI leader reserves a paired lane change: the target moves to its nearest logical lane slot and the overtaker moves to an adjacent slot in the same manoeuvre. Both begin immediately; there is no yield-ready handshake or timeout.
+- Both lane transitions, the pass phase, and the return are checked against road bounds and all active cars. The target's predicted lane change is included in the collision calculation rather than treating it as stationary or ignoring it.
 - The exact fixed-offset racing-line plan is prevalidated before a pass starts. If a later far-horizon replan fails, it retries a shorter reserved horizon and keeps the last validated near-field plan while it remains usable. It returns to the base lane only when that lane is clear; it never merges into an occupied source lane. If neither lane has a validated continuation, braking remains the final collision-avoidance response.
-- The overtaker stays in the passing lane until it has cleared the target by two vehicle lengths. It returns only after the base lane is clear.
+- The target holds its temporary lane until the overtaker has cleared it by two vehicle lengths and returned to its original racing line; the target's temporary reservation is then released.
 - If the adjacent lane is occupied or the predicted swept path is unsafe, the car follows the leader using the current-lane braking model. The controller does not force an unsafe pass.
 
 ## Trace findings that motivated the redesign
