@@ -767,8 +767,16 @@ local function collisionEvasion(carIndex,car,p,speed)
   if not canLeft and not canRight then
     p.collisionEvasionSide=0
     p.collisionEvasionTarget=nearestIndex
-    return nil
+    if not p.collisionEvasionBlockedLogged or
+       p.collisionEvasionLoggedTarget~=nearestIndex then
+      H.log("COLLISION_EVASION_BLOCKED id=%d other=%d ttc=%.3f long=%.2f lat=%.2f",
+        carIndex,nearestIndex,nearestTime,nearestLongitudinal,nearestLateral)
+      p.collisionEvasionBlockedLogged=true
+      p.collisionEvasionLoggedTarget=nearestIndex
+    end
+    return nil,true
   end
+  p.collisionEvasionBlockedLogged=false
 
   local side
   if canLeft and canRight then
@@ -2343,16 +2351,17 @@ function Driver.update(carIndex, car, dt)
 
   p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
-  local evasiveSteer=collisionEvasion(carIndex,car,p,speed)
+  local evasiveSteer,evasionBlocked=collisionEvasion(carIndex,car,p,speed)
   p.collisionEvasionActive=evasiveSteer~=nil
+  p.collisionEvasionBlocked=evasionBlocked==true
   if evasiveSteer~=nil then steerTarget=evasiveSteer
-  else
+  elseif not p.collisionEvasionBlocked then
     p.collisionEvasionLogged=false
     p.collisionEvasionTarget=nil
     p.collisionEvasionSide=0
   end
   p.steerTarget = steerTarget
-  if p.projectionLost then targetSpeed=0 end
+  if p.projectionLost or p.collisionEvasionBlocked then targetSpeed=0 end
   -- Boundary correction is a steering task, not a reason to stop.
   -- The predictive footprint guard already bends the target path back into
   -- the corridor. Do not convert lateral correction magnitude into a speed
@@ -2361,7 +2370,7 @@ function Driver.update(carIndex, car, dt)
   local steer = filterSteering(p, steerTarget, dt,p.collisionEvasionActive)
 
   calculateThrottle(p, speed, targetSpeed, dt)
-  if p.projectionLost then p.gas=0; p.brake=1 end
+  if p.projectionLost or p.collisionEvasionBlocked then p.gas=0; p.brake=1 end
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
