@@ -46,7 +46,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   if not route or not progress or not boundsAt then return nil end
   local size = car and car.aabbSize
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
-  local margin = halfWidth + 0.42
+  local halfLength = math.max(1.5, safe(size and size.z, 4.5) * 0.5)
+  local margin = 0.22
   local step = math.max(6.0, spacing or 7.5)
   local length = math.min(135.0, math.max(35.0, horizon or 95.0))
   local count = math.floor(length / step) + 1
@@ -61,7 +62,24 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
     if not sample then break end
     local left, right = boundsAt(sample)
     left, right = safe(left, -2.0), safe(right, 2.0)
-    local lo, hi = left + margin, right - margin
+    -- Approximate the lateral projection of the complete oriented body.
+    -- The heading change across half a vehicle length captures cornering
+    -- sweep; the body is not reduced to its centre point or width alone.
+    local before = sampleFn(route, progress + d - halfLength)
+    local after = sampleFn(route, progress + d + halfLength)
+    local angle = 0
+    if before and after then
+      local hx, hz = after.x - before.x, after.z - before.z
+      local hl = math.sqrt(hx * hx + hz * hz)
+      if hl > 0.05 then
+        hx, hz = hx / hl, hz / hl
+        angle = math.abs(math.atan2(hx * sample.tz - hz * sample.tx,
+          hx * sample.tx + hz * sample.tz))
+      end
+    end
+    local bodyEnvelope = halfWidth * math.abs(math.cos(angle)) +
+      halfLength * math.abs(math.sin(angle)) + margin
+    local lo, hi = left + bodyEnvelope, right - bodyEnvelope
     if lo > hi then
       -- A near-field corridor that cannot contain the car is an immediate
       -- hard stop. A distant narrowing becomes a braking constraint instead.
@@ -98,7 +116,10 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       end
     end
   end
-  local stabilityWeight=straightOpen and 3.0 or 0.35
+  -- A previous line is a warm start, not a straight-line leash. Keep only
+  -- enough temporal weight to avoid visible lateral chatter while allowing
+  -- the optimizer to cut small reference-spline kinks.
+  local stabilityWeight=straightOpen and 0.08 or 0.22
   local function stabilityCost(index,value)
     local previous=previousOffsets[index]
     if previous==nil then return 0 end
@@ -182,8 +203,15 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local slope=offC-offB
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
-          local cost=node.cost+k*k*180.0+excess*excess*200000.0+
-            second*second*0.18+slope*slope*0.075+
+          local segmentLength=math.sqrt(
+            (pointC.x-pointB.x)^2+(pointC.z-pointB.z)^2)
+          local estimatedCornerSpeed=clamp(
+            math.sqrt(10.0/math.max(math.abs(k),0.0008)),8.0,90.0)
+          local segmentTime=segmentLength/estimatedCornerSpeed
+          local extraLength=math.max(0,segmentLength-step)
+          local cost=node.cost+segmentTime*8.0+k*k*45.0+
+            excess*excess*200000.0+second*second*0.18+
+            slope*slope*0.075+extraLength*0.35+
             0.00008/math.max(0.12,clearance+0.12)+
             stabilityCost(station+1,offC)
           local key=node.b*100+c
@@ -225,9 +253,27 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   curvatures[1] = curvatures[2] or 0
   curvatures[n] = curvatures[n - 1] or 0
 
+  -- Classify connected road features over the whole lookahead window. An
+  -- S-section is detected as a sign reversal, not as two unrelated corners.
+  local feature={}
+  for i=1,n do
+    local k=safe(curvatures[i])
+    local kind=math.abs(k)>=0.12 and "HAIRPIN" or
+      (math.abs(k)<0.0012 and "STRAIGHT" or
+      (math.abs(k)<0.025 and "FAST_BEND" or "CORNER"))
+    feature[i]=kind
+  end
+  for i=2,n-1 do
+    local a,bk=curvatures[i-1] or 0,curvatures[i+1] or 0
+    if a*bk< -0.00004 and math.abs(a)>0.001 and math.abs(bk)>0.001 then
+      feature[i]="S_BEND"
+    end
+  end
+
   return {
     points = points,
     curvature = curvatures,
+    feature = feature,
     spacing = step,
     count = n,
     horizon = (n - 1) * step,
