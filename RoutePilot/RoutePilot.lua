@@ -354,7 +354,7 @@ local function recordSecondTelemetry(sim)
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i)
     local p=state.p[i]
-    if car and car.isActive and car.isAIControlled and p then
+    if i>0 and car and car.isActive and p then
       if Driver and Driver.telemetryLine then writeLog(Driver.telemetryLine(i,car,p)) end
       any=true
     end
@@ -459,7 +459,7 @@ local function trySpawnTeleport(sim,dt)
   local aiCars={}
   for i=1,sim.carsCount-1 do
     local car=ac.getCar(i)
-    if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
+    if car and car.isActive then aiCars[#aiCars+1]=i end
   end
   local roster=table.concat(aiCars,",")
   if #aiCars==0 then
@@ -688,7 +688,7 @@ function script.update(dt)
       local driveOrder={}
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
-        local shouldDrive=car and car.isActive and car.isAIControlled
+        local shouldDrive=car and car.isActive and (i>0 or (i==0 and playerAI))
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
           driveOrder[#driveOrder+1]=i
@@ -739,7 +739,7 @@ function script.update(dt)
       end)
       for _,i in ipairs(driveOrder) do
         local car=ac.getCar(i)
-        if car and car.isActive and car.isAIControlled then
+        if car and car.isActive and (i>0 or playerAI) then
           local okc,erc=pcall(Driver.update,i,car,dt)
           if not okc then
             writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
