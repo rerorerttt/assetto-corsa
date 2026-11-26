@@ -404,12 +404,22 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     (future.z+future.tx*p.laneOffsetCurrent)
   local dx,dz=targetX-car.position.x,targetZ-car.position.z
   local targetDist=math.sqrt(dx*dx+dz*dz)
-  if targetDist<0.5 then return 0 end
+  p.steeringTargetX,p.steeringTargetZ=targetX,targetZ
+  p.steeringTargetDistance=targetDist
+  p.steeringTargetSource=raceTarget and "RACING_PLAN" or "ROUTE_SPLINE"
+  p.steeringTargetPlanDistance=targetPlanDistance
+  p.steeringTargetOffset=raceTarget and raceTarget.offset or p.laneOffsetCurrent
+  if targetDist<0.5 then
+    p.pursuitSteer=0; p.boundaryCurvatureSteer=0; p.rawSteer=0
+    p.steeringAlpha=0
+    return 0
+  end
 
   -- Pure-pursuit curvature from the preview point, plus modest curvature
   -- feed-forward to begin rotating into the bend before heading error grows.
   local alpha=signedAngle(fx,fz,dx/targetDist,dz/targetDist)
   local pursuitCurvature=2.0*math.sin(alpha)/targetDist
+  p.steeringAlpha=alpha
   -- Pure pursuit already calculates the curvature needed to reach this
   -- preview point. Adding the planner's curvature again double-counts the
   -- same bend and can create an oversteer/oscillation feedback loop.
@@ -438,8 +448,21 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local boundarySteer=clamp(
     boundaryError*0.075-p.lateralVelocityFiltered*0.035,-0.22,0.22)
   p.boundarySteer=boundarySteer
+  p.boundaryCurvature=boundaryCurvature
   p.lookahead=ahead
   p.pursuitCurvature=pursuitCurvature
+  p.lateralVelocity=lateralVelocity
+  p.previewTime=previewTime
+  local k15=Geometry.sample(route,projection.s+15.0)
+  local k30=Geometry.sample(route,projection.s+30.0)
+  local k50=Geometry.sample(route,projection.s+50.0)
+  p.roadCurvature0=safeNumber(current.k)
+  p.roadCurvature15=safeNumber(k15 and k15.k)
+  p.roadCurvature30=safeNumber(k30 and k30.k)
+  p.roadCurvature50=safeNumber(k50 and k50.k)
+  p.roadStraight=math.max(math.abs(p.roadCurvature0),
+    math.abs(p.roadCurvature15),math.abs(p.roadCurvature30),
+    math.abs(p.roadCurvature50))<0.0012
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
@@ -460,16 +483,22 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- the deviation and create a left/right steering feedback loop. The
   -- autonomous path controller owns steering; axle-based stability control
   -- will be added separately after its signs and gains are validated.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+boundarySteer
-  -- Do not erase meaningful path corrections: this deadband is only for
-  -- numerical residue around a genuinely straight, settled trajectory.
-  if math.abs(steer)<STEER_DEAD and
+  local pursuitSteer=pursuitCurvature*CFG.CURVATURE_STEER_GAIN
+  local boundaryCurvatureSteer=boundaryCurvature*CFG.CURVATURE_STEER_GAIN
+  local rawSteer=pursuitSteer+boundaryCurvatureSteer+boundarySteer
+  local deadbandActive=false
+  if math.abs(rawSteer)<STEER_DEAD and
      math.abs(p.crossTrackError or 0)<0.03 and
      math.abs(p.headingError or 0)<0.001 and
      math.abs(p.lateralVelocityFiltered or 0)<0.03 then
-    steer=0
+    rawSteer=0
+    deadbandActive=true
   end
-  return clamp(steer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
+  p.pursuitSteer=pursuitSteer
+  p.boundaryCurvatureSteer=boundaryCurvatureSteer
+  p.rawSteer=rawSteer
+  p.deadbandActive=deadbandActive
+  return clamp(rawSteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
@@ -478,8 +507,12 @@ local function filterSteering(p, target, dt)
   -- Emergency passing changes the target path, not the steering authority.
   -- No full-lock pulse or emergency gain is permitted at high speed.
   local maxChange=CFG.STEER_RATE*dt
-  p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
-    -CFG.STEER_LIMIT, CFG.STEER_LIMIT)
+  local requestedChange=p.steerFiltered-p.steer
+  local appliedChange=clamp(requestedChange,-maxChange,maxChange)
+  p.steerRateLimited=math.abs(requestedChange)>maxChange+1e-6
+  p.steerRateLimitDemand=requestedChange
+  p.steerRateLimitApplied=appliedChange
+  p.steer = clamp(p.steer+appliedChange,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
   return p.steer
 end
 
@@ -830,6 +863,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
     fixedOffset==nil and obstacleAt or nil,previousPlan,previousAdvance,
     fixedTransitionDistance)
+  if nextPlan ~= p.racingPlan then
+    p.racingPlanGeneration = (p.racingPlanGeneration or 0) + 1
+  end
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
   local wasTrafficBlocked=p.racingPlanTrafficBlocked==true
@@ -1342,6 +1378,94 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)
 end
 
+local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
+  dt=math.max(0,safeNumber(dt))
+  p.steerDiagTimer=(p.steerDiagTimer or 0)+dt
+  p.steerEventCooldown=math.max(0,(p.steerEventCooldown or 0)-dt)
+  local flags={}
+  local function flag(name) flags[#flags+1]=name end
+  local target=safeNumber(p.steerTarget)
+  local final=safeNumber(p.steer)
+  local previousTarget=p.diagPreviousTarget
+  local previousFinal=p.diagPreviousFinal
+  local targetOffset=safeNumber(p.steeringTargetOffset)
+  local targetAlpha=safeNumber(p.steeringAlpha)
+  local previousOffset=p.diagPreviousTargetOffset
+  local previousAlpha=p.diagPreviousTargetAlpha
+  local targetSource=p.steeringTargetSource or "NONE"
+
+  if p.roadStraight and math.abs(target)>0.01 and
+     not p.diagWasSteeringOnStraight then flag("STEER_ON_STRAIGHT") end
+  if previousTarget and previousTarget*target<0 and
+     math.abs(previousTarget)>0.02 and math.abs(target)>0.02 then flag("TARGET_SIGN_REVERSAL") end
+  if previousFinal and previousFinal*final<0 and
+     math.abs(previousFinal)>0.02 and math.abs(final)>0.02 then flag("FINAL_SIGN_REVERSAL") end
+  if previousOffset~=nil and math.abs(targetOffset-previousOffset)>0.20 then flag("TARGET_OFFSET_JUMP") end
+  if previousAlpha~=nil and math.abs(targetAlpha-previousAlpha)>0.015 then flag("TARGET_ANGLE_JUMP") end
+  if p.diagPreviousTargetSource~=nil and p.diagPreviousTargetSource~=targetSource then flag("TARGET_SOURCE_CHANGED") end
+  if p.diagPreviousPlanGeneration~=nil and
+     p.diagPreviousPlanGeneration~=(p.racingPlanGeneration or 0) then flag("RACING_PLAN_REBUILT") end
+
+  local expectedProgress=math.max(0,safeNumber(car.speedMs))*dt
+  local progressDelta=safeNumber(p.frameProgressDelta)
+  local steerProjectionDelta=safeNumber(p.projectionProgressDelta)
+  if p.routeLocked and dt>0 and
+     math.abs(progressDelta-expectedProgress)>math.max(1.0,expectedProgress*0.85) then flag("PROJECTION_STEP_MISMATCH") end
+  if p.steerRateLimited then flag("STEER_RATE_LIMITED") end
+  if p.projectionLost then flag("PROJECTION_LOST") end
+  if p.overtakeSide and p.overtakeSide~=0 then flag("OVERTAKE_STEERING_CONTEXT") end
+  if p.returningFromPass then flag("RETURN_FROM_OVERTAKE") end
+  if not controlWriteOk then flag("CONTROL_WRITE_FAILED") end
+  if math.abs(safeNumber(p.pursuitSteer))>0.01 then flag("PURE_PURSUIT_ACTIVE") end
+  if math.abs(safeNumber(p.boundaryCurvatureSteer))>0.01 then flag("BOUNDARY_CURVATURE_ACTIVE") end
+  if math.abs(safeNumber(p.boundarySteer))>0.01 then flag("BOUNDARY_STEER_ACTIVE") end
+
+  local yawTarget=safeNumber(p.steerCurvature)*math.max(0,safeNumber(car.speedMs))
+  local yawActual=safeNumber(p.measuredYawRate,safeNumber(p.yawRate))
+  p.yawRateTarget=yawTarget
+  p.yawRateError=yawTarget-yawActual
+  if safeNumber(car.speedMs)>15 and math.abs(p.yawRateError)>0.35 then flag("YAW_RATE_MISMATCH") end
+  p.diagWasSteeringOnStraight=p.roadStraight and math.abs(target)>0.01
+
+  if #flags>0 and p.steerEventCooldown<=0 then
+    H.log("STEER_EVENT id=%d flags=%s v=%.2f target=%.4f final=%.4f raw=%.4f pp=%.4f boundK=%.4f bound=%.4f cross=%.3f head=%.4f latV=%.3f yaw=%.4f yawTarget=%.4f routeDelta=%.3f steerProjDelta=%.3f expected=%.3f targetOffset=%.3f targetAlpha=%.5f planGen=%d",
+      carIndex,table.concat(flags,"+"),safeNumber(car.speedMs),target,final,
+      safeNumber(p.rawSteer),safeNumber(p.pursuitSteer),safeNumber(p.boundaryCurvatureSteer),
+      safeNumber(p.boundarySteer),safeNumber(p.crossTrackError),safeNumber(p.headingError),
+      safeNumber(p.lateralVelocity),yawActual,yawTarget,progressDelta,steerProjectionDelta,
+      expectedProgress,targetOffset,targetAlpha,safeNumber(p.racingPlanGeneration))
+    p.steerEventCooldown=0.20
+  end
+
+  local interval=0.50
+  if p.roadStraight and (math.abs(target)>0.004 or math.abs(final)>0.004) then interval=0.10
+  elseif math.abs(target)>0.004 or math.abs(final)>0.004 then interval=0.25 end
+  if p.steerDiagTimer>=interval then
+    p.steerDiagTimer=p.steerDiagTimer-interval
+    H.log("STEER_DIAG id=%d v=%.2f dt=%.3f straight=%d k0=%.6f k15=%.6f k30=%.6f k50=%.6f progress=%.2f projDist=%.3f routeDelta=%.3f steerProjDelta=%.3f lateral=%.3f cross=%.3f head=%.5f latV=%.3f slip=%.4f yawEst=%.4f yawPhys=%.4f yawTarget=%.4f yawErr=%.4f axleF=%.4f axleR=%.4f look=%.1f targetSrc=%s targetXY=(%.2f,%.2f) targetDist=%.2f alpha=%.5f targetOffset=%.3f planGen=%d planMode=%s ppK=%.6f ppSteer=%.5f boundErr=%.4f boundK=%.6f boundKSteer=%.5f boundSteer=%.5f raw=%.5f deadband=%d target=%.5f filtered=%.5f rateDemand=%.5f rateApplied=%.5f rateLimited=%d final=%.5f lane=%.3f raceOffset=%.3f pass=%d returning=%d controlOK=%d",
+      carIndex,safeNumber(car.speedMs),dt,p.roadStraight and 1 or 0,
+      safeNumber(p.roadCurvature0),safeNumber(p.roadCurvature15),safeNumber(p.roadCurvature30),safeNumber(p.roadCurvature50),
+      safeNumber(p.routeProgress),safeNumber(p.lineDist),progressDelta,steerProjectionDelta,
+      safeNumber(p.latOff),safeNumber(p.crossTrackError),safeNumber(p.headingError),
+      safeNumber(p.lateralVelocity),safeNumber(p.slipAngle),safeNumber(p.yawRate),safeNumber(p.measuredYawRate),
+      safeNumber(p.yawRateTarget),safeNumber(p.yawRateError),safeNumber(p.frontAxleSlip),safeNumber(p.rearAxleSlip),
+      safeNumber(p.lookahead),tostring(targetSource),safeNumber(p.steeringTargetX),safeNumber(p.steeringTargetZ),
+      safeNumber(p.steeringTargetDistance),targetAlpha,targetOffset,safeNumber(p.racingPlanGeneration),
+      tostring(p.racingPlanMode or "NONE"),safeNumber(p.pursuitCurvature),safeNumber(p.pursuitSteer),
+      safeNumber(p.boundaryError),safeNumber(p.boundaryCurvature),safeNumber(p.boundaryCurvatureSteer),
+      safeNumber(p.boundarySteer),safeNumber(p.rawSteer),p.deadbandActive and 1 or 0,target,
+      safeNumber(p.steerFiltered),safeNumber(p.steerRateLimitDemand),safeNumber(p.steerRateLimitApplied),
+      p.steerRateLimited and 1 or 0,final,safeNumber(p.laneOffsetCurrent),safeNumber(p.raceOffsetRaw),
+      safeNumber(p.overtakeSide),p.returningFromPass and 1 or 0,controlWriteOk and 1 or 0)
+  end
+  p.diagPreviousTarget=target
+  p.diagPreviousFinal=final
+  p.diagPreviousTargetOffset=targetOffset
+  p.diagPreviousTargetAlpha=targetAlpha
+  p.diagPreviousTargetSource=targetSource
+  p.diagPreviousPlanGeneration=p.racingPlanGeneration or 0
+end
+
 function Driver.update(carIndex, car, dt)
   local p = state.p[carIndex]
   if not p then
@@ -1358,6 +1482,7 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
+  local previousRouteProgress=p.routeProgress
   local progress, projectedLateral, projectedSeg, _, projectionDistance =
     routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
   if p.spawnSeeded and
@@ -1365,12 +1490,14 @@ function Driver.update(carIndex, car, dt)
     progress=nil
   end
   if progress ~= nil then
+    p.frameProgressDelta=previousRouteProgress~=nil and routeGap(previousRouteProgress,progress) or 0
     p.routeLocked = true
     p.routeProgress = progress
     p.latOff = projectedLateral or p.latOff
     p.projectionLost = false
     if projectedSeg then p.segIdx = projectedSeg end
   else
+    p.frameProgressDelta=0
     p.projectionLost = true
   end
   readWheelSlip(car,p)
@@ -1422,6 +1549,8 @@ function Driver.update(carIndex, car, dt)
     controls.brake = p.brake
     controls.handbrake = 0
   end
+  p.controlWriteOk=ok and controls~=nil
+  logSteeringDiagnostics(carIndex,car,p,dt,p.controlWriteOk)
 end
 
 -- Observe the human-driven car without touching its controls.
