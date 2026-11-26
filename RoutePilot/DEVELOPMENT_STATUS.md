@@ -16,7 +16,7 @@ The current implementation replaces that chain with a direct adjacent-lane polic
 - Lane slots are derived from measured bounds: widths 3/7/11/15 m yield 1/2/3/4 slots. On a single-lane corridor there is no pass.
 - A fast car detecting a slower AI leader reserves a paired lane change: the target moves to its nearest logical lane slot and the overtaker moves to an adjacent slot in the same manoeuvre. Both begin immediately; there is no yield-ready handshake or timeout.
 - Both lane transitions, the pass phase, and the return are checked against road bounds and all active cars. The target's predicted lane change is included in the collision calculation rather than treating it as stationary or ignoring it.
-- The exact fixed-offset racing-line plan is prevalidated before a pass starts. If a later far-horizon replan fails, it retries a shorter reserved horizon and keeps the last validated near-field plan while it remains usable. It returns to the base lane only when that lane is clear; it never merges into an occupied source lane. If neither lane has a validated continuation, braking remains the final collision-avoidance response.
+- The exact fixed-offset racing-line plan is prevalidated before a pass starts. If a later far-horizon replan fails, it retries a shorter reserved horizon and keeps the last validated near-field plan while it remains usable. It returns to the original racing line only when that corridor is clear; it never merges into an occupied source corridor. If neither lane has a validated continuation, braking remains the final collision-avoidance response.
 - The target holds its temporary lane until the overtaker has cleared it by two vehicle lengths and returned to its original racing line; the target's temporary reservation is then released.
 - If the adjacent lane is occupied or the predicted swept path is unsafe, the car follows the leader using the current-lane braking model. The controller does not force an unsafe pass.
 
@@ -31,9 +31,9 @@ The supplied `routepilot_trace.txt` showed:
 
 ## Files changed in 0.9.3
 
-- `RoutePilot/driver.lua`: deterministic slow/fast classes; base-lane assignment; immediate adjacent-lane passing without leader-yield state; target-inclusive predicted collision checks; exact pass-plan prevalidation; pass abort and base-lane replanning on runtime plan failure.
+- `RoutePilot/driver.lua`: deterministic slow/fast classes; simultaneous temporary lane assignment for target and overtaker; no yield-ready wait; target-inclusive predicted collision checks; exact pass-plan prevalidation; pass abort and base-lane replanning on runtime plan failure.
 - `RoutePilot/racing_line.lua` remains full-width and unchanged; temporary lane-slot assignments are handled by `driver.lua` only during an overtake.
-- `RoutePilot/RoutePilot.lua`: traffic diagnostics now record speed class, base lane, pass target, plan failure, stuck time, and control status; obsolete yield-queue scheduling removed; app version string updated.
+- `RoutePilot/RoutePilot.lua`: traffic diagnostics now record speed class, target lane assignment, current offset, pass target, plan failure, stuck time, and control status; obsolete yield-queue scheduling removed; app version string updated.
 - `RoutePilot/manifest.ini`: version 0.9.3.
 - `RoutePilot/README.md`: current traffic model and validation requirements.
 
