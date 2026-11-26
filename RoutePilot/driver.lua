@@ -126,8 +126,7 @@ local function newPersonality(carIndex)
     pursuitCurvature = 0, boundarySteer = 0, lookahead = 0,
     stuck = 0, blockedT = 0, passT = 0,
     lineDist = 0, latOff = 0, targetSpeed = 0,
-    slipSeverity = 0, stability = 1,
-    overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
+remove unused stability state    overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
   }
@@ -219,19 +218,6 @@ local function readVehicleDynamics(car, p, dt)
   end
   p.lateralAccelLimit=grip
   return speed, fx, fz
-end
-
-local function calculateStability(p, speed)
-  local slip = math.abs(p.slipAngle)
-  local severity = 0
-  if speed > CFG.SLIP_DAMP_MIN_SPEED and slip > CFG.SLIP_DAMP_MIN_ANGLE then
-    local ss = clamp((slip - CFG.SLIP_START) / (CFG.SLIP_FULL - CFG.SLIP_START), 0, 1)
-    local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),4.0,20.0)
-    local as = clamp((p.lateralAccel - grip) / (grip * 0.7), 0, 1)
-    severity = math.max(ss, as)
-  end
-  p.slipSeverity = severity
-  p.stability = 1 - severity
 end
 
 local function planTargetSpeed(p,speed)
@@ -420,7 +406,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- feed-forward to begin rotating into the bend before heading error grows.
   local alpha=signedAngle(fx,fz,dx/targetDist,dz/targetDist)
   local pursuitCurvature=2.0*math.sin(alpha)/targetDist
-  local previewCurvature=safeNumber(raceTarget and raceTarget.k or curvePreview.k)
   -- Pure pursuit already calculates the curvature needed to reach this
   -- preview point. Adding the planner's curvature again double-counts the
   -- same bend and can create an oversteer/oscillation feedback loop.
@@ -958,24 +943,22 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   local lateralLimit=clamp(
     safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
   -- A lane change is a spatial manoeuvre. Its minimum distance grows with
-  -- speed so the lateral acceleration remains bounded instead of shrinking
-  -- to a fixed 6/22 m at racing speeds.
+  -- speed so the lateral acceleration remains bounded.
   local transitionOut=math.max(22.0,
     math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
+  if safeNumber(passDistance)<transitionOut then
+    return false,"insufficient_transition_distance"
+  end
   local transitionBack=transitionOut
   local totalDistance=math.max(20.0,passDistance)+transitionBack
-  local step=urgent and 1.5 or 3.0
+  local step=3.0
   local distance=0.0
   while distance<=totalDistance+0.001 do
     local sample=Geometry.sample(route,p.routeProgress+distance)
     if not sample then return false,"route_ends" end
 
     local outT=clamp(distance/transitionOut,0,1)
-    if urgent then
-      outT=1.0-(1.0-outT)*(1.0-outT)*(1.0-outT)
-    else
-      outT=outT*outT*(3.0-2.0*outT)
-    end
+    outT=outT*outT*(3.0-2.0*outT)
     local backT=clamp((distance-passDistance)/transitionBack,0,1)
     backT=backT*backT*(3.0-2.0*backT)
     local offset
@@ -1378,7 +1361,6 @@ function Driver.update(carIndex, car, dt)
   else
     p.projectionLost = true
   end
-  calculateStability(p, speed)
   readWheelSlip(car,p)
 
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
@@ -1454,7 +1436,6 @@ function Driver.observePlayer(car, dt, steerInput)
   end
 
   local speed,fx,fz=readVehicleDynamics(car,p,dt or 0.016)
-  calculateStability(p,speed)
   readWheelSlip(car,p)
   local progress,lateral,seg,_,distance=routeProjection(
     car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt or 0.016)
