@@ -101,3 +101,19 @@ The current steering law still uses a fixed curvature-to-normalized-steer gain. 
 - Per-frame performance has not been benchmarked with 1/5/10/20+ cars. The speed-scaled replan interval increases planner work at very high speed and must be profiled in CSP.
 
 Static checks only. No Lua/LuaJIT compiler or Assetto Corsa/CSP runtime is available in this environment. None of the steering, high-speed preview, lane-transition, collision-avoidance or FPS changes is claimed as in-game verified. The next test must begin with one car on a genuinely straight Drag route, then repeat at increasing speed, and only after that test corners and traffic.
+
+
+## 2026-11-26 GDD cross-check: planner failure versus physical blockage
+
+The GDD's governing constraints are explicit: planner errors must not strand cars on a passable road; the car should continue on a verified safe path where possible; and the full vehicle footprint must remain inside confirmed road bounds. The supplied trace showed the previous implementation conflated two different conditions:
+
+- `DP NO_PATH`: the dynamic-programming candidate graph did not contain a complete sequence of accepted candidates;
+- `NO_SAFE_PATH`: no tested path, including a deterministic fallback, satisfies the full-body road-boundary checks.
+
+Those conditions are not equivalent. The driver previously treated the first as the second and forced target speed to zero.
+
+The current correction separates them in OPEN mode by trying the current lateral corridor and then the route-centre corridor through the existing full-body-validated planner. The fallback does not bypass road bounds, does not remove body-sweep checks, and does not apply during PASS, RETURN, YIELD or TRAFFIC_HOLD where changing the reserved corridor could create a traffic conflict. Only failure of the permitted geometry-validated paths leaves `racingPlanBlocked=true`.
+
+This closes the specific false-stop path identified in the supplied trace at source level. It does not close the broader GDD route-loss requirement: projection loss still invokes the existing immediate brake fail-safe pending a separately validated last-safe-path/reacquisition state machine. It also does not establish a globally time-optimal racing line; the current optimizer remains a local short-horizon approximation.
+
+Static validation only. The new driver source was fetched back from GitHub after commit. No Lua compiler, Assetto Corsa session, CSP runtime, or FPS benchmark was available. In-game acceptance must verify that fallback events occur on passable OPEN road, that hard stops remain when the full-body corridor is genuinely infeasible, and that PASS/YIELD/RETURN reservations are unchanged.
