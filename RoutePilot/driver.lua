@@ -1240,8 +1240,10 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         if otherLane==targetLane and math.abs(gap)<dynamicWindow then
           return false
         end
-        -- A car already changing into this slot reserves it before its body
-        -- reaches the centre, preventing two simultaneous lane changes.
+        -- Reserve both the destination and the lane being vacated until the
+        -- full vehicle body has completed its lateral transition.
+        if other.p.coordinatorFromLane==targetLane and
+            math.abs(gap)<dynamicWindow+4.0 then return false end
         if other.p.coordinatorTargetLane==targetLane and
             math.abs(gap)<dynamicWindow+4.0 then return false end
       end
@@ -1255,12 +1257,13 @@ local function coordinatorMove(record,targetLane,records,reason,otherIndex)
   if targetLane<1 or targetLane>record.lanes.count or
       math.abs(targetLane-current)~=1 then return false end
   if not coordinatorLaneFree(record,targetLane,records,8.0) then return false end
+  record.p.coordinatorFromLane=current
   record.p.coordinatorTargetLane=targetLane
   record.p.coordinatedLane=targetLane
   record.p.coordinatorOffset=record.lanes.centers[targetLane]
   record.p.baseLaneOffset=record.p.coordinatorOffset
   record.p.laneOffset=record.p.coordinatorOffset
-  record.p.coordinatorChangeT=0
+  record.p.coordinatorChangeT=1.5
   if reason=="PASS" then
     record.p.passTargetIndex=otherIndex
     record.p.overtakeSide=targetLane>current and 1 or -1
@@ -1295,6 +1298,11 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         p.routeProgress=progress;p.routeLocked=true
         p.segIdx=seg or p.segIdx;p.latOff=lateral or p.latOff
         p.projectionLost=false
+        if p.coordinatorFromLane and
+            math.abs((lateral or p.latOff or 0)-
+              safeNumber(p.coordinatorOffset,0))<0.30 then
+          p.coordinatorFromLane=nil
+        end
         local lanes=coordinatorLaneGeometry(p.segIdx,car)
         p.coordinatorLaneCount=lanes.count
         p.coordinatorChangeT=math.max(0,safeNumber(p.coordinatorChangeT)-dt)
