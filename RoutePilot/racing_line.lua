@@ -133,7 +133,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       if #list==0 then
         -- Fail closed: never manufacture an edge candidate inside an
         -- occupied corridor. Longitudinal following handles the blocked road.
-        return nil,"NO_PATH"
+        return nil,"NO_PATH",d
       end
       local previous=sampleFn(route,progress+math.max(0,d-step))
       local following=sampleFn(route,progress+d+step)
@@ -192,14 +192,14 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       end
       for _,node in pairs(bestByPair) do nextLayer[#nextLayer+1]=node end
       layer=nextLayer
-      if #layer==0 then return nil, "NO_PATH" end
+      if #layer==0 then return nil, "NO_PATH",station*step end
     end
 
     local best=nil
     for _,node in ipairs(layer) do
       if not best or node.cost<best.cost then best=node end
     end
-    if not best then return nil, "NO_PATH" end
+    if not best then return nil, "NO_PATH",length end
     local node,station=best,n
     while node and station>=2 do
       offsets[station]=candidateSets[station][node.b]
