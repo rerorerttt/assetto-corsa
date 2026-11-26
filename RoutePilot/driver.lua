@@ -412,6 +412,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.returningFromPass=false
     p.returnFromOffset=nil
     p.returnTargetIndex=nil
+    p.passFromOffset=nil
     p.passLat=nil
     p.passTargetIndex=nil
   end
@@ -839,7 +840,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local originalFailure=planFailure or (not nextPlan and "NO_PLAN" or nil)
   local fallbackKind=nil
   local holdPreviousPlan=false
-  if not nextPlan and (mode=="PASS" or mode=="RETURN") then
+  if not nextPlan and (mode=="PASS" or mode=="RETURN" or mode=="YIELD") then
     -- A new far-horizon sample can fail on a later bend even while the
     -- previously validated near-field path is still usable. Replan a shorter
     -- reserved corridor first; if that also fails, retain the last valid plan
