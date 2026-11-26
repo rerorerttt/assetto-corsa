@@ -84,7 +84,7 @@ local function initialProjectionValid(result, heading)
   return true
 end
 
-local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, dt)
+local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, dt, recovery)
   refreshRouteMetrics()
   if not state.routeGeometry then return nil end
   local locked=allowGlobal ~= true and hintProgress ~= nil
@@ -114,7 +114,8 @@ local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, d
     end
   end
   if not result then return nil end
-  if not locked and not initialProjectionValid(result,car.look) then return nil end
+  if recovery and safeNumber(result.distance,math.huge)>100.0 then return nil end
+  if not locked and not recovery and not initialProjectionValid(result,car.look) then return nil end
   return result.s, result.lateral, result.seg, result.t, result.distance,
     result.tx, result.tz
 end
@@ -363,8 +364,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- Project onto the continuous spline, then aim at a point measured by
   -- arc distance. The controller never aims at the next raw recorded node.
   local locked=p.routeLocked and p.routeProgress~=nil
+  local recovery=p.offTrackRecovering==true
+  if recovery then p.routeLocked=false end
   local ps,pl,pg,pt,pd,tx,tz=routeProjection(
-    car,p.segIdx,not locked,p.routeProgress,speed,dt)
+    car,p.segIdx,recovery or not locked,recovery and nil or p.routeProgress,speed,dt,recovery)
   local projection=ps and {s=ps,lateral=pl,seg=pg,t=pt,distance=pd,tx=tx,tz=tz} or nil
   if not projection or (p.spawnSeeded and projection.distance>8.0) then
     p.projectionLost=true; p.targetSpeed=0; p.gas=0; p.brake=1; p.lineDist=999
@@ -676,6 +679,14 @@ end
 
 local function updateRacingPlan(carIndex,car,p,speed,dt)
   refreshRouteMetrics()
+  if p.offTrackRecovering then
+    p.racingPlan=nil
+    p.racingPlanBlocked=false
+    p.racingPlanTrafficBlocked=false
+    p.racingPlanBlockedDistance=nil
+    p.racingPlanTargetOffset=nil
+    return
+  end
   if p.emergencyEscape then
     p.racingPlan=nil
     p.racingPlanBlocked=false
@@ -1571,8 +1582,14 @@ function Driver.update(carIndex, car, dt)
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
   local previousRouteProgress=p.routeProgress
+  local recovering=p.offTrackRecovering==true or safeNumber(p.offTrackT)>0
+  local projectionHint=p.routeProgress
+  if recovering then
+    p.routeLocked=false
+    projectionHint=nil
+  end
   local progress, projectedLateral, projectedSeg, _, projectionDistance =
-    routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
+    routeProjection(car,p.segIdx,recovering or not p.routeLocked,projectionHint,speed,dt,recovering)
   if progress==nil and not p.spawnSeeded and previousRouteProgress~=nil then
     -- Off-track recovery may use a nearby global projection, but only when
     -- heading and route-progress continuity agree. This avoids jumping to a
@@ -1598,7 +1615,7 @@ function Driver.update(carIndex, car, dt)
       end
     end
   end
-  if p.spawnSeeded and
+  if p.spawnSeeded and not recovering and
      (projectionDistance==nil or projectionDistance>8.0) then
     progress=nil
   end
@@ -1622,8 +1639,20 @@ function Driver.update(carIndex, car, dt)
   end
   if outsideBounds or p.projectionLost then
     p.offTrackT=safeNumber(p.offTrackT)+dt
+    p.offTrackRecovering=true
+    if not p.offTrackRecoveryLogged then
+      p.offTrackRecoveryLogged=true
+      H.log("OFFTRACK_RECOVERY_BEGIN id=%d distance=%.2f lateral=%.2f",
+        carIndex,safeNumber(projectionDistance,999),safeNumber(projectedLateral,999))
+    end
   else
+    if p.offTrackRecovering then
+      H.log("OFFTRACK_RECOVERY_COMPLETE id=%d time=%.2f lateral=%.2f",
+        carIndex,safeNumber(p.offTrackT),safeNumber(projectedLateral))
+    end
     p.offTrackT=0
+    p.offTrackRecovering=false
+    p.offTrackRecoveryLogged=false
   end
 
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
@@ -1653,18 +1682,24 @@ function Driver.update(carIndex, car, dt)
     p.stuck=0
   end
   local rescueReason=nil
-  if p.stuck>=RESCUE_TIME then rescueReason="stuck_5s"
-  elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_10s" end
+  if p.emergencyBlockedT>=10.0 then rescueReason="traffic_blocked_10s"
+  elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_recovery_failed_10s"
+  elseif p.stuck>=RESCUE_TIME then rescueReason="stuck_5s" end
   if rescueReason and p.rescueRetryT<=0 then
-    p.stuck=0;p.offTrackT=0;p.rescueRetryT=5.0
+    p.stuck=0
+    p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
-    H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s",
-      carIndex,rescueReason,tostring(rescued))
+    H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s elapsed=%.2f",
+      carIndex,rescueReason,tostring(rescued),
+      rescueReason=="traffic_blocked_10s" and safeNumber(p.emergencyBlockedT) or safeNumber(p.offTrackT))
     if rescued then return end
   end
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
+  if p.offTrackRecovering and not p.projectionLost then
+    targetSpeed=math.min(targetSpeed,8.0)
+  end
   targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   -- Ordinary optimiser failures use the route-spline fallback; only NO_FIT stops.
   -- Overtake state can change in this frame; rebuild the steering path before
