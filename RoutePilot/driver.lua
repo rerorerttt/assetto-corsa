@@ -1627,9 +1627,13 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
 
   local leaderPace=math.max(0,leaderSpeed or 0)
   local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
-  -- Predict one second of available acceleration rather than treating an
-  -- unbounded cruise target as an instantaneous speed advantage.
-  local speedAdvantage=speed-leaderPace+acceleration*1.5
+  local leaderState=state.p[leaderIndex]
+  local leaderAcceleration=clamp(safeNumber(
+    leaderState and leaderState.accelEstimate,acceleration),0.5,18.0)
+  -- Compare predicted speeds, not our acceleration against a fictitious
+  -- stationary leader: equal cars at equal speed must not trigger passes.
+  local relativeAcceleration=acceleration-leaderAcceleration
+  local speedAdvantage=speed-leaderPace+relativeAcceleration*1.5
   local slower=speedAdvantage>=1.5
   if slower then
     local targetCar=ac.getCar(leaderIndex)
@@ -1641,15 +1645,15 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     -- before the target was passed when the initial gap was large.
     local requiredClosure=math.max(0,safeNumber(gap))+clearanceDistance
     local relativeSpeed=speed-leaderPace
-    local passTime
-    local estimatedPassDistance
-    if relativeSpeed>=3.0 then
+    local passTime=math.huge
+    local estimatedPassDistance=math.huge
+    if relativeSpeed>=1.0 then
       passTime=requiredClosure/relativeSpeed
       estimatedPassDistance=speed*passTime
-    else
+    elseif relativeAcceleration>0.25 then
       passTime=(-relativeSpeed+
-        math.sqrt(relativeSpeed*relativeSpeed+2.0*acceleration*requiredClosure))/
-        acceleration
+        math.sqrt(relativeSpeed*relativeSpeed+
+          2.0*relativeAcceleration*requiredClosure))/relativeAcceleration
       estimatedPassDistance=speed*passTime+
         0.5*acceleration*passTime*passTime
     end
@@ -1704,11 +1708,18 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
                 local farLength=math.max(3.0,safeNumber(farCar and farCar.aabbSize and farCar.aabbSize.z,4.5))
                 local required=farGap+ownLength+farLength+6.0
                 local relative=speed-(farCar and safeNumber(farCar.speedMs) or leaderPace)
-                local accel=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
-                local t=relative>=1.0 and required/relative or
-                  (-relative+math.sqrt(relative*relative+2.0*accel*required))/accel
+                local farAcceleration=clamp(safeNumber(
+                  farState and farState.accelEstimate,leaderAcceleration),0.5,18.0)
+                local relativeAccel=acceleration-farAcceleration
+                local t=math.huge
+                if relative>=1.0 then
+                  t=required/relative
+                elseif relativeAccel>0.25 then
+                  t=(-relative+math.sqrt(relative*relative+
+                    2.0*relativeAccel*required))/relativeAccel
+                end
                 groupPassDistance=math.max(groupPassDistance,
-                  speed*t+0.5*accel*t*t)
+                  math.min(1000.0,speed*t+0.5*acceleration*t*t))
                 local groupOffset=groupPassDistance<=300.0 and
                   findPassingOffset(carIndex,car,p,leaderIndex,
                     leaderLateral,speed,groupPassDistance) or nil
