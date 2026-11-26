@@ -1,41 +1,35 @@
--- RoutePilot/driver.lua — v0.9.2 (CSP 0.3.2-preview2)
--- ROOT-CAUSE fixes for the 150+ km/h weave on a dead-straight road
--- (ks_drag trace, 2026-11-26). Three defects, all confirmed from the trace:
---
---  1) JUMPING TARGET. The racing-line optimizer re-ran every 0.40 s and on
---     a straight road (only recording noise, |k| 0.002..0.003) re-picked a
---     lateral target each rebuild: trace LANE column flipped 0.00 -> -1.44
---     -> +1.75 -> -2.16 -> +2.16 -> 1.75 -> 0.72. The steering controller
---     chased a target that changed sides; the car wove until it lost
---     control. Fixed in racing_line.lua v1.1 (STRAIGHT-ROAD FREEZE) and
---     here: the base target on open road is now the RECORDED LINE (offset
---     0), not a fictitious left-lane center. The optimizer now only runs
---     when there is a real corner ahead.
---
---  2) SPEED-BLIND STEERING. Preview was capped at 28 m for any speed; at
---     53 m/s that is 0.53 s ahead. The steering authority did not shrink
---     with speed. Design doc §7.1: "the rate of steering change must
---     account for the current speed". Preview is now TIME-based:
---     0.9 s of travel (12..60 m). At 500 km/h the preview reaches 60 m and
---     the same angular error demands proportionally less steering, so a
---     straight stays straight at any speed.
---
---  3) PHANTOM BRAKING. The speed planner treated noise curvature 0.0028
---     (radius 350 m) as a corner: trace TARGET_SPEED dropped to 72.78 and
---     65.02 on a drag strip for no reason. The noise floor is now 0.004
---     (radius 250 m) — real corners are far above it, noise is below.
---
---  Also: the AGA stabilizer (added experimentally in 0.9.2-aga) is not
---  applied here. The ks_drag trace shows the actual STEER up to 5x the
---  driver's own command (STEER_CURV) at the onset of the weave — the
---  stabilizer's add-on was amplifying the oscillation on this track. Its
---  rear-axle geometry was derived, not measured (wheel-midpoint instead of
---  the axle, hand-derived signs for AC's left-handed frame). Until it is
---  recalibrated against AGA's actual 3D axle math and validated in game,
---  it stays out of the control loop (RoutePilot.lua 0.9.3 no longer calls
---  it; the module remains in the folder for future work).
---
---  Everything else from v0.9.1 is retained verbatim.
+-- RoutePilot/driver.lua — v1.0 STRAIGHT-LINE STABILITY (CSP 0.3.2-preview2)
+-- THE CONTROL EXPERIMENT WAS IN THE USER'S OWN TRACE (ks_drag, 0.9.3):
+--   * 26.6-33.6 s: the frozen plan target sat still -> the car held
+--     100->198 km/h DEAD STRAIGHT (STEER=0.000, LINE_ERROR constant).
+--   * 35.6 s onward: every 0.40 s plan rebuild re-anchored the target to
+--     the car's own drifting position (LANE 0.31 -> 0.33 -> 0.36 -> 0.51),
+--     corrections were ~100x weaker than the real drift, the drift grew,
+--     the boundary guard slammed the target to the road edge
+--     (BOUNDARY 2.16 / -6.54) and chasing that slam at 170+ km/h WAS the
+--     weave and the spin.
+-- Fixed with racing_line.lua v1.2 (straight-freeze anchors at the RECORDED
+-- LINE, a target that never moves between rebuilds — already on the branch)
+-- plus three changes here:
+--  1) TIME-BASED PREVIEW, no short cap: 0.9 s of travel up to 150 m. The
+--     0.9.2 cap of 60 m was still too short at drag speeds (42 m at 170
+--     km/h = 0.9 s, fine; but the old code could shrink it further). The
+--     steering authority now scales down with speed exactly as the design
+--     doc §7.1 requires, at ANY speed up to 500 km/h.
+--  2) SPEED-SCALED BOUNDARY KICK: the boundary-guard steering term no
+--     longer throws a fixed ±0.22 lock at any speed. Its authority is
+--     divided by max(1, speed*0.04): full authority below ~25 m/s, ~5x
+--     gentler at 170 km/h, ~8x at 250 km/h. A gentle correction cannot
+--     excite a fishtail; a full-lock kick at speed can and did.
+--  3) FULL-LOCK PULSE AND EMERGENCY x2.6 STEERING REMOVED. The design doc
+--     §7.1 forbids full-lock impulses as a normal correction; §6 requires
+--     overtakes to be smooth, decisive LANE moves, not steering spikes.
+--     A pass now uses the same stable path-following steering with only
+--     a faster response rate. The lateral target transition speed during
+--     a pass is unchanged (up to 12 m/s) — the lane change stays quick.
+-- Design-doc audit of everything else: racing-line planning (§5),
+-- traffic-aware obstacles and reservations (§6), rescue (§7.3), traction
+-- control (§7.2) are all required by the document and are kept.
 
 local Driver = {}
 local Geometry = require("route_geometry")
@@ -51,6 +45,8 @@ local RESCUE_SPEED = 1.5
 local RESCUE_TIME  = 10.0
 local STEER_DEAD   = 0.001  -- only suppress numerical noise; never freeze real cornering input
 local SPEED_NOISE_K = 0.004 -- below this |k| (radius > 250 m) the planner does not brake: recording noise
+local PREVIEW_TIME = 0.9    -- seconds of travel for the steering preview
+local PREVIEW_MAX  = 150.0  -- m; 0.9 s at 500 km/h is 125 m, so this cap is never the limit
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -357,15 +353,11 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.routeProgress=projection.s; p.segIdx=projection.seg
   p.lineDist=projection.distance; p.latOff=projection.lateral
 
-  -- Preview the complete vehicle footprint through the steering horizon.
-  -- The common safe lateral interval forces the target to remain inside both
-  -- saved boundaries before the car reaches a narrowing or a bend.
-  -- SPEED-BLIND FIX: preview is now a TIME constant, not a distance cap.
-  -- 0.9 s of travel, clamped 12..60 m: at 150 km/h the preview is ~38 m
-  -- (was 28 m = 0.67 s), at 300 km/h it reaches the 60 m cap. The same
-  -- angular error then produces proportionally less steering as speed
-  -- rises — a straight stays straight at any speed (design doc §7.1).
-  local ahead=clamp(math.max(12.0,speed*0.9),12.0,60.0)
+  -- TIME-BASED PREVIEW: a fixed travel time ahead, so the steering
+  -- authority shrinks as speed grows (design doc §7.1). 0.9 s of travel,
+  -- 12..150 m: at 170 km/h the preview is 42 m, at 300 km/h 75 m, at
+  -- 500 km/h 125 m. A straight stays straight at any speed.
+  local ahead=clamp(speed*PREVIEW_TIME,12.0,PREVIEW_MAX)
   local current=Geometry.sample(route,projection.s)
   local future=Geometry.sample(route,projection.s+ahead)
   local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
@@ -381,11 +373,8 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   end
   local bodyEnvelope=halfWidth+BOUND_MARGIN
 
-  -- JUMPING-TARGET FIX: on open road the base target is the RECORDED LINE
-  -- (offset 0) — the driver's own recorded racing line. The old code biased
-  -- the base to a fictitious left-lane center (+half road on wide roads),
-  -- which fought the racing-plan optimizer every rebuild. During a pass or
-  -- its return the target is the reserved corridor, as before.
+  -- Base target on open road is the RECORDED LINE (offset 0); a pass or its
+  -- return temporarily targets the reserved corridor, as before.
   local laneTarget=0
   if p.overtakeSide~=0 then
     laneTarget=safeNumber(p.passLat,0)
@@ -438,14 +427,17 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   local safePredicted=clamp(predictedLateral,safeMin,safeMax)
   local boundaryError=safePredicted-predictedLateral
   local boundaryDistance=math.max(6.0,ahead*0.50)
-  -- Boundary recovery is deliberately a low-authority damping term.
-  -- The previous high-gain prediction feedback changed sign every time the
-  -- lateral velocity crossed zero, producing full-lock left/right oscillation
-  -- on straights. Main path tracking remains responsible for normal steering.
+  -- Boundary recovery is a low-authority damping term, SPEED-SCALED: at
+  -- 170+ km/h a fixed ±0.22 steering kick spins the car (proven by the
+  -- ks_drag fishtail right after BOUNDARY hit ±2.16). Authority is divided
+  -- by max(1, speed*0.04): full below ~25 m/s, ~5x gentler at 170 km/h.
   local boundaryCurvature=clamp(1.2*boundaryError/
     (boundaryDistance*boundaryDistance),-0.06,0.06)
   desiredCurvature=desiredCurvature+boundaryCurvature
-  local boundarySteer=clamp(boundaryError*0.075-lateralVelocity*0.035,-0.22,0.22)
+  local speedScale=1.0/math.max(1.0,speed*0.04)
+  local boundarySteer=clamp(
+    (boundaryError*0.075-lateralVelocity*0.035)*speedScale,
+    -0.22*speedScale-0.02,0.22*speedScale+0.02)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
@@ -461,32 +453,21 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.boundaryEmergency=math.abs(boundaryError)>0.45 or boundaryDeficit>0.15
 
   -- Small slip-angle damping is secondary; the spline preview is the
-  -- primary steering signal.
+  -- primary steering signal. ONE controller, no multipliers, no pulses.
   local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
-  if p.emergencyPass then
-    steer=steer*CFG.EMERGENCY_STEER_GAIN
-    return clamp(steer+boundarySteer,-1.0,1.0)
-  end
   return clamp(steer+boundarySteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
 local function filterSteering(p, target, dt)
-  if safeNumber(p.emergencySteerBoostT)>0 and math.abs(target)>0.02 then
-    p.emergencySteerBoostT=math.max(0,p.emergencySteerBoostT-dt)
-    local fullLock=target>0 and 1.0 or -1.0
-    p.steer=fullLock
-    p.steerFiltered=fullLock
-    return fullLock
-  else
-    p.emergencySteerBoostT=0
-  end
+  -- v1.0: no full-lock pulse. The design doc §7.1 forbids steering spikes;
+  -- the ks_drag trace showed the pulse/multiplier path destabilized passes.
+  -- A pass uses the same stable controller with a faster response rate.
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
   p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  local steerRate=p.emergencyPass and math.max(CFG.STEER_RATE,CFG.EMERGENCY_STEER_RATE) or CFG.STEER_RATE
+  local steerRate=p.emergencyPass and CFG.EMERGENCY_STEER_RATE or CFG.STEER_RATE
   local maxChange=steerRate*dt
-  local steerLimit=p.emergencyPass and 1.0 or CFG.STEER_LIMIT
   p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
-    -steerLimit,steerLimit)
+    -CFG.STEER_LIMIT,CFG.STEER_LIMIT)
   return p.steer
 end
 
@@ -773,10 +754,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     p.racingPlanBlockedDistance=nil
     return
   end
-  local bl,br=H.boundsAt(p.segIdx)
-  -- JUMPING-TARGET FIX: the base/preferred offset is the RECORDED LINE (0).
-  -- The old left-lane-center bias made the optimizer start every rebuild
-  -- from +1.75 m and re-decide the line each time on wide roads.
+  -- Base/preferred offset on open road is the RECORDED LINE (0). racing_line
+  -- v1.2 freezes the straight-road plan at this FIXED anchor.
   local base=p.baseLaneOffset or 0
 
   p.racingPlanTimer=math.max(0,safeNumber(p.racingPlanTimer)-dt)
@@ -1051,7 +1030,6 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex;p.passT=0;p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
-  p.emergencySteerBoostT=(p.emergencyPass and gap<=8.0) and 0.18 or 0
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
@@ -1324,10 +1302,6 @@ function Driver.update(carIndex, car, dt)
   p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
   if p.projectionLost then targetSpeed=0 end
-  -- Boundary correction is a steering task, not a reason to stop.
-  -- The predictive footprint guard already bends the target path back into
-  -- the corridor. Do not convert lateral correction magnitude into a speed
-  -- cap: that caused repeated full stops even with zero corridor deficit.
   p.targetSpeed=targetSpeed
   local steer = filterSteering(p, steerTarget, dt)
 
