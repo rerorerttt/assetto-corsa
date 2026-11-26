@@ -549,7 +549,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   p.yawRateTarget=yawTarget
   p.yawRateFeedbackError=yawError
   if p.emergencyEscape and p.emergencyTargetOffset~=nil then
-    local escapeError=p.emergencyTargetOffset-projection.lateral
+    local escapeTarget=clamp(p.emergencyTargetOffset,
+      corridorMin or safeMin,corridorMax or safeMax)
+    p.emergencyTargetOffset=escapeTarget
+    local escapeError=escapeTarget-projection.lateral
     local escapeDirection=escapeError>=0 and 1 or -1
     local towardSpeed=lateralVelocity*escapeDirection
     if math.abs(escapeError)<=0.45 then
@@ -1039,6 +1042,9 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           p.coordinatedLane=clamp(p.coordinatedLane,1,lanes.count)
           p.homeLane=clamp(p.homeLane or p.coordinatedLane,1,lanes.count)
           p.coordinatorOffset=lanes.centers[p.coordinatedLane]
+          if p.emergencyEscape then
+            p.emergencyTargetOffset=p.coordinatorOffset
+          end
         end
         p.coordinatorLaneCount=lanes.count
         p.coordinatorChangeT=math.max(0,safeNumber(p.coordinatorChangeT)-dt)
