@@ -568,9 +568,9 @@ local function roomAt(seg, off)
   return off - bl, br - off
 end
 
--- Divide the measured corridor into logical lanes of approximately equal
--- width. Positive offsets are left of the recorded route. The default lane
--- is the outermost left lane; a pass uses the immediately adjacent lane.
+-- Divide the measured corridor into temporary logical slots of roughly
+-- equal width. Positive offsets are left of the recorded route. Slots are
+-- assigned only while a paired overtake is active.
 local function laneSlotCenter(seg, slot)
   local bl,br=H.boundsAt(seg)
   local width=br-bl
