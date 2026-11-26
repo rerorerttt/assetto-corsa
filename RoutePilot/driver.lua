@@ -777,7 +777,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     local currentOffset=safeNumber(p.laneOffsetCurrent,p.baseLaneOffset or base)
     local aheadGap=carAheadInLane(carIndex,car,currentOffset)
     local lockDistance=math.max(35.0,speed*1.5+15.0)
-    local trafficLock=aheadGap~=nil and aheadGap>=-6.0 and aheadGap<lockDistance
+    local trafficLock=p.pendingYieldTarget~=nil or
+      (aheadGap~=nil and aheadGap>=-6.0 and aheadGap<lockDistance)
     if not trafficLock then
       trafficLock=laneOccupied(carIndex,car,currentOffset,nil)
     end
