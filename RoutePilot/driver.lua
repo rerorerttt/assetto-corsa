@@ -933,7 +933,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   elseif p.yieldRequestBy~=nil and p.yieldOffset~=nil then forcedMode="YIELD" end
   local mode=forcedMode or "OPEN"
   local fixedOffset=nil
-  local fixedTransitionDistance=22.0
+  local fixedTransitionDistance=8.0
   -- Normal racing always uses the complete road corridor, even when other
   -- cars are nearby. Traffic spacing and conflict decisions belong to
   -- updateTrafficControl(); converting every nearby car into a fixed-offset
@@ -954,7 +954,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     local lateralDelta=math.abs(fixedOffset-safeNumber(p.latOff,base))
     local lateralLimit=clamp(
       safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
-    fixedTransitionDistance=math.max(22.0,
+    fixedTransitionDistance=math.max(8.0,
       math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
   end
   -- In OPEN running the optimizer uses the complete road width.
@@ -1170,7 +1170,7 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
     safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
   -- A lane change is a spatial manoeuvre. Its minimum distance grows with
   -- speed so the lateral acceleration remains bounded.
-  local transitionOut=math.max(22.0,
+  local transitionOut=math.max(8.0,
     math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
   if safeNumber(passDistance)<transitionOut then
     return false,"insufficient_transition_distance"
@@ -1258,7 +1258,6 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
-  local separation=(ownWidth+targetWidth)*0.5+0.55
   local candidates={}
   -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
   -- road widths produce 1/2/3/4 slots), never arbitrary 0.30 m offsets.
@@ -1277,7 +1276,10 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   end
   for i=1,laneCount do
     local offset=bl+(i-0.5)*slotWidth
-    if i~=sourceSlot and math.abs(offset-leaderLateral)>=separation then
+    -- The target may currently sit near the slot boundary. Its planned
+    -- yield position is moved to the far edge of its own slot, so rejecting
+    -- the pass by the *current* lateral gap would deadlock two-slot roads.
+    if i~=sourceSlot then
       candidates[#candidates+1]=offset
     end
   end
@@ -1691,9 +1693,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     return targetSpeed
   end
   p.trafficAction="FOLLOW";p.trafficReason="leader_in_path"
-  -- Overtake opportunities are evaluated only by the 10-second global
-  -- coordinator. Per-car control performs no independent pass scan or ETA
-  -- calculation; it follows the current corridor until a batch order arrives.
+  -- Overtake opportunities are evaluated by the shared 4 Hz coordinator.
+  -- No per-car queue timer is allowed to delay a valid passing decision.
   p.followTimer=0;p.blockedT=0;p.trafficPriority=0
   local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
   p.trafficReason="coordinator_order_pending"
@@ -1894,8 +1895,8 @@ end
 -- any controller writes controls. This makes traffic decisions independent of
 -- the order in which cars are subsequently processed.
 local function coordinateTrafficFrame(sim,dt,frame)
-  -- Consume the latest per-car pace estimates; this function is called only
-  -- by the 10-second batch planner, never from the per-car physics loop.
+  -- Consume the latest per-car pace estimates in one shared traffic snapshot;
+  -- keep the expensive all-car arbitration out of the per-car physics loop.
   for i=0,sim.carsCount-1 do
     local car=ac.getCar(i);local p=state.p[i]
     if car and car.isActive and car.isAIControlled and p and
@@ -1979,37 +1980,60 @@ local function coordinateTrafficFrame(sim,dt,frame)
       local passOffset=ownSlot==sourceSlot and
         findPassingOffset(i,car,p,q.leader,q.leaderLateral,
           safeNumber(car.speedMs),q.distance,true,ignore) or nil
-      local yieldOffset=bl+(sourceSlot-0.5)*slotWidth
       local passSlot=passOffset and clamp(math.floor((passOffset-bl)/math.max(0.1,slotWidth))+1,1,count) or sourceSlot
       local valid=passOffset~=nil and count>=2 and passSlot~=sourceSlot
+      local yieldTargets={}
+      -- The slower pack moves away from the passing side, all the way to the
+      -- usable outer edge of its current logical slot. This creates real body
+      -- clearance even when both cars were originally driving on the centre
+      -- of a two-slot road.
+      local sourceCenter=bl+(sourceSlot-0.5)*slotWidth
+      local yieldDirection=passOffset and passOffset>sourceCenter and -1 or 1
       if valid then
         for k=1,#group do
           local m=state.p[group[k]];local mc=ac.getCar(group[k])
-          if not m or not mc or not m.frameProjection or not m.frameProjection.valid then valid=false;break end
+          if not m or not mc or not m.frameProjection or not m.frameProjection.valid then
+            valid=false;break
+          end
           local ml,mr=H.boundsAt(m.segIdx or lp.segIdx)
           local mn=math.max(1,math.floor(((mr-ml)+1)/4));local mw=(mr-ml)/mn
           local ms=1
-          for s=2,mn do
-            if math.abs(ml+(s-0.5)*mw-safeNumber(m.latOff))<
-               math.abs(ml+(ms-0.5)*mw-safeNumber(m.latOff)) then ms=s end
+          for si=2,mn do
+            if math.abs(ml+(si-0.5)*mw-safeNumber(m.latOff))<
+               math.abs(ml+(ms-0.5)*mw-safeNumber(m.latOff)) then ms=si end
           end
+          local lo,hi
           local fx,fz=normalize2(mc.look.x,mc.look.z)
-          local lo,hi=safeCorridorForPreview(state.routeGeometry,m.routeProgress,22,mc,fx,fz)
-          if mn<2 or ms~=sourceSlot or not lo or not hi or
-             yieldOffset<lo or yieldOffset>hi or laneOccupied(group[k],mc,yieldOffset,ignore) then
+          lo,hi=safeCorridorForPreview(state.routeGeometry,m.routeProgress,22,mc,fx,fz)
+          if mn<2 or ms~=sourceSlot or not lo or not hi then
             valid=false;break
           end
+          local halfWidth=math.max(0.75,safeNumber(mc.aabbSize and mc.aabbSize.x,2.0)*0.5)
+          local slotLow=ml+(sourceSlot-1)*mw
+          local slotHigh=slotLow+mw
+          local safeLow=math.max(ml+halfWidth+BOUND_MARGIN,slotLow+halfWidth+0.12,lo)
+          local safeHigh=math.min(mr-halfWidth-BOUND_MARGIN,slotHigh-halfWidth-0.12,hi)
+          if safeHigh-safeLow<0.16 then valid=false;break end
+          local memberYieldOffset=yieldDirection<0 and safeLow or safeHigh
+          local passHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+          if math.abs(passOffset-memberYieldOffset)<
+               halfWidth+passHalfWidth+0.45 or
+             laneOccupied(group[k],mc,memberYieldOffset,ignore) then
+            valid=false;break
+          end
+          yieldTargets[k]=memberYieldOffset
         end
       end
       if valid then
         for k=1,#group do
           local m=state.p[group[k]];local mc=ac.getCar(group[k])
+          local yieldOffset=yieldTargets[k]
           m.yieldRequestBy=i;m.yieldOffset=yieldOffset
           m.yieldFromOffset=safeNumber(m.latOff,yieldOffset)
           m.yieldStartProgress=m.routeProgress
           local delta=math.abs(yieldOffset-m.yieldFromOffset)
           local lat=clamp(safeNumber(m.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4,12)
-          m.yieldTransitionDistance=math.max(22,
+          m.yieldTransitionDistance=math.max(8,
             math.max(0,safeNumber(mc.speedMs))*math.sqrt(6*delta/lat))
           m.yieldReady=true
         end
@@ -2037,9 +2061,8 @@ function Driver.prepareFrame(sim,dt)
   if not sim then return end
   state.trafficFrame=(state.trafficFrame or 0)+1
   local frame=state.trafficFrame
-  -- Re-evaluate traffic frequently enough to react before a queue forms.
-  -- The expensive route snapshot and arbitration run at 4 Hz, not every
-  -- physics frame; individual controllers retain live local safety checks.
+  -- Re-evaluate traffic at 4 Hz. Individual controllers retain live local
+  -- safety checks between coordinator passes.
   state.trafficPlanTimer=math.max(0,safeNumber(state.trafficPlanTimer)-math.max(0,safeNumber(dt,0.05)))
   if state.trafficPlanTimer>0 then return end
   state.trafficPlanTimer=0.25
