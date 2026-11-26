@@ -447,7 +447,12 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   -- Small slip-angle damping is secondary; the spline preview is the
   -- primary steering signal.
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN+p.slipAngle*0.18
+  -- Do not feed body slip angle directly into the steering command.
+  -- This term is not yaw damping: during a growing slide it can reinforce
+  -- the deviation and create a left/right steering feedback loop. The
+  -- autonomous path controller owns steering; axle-based stability control
+  -- will be added separately after its signs and gains are validated.
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN
   if p.emergencyPass then
     steer=steer*CFG.EMERGENCY_STEER_GAIN
     return clamp(steer+boundarySteer,-1.0,1.0)
@@ -1039,7 +1044,13 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   p.overtakeDeniedLogged=false
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
   p.overtakeSide=offset<source and -1 or 1
-  p.passTargetIndex=leaderIndex;p.passT=0;p.followTimer=0;p.blockedT=0
+  p.passTargetIndex=leaderIndex
+  p.passT=0
+  p.passBlockedT=0
+  p.passDeadline=math.max(PASS_TIMEOUT,
+    (math.max(20.0,safeNumber(passDistance,60.0))/
+      math.max(8.0,speed))*2.0+4.0)
+  p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
   p.emergencySteerBoostT=(p.emergencyPass and gap<=8.0) and 0.18 or 0
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
@@ -1077,6 +1088,41 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       passSafeSpeed = math.min(passSafeSpeed,
         safeFollowingSpeed(rightGap, rightLeaderSpeed or 0,p.brakeAccelEstimate))
     end
+
+    -- A pass can become blocked after its initial corridor reservation
+    -- (another car may enter the lane or the target may stop). Do not keep
+    -- the AI committed to that lane indefinitely. Abort only after sustained
+    -- near-zero progress and only when the original lane is physically clear.
+    if speed < 3.0 and passSafeSpeed < 2.5 then
+      p.passBlockedT = safeNumber(p.passBlockedT) + dt
+    else
+      p.passBlockedT = 0
+    end
+
+    local returnOffset=p.passFromOffset or p.baseLaneOffset or defaultOffset
+    local passExpired=p.passT >= safeNumber(p.passDeadline,PASS_TIMEOUT)
+    local passDeadlocked=p.passBlockedT >= 2.5
+    if (passExpired or passDeadlocked) and
+       not laneOccupied(carIndex,car,returnOffset,nil) then
+      p.overtakeSide=0
+      p.passTargetIndex=nil
+      p.emergencyPass=false
+      p.returningFromPass=true
+      p.laneOffset=returnOffset
+      p.baseLaneOffset=returnOffset
+      p.passFromOffset=nil
+      p.passLat=nil
+      p.passT=0
+      p.passBlockedT=0
+      p.passDeadline=nil
+      p.followTimer=0
+      p.blockedT=0
+      p.overtakeRetryT=2.0
+      H.log("CAR=%d OVERTAKE_ABORT reason=%s return=%.2f",
+        carIndex,passDeadlocked and "blocked" or "timeout",returnOffset)
+      return targetSpeed
+    end
+
     local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
     local passedClearance = false
     if target and target.isActive then
@@ -1113,7 +1159,6 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       passedClearance = true
     end
 
-    local returnOffset=p.passFromOffset or p.baseLaneOffset or defaultOffset
     if passedClearance and
        not laneOccupied(carIndex,car,returnOffset,p.passTargetIndex) then
       p.overtakeSide=0
@@ -1125,6 +1170,8 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
       p.passFromOffset=nil
       p.passLat=nil
       p.passT=0
+      p.passBlockedT=0
+      p.passDeadline=nil
       p.followTimer=0
       p.blockedT=0
       H.log("CAR=%d OVERTAKE_END return=%.2f clearance=2_car_lengths",
@@ -1314,6 +1361,7 @@ function Driver.update(carIndex, car, dt)
 
   p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
+  p.steerTarget = steerTarget
   if p.projectionLost then targetSpeed=0 end
   -- Boundary correction is a steering task, not a reason to stop.
   -- The predictive footprint guard already bends the target path back into
@@ -1400,7 +1448,7 @@ function Driver.telemetryLine(i, car, p)
   local mode=p.player and " MODE=PLAYER" or
     (p.playerAutopilot and " MODE=AI_AUTOPILOT" or "")
   return string.format(
-    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f AXLE_VALID=%d FRONT_AXLE_RAD=%.3f REAR_AXLE_RAD=%.3f FRONT_TIRE_DEG=%.2f REAR_TIRE_DEG=%.2f FRONT_NDSLIP=%.3f REAR_NDSLIP=%.3f YAW_RATE_RAD=%.3f WHEELBASE_M=%.2f STEER_LOCK_DEG=%.1f%s",
+    "CAR=%d POS=(%.2f,%.2f,%.2f) SPEED=%.2f STEER=%.3f GAS=%.3f BRAKE=%.3f TARGET_SPEED=%.2f LINE_ERROR=%.2f SEGMENT=%d PACE=%.2f BOUNDS=[%.1f,%.1f] OFF=%.1f OT_SIDE=%d CROSS=%.2f HEAD=%.3f CURVE=%.4f ROUTE=%.1f LANE=%.2f SAT=%d WHEEL_SLIP=%.3f TC_SCALE=%.2f STEER_CURV=%.4f BOUNDARY=%.2f SAFE=[%.2f,%.2f] BODY=%.2f DEFICIT=%.2f BRAKE_ACC=%.2f DRIVE_ACC=%.2f GRIP=%.2f STUCK=%.1f AXLE_VALID=%d FRONT_AXLE_RAD=%.3f REAR_AXLE_RAD=%.3f FRONT_TIRE_DEG=%.2f REAR_TIRE_DEG=%.2f FRONT_NDSLIP=%.3f REAR_NDSLIP=%.3f YAW_RATE_RAD=%.3f WHEELBASE_M=%.2f STEER_LOCK_DEG=%.1f STEER_TARGET=%.3f SLIP_ANGLE_DEG=%.2f YAW_EST_RAD=%.3f PASS_BLOCKED=%.1f PASS_TIME=%.1f%s",
     i, car.position.x, car.position.y, car.position.z,
     safeNumber(car.speedMs), p.steer, p.gas, p.brake, p.targetSpeed,
     p.lineDist, p.segIdx, (p.pace or 0), bl, br, p.latOff, p.overtakeSide,
@@ -1419,7 +1467,9 @@ function Driver.telemetryLine(i, car, p)
     safeNumber(p.frontTireSlipDeg), safeNumber(p.rearTireSlipDeg),
     safeNumber(p.frontNdSlip), safeNumber(p.rearNdSlip),
     safeNumber(p.measuredYawRate), safeNumber(p.measuredWheelbase),
-    safeNumber(p.measuredSteerLock), mode)
+    safeNumber(p.measuredSteerLock),
+    safeNumber(p.steerTarget), math.deg(safeNumber(p.slipAngle)),
+    safeNumber(p.yawRate), safeNumber(p.passBlockedT), safeNumber(p.passT), mode)
 end
 
 return Driver
