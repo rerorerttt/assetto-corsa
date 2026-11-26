@@ -1761,22 +1761,36 @@ function Driver.update(carIndex, car, dt)
   if p.racingPlanBlocked and p.overtakeSide~=0 and not p.projectionLost then
     local returnOffset=p.baseLaneOffset or p.passFromOffset or 0
     local targetIndex=p.passTargetIndex
-    p.overtakeSide=0
-    p.passTargetIndex=nil
-    p.passLat=nil
-    p.passFromOffset=nil
-    p.passT=0
-    p.passBlockedT=0
-    p.passDeadline=nil
-    p.returningFromPass=false
-    p.laneOffset=returnOffset
-    p.baseLaneOffset=returnOffset
-    p.overtakeRetryT=1.5
-    p.trafficAction="FOLLOW"
-    p.trafficReason="pass_path_rejected_return_to_base_lane"
-    H.log("CAR=%d OVERTAKE_ABORT reason=pass_plan_no_path target=%d return=%.2f",
-      carIndex,targetIndex or -1,returnOffset)
-    updateRacingPlan(carIndex,car,p,speed,dt)
+    local alreadyInBase=math.abs(safeNumber(p.latOff)-returnOffset)<0.55
+    local baseLaneClear=not laneOccupied(carIndex,car,returnOffset,nil)
+    if alreadyInBase or baseLaneClear then
+      p.overtakeSide=0
+      p.passTargetIndex=nil
+      p.passLat=nil
+      p.passFromOffset=nil
+      p.passT=0
+      p.passBlockedT=0
+      p.passDeadline=nil
+      p.returningFromPass=false
+      p.returnFromOffset=nil
+      p.returnTargetIndex=nil
+      p.laneOffset=returnOffset
+      p.baseLaneOffset=returnOffset
+      p.overtakeRetryT=1.5
+      p.trafficAction="FOLLOW"
+      p.trafficReason="pass_path_rejected_return_to_base_lane"
+      H.log("CAR=%d OVERTAKE_ABORT reason=pass_plan_no_path target=%d return=%.2f",
+        carIndex,targetIndex or -1,returnOffset)
+      updateRacingPlan(carIndex,car,p,speed,dt)
+    else
+      -- Do not merge back into an occupied source lane. The hard stop remains
+      -- active only in this exceptional case where neither reserved path has
+      -- a geometry-validated continuation.
+      p.trafficAction="PASSING"
+      p.trafficReason="pass_plan_failed_source_lane_occupied"
+      H.log("CAR=%d PASS_PATH_BLOCKED source_lane_occupied target=%d",
+        carIndex,targetIndex or -1)
+    end
   end
   p.targetSpeed = targetSpeed
 
