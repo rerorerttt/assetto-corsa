@@ -286,3 +286,12 @@ Implemented:
 Open GDD gaps are recorded in ENGINEERING_AUDIT.md: default/inferred road bounds, the not-yet-time-optimal path/speed planner, distributed traffic arbitration, immediate full braking on projection loss, and unbenchmarked multi-car performance.
 
 Validation is static only. GitHub files were fetched back after the edits; no Lua compiler and no Assetto Corsa/CSP runtime test were available. Do not treat this branch as proven stable until the straight-line and subsequent traffic tests confirm it.
+
+
+## 2026-11-26 trace-backed traffic rewrite
+
+The supplied trace showed car 4 starting an urgent pass of car 5 at a 20.7 m gap even though car 4's target speed had fallen to about 22 m/s while car 5's target speed was above 57 m/s. The old pass gate treated an unrestricted AI as having a generic 90 m/s potential and did not compare the target's reachable speed. The pass was therefore impossible and remained active while the fixed-offset planner repeatedly returned `NO_PATH`.
+
+The current revision compares both cars' measured acceleration and target-speed envelopes, solves the relative-acceleration closure distance, and rejects passes without at least a 3 m/s predicted advantage or with an excessive clearance distance. When a pass is accepted, the target and overtaker receive separate adjacent lane slots in one reservation and start moving together; there is no yield-ready wait. Both lanes are rechecked every frame. A blocked pass returns to the original racing line only when physically clear, and the target reservation is held until the overtaker has completed that return.
+
+The trace also exposed an over-broad lane-reservation check that could block a safe return for tens of metres, plus a stale zero target speed after a pass-plan abort. The reservation check now separates physical occupancy from pass arbitration, and the driver recomputes target speed immediately after rebuilding the normal plan. The optional detailed traffic logger is explicitly off by default; ordinary telemetry logging remains active. This revision has passed source-level consistency checks but has not yet been run in the game.
