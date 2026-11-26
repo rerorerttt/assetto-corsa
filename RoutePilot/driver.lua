@@ -2050,8 +2050,18 @@ local function coordinateTrafficFrame(sim,dt,frame)
             frame,i,q.leader,tostring(p.lastPassDeniedReason or "commit_validation_failed"))
         end
       else
-        H.log("TRAFFIC_BATCH_DENY frame=%d pass=%d leader=%d reason=%s",
-          frame,i,q.leader,tostring(p.lastPassDeniedReason or "no_batch_corridor"))
+        -- Pack-wide yielding is optional. If the group cannot form a
+        -- coordinated corridor, try a safe individual pass around this leader.
+        local singleOffset=findPassingOffset(i,car,p,q.leader,q.leaderLateral,
+          safeNumber(car.speedMs),q.distance,false,q.leader)
+        if singleOffset~=nil and beginOvertake(i,car,p,q.gap,q.leader,
+            q.leaderLateral,safeNumber(car.speedMs),q.distance,singleOffset) then
+          H.log("TRAFFIC_SINGLE_PASS frame=%d pass=%d leader=%d gap=%.2f eta=%.2f offset=%.2f",
+            frame,i,q.leader,q.gap,q.eta,singleOffset)
+        else
+          H.log("TRAFFIC_BATCH_DENY frame=%d pass=%d leader=%d reason=%s",
+            frame,i,q.leader,tostring(p.lastPassDeniedReason or "no_batch_corridor"))
+        end
       end
     end
   end
