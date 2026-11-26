@@ -98,9 +98,15 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
 
   -- Check the full oriented rectangle at multiple points along every swept
   -- segment. The centre path alone is never accepted as proof of clearance.
+  local bodySampleCache={}
+  local bodyBoundsCache={}
   local function bodyFitsAt(distance,point,hx,hz)
-    local sample=sampleFn(route,progress+distance)
-    if not sample then return false end
+    local sample=bodySampleCache[distance]
+    if sample==nil then
+      sample=sampleFn(route,progress+distance) or false
+      bodySampleCache[distance]=sample
+    end
+    if sample==false then return false end
     local headingLength=math.sqrt(hx*hx+hz*hz)
     if headingLength<0.001 then return false end
     hx,hz=hx/headingLength,hz/headingLength
@@ -110,8 +116,13 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       halfLength*math.abs(math.sin(angle))+margin
     local nx,nz=-sample.tz,sample.tx
     local offset=(point.x-sample.x)*nx+(point.z-sample.z)*nz
-    local left,right=boundsAt(sample)
-    left,right=safe(left,-2.0),safe(right,2.0)
+    local roadBounds=bodyBoundsCache[distance]
+    if not roadBounds then
+      local left,right=boundsAt(sample)
+      roadBounds={safe(left,-2.0),safe(right,2.0)}
+      bodyBoundsCache[distance]=roadBounds
+    end
+    local left,right=roadBounds[1],roadBounds[2]
     return offset>=left+envelope and offset<=right-envelope
   end
 
