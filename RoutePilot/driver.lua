@@ -637,7 +637,7 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
           local separation=ownHalfWidth+otherHalfWidth+0.35
           local actualGap=math.abs(actualLateral-laneOffset)
           local otherTarget=otherState and
-            (otherState.overtakeSide~=0 or otherState.returningFromPass or otherState.yieldRequestBy~=nil) and
+            (otherState.overtakeSide~=0 or otherState.returningFromPass) and
             safeNumber(otherState.yieldOffset or otherState.laneOffset,actualLateral) or actualLateral
           local reservedGap=math.abs(otherTarget-laneOffset)
           local currentOffset=own and safeNumber(own.laneOffsetCurrent,
@@ -893,11 +893,26 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
 end
 
 local function passingReservationBlocked(carIndex,p,targetOffset,speed)
-  -- Lane reservations are not used as global traffic locks. Real occupancy
-  -- and predicted vehicle footprints are checked at the manoeuvre itself.
+  if p.routeProgress==nil then return true end
+  local range=math.max(16.0,math.max(0,speed)*1.0+8.0)
+  local ownCar=ac.getCar(carIndex)
+  if not ownCar then return true end
+  local ownWidth=math.max(1.5,safeNumber(ownCar.aabbSize and ownCar.aabbSize.x,2.0))
+  for otherIndex,other in pairs(state.p) do
+    if otherIndex~=carIndex and
+       (other.overtakeSide~=0 or other.returningFromPass) and
+       other.routeProgress~=nil and other.laneOffset~=nil then
+      local gap=math.abs(routeGap(p.routeProgress,other.routeProgress))
+      local otherCar=ac.getCar(otherIndex)
+      local otherWidth=math.max(1.5,safeNumber(otherCar and otherCar.aabbSize and otherCar.aabbSize.x,2.0))
+      local lateralSeparation=(ownWidth+otherWidth)*0.5+0.5
+      if gap<range and math.abs(safeNumber(other.laneOffset)-targetOffset)<lateralSeparation then
+        return true,otherIndex,gap
+      end
+    end
+  end
   return false
-end
-local function safeFollowingSpeed(gap,leaderSpeed,brakeAccel)
+endlocal function safeFollowingSpeed(gap,leaderSpeed,brakeAccel)
   local available=math.max(0,gap-math.max(0,safeNumber(state.followGap,8)))
   local decel=clamp(safeNumber(brakeAccel,CFG.BRAKE_ACCEL),2.5,22.0)
   local reactionTerm=decel*0.45
