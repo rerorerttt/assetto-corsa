@@ -244,8 +244,9 @@ local function planTargetSpeed(p,speed)
     local planDistance=distance+math.max(0,planAdvance)
     local planned=p.racingPlan and planDistance<=p.racingPlan.horizon and
       RacingLine.sample(p.racingPlan,planDistance) or nil
-    local sample=planned or Geometry.sample(route,p.routeProgress+distance)
-    if not sample then break end
+    local roadSample=Geometry.sample(route,p.routeProgress+distance)
+    local sample=planned or roadSample
+    if not sample or not roadSample then break end
     -- On an open run, use the recorded road curvature for braking.
     -- The optimizer's first plan stations can contain a short-lived geometric
     -- kink while the path is being rebuilt; treating that single value as a
@@ -255,7 +256,7 @@ local function planTargetSpeed(p,speed)
     local usePlannedCurvature=p.racingPlanMode=="PASS" or
       p.racingPlanMode=="RETURN"
     local curvature=math.abs(safeNumber(
-      usePlannedCurvature and planned and planned.k or sample.k))
+      usePlannedCurvature and planned and planned.k or roadSample.k))
     if curvature>math.max(CFG.CURVE_MIN,0.0018) then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*0.90
       local curveSpeed=math.sqrt(lateralLimit/curvature)
