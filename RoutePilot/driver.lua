@@ -714,9 +714,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
-  -- A missing optional optimisation plan falls back to the recorded route
-  -- spline and assigned lane offset; it is not a hard-stop condition.
-  p.racingPlanBlocked=false
+  -- Search failure falls back to the recorded route spline. Only NO_FIT means
+  -- the vehicle physically cannot fit the immediate corridor and may stop.
+  p.racingPlanBlocked=nextPlan==nil and planFailure=="NO_FIT"
   p.racingPlanFailure=p.racingPlanBlocked and
     (planFailure or originalFailure or "NO_SAFE_PATH") or nil
   p.racingPlanFallback=fallbackKind
@@ -1457,7 +1457,7 @@ function Driver.update(carIndex, car, dt)
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
-  -- Optimiser failure uses the route-spline fallback; it never stops the car.
+  -- Ordinary optimiser failures use the route-spline fallback; only NO_FIT stops.
   -- Overtake state can change in this frame; rebuild the steering path before
   -- issuing controls so the first lateral movement follows the reserved side.
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
