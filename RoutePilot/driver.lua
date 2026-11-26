@@ -885,6 +885,20 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     end
   end
 
+  -- A geometric optimizer failure is not a traffic obstruction. If both
+  -- optimized and reserved paths fail their conservative swept-body checks,
+  -- keep the AI moving on the recorded road centre. Actual vehicle blocking
+  -- is handled separately by updateTrafficControl().
+  if not nextPlan then
+    nextPlan=RacingLine.referencePlan(
+      state.routeGeometry,Geometry.sample,p.routeProgress,routeBoundsAtSample,
+      horizon,7.5)
+    if nextPlan then
+      fallbackKind="REFERENCE_CENTRE"
+      planFailure=nil
+    end
+  end
+
   if nextPlan ~= p.racingPlan then
     p.racingPlanGeneration = (p.racingPlanGeneration or 0) + 1
   end
