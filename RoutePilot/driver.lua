@@ -9,7 +9,7 @@
 --    instead of micro-correcting left/right every frame (zigzag source).
 --  * DECISIVE OVERTAKES: side is picked ONCE from the free room and LOCKED
 --    for the whole pass; no flapping between sides mid-manoeuvre.
---  * SOFT START: gas capped at low speed (no burnout launch).
+--  * TRACTION-CONTROLLED START: wheel-slip feedback manages launch torque.
 --  * Route planned tens of meters ahead (lookahead 14 + 0.8*speed, max 50).
 
 local Driver = {}
