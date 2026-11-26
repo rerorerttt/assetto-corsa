@@ -1197,7 +1197,11 @@ local function collectYieldGroup(carIndex,car,p,leaderIndex,maxRange)
   local laneCount=math.max(1,math.floor(((right-left)+1.0)/4.0))
   local slotWidth=(right-left)/laneCount
   local leaderLat=safeNumber(leaderState.latOff,0)
-  local leaderSlot=clamp(math.floor((leaderLat-left)/math.max(0.1,slotWidth))+1,1,laneCount)
+  local leaderSlot=1
+  for i=2,laneCount do
+    if math.abs(bl+(i-0.5)*slotWidth-leaderLat)<
+       math.abs(bl+(leaderSlot-0.5)*slotWidth-leaderLat) then leaderSlot=i end
+  end
   local candidates={{index=leaderIndex,gap=leaderGap}}
   for i=0,sim.carsCount-1 do
     if i~=carIndex and i~=leaderIndex then
@@ -1214,7 +1218,11 @@ local function collectYieldGroup(carIndex,car,p,leaderIndex,maxRange)
             local ol,orr=H.boundsAt(seg or os.segIdx or leaderSeg)
             local lanes=math.max(1,math.floor(((orr-ol)+1.0)/4.0))
             local width=(orr-ol)/lanes
-            local slot=clamp(math.floor((lateral-ol)/math.max(0.1,width))+1,1,lanes)
+            local slot=1
+            for si=2,lanes do
+              if math.abs(ol+(si-0.5)*width-lateral)<
+                 math.abs(ol+(slot-0.5)*width-lateral) then slot=si end
+            end
             if slot==leaderSlot and math.abs(lateral-leaderLat)<math.min(slotWidth,width)*0.38 then
               candidates[#candidates+1]={index=i,gap=gap}
             end
@@ -1787,6 +1795,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       if oldLeader and oldLeader.yieldRequestBy==carIndex then
         oldLeader.yieldRequestBy=nil;oldLeader.yieldOffset=nil;oldLeader.yieldReady=false;oldLeader.yieldRequestTimer=0
       end
+      releaseYieldGroup(carIndex,p.pendingYieldGroup or {p.pendingYieldTarget})
+      p.pendingYieldGroup=nil
       p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
     end
     local safe=safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0)
