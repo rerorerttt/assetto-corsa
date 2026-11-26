@@ -112,10 +112,11 @@ local function routeGap(ownProgress, otherProgress)
 end
 
 local function newPersonality(carIndex)
-  -- No artificial cruise-speed ceiling: the route planner and vehicle physics
-  -- determine speed. Curvature and measured braking capability remain limits.
+  -- Alternate slow and fast classes to guarantee a real closing-speed
+  -- difference: odd AI indices cruise at 40 km/h, even indices are unrestricted
+  -- by a fixed cap and are the only cars that initiate overtakes.
   local p = {
-    segIdx = 1, cruiseSpeed = math.huge, brakeAccelEstimate = CFG.BRAKE_ACCEL,
+    segIdx = 1, brakeAccelEstimate = CFG.BRAKE_ACCEL,
     accelEstimate = 4.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
     previousSpeed = nil, playerAutopilot = carIndex == 0,
     steer = 0, steerFiltered = 0, gas = 0, brake = 0,
@@ -1127,8 +1128,25 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
     if not reserved and not laneOccupied(carIndex,car,offset,leaderIndex) then
       local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
         source,offset,passDistance or 60.0,speed)
-      if clear then return offset end
-      lastReason=reason or lastReason
+      if clear then
+        -- Validate with the exact same fixed-lane planner used after the
+        -- reservation. This prevents a pass from starting when the racing
+        -- planner would immediately reject its swept vehicle footprint.
+        local lateralLimit=clamp(
+          safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+        local transitionDistance=math.max(22.0,
+          math.max(0,speed)*math.sqrt(6.0*math.abs(offset-source)/lateralLimit))
+        local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+        local horizon=clamp(math.max(CFG.PLAN_HORIZON,
+          speed*speed/(2.0*brakeAccel)+speed*1.5+35.0),CFG.PLAN_HORIZON,135.0)
+        local validated,planReason=RacingLine.plan(
+          state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+          source,offset,offset,horizon,7.5,nil,0,transitionDistance,p.lateralAccelLimit)
+        if validated then return offset end
+        lastReason="pass_plan_"..tostring(planReason or "NO_PATH")
+      else
+        lastReason=reason or lastReason
+      end
     else
       if reserved then p.lastPassReservationOwner=reservationOwner end
       lastReason=reserved and "reserved_corridor" or "occupied_corridor"
