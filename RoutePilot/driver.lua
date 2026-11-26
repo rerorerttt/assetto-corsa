@@ -1720,6 +1720,34 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     if passRequestReady then
       local leaderState=state.p[leaderIndex]
       local leaderCar=ac.getCar(leaderIndex)
+      if leaderState and leaderCar and leaderCar.isActive and
+         leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
+        -- A pending reservation is not an active pass. A materially stronger
+        -- eligible car may take over that request before the yield manoeuvre
+        -- begins; once the pass starts, its reservation is never pre-empted.
+        local ownerIndex=leaderState.yieldRequestBy
+        local ownerState=state.p[ownerIndex]
+        local ownerCar=ac.getCar(ownerIndex)
+        if ownerState and ownerCar and ownerCar.isActive and
+           ownerState.overtakeSide==0 and not ownerState.returningFromPass then
+          local ownScore=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)*100.0+
+            math.max(0,safeNumber(car.speedMs))*2.0
+          local ownerScore=clamp(safeNumber(ownerState.accelEstimate,4.0),0.5,18.0)*100.0+
+            math.max(0,safeNumber(ownerCar.speedMs))*2.0
+          if ownScore>ownerScore+25.0 then
+            releaseYieldGroup(ownerIndex,ownerState.pendingYieldGroup or {leaderIndex})
+            ownerState.pendingYieldGroup=nil
+            ownerState.pendingYieldTarget=nil;ownerState.pendingPassOffset=nil
+            ownerState.pendingYieldTimer=0;ownerState.pendingYieldOrder=nil
+            ownerState.pendingYieldGap=nil;ownerState.pendingYieldSpeed=nil
+            ownerState.pendingPassDistance=nil
+            leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil
+            leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
+            H.log("YIELD_PREEMPT leader=%d old=%d new=%d old_score=%.1f new_score=%.1f",
+              leaderIndex,ownerIndex,carIndex,ownerScore,ownScore)
+          end
+        end
+      end
       if not leaderState or not leaderCar or not leaderCar.isActive or
          not leaderCar.isAIControlled or leaderState.overtakeSide~=0 or
          leaderState.returningFromPass or leaderState.pendingYieldTarget~=nil then
@@ -2096,6 +2124,7 @@ function Driver.prepareFrame(sim,dt)
       local progress,lateral,seg,parameter,distance,tx,tz=
         routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,
           math.max(0,safeNumber(car.speedMs)),dt or 0.05)
+      p.framePreviousRouteProgress=p.routeProgress
       p.framePreparedFrame=frame
       p.frameProjection={valid=progress~=nil,progress=progress,lateral=lateral,
         seg=seg,parameter=parameter,distance=distance,tx=tx,tz=tz}
@@ -2125,8 +2154,8 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  local previousRouteProgress=p.routeProgress
   local prepared=p.framePreparedFrame==(state.trafficFrame or -1) and p.frameProjection or nil
+  local previousRouteProgress=prepared and p.framePreviousRouteProgress or p.routeProgress
   local progress, projectedLateral, projectedSeg, projectionParameter, projectionDistance
   if prepared then
     if prepared.valid then
