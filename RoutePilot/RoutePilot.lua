@@ -46,7 +46,7 @@ local state = {
   followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  spawnHints={}, nodes={}, p={}, rescueWatch={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
 }
 local logger=nil
@@ -434,11 +434,15 @@ local function sampleSpawnRoute(metrics,distance)
   end
   return nil,nil,nil,nil
 end
+local function isRescueDisabled(index)
+  local watch=state.rescueWatch and state.rescueWatch[index]
+  return watch and watch.disabled==true or false
+end
 local function spotIsClear(pos, exceptIndex)
   local sim=ac.getSim()
   if not sim then return true end
   for i=0,sim.carsCount-1 do
-    if i~=exceptIndex then
+    if i~=exceptIndex and not isRescueDisabled(i) then
       local other=ac.getCar(i)
       if other and other.isActive then
         local dx=other.position.x-pos.x
@@ -553,34 +557,38 @@ local function teleportHome(carIndex,car)
 end
 local function teleportForward(carIndex,car,reason)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
+    writeLog("RESCUE_FORWARD_API_UNAVAILABLE id=%d reason=%s",carIndex,tostring(reason))
+    flushLog()
     return false
   end
   local metrics=buildSpawnRouteMetrics()
-  if not metrics then return false end
-  local startDistance,routeError=findRouteDistanceAtPosition(
-    car.position,metrics,car.look)
-  if not startDistance or routeError>100.0 then
-    writeLog("RESCUE_FORWARD_NO_ROUTE id=%d reason=%s error=%.2f",
-      carIndex,tostring(reason),routeError or 999.0)
+  if not metrics then
+    writeLog("RESCUE_FORWARD_ROUTE_METRICS_INVALID id=%d reason=%s nodes=%d segments=%d loop=%s",
+      carIndex,tostring(reason),#state.nodes,segmentCount(),tostring(state.loopRoute))
+    flushLog()
     return false
   end
-
-  -- Candidate points are strictly ahead along the recorded route. Never scan
-  -- backward from the incident: this prevents returning the car to the same
-  -- queue, wall or dead-end which caused the rescue.
-  local offsets={30.0,42.0,56.0,72.0,92.0,120.0,150.0}
+  local heading=car.look
+  if reason=="rollover_10s" then heading=nil end
+  local startDistance,routeError=findRouteDistanceAtPosition(car.position,metrics,heading)
+  if not startDistance or routeError>250.0 then
+    writeLog("RESCUE_FORWARD_NO_ROUTE id=%d reason=%s error=%.2f",
+      carIndex,tostring(reason),routeError or 999.0)
+    flushLog()
+    return false
+  end
   local maxAhead=metrics.loop and math.max(0,metrics.length-12.0) or
     math.max(0,metrics.length-startDistance-8.0)
-  for _,ahead in ipairs(offsets) do
+  for ahead=24.0,360.0,12.0 do
     if ahead<=maxAhead then
       local routePos,direction,segment,parameter=
         sampleSpawnRoute(metrics,startDistance+ahead)
       if routePos and direction then
-        local pos=vec3(routePos.x-direction.x*3.0,
-          routePos.y+0.15,routePos.z-direction.z*3.0)
+        local pos=vec3(routePos.x-direction.x*3.0,routePos.y+0.25,
+          routePos.z-direction.z*3.0)
         if spotIsClear(pos,carIndex) then
-          local ok,result=pcall(physics.setAICarPosition,carIndex,
-            pos,vec3(-direction.x,0,-direction.z))
+          local ok,result=pcall(physics.setAICarPosition,carIndex,pos,
+            vec3(-direction.x,-direction.y,-direction.z))
           if ok and result~=false then
             state.p[carIndex]=nil
             writeLog("RESCUE_FORWARD id=%d reason=%s ahead=%.1f route=%.1f segment=%d",
@@ -594,11 +602,12 @@ local function teleportForward(carIndex,car,reason)
       end
     end
   end
-  writeLog("RESCUE_FORWARD_NO_SAFE_POINT id=%d reason=%s route=%.1f",
-    carIndex,tostring(reason),startDistance)
+  writeLog("RESCUE_FORWARD_NO_SAFE_POINT id=%d reason=%s route=%.1f max_ahead=%.1f",
+    carIndex,tostring(reason),startDistance,maxAhead)
   flushLog()
   return false
 end
+
 local function addPoint(pos)
   if #state.nodes>=CFG.MAX_ROUTE_POINTS then
     state.recLine=false; state.status="Достигнут лимит точек"; return
@@ -672,6 +681,58 @@ local function releaseCar(carIndex)
   end
   state.p[carIndex]=nil
 end
+local function updateRescueWatchdog(sim,dt)
+  if not sim then return end
+  for index=0,sim.carsCount-1 do
+    local car=ac.getCar(index)
+    if car and car.isActive and car.isAIControlled then
+      local watch=state.rescueWatch[index]
+      if not watch then
+        watch={rolloverT=0,retryT=0,disabled=false,reason=nil}
+        state.rescueWatch[index]=watch
+      end
+      if not watch.disabled then
+        local upY=safeNumber(car.up and car.up.y,1.0)
+        if upY<0.55 then watch.rolloverT=watch.rolloverT+dt
+        else watch.rolloverT=0 end
+        local p=state.p[index]
+        local offTrackT=safeNumber(p and p.offTrackT)
+        if watch.rolloverT>=10.0 then
+          watch.reason="rollover_10s"
+        elseif offTrackT>=10.0 then
+          watch.reason="offtrack_recovery_failed_10s"
+        end
+        if watch.reason then
+          watch.disabled=true
+          watch.retryT=0
+          writeLog("RESCUE_WATCHDOG_LATCH id=%d reason=%s rollover=%.2f offtrack=%.2f",
+            index,watch.reason,watch.rolloverT,offTrackT)
+        end
+      end
+      if watch.disabled then
+        watch.retryT=math.max(0,safeNumber(watch.retryT)-dt)
+        local ok,controls=pcall(ac.overrideCarControls,index)
+        if ok and controls then
+          controls.combineAxis=false
+          controls.steer=0; controls.gas=0; controls.brake=0; controls.handbrake=0
+        end
+        if watch.retryT<=0 then
+          local okRescue,rescued=pcall(teleportForward,index,car,watch.reason)
+          if okRescue and rescued then
+            state.rescueWatch[index]=nil
+            writeLog("RESCUE_WATCHDOG_SUCCESS id=%d reason=%s",index,watch.reason)
+          else
+            watch.retryT=2.0
+            writeLog("RESCUE_WATCHDOG_RETRY id=%d reason=%s error=%s",
+              index,watch.reason,okRescue and "no_safe_forward_point" or tostring(rescued))
+          end
+        end
+      end
+    else
+      state.rescueWatch[index]=nil
+    end
+  end
+end
 local driverReady=false
 local function ensureDriver()
   if driverReady or not Driver then return Driver~=nil end
@@ -696,6 +757,7 @@ function script.update(dt)
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 then
       trySpawnTeleport(sim,dt)
+      updateRescueWatchdog(sim,dt)
     end
     -- Ctrl+8 switches the player car into Assetto Corsa's native AI state.
     -- RoutePilot adopts car 0 only in that state and runs the same route,
@@ -736,7 +798,8 @@ function script.update(dt)
       local driveOrder={}
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
-        local shouldDrive=car and car.isActive and car.isAIControlled
+        local shouldDrive=car and car.isActive and car.isAIControlled and
+          not isRescueDisabled(i)
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
           driveOrder[#driveOrder+1]=i
