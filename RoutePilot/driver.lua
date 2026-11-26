@@ -16,6 +16,7 @@ local Driver = {}
 local Geometry = require("route_geometry")
 local RacingLine = require("racing_line")
 local TrajectoryOptimizer = require("trajectory_optimizer")
+local VehicleDynamics = require("vehicle_dynamics")
 local CFG, state, H
 
 local BOUND_MARGIN = 0.4
@@ -608,8 +609,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- deliberate drift/pass recovery state.
   local straight=math.abs(current.k)<0.00035 and
     math.abs(curvePreview.k)<0.00035 and math.abs(previewCurvature)<0.00035
-  local yawDamping=safeNumber(p.yawRateFiltered,p.yawRate)*0.18
-  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN-yawDamping
+  local steer=desiredCurvature*CFG.CURVATURE_STEER_GAIN
   if straight then
     steer=clamp(steer,-0.08,0.08)
     if math.abs(projection.lateral)<0.10 and
@@ -1646,6 +1646,7 @@ function Driver.update(carIndex, car, dt)
 
   p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
+  steerTarget = VehicleDynamics.correctSteering(car, p, steerTarget, speed, dt)
   if p.projectionLost then targetSpeed=0 end
   -- Boundary correction is a steering task, not a reason to stop.
   -- The predictive footprint guard already bends the target path back into
