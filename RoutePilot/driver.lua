@@ -111,9 +111,9 @@ local function routeGap(ownProgress, otherProgress)
 end
 
 local function newPersonality(carIndex)
-  -- Alternate slow and fast classes to guarantee a real closing-speed
-  -- difference: odd AI indices cruise at 40 km/h, even indices are unrestricted
-  -- by a fixed cap and are the only cars that initiate overtakes.
+  -- Every AI uses its own physics-limited acceleration. Overtake eligibility
+  -- is based on measured acceleration and current closing speed; no car-index
+  -- class or artificial cruise-speed cap is imposed.
   local p = {
     segIdx = 1, brakeAccelEstimate = CFG.BRAKE_ACCEL,
     accelEstimate = 4.0, lateralAccelLimit = CFG.MAX_LATERAL_ACCEL,
@@ -158,7 +158,7 @@ local function newPersonality(carIndex)
   end
   state.p[carIndex] = p
   H.log("CAR_INIT id=%d line=RACING class=%s cruise=%s canOvertake=%d",
-    carIndex,p.speedClass,p.canOvertake and "UNLIMITED" or "40KMH",
+    carIndex,p.speedClass,p.canOvertake and "UNLIMITED" or "DISABLED",
     p.canOvertake and 1 or 0)
 end
 
