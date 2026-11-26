@@ -131,6 +131,7 @@ local function newPersonality(carIndex)
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
     yieldRequestBy = nil, yieldOffset = nil, yieldPlanBlocked = false,
+    yieldAssignedTimer = 0,
     returnTargetIndex = nil, passTargetLaneFailed = false,
     speedClass = carIndex%2==0 and "FAST" or "SLOW",
     canOvertake = carIndex%2==0,
@@ -1330,6 +1331,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   leaderState.yieldRequestBy=carIndex
   leaderState.yieldOffset=leaderLaneOffset
   leaderState.yieldPlanBlocked=false
+  leaderState.yieldAssignedTimer=0
   leaderState.laneOffset=leaderLaneOffset
   p.passTargetLaneFailed=false
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
@@ -1375,11 +1377,16 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   -- yield-ready signal.
   if p.yieldRequestBy~=nil and p.yieldOffset~=nil then
     local requester=state.p[p.yieldRequestBy]
-    if not requester or
+    p.yieldAssignedTimer=safeNumber(p.yieldAssignedTimer)+dt
+    if not requester or p.yieldAssignedTimer>30.0 or
        (requester.overtakeSide==0 and not requester.returningFromPass) then
+      if requester and p.yieldAssignedTimer>30.0 then
+        requester.passTargetLaneFailed=true
+      end
       p.yieldRequestBy=nil
       p.yieldOffset=nil
       p.yieldPlanBlocked=false
+      p.yieldAssignedTimer=0
       p.laneOffset=nil
     else
       p.laneOffset=p.yieldOffset
