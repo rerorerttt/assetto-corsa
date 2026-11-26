@@ -907,6 +907,13 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
         local ownHalf=math.max(1.5,
           safeNumber(owner.car.aabbSize and owner.car.aabbSize.z,4.5)*0.5)
+        local ownLateralHalf=math.max(0.75,
+          safeNumber(owner.car.aabbSize and owner.car.aabbSize.x,2.0)*0.5)
+        local otherLateralHalf=math.max(0.75,
+          safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
+        local targetLateralOverlap=math.abs(center-
+          safeNumber(other.p.latOff,center))<
+          ownLateralHalf+otherLateralHalf+0.35
         local lateralDelta=math.abs(center-
           safeNumber(owner.p.latOff,owner.p.coordinatorOffset or center))
         local lateralLimit=clamp(
@@ -917,7 +924,8 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local dynamicWindow=math.max(window or 8.0,
           ownHalf+otherHalf+math.abs(owner.speed-other.speed)*transitionTime+5.0)
         local otherLane=other.p.coordinatedLane
-        if otherLane==targetLane and math.abs(gap)<dynamicWindow then
+        if (otherLane==targetLane or targetLateralOverlap) and
+            math.abs(gap)<dynamicWindow then
           return false
         end
         -- Reserve both the destination and the lane being vacated until the
