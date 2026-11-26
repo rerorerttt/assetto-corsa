@@ -88,12 +88,35 @@ local function initialProjectionValid(result, heading)
   return true
 end
 
+-- A continuity-checked global reacquisition prevents a transient local
+-- projection miss from commanding a full stop on an otherwise clear road.
+local function projectWithRecovery(car,hintProgress,speed,dt,locked)
+  local route=state.routeGeometry
+  local result=Geometry.project(route,car.position,hintProgress,car.look,
+    speed,dt,locked)
+  if result or not locked or hintProgress==nil then return result end
+
+  local recovered=Geometry.project(route,car.position,nil,car.look,
+    speed,dt,false)
+  if not initialProjectionValid(recovered,car.look) then return nil end
+  local delta=recovered.s-hintProgress
+  if state.loopRoute and state.routeLength>0 then
+    if delta>state.routeLength*0.5 then delta=delta-state.routeLength end
+    if delta< -state.routeLength*0.5 then delta=delta+state.routeLength end
+  end
+  local maxJump=math.max(15.0,math.max(0,speed)*math.max(0.01,dt)*8.0+8.0)
+  local hx,hz=normalize2(car.look.x,car.look.z)
+  local headingDot=hx*recovered.tx+hz*recovered.tz
+  if delta< -5.0 or delta>maxJump or headingDot<0.25 then return nil end
+  return recovered
+end
+
 local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, dt)
   refreshRouteMetrics()
   if not state.routeGeometry then return nil end
   local locked=allowGlobal ~= true and hintProgress ~= nil
-  local result = Geometry.project(state.routeGeometry, car.position,
-    hintProgress, car.look, speed or safeNumber(car.speedMs), dt or 0.05, locked)
+  local result=projectWithRecovery(car,hintProgress,
+    speed or safeNumber(car.speedMs),dt or 0.05,locked)
   if not result then return nil end
   if not locked and not initialProjectionValid(result,car.look) then return nil end
   return result.s, result.lateral, result.seg, result.t, result.distance,
@@ -351,8 +374,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- Project onto the continuous spline, then aim at a point measured by
   -- arc distance. The controller never aims at the next raw recorded node.
   local locked=p.routeLocked and p.routeProgress~=nil
-  local projection=Geometry.project(route,car.position,p.routeProgress,car.look,
-    speed,dt,locked)
+  local projection=projectWithRecovery(car,p.routeProgress,speed,dt,locked)
   if not projection or
      (not locked and not initialProjectionValid(projection,car.look)) or
      (p.spawnSeeded and projection.distance>8.0) then
