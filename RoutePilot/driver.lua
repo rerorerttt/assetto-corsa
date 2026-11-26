@@ -1553,11 +1553,15 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   -- Measured longitudinal acceleration is the available in-session proxy
   -- for usable power-to-weight. A faster car is not automatically stronger.
   local powerAdvantage=ownPower-leaderPower
-  local acceleration=math.max(0.35,powerAdvantage)
+  -- Following control makes the follower's speed converge to the leader's.
+  -- Therefore equal speed is not evidence that the cars have equal pace.
+  -- Permit a pass request when the follower is within 1 m/s of the leader;
+  -- the swept-path reservation and actual acceleration determine success.
+  local acceleration=math.max(1.0,powerAdvantage)
   local speedAdvantage=speed-leaderPace
   local stronger=powerAdvantage>=0.25
   local faster=speedAdvantage>=1.5
-  local slower=stronger or faster
+  local slower=stronger or faster or speedAdvantage>=-1.0
   if slower then
     local targetCar=ac.getCar(leaderIndex)
     local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
@@ -1581,7 +1585,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
         0.5*acceleration*passTime*passTime
     end
     local urgentGap=clamp(16.0+speed*1.0,25.0,70.0)
-    local canActuallyPass=(stronger or faster) and estimatedPassDistance<=260.0 and
+    local canActuallyPass=estimatedPassDistance<=260.0 and
       speed>=(leaderSpeed or 0)-8.0
     local urgent=canActuallyPass and gap<=urgentGap
     local passWindow=math.max(70.0,32.0+speed*2.0)
