@@ -663,8 +663,7 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
           -- An active pass reserves only its actual swept corridor and only
           -- near enough to create a time/space conflict.
           local reservationConflict=otherState and
-            (otherState.overtakeSide~=0 or otherState.returningFromPass or
-             otherState.yieldRequestBy~=nil) and
+            (otherState.overtakeSide~=0 or otherState.returningFromPass) and
             reservedGap<separation+0.25 and
             longitudinal>-math.max(12.0,otherSpeed*0.8+5.0) and
             longitudinal<math.max(22.0,ownSpeed*1.2+7.0)
@@ -1991,6 +1990,7 @@ function Driver.update(carIndex, car, dt)
       H.log("CAR=%d OVERTAKE_ABORT reason=pass_plan_no_path target=%d return=%.2f",
         carIndex,targetIndex or -1,returnOffset)
       updateRacingPlan(carIndex,car,p,speed,dt)
+      targetSpeed=p.racingPlanBlocked and 0 or planTargetSpeed(p,speed)
     else
       -- Do not merge back into an occupied source lane. The hard stop remains
       -- active only in this exceptional case where neither reserved path has
@@ -1999,6 +1999,25 @@ function Driver.update(carIndex, car, dt)
       p.trafficReason="pass_plan_failed_source_lane_occupied"
       H.log("CAR=%d PASS_PATH_BLOCKED source_lane_occupied target=%d",
         carIndex,targetIndex or -1)
+    end
+  end
+  -- If the return-offset planner loses a valid path, re-enter the already
+  -- reserved passing slot when it remains clear. Do not freeze in the middle
+  -- of a return transition while a validated adjacent corridor is available.
+  if p.racingPlanBlocked and p.returningFromPass and not p.projectionLost then
+    local passOffset=p.passLat
+    if passOffset~=nil and not laneOccupied(carIndex,car,passOffset,nil) then
+      p.returningFromPass=false
+      p.overtakeSide=passOffset<(p.passFromOffset or 0) and -1 or 1
+      p.passTargetIndex=p.returnTargetIndex
+      p.passT=0
+      p.passBlockedT=0
+      p.passDeadline=PASS_TIMEOUT
+      p.laneOffset=passOffset
+      p.trafficAction="PASSING"
+      p.trafficReason="return_plan_failed_reenter_reserved_lane"
+      updateRacingPlan(carIndex,car,p,speed,dt)
+      targetSpeed=p.racingPlanBlocked and 0 or planTargetSpeed(p,speed)
     end
   end
   p.targetSpeed = targetSpeed
