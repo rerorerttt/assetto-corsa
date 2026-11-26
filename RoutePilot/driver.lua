@@ -411,6 +411,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   end
   if p.returningFromPass and math.abs(projection.lateral-laneTarget)<0.35 then
     p.returningFromPass=false
+    p.laneReassigning=false
   end
 
   local targetX=raceTarget and raceTarget.x or
@@ -1267,7 +1268,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       end
     end
   end
-  if p.returningFromPass then
+  if p.returningFromPass and not p.laneReassigning and
+      safeNumber(p.offTrackT)<=0 then
     p.trafficPriority=900000
     return targetSpeed
   end
@@ -1294,6 +1296,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.baseLaneOffset=preferredOffset
       p.laneOffset=preferredOffset
       p.returningFromPass=true
+      p.laneReassigning=true
       H.log("CAR=%d LANE_REASSIGN accel=%.2f lane=%d offset=%.2f",
         carIndex,safeNumber(p.accelEstimate),preferred,preferredOffset)
     end
