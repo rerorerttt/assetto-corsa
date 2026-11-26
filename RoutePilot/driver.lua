@@ -1132,7 +1132,7 @@ local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
   local safeHigh=math.min(br-halfWidth-BOUND_MARGIN,slotHigh-halfWidth-0.12)
   if safeHigh-safeLow<0.24 then return nil end
   local direction=passOffset>lateral and -1 or 1
-  local desired=clamp(lateral+direction*0.42,safeLow,safeHigh)
+  local desired=direction<0 and safeLow or safeHigh
   if math.abs(desired-lateral)<0.22 then return nil end
   local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
   local corridorLow,corridorHigh=safeCorridorForPreview(state.routeGeometry,leaderState.routeProgress,18.0,leaderCar,fx,fz)
@@ -1182,7 +1182,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
     (math.max(20.0,safeNumber(passDistance,60.0))/
       math.max(8.0,speed))*2.0+4.0)
   p.followTimer=0;p.blockedT=0
-  p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
+  p.emergencyPass=true;p.emergencyPassRequest=false
   p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
   p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
@@ -1416,7 +1416,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
           if pendingOffset~=nil and yieldOffset==nil then p.overtakeRetryT=0.25 end
           if yieldOffset~=nil then
             targetState.yieldRequestBy=carIndex;targetState.yieldOffset=yieldOffset
-            targetState.yieldReady=false;targetState.yieldRequestTimer=0
+            targetState.yieldReady=true;targetState.yieldRequestTimer=0
             H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,targetIndex,yieldOffset,safeNumber(p.pendingPassOffset))
           end
         end
@@ -1525,7 +1525,7 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
               local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
               if yieldOffset~=nil then
                 leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
-                leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
+                leaderState.yieldReady=true;leaderState.yieldRequestTimer=0
                 p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
                 if not p.pendingYieldOrder then
                   state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1
