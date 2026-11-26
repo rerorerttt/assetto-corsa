@@ -1,37 +1,47 @@
 # RoutePilot development status
 
-Updated: 2026-11-24
+Updated: 2026-11-26
 
-## Active traffic model
+## Active traffic model — 0.9.3
 
-This branch is based directly on `main` and replaces the previous generic/random overtake behavior with the requested minimal two-lane rule set.
+Active branch: `routepilot/two-lane-traffic-rework-2026-11-26`.
 
-- Every AI starts in the left lane, whose center is derived from the saved left/right route bounds.
-- AI cars alternate by AI car index: odd indices (1, 3, 5, ...) are capped at 40 km/h; even indices (2, 4, 6, ...) use the app's existing `speedMax` and curvature/braking planner.
-- Only fast-class cars overtake.
-- A fast car detects a slower vehicle ahead in its current left lane, checks that the right lane exists and is clear in a longitudinal window both ahead and behind, then moves to the right lane.
-- It stays in the right lane until its front has advanced by the combined vehicle lengths (approximately two car bodies) beyond the target. It then checks the left lane; if occupied, it remains right and retries on later updates. It returns left only when that lane is clear.
-- Passing is disabled unless each half of the saved corridor is at least 2.7 m wide. With symmetric 7 m bounds, lane centers are +1.75 m and -1.75 m from the recorded route. On narrower single-lane corridors, all cars stay centered on the recorded route instead of being shifted into a fictitious left lane.
-- The existing stuck-car rescue and `teleportHome()` mechanism from `main` were not modified.
+The previous trace was reviewed against the active Lua source. It showed that the advertised slow/fast traffic classes were not actually present in `driver.lua`: every AI used `cruiseSpeed = math.huge`. It also showed that the racing-line planner selected the route midpoint as its base preference, so cars were not physically distributed into logical lanes. The old yield handshake then made passing conditional on the target moving away, while a failed fixed-lane plan forced target speed to zero.
 
-## Files changed
+The current implementation replaces that chain with a direct adjacent-lane policy:
 
-- `RoutePilot/driver.lua`: deterministic slow/fast assignment, left-lane target, right-lane pass, two-body clearance before return, and lane occupancy checks.
-- `RoutePilot/README.md`: documents the behavior.
+- Odd AI indices (1, 3, 5, ...) are slow-class cars capped at 40 km/h.
+- Even AI indices (2, 4, 6, ...) are fast-class cars with no fixed cruise cap; only fast-class cars initiate overtakes.
+- Every AI is assigned to the outermost left logical lane. The racing-line optimizer now penalizes deviation from that lane and the recovery fallback tries the base lane before the road centre.
+- Lane slots are derived from measured bounds: widths 3/7/11/15 m yield 1/2/3/4 slots. On a single-lane corridor there is no pass.
+- A fast car detecting a slower leader checks the adjacent lane and reserves it immediately. The target does not have to yield or change its own lane.
+- The full transition, target interaction, pass phase, and return are checked against the road bounds and all active cars. The target leader is included in predicted collision checks rather than ignored.
+- The exact fixed-offset racing-line plan is prevalidated before a pass starts. If the runtime pass plan still fails, the pass is cancelled and the car replans in its base lane instead of remaining stuck at zero speed.
+- The overtaker stays in the passing lane until it has cleared the target by two vehicle lengths. It returns only after the base lane is clear.
+- If the adjacent lane is occupied or the predicted swept path is unsafe, the car follows the leader using the current-lane braking model. The controller does not force an unsafe pass.
+
+## Trace findings that motivated the redesign
+
+The supplied `routepilot_trace.txt` showed:
+- `ROUTEPILOT 0.9.1 INITIALIZED` even though the manifest declared 0.9.2; the internal version string was stale.
+- `CAR_INIT ... cruise=PHYSICS_LIMITED` for every AI, while the actual `newPersonality()` set every car's `cruiseSpeed` to `math.huge`; the active code had no slow/fast speed differential.
+- Repeated `YIELD_REQUEST` / `YIELD_ABORT reason=timeout` events and traffic states `WAIT_YIELD` / `YIELDING`, proving that the old pass policy waited on a target-side manoeuvre.
+- 38 `RACE_LINE_BLOCKED ... cause=NO_PATH` records after car 4 entered `PASSING`, followed by `RESCUE_ATTEMPT id=4 success=true`. The update loop converted a failed fixed-offset pass plan into a zero-speed target, causing the observed standstill.
+- The most common pass denials were `leader_has_no_safe_yield_space`, `predicted_vehicle_conflict`, and `yielded_corridor_no_longer_clear`.
+
+## Files changed in 0.9.3
+
+- `RoutePilot/driver.lua`: deterministic slow/fast classes; base-lane assignment; immediate adjacent-lane passing without leader-yield state; target-inclusive predicted collision checks; exact pass-plan prevalidation; pass abort and base-lane replanning on runtime plan failure.
+- `RoutePilot/racing_line.lua`: lane-preference cost in the optimizer.
+- `RoutePilot/RoutePilot.lua`: traffic diagnostics now record speed class, base lane, pass target, plan failure, stuck time, and control status; obsolete yield-queue scheduling removed; app version string updated.
+- `RoutePilot/manifest.ini`: version 0.9.3.
+- `RoutePilot/README.md`: current traffic model and validation requirements.
 
 ## Validation status
 
-Static source inspection only. This branch has not been executed in Assetto Corsa/CSP. Required in-game checks:
+Source review and GitHub consistency checks only. The new Lua has not been run in Assetto Corsa/CSP, so actual overtakes, collision-free lane changes, corner transitions, and stop-free operation are not yet runtime-verified. The next test must use this exact 0.9.3 branch and capture a fresh trace with **Трафик лог** enabled. Verify first that cars 1/3/5 settle at 40 km/h in the left lane, cars 2/4 use the adjacent lane to pass, and no `RACE_LINE_BLOCKED mode=PASS` or `OVERTAKE_ABORT reason=pass_plan_no_path` loop occurs.
 
-1. Confirm all AI cars adopt the controller and initially settle into the left lane.
-2. Confirm speed pattern by AI index: 1=40 km/h, 2=fast, 3=40 km/h, 4=fast.
-3. Confirm fast cars pass only using the right lane and do not enter it when occupied.
-4. Confirm a fast car remains right until it has cleared the target by approximately two vehicle lengths, then returns left only when clear.
-5. Confirm single-lane/narrow bounds disable passing.
-6. Confirm the existing stuck recovery still teleports a car after its original timeout.
-
-Do not treat static checks as runtime validation. Preserve existing working spawn, AI adoption, steering, and rescue behavior unless a reproducible defect requires a targeted change.
-
+Historical notes below describe earlier revisions and are superseded wherever they conflict with the active 0.9.3 model.
 
 ## 2026-11-24 trace-driven corrections
 
