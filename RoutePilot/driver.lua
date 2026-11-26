@@ -540,12 +540,15 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   return clamp(rawSteer,-CFG.STEER_LIMIT,CFG.STEER_LIMIT)
 end
 
-local function filterSteering(p, target, dt)
+local function filterSteering(p, target, dt, collisionEmergency)
   local alpha = clamp(dt / (CFG.STEER_FILTER + dt), 0, 1)
-  p.steerFiltered = lerp(p.steerFiltered, target, alpha)
-  -- Emergency passing changes the target path, not the steering authority.
-  -- No full-lock pulse or emergency gain is permitted at high speed.
-  local maxChange=CFG.STEER_RATE*dt
+  p.steerFiltered = collisionEmergency and target or
+    lerp(p.steerFiltered, target, alpha)
+  -- A predicted collision needs faster steering authority than an ordinary
+  -- lane change. The input remains bounded by STEER_LIMIT and the emergency
+  -- slew is capped per frame to avoid an instantaneous full-lock snap.
+  local maxChange=collisionEmergency and math.max(CFG.STEER_RATE*dt,
+    math.min(0.45,16.0*dt)) or CFG.STEER_RATE*dt
   local requestedChange=p.steerFiltered-p.steer
   local appliedChange=clamp(requestedChange,-maxChange,maxChange)
   p.steerRateLimited=math.abs(requestedChange)>maxChange+1e-6
@@ -689,6 +692,129 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
   return false
 end
 
+-- Detect an imminent physical overlap independently from lane following.
+-- A car that is already alongside/behind must never become a longitudinal
+-- leader; it is handled here as a short emergency steering manoeuvre instead.
+local function collisionEvasion(carIndex,car,p,speed)
+  local sim=ac.getSim()
+  if not sim or not state.routeGeometry or p.routeProgress==nil then return nil end
+  local fx,fz=normalize2(car.look.x,car.look.z)
+  local rx,rz=-fz,fx
+  local ownHalfLength=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
+  local ownHalfWidth=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+  local ownVelocity=car.velocity or {x=fx*speed,z=fz*speed}
+  local ovx,ovz=safeNumber(ownVelocity.x),safeNumber(ownVelocity.z)
+  local nearestTime=nil
+  local nearestIndex=nil
+  local nearestLateral=0
+  local nearestLongitudinal=0
+  local nearestHalfWidth=0
+  for i=0,sim.carsCount-1 do
+    if i~=carIndex then
+      local other=ac.getCar(i)
+      if other and other.isActive then
+        local dx=safeNumber(other.position.x)-safeNumber(car.position.x)
+        local dz=safeNumber(other.position.z)-safeNumber(car.position.z)
+        local otherVelocity=other.velocity or {x=0,z=0}
+        local rvx=safeNumber(otherVelocity.x)-ovx
+        local rvz=safeNumber(otherVelocity.z)-ovz
+        local longitudinal=dx*fx+dz*fz
+        local lateral=dx*rx+dz*rz
+        local relativeSpeedSq=rvx*rvx+rvz*rvz
+        local closestTime=relativeSpeedSq>0.25 and
+          clamp(-(dx*rvx+dz*rvz)/relativeSpeedSq,0,0.90) or 0
+        local predictedLongitudinal=(dx+rvx*closestTime)*fx+
+          (dz+rvz*closestTime)*fz
+        local predictedLateral=(dx+rvx*closestTime)*rx+
+          (dz+rvz*closestTime)*rz
+        local otherHalfLength=math.max(1.5,
+          safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
+        local otherHalfWidth=math.max(0.75,
+          safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+        local ofx,ofz=normalize2(other.look.x,other.look.z)
+        local orx,orz=-ofz,ofx
+        -- Project the other vehicle's oriented rectangle into our local frame.
+        local otherLongExtent=otherHalfLength*math.abs(ofx*fx+ofz*fz)+
+          otherHalfWidth*math.abs(orx*fx+orz*fz)
+        local otherLatExtent=otherHalfLength*math.abs(ofx*rx+ofz*rz)+
+          otherHalfWidth*math.abs(orx*rx+orz*rz)
+        local longitudinalLimit=ownHalfLength+otherLongExtent+0.65
+        local lateralLimit=ownHalfWidth+otherLatExtent+0.45
+        local currentOverlap=math.abs(longitudinal)<longitudinalLimit and
+          math.abs(lateral)<lateralLimit
+        local predictedOverlap=math.abs(predictedLongitudinal)<longitudinalLimit and
+          math.abs(predictedLateral)<lateralLimit
+        local closing=-(dx*rvx+dz*rvz)
+        if predictedOverlap and (currentOverlap or closing>0.5) and
+           (nearestTime==nil or closestTime<nearestTime) then
+          nearestTime=closestTime
+          nearestIndex=i
+          nearestLateral=predictedLateral
+          nearestLongitudinal=predictedLongitudinal
+          nearestHalfWidth=otherLatExtent
+        end
+      end
+    end
+  end
+  if nearestIndex==nil then return nil end
+
+  local sample=Geometry.sample(state.routeGeometry,p.routeProgress)
+  if not sample then return nil end
+  local leftBound,rightBound=routeBoundsAtSample(sample)
+  local currentLateral=safeNumber(p.latOff)
+  local leftRoom=rightBound-currentLateral-ownHalfWidth-0.35
+  local rightRoom=currentLateral-leftBound-ownHalfWidth-0.35
+  local requiredShift=ownHalfWidth+nearestHalfWidth+0.55
+  local canLeft=leftRoom>=requiredShift and
+    not laneOccupied(carIndex,car,currentLateral+requiredShift,nearestIndex)
+  local canRight=rightRoom>=requiredShift and
+    not laneOccupied(carIndex,car,currentLateral-requiredShift,nearestIndex)
+  if not canLeft and not canRight then
+    p.collisionEvasionSide=0
+    p.collisionEvasionTarget=nearestIndex
+    if not p.collisionEvasionBlockedLogged or
+       p.collisionEvasionLoggedTarget~=nearestIndex then
+      H.log("COLLISION_EVASION_BLOCKED id=%d other=%d ttc=%.3f long=%.2f lat=%.2f",
+        carIndex,nearestIndex,nearestTime,nearestLongitudinal,nearestLateral)
+      p.collisionEvasionBlockedLogged=true
+      p.collisionEvasionLoggedTarget=nearestIndex
+    end
+    return nil,true
+  end
+  p.collisionEvasionBlockedLogged=false
+
+  local side
+  -- Keep the selected escape direction for the duration of this threat;
+  -- changing sides while the vehicles are still converging would create
+  -- exactly the steering oscillation the emergency manoeuvre is meant to avoid.
+  if p.collisionEvasionSide==1 and canLeft then side=1
+  elseif p.collisionEvasionSide==-1 and canRight then side=-1
+  elseif canLeft and canRight then
+    if nearestLateral>0.15 then side=-1
+    elseif nearestLateral< -0.15 then side=1
+    else side=leftRoom>=rightRoom and 1 or -1 end
+  else
+    side=canLeft and 1 or -1
+  end
+  local severity=clamp(1.0-nearestTime/0.90,0,1)
+  local magnitude=clamp(0.62+severity*0.24,0.62,0.86)
+  p.collisionEvasionSide=side
+  p.collisionEvasionTarget=nearestIndex
+  p.collisionEvasionTTC=nearestTime
+  p.collisionEvasionOffset=currentLateral+side*requiredShift
+  if not p.collisionEvasionLogged or
+     p.collisionEvasionLoggedTarget~=nearestIndex or
+     p.collisionEvasionLoggedSide~=side then
+    H.log("COLLISION_EVASION id=%d other=%d side=%s ttc=%.3f long=%.2f lat=%.2f target=%.2f",
+      carIndex,nearestIndex,side>0 and "LEFT" or "RIGHT",nearestTime,
+      nearestLongitudinal,nearestLateral,p.collisionEvasionOffset)
+    p.collisionEvasionLogged=true
+    p.collisionEvasionLoggedTarget=nearestIndex
+    p.collisionEvasionLoggedSide=side
+  end
+  return side*magnitude
+end
+
 local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   local sim=ac.getSim()
   local own=state.p[carIndex]
@@ -732,14 +858,16 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
             gap,actualLateral=relativeToRoute(other.position,ownSample)
           end
         end
-        local halfLengths=(safeNumber(car.aabbSize and car.aabbSize.z,4.5)+
-          safeNumber(other.aabbSize and other.aabbSize.z,4.5))*0.5
         local lateralSeparation=(math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))+
           math.max(1.5,safeNumber(other.aabbSize and other.aabbSize.x,2.0)))*0.5+0.4
         local otherSpeed=math.max(0,safeNumber(other.speedMs))
         local detectionHorizon=directionDot < -0.25 and
           (ownSpeed+otherSpeed)*2.0+30.0 or ownSpeed*3.0+30.0
-        if gap and actualLateral and gap>-halfLengths-2.0 and
+        -- Same-direction traffic is a leader only when it is genuinely
+        -- ahead. The former negative-gap allowance made two overlapping cars
+        -- select each other as leaders, producing reciprocal zero-speed locks.
+        -- Oncoming traffic uses local forward projection and must also be ahead.
+        if gap and actualLateral and gap>0.5 and
            gap<math.max(110.0,detectionHorizon) and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or gap<bestGap) then
@@ -820,6 +948,11 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local previousAdvance=previousPlan and p.racingPlanStartProgress and
     math.max(0,routeGap(p.racingPlanStartProgress,p.routeProgress)) or 0
   local nextPlan
+  -- If a reserved PASS/RETURN/YIELD path cannot be optimized, first hold the
+  -- car's measured current corridor. This is still a full-body swept-path
+  -- validation; it does not jump to another lane or relax road boundaries.
+  -- A planner search failure therefore cannot strand a car when its present
+  -- corridor remains physically drivable.
   -- In OPEN mode the preferred offset is the physical road midpoint, not
   -- the legacy left-lane slot. Discrete lane slots are traffic reservations
   -- for passing/yielding only; they must not bias ordinary racing-line speed.
@@ -847,6 +980,21 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
       fallbackKind="ROAD_CENTRE"
     else
       planFailure=fallbackFailure or originalFailure or "NO_SAFE_FALLBACK"
+    end
+  end
+
+  if not nextPlan and mode~="OPEN" then
+    local holdOffset=safeNumber(p.latOff,base)
+    local holdFailure=nil
+    nextPlan,holdFailure=RacingLine.plan(
+      state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+      holdOffset,holdOffset,holdOffset,horizon,7.5,
+      nil,0,fixedTransitionDistance,p.lateralAccelLimit)
+    if nextPlan then
+      fallbackKind="HOLD_CURRENT_CORRIDOR"
+      planFailure=nil
+    else
+      planFailure=holdFailure or planFailure or "NO_SAFE_CURRENT_CORRIDOR"
     end
   end
 
@@ -1400,7 +1548,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
          listContains(pendingOwnerState.passGroupTargets,p.pendingYieldTarget))))
     local ownerAvailable=pendingOwner==nil and p.pendingYieldTarget==leaderIndex
     local reservationValid=pendingState and pendingCar and pendingCar.isActive and
-      (ownerStillOwnsRequest or ownerAvailable) and pendingGap and pendingGap>0
+      (ownerStillOwnsRequest or ownerAvailable) and pendingGap and
+      pendingGap>0 and pendingGap<math.max(120.0,speed*5.0+50.0)
     if not reservationValid then
       releaseYieldGroup(carIndex,p.pendingYieldGroup or {p.pendingYieldTarget})
       p.pendingYieldGroup=nil
@@ -1699,6 +1848,34 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     if passRequestReady then
       local leaderState=state.p[leaderIndex]
       local leaderCar=ac.getCar(leaderIndex)
+      if leaderState and leaderCar and leaderCar.isActive and
+         leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
+        -- A pending reservation is not an active pass. A materially stronger
+        -- eligible car may take over that request before the yield manoeuvre
+        -- begins; once the pass starts, its reservation is never pre-empted.
+        local ownerIndex=leaderState.yieldRequestBy
+        local ownerState=state.p[ownerIndex]
+        local ownerCar=ac.getCar(ownerIndex)
+        if ownerState and ownerCar and ownerCar.isActive and
+           ownerState.overtakeSide==0 and not ownerState.returningFromPass then
+          local ownScore=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)*100.0+
+            math.max(0,safeNumber(car.speedMs))*2.0
+          local ownerScore=clamp(safeNumber(ownerState.accelEstimate,4.0),0.5,18.0)*100.0+
+            math.max(0,safeNumber(ownerCar.speedMs))*2.0
+          if ownScore>ownerScore+25.0 then
+            releaseYieldGroup(ownerIndex,ownerState.pendingYieldGroup or {leaderIndex})
+            ownerState.pendingYieldGroup=nil
+            ownerState.pendingYieldTarget=nil;ownerState.pendingPassOffset=nil
+            ownerState.pendingYieldTimer=0;ownerState.pendingYieldOrder=nil
+            ownerState.pendingYieldGap=nil;ownerState.pendingYieldSpeed=nil
+            ownerState.pendingPassDistance=nil
+            leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil
+            leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
+            H.log("YIELD_PREEMPT leader=%d old=%d new=%d old_score=%.1f new_score=%.1f",
+              leaderIndex,ownerIndex,carIndex,ownerScore,ownScore)
+          end
+        end
+      end
       if not leaderState or not leaderCar or not leaderCar.isActive or
          not leaderCar.isAIControlled or leaderState.overtakeSide~=0 or
          leaderState.returningFromPass or leaderState.pendingYieldTarget~=nil then
@@ -2059,6 +2236,36 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
   p.diagPreviousPlanGeneration=p.racingPlanGeneration or 0
 end
 
+-- Build one coherent route-projection snapshot for every active AI car before
+-- any controller writes controls. This makes traffic decisions independent of
+-- the order in which cars are subsequently processed.
+function Driver.prepareFrame(sim,dt)
+  if not sim then return end
+  refreshRouteMetrics()
+  state.trafficFrame=(state.trafficFrame or 0)+1
+  local frame=state.trafficFrame
+  for i=0,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive and car.isAIControlled then
+      local p=state.p[i]
+      if not p then newPersonality(i);p=state.p[i] end
+      local progress,lateral,seg,parameter,distance,tx,tz=
+        routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,
+          math.max(0,safeNumber(car.speedMs)),dt or 0.05)
+      p.framePreviousRouteProgress=p.routeProgress
+      p.framePreparedFrame=frame
+      p.frameProjection={valid=progress~=nil,progress=progress,lateral=lateral,
+        seg=seg,parameter=parameter,distance=distance,tx=tx,tz=tz}
+      if progress~=nil then
+        p.routeLocked=true
+        p.routeProgress=progress
+        if lateral~=nil then p.latOff=lateral end
+        if seg then p.segIdx=seg end
+      end
+    end
+  end
+end
+
 function Driver.update(carIndex, car, dt)
   local p = state.p[carIndex]
   if not p then
@@ -2075,9 +2282,29 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
-  local previousRouteProgress=p.routeProgress
-  local progress, projectedLateral, projectedSeg, _, projectionDistance =
-    routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
+  local prepared=p.framePreparedFrame==(state.trafficFrame or -1) and p.frameProjection or nil
+  local previousRouteProgress=prepared and p.framePreviousRouteProgress or p.routeProgress
+  local progress, projectedLateral, projectedSeg, projectionParameter, projectionDistance
+  if prepared then
+    if prepared.valid then
+      progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance=
+        prepared.progress,prepared.lateral,prepared.seg,prepared.parameter,prepared.distance
+    end
+  else
+    progress,projectedLateral,projectedSeg,projectionParameter,projectionDistance=
+      routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
+  end
+  -- A locked projection can fail after a small transient departure. Permit a
+  -- topology reacquisition only when the global candidate is still within the
+  -- existing 8 m acquisition radius and points in the vehicle's travel
+  -- direction; never jump to a distant parallel section.
+  if progress==nil and p.routeLocked then
+    local rp,rl,rs,_,rd=routeProjection(car,p.segIdx,true,nil,speed,dt)
+    if rp~=nil and rd~=nil and rd<=8.0 then
+      progress,projectedLateral,projectedSeg,projectionDistance=rp,rl,rs,rd
+      H.log("ROUTE_REACQUIRE id=%d distance=%.2f seg=%d",carIndex,rd,rs or -1)
+    end
+  end
   if p.spawnSeeded and
      (projectionDistance==nil or projectionDistance>8.0) then
     progress=nil
@@ -2101,9 +2328,19 @@ function Driver.update(carIndex, car, dt)
   else
     p.stuck=0
   end
-  -- Traffic ahead is not a reason to disable recovery forever. A car that
-  -- cannot make progress for ten seconds gets one safe respawn attempt.
-  if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 then
+  -- A low-speed car in an active traffic transaction is waiting, not stuck.
+  -- Recovery is reserved for a genuine no-progress condition with no current
+  -- lane leader, no outstanding yield/pass reservation and a valid route plan.
+  local trafficWait=p.trafficAction=="WAIT_QUEUE" or
+    p.trafficAction=="WAIT_YIELD" or p.trafficAction=="YIELDING" or
+    p.pendingYieldTarget~=nil or p.yieldRequestBy~=nil or
+    p.overtakeSide~=0 or p.returningFromPass
+  local trafficGap=safeNumber(p.trafficGap,-1)
+  local nearbyLaneLeader=trafficGap>=0 and
+    trafficGap<math.max(30.0,speed*2.0+10.0)
+  if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 and
+     not trafficWait and not nearbyLaneLeader and
+     not p.projectionLost then
     p.stuck=0
     p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
@@ -2112,9 +2349,11 @@ function Driver.update(carIndex, car, dt)
   end
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
-  local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
+  -- A failed optimizer is not a physical obstacle. If route projection is
+  -- still valid, steering falls back to the recorded spline and speed planning
+  -- uses its curvature instead of commanding a stationary vehicle.
+  local targetSpeed = p.projectionLost and 0 or planTargetSpeed(p,speed)
   targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
-  if p.racingPlanBlocked then targetSpeed=0 end
   -- Overtake state can change in this frame; rebuild the steering path before
   -- issuing controls so the first lateral movement follows the reserved side.
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
@@ -2122,17 +2361,26 @@ function Driver.update(carIndex, car, dt)
 
   p.boundaryEmergency=false
   local steerTarget = calculateSteering(car, p, speed, fx, fz, dt)
+  local evasiveSteer,evasionBlocked=collisionEvasion(carIndex,car,p,speed)
+  p.collisionEvasionActive=evasiveSteer~=nil
+  p.collisionEvasionBlocked=evasionBlocked==true
+  if evasiveSteer~=nil then steerTarget=evasiveSteer
+  elseif not p.collisionEvasionBlocked then
+    p.collisionEvasionLogged=false
+    p.collisionEvasionTarget=nil
+    p.collisionEvasionSide=0
+  end
   p.steerTarget = steerTarget
-  if p.projectionLost then targetSpeed=0 end
+  if p.projectionLost or p.collisionEvasionBlocked then targetSpeed=0 end
   -- Boundary correction is a steering task, not a reason to stop.
   -- The predictive footprint guard already bends the target path back into
   -- the corridor. Do not convert lateral correction magnitude into a speed
   -- cap: that caused repeated full stops even with zero corridor deficit.
   p.targetSpeed=targetSpeed
-  local steer = filterSteering(p, steerTarget, dt)
+  local steer = filterSteering(p, steerTarget, dt,p.collisionEvasionActive)
 
   calculateThrottle(p, speed, targetSpeed, dt)
-  if p.projectionLost then p.gas=0; p.brake=1 end
+  if p.projectionLost or p.collisionEvasionBlocked then p.gas=0; p.brake=1 end
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
