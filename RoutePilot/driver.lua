@@ -59,7 +59,6 @@ function Driver.setup(cfg, st, helpers)
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
-  state.trafficRequestSerial=state.trafficRequestSerial or 0
 end
 
 local function refreshRouteMetrics()
@@ -136,10 +135,6 @@ local function newPersonality(carIndex)
     cruiseSpeed = carIndex%2==0 and math.huge or (40.0/3.6),
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
     trafficPriority = 0,
-    yieldRequestBy = nil, yieldOffset = nil, yieldReady = false,
-    yieldRequestTimer = 0, pendingYieldTarget = nil,
-    pendingPassOffset = nil, pendingYieldTimer = 0,
-    pendingYieldGap = nil, pendingYieldSpeed = nil, pendingPassDistance = nil,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -647,8 +642,8 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
           local separation=ownHalfWidth+otherHalfWidth+0.35
           local actualGap=math.abs(actualLateral-laneOffset)
           local otherTarget=otherState and
-            (otherState.overtakeSide~=0 or otherState.returningFromPass or otherState.yieldRequestBy~=nil) and
-            safeNumber(otherState.yieldOffset or otherState.laneOffset,actualLateral) or actualLateral
+            (otherState.overtakeSide~=0 or otherState.returningFromPass) and
+            safeNumber(otherState.laneOffset,actualLateral) or actualLateral
           local reservedGap=math.abs(otherTarget-laneOffset)
           local currentOffset=own and safeNumber(own.laneOffsetCurrent,
             own.laneOffset or laneOffset) or laneOffset
@@ -672,7 +667,7 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
           -- An active pass reserves only its actual swept corridor and only
           -- near enough to create a time/space conflict.
           local reservationConflict=otherState and
-            (otherState.overtakeSide~=0 or otherState.returningFromPass or otherState.yieldRequestBy~=nil) and
+            (otherState.overtakeSide~=0 or otherState.returningFromPass) and
             reservedGap<separation+0.25 and
             longitudinal>-math.max(12.0,otherSpeed*0.8+5.0) and
             longitudinal<math.max(22.0,ownSpeed*1.2+7.0)
@@ -783,7 +778,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local forcedMode=nil
   if p.overtakeSide~=0 then forcedMode="PASS"
   elseif p.returningFromPass then forcedMode="RETURN"
-  elseif p.yieldRequestBy~=nil and p.yieldOffset~=nil then forcedMode="YIELD" end
+  end
   local mode=forcedMode or "OPEN"
   local fixedOffset=nil
   local fixedTransitionDistance=22.0
@@ -800,8 +795,6 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedOffset=safeNumber(p.passLat,p.laneOffset or base)
   elseif mode=="RETURN" then
     fixedOffset=safeNumber(p.baseLaneOffset,base)
-  elseif mode=="YIELD" then
-    fixedOffset=safeNumber(p.yieldOffset,base)
   end
   if fixedOffset~=nil then
     local lateralDelta=math.abs(fixedOffset-safeNumber(p.latOff,base))
@@ -918,13 +911,13 @@ local function passingReservationBlocked(carIndex,p,targetOffset,speed)
   local ownWidth=math.max(1.5,safeNumber(ownCar.aabbSize and ownCar.aabbSize.x,2.0))
   for otherIndex,other in pairs(state.p) do
     if otherIndex~=carIndex and
-       (other.overtakeSide~=0 or other.returningFromPass or other.yieldRequestBy~=nil) and
-       other.routeProgress~=nil and (other.laneOffset~=nil or other.yieldOffset~=nil) then
+       (other.overtakeSide~=0 or other.returningFromPass) and
+       other.routeProgress~=nil and other.laneOffset~=nil then
       local gap=math.abs(routeGap(p.routeProgress,other.routeProgress))
       local otherCar=ac.getCar(otherIndex)
       local otherWidth=math.max(1.5,safeNumber(otherCar and otherCar.aabbSize and otherCar.aabbSize.x,2.0))
       local lateralSeparation=(ownWidth+otherWidth)*0.5+0.5
-      if gap<range and math.abs(safeNumber(other.yieldOffset,other.laneOffset)-targetOffset)<lateralSeparation then
+      if gap<range and math.abs(safeNumber(other.laneOffset)-targetOffset)<lateralSeparation then
         return true,otherIndex,gap
       end
     end
@@ -965,9 +958,8 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   local sim=ac.getSim()
   if not sim then return false,"no_sim" end
 
-  -- The leader is deliberately excluded from static occupancy prediction:
-  -- it must first move to the outer edge of its own lane, and the pass starts
-  -- only after chooseYieldOffset() confirms that position is reached.
+  -- The target leader remains in its source lane while the overtaker uses
+  -- the adjacent lane. Other active vehicles are checked across the full path.
   local currentSample=Geometry.sample(route,p.routeProgress)
   for i=0,sim.carsCount-1 do
     if i~=carIndex and i~=leaderIndex then
@@ -1008,8 +1000,8 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
             safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
           local otherOffset=ol or 0
           if otherState and
-             (otherState.overtakeSide~=0 or otherState.returningFromPass or otherState.yieldRequestBy~=nil) then
-            otherOffset=safeNumber(otherState.yieldOffset or otherState.laneOffset,otherOffset)
+             (otherState.overtakeSide~=0 or otherState.returningFromPass) then
+            otherOffset=safeNumber(otherState.laneOffset,otherOffset)
           end
           traffic[#traffic+1]={
             index=i,progress=op,lateral=otherOffset,speed=signedSpeed,
@@ -1199,8 +1191,6 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
       math.max(8.0,speed))*2.0+4.0)
   p.followTimer=0;p.blockedT=0
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
-  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
-  p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
   H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
     carIndex,leaderIndex or -1,source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
