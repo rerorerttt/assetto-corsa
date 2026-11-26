@@ -804,6 +804,10 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     p.trafficAction="EMERGENCY_ESCAPE"
     p.trafficReason="leaving_blocking_vehicle"
     p.trafficPriority=1100000
+  elseif p.emergencyWait then
+    p.trafficAction="EMERGENCY_WAIT"
+    p.trafficReason="adjacent_lane_blocked_braking"
+    p.trafficPriority=1050000
   elseif p.passTargetIndex~=nil then
     p.trafficAction="PASSING"
     p.trafficReason="coordinator_lane_reserved"
