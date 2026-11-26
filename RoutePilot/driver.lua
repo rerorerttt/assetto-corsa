@@ -1489,8 +1489,12 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
         p.overtakeSide=0
         p.passTargetIndex=nil
         p.returnTargetIndex=targetIndex
+        p.passT=0
+        p.passBlockedT=0
+        p.passDeadline=nil
         p.returningFromPass=true
         p.laneOffset=returnOffset
+        p.trafficPriority=900000
         p.overtakeRetryT=1.5
         p.trafficAction="RETURNING"
         p.trafficReason="pass_lane_became_occupied"
@@ -2016,6 +2020,8 @@ function Driver.update(carIndex, car, dt)
       p.laneOffset=passOffset
       p.trafficAction="PASSING"
       p.trafficReason="return_plan_failed_reenter_reserved_lane"
+      p.trafficTargetOffset=passOffset
+      p.trafficPriority=1000000
       updateRacingPlan(carIndex,car,p,speed,dt)
       targetSpeed=p.racingPlanBlocked and 0 or planTargetSpeed(p,speed)
     end
