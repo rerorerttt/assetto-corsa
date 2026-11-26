@@ -133,9 +133,9 @@ local function newPersonality(carIndex)
     yieldRequestBy = nil, yieldOffset = nil, yieldPlanBlocked = false,
     yieldAssignedTimer = 0,
     returnTargetIndex = nil, passTargetLaneFailed = false,
-    speedClass = carIndex%2==0 and "FAST" or "SLOW",
-    canOvertake = carIndex%2==0,
-    cruiseSpeed = carIndex%2==0 and math.huge or (40.0/3.6),
+    speedClass = "DYNAMIC",
+    canOvertake = true,
+    cruiseSpeed = math.huge,
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
     trafficPriority = 0,
   }
@@ -1344,6 +1344,8 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficLeaderIndex=-1
   p.trafficGap=-1
   p.trafficLeaderSpeed=0
+  p.trafficPotentialSpeed=0
+  p.trafficSpeedAdvantage=0
   p.trafficTargetOffset=safeNumber(p.laneOffsetCurrent,p.latOff or 0)
 
   local ownProgress,ownLateral,ownSeg=routeProjection(
@@ -1595,10 +1597,15 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficAction="FOLLOW"
   p.trafficReason="leader_in_racing_line"
   local leaderPace=math.max(0,safeNumber(leaderSpeed))
-  local targetPotential=targetSpeed==math.huge and 90.0 or safeNumber(targetSpeed)
+  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.8,18.0)
+  -- Estimate attainable speed from the car's measured acceleration instead
+  -- of assigning arbitrary slow/fast classes by car index.
+  local targetPotential=targetSpeed==math.huge and
+    (speed+acceleration*4.0) or safeNumber(targetSpeed)
   local potentialSpeed=math.min(90.0,math.max(speed,targetPotential))
   local speedAdvantage=potentialSpeed-leaderPace
-  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.8,18.0)
+  p.trafficPotentialSpeed=potentialSpeed
+  p.trafficSpeedAdvantage=speedAdvantage
   local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
   local leaderCar=ac.getCar(leaderIndex)
   local leaderLength=math.max(3.0,
