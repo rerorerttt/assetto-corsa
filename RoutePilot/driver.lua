@@ -1346,6 +1346,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficLeaderSpeed=0
   p.trafficPotentialSpeed=0
   p.trafficSpeedAdvantage=0
+  p.trafficLeaderAccel=0
   p.trafficTargetOffset=safeNumber(p.laneOffsetCurrent,p.latOff or 0)
 
   local ownProgress,ownLateral,ownSeg=routeProjection(
@@ -1597,30 +1598,46 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficAction="FOLLOW"
   p.trafficReason="leader_in_racing_line"
   local leaderPace=math.max(0,safeNumber(leaderSpeed))
-  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.8,18.0)
-  -- Estimate attainable speed from the car's measured acceleration instead
-  -- of assigning arbitrary slow/fast classes by car index.
+  local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.5,18.0)
+  local leaderState=state.p[leaderIndex]
+  local leaderAcceleration=clamp(
+    safeNumber(leaderState and leaderState.accelEstimate,4.0),0.5,18.0)
+  -- Compare attainable speed for both cars using their measured acceleration.
+  -- This prevents identical cars from inventing an advantage merely because
+  -- every AI has an unlimited software speed target.
   local targetPotential=targetSpeed==math.huge and
     (speed+acceleration*4.0) or safeNumber(targetSpeed)
   local potentialSpeed=math.min(90.0,math.max(speed,targetPotential))
-  local speedAdvantage=potentialSpeed-leaderPace
+  local leaderPotential=math.min(90.0,leaderPace+leaderAcceleration*4.0)
+  local speedAdvantage=potentialSpeed-leaderPotential
   p.trafficPotentialSpeed=potentialSpeed
   p.trafficSpeedAdvantage=speedAdvantage
+  p.trafficLeaderAccel=leaderAcceleration
   local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
   local leaderCar=ac.getCar(leaderIndex)
   local leaderLength=math.max(3.0,
     safeNumber(leaderCar and leaderCar.aabbSize and leaderCar.aabbSize.z,4.5))
   local requiredClosure=math.max(0,safeNumber(gap))+ownLength+leaderLength+5.0
   local relativeSpeed=speed-leaderPace
-  local passTime
-  local estimatedPassDistance
-  if relativeSpeed>=3.0 then
-    passTime=requiredClosure/relativeSpeed
-    estimatedPassDistance=speed*passTime
+  local relativeAcceleration=acceleration-leaderAcceleration
+  local passTime=math.huge
+  if math.abs(relativeAcceleration)<0.25 then
+    if relativeSpeed>0.5 then
+      passTime=requiredClosure/relativeSpeed
+    end
   else
-    passTime=(-relativeSpeed+
-      math.sqrt(relativeSpeed*relativeSpeed+2.0*acceleration*requiredClosure))/
-      acceleration
+    local discriminant=relativeSpeed*relativeSpeed+
+      2.0*relativeAcceleration*requiredClosure
+    if discriminant>=0 then
+      local root=math.sqrt(discriminant)
+      local t1=(-relativeSpeed+root)/relativeAcceleration
+      local t2=(-relativeSpeed-root)/relativeAcceleration
+      if t1>0 then passTime=t1 end
+      if t2>0 and t2<passTime then passTime=t2 end
+    end
+  end
+  local estimatedPassDistance=math.huge
+  if passTime<math.huge then
     estimatedPassDistance=speed*passTime+
       0.5*acceleration*passTime*passTime
   end
@@ -1633,8 +1650,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   local passWindow=math.max(45.0,25.0+potentialSpeed*1.25)
   local canActuallyPass=p.canOvertake==true and leaderIsAI==true and
     safeNumber(leaderSpeed,-1)>=0 and speedAdvantage>=3.0 and
-    estimatedPassDistance<=180.0 and
-    potentialSpeed>=leaderPace+2.0
+    estimatedPassDistance<=180.0
   local urgent=canActuallyPass and gap<=clamp(12.0+potentialSpeed*0.8,20.0,60.0)
 
   -- Both cars are assigned adjacent slots in one reservation. The target's
