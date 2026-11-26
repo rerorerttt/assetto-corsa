@@ -829,6 +829,29 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   -- we use the physical road centre as a neutral recovery corridor.
   local originalFailure=planFailure or (not nextPlan and "NO_PLAN" or nil)
   local fallbackKind=nil
+  local holdPreviousPlan=false
+  if not nextPlan and (mode=="PASS" or mode=="RETURN") then
+    -- A new far-horizon sample can fail on a later bend even while the
+    -- previously validated near-field path is still usable. Replan a shorter
+    -- reserved corridor first; if that also fails, retain the last valid plan
+    -- while it still covers the car's immediate preview.
+    local reservedFailure=planFailure
+    local shortHorizon=math.min(90.0,horizon)
+    nextPlan,planFailure=RacingLine.plan(
+      state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+      safeNumber(p.latOff,base),preferredOffset,fixedOffset,shortHorizon,7.5,
+      previousPlan,previousAdvance,fixedTransitionDistance,p.lateralAccelLimit)
+    if nextPlan then
+      fallbackKind="SHORT_RESERVED_PLAN"
+    elseif previousPlan and previousAdvance<previousPlan.horizon-20.0 then
+      nextPlan=previousPlan
+      planFailure=nil
+      holdPreviousPlan=true
+      fallbackKind="LAST_VALID_RESERVED_PLAN"
+    else
+      planFailure=reservedFailure or planFailure
+    end
+  end
   if not nextPlan and mode=="OPEN" then
     local fallbackFailure=nil
     local laneDelta=math.abs(base-safeNumber(p.latOff,base))
@@ -860,7 +883,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     p.racingPlanGeneration = (p.racingPlanGeneration or 0) + 1
   end
   p.racingPlan=nextPlan
-  p.racingPlanStartProgress=p.routeProgress
+  if not holdPreviousPlan then
+    p.racingPlanStartProgress=p.routeProgress
+  end
   -- A hard stop is reserved for the case where the optimizer, base-lane
   -- fallback, and validated road-centre fallback all fail, or a reserved
   -- PASS/RETURN corridor cannot contain the complete vehicle body.
