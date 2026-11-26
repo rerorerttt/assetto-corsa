@@ -24,7 +24,8 @@ local CFG, state, H
 
 local BOUND_MARGIN = 0.4
 local RESCUE_SPEED = 1.5
-local RESCUE_TIME  = 10.0
+local RESCUE_TIME  = 5.0
+local OFFTRACK_TIME = 10.0
 local STEER_DEAD   = 0.002  -- suppress only sub-resolution steering noise
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -1366,6 +1367,31 @@ function Driver.update(carIndex, car, dt)
   local previousRouteProgress=p.routeProgress
   local progress, projectedLateral, projectedSeg, _, projectionDistance =
     routeProjection(car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt)
+  if progress==nil and not p.spawnSeeded and previousRouteProgress~=nil then
+    -- Off-track recovery may use a nearby global projection, but only when
+    -- heading and route-progress continuity agree. This avoids jumping to a
+    -- different branch at a crossing while still allowing a car to rejoin.
+    local candidate=Geometry.project(state.routeGeometry,car.position,nil,
+      car.look,speed,dt,false)
+    if candidate and candidate.distance<=30.0 then
+      local hx,hz=normalize2(car.look.x,car.look.z)
+      local alignment=hx*candidate.tx+hz*candidate.tz
+      local delta=candidate.s-previousRouteProgress
+      if state.loopRoute then
+        local total=state.routeLength or 0
+        if total>0 and delta>total*0.5 then delta=delta-total end
+        if total>0 and delta< -total*0.5 then delta=delta+total end
+      end
+      local continuityLimit=math.max(25.0,speed*dt*6.0+12.0)
+      if alignment>=0.0 and math.abs(delta)<=continuityLimit then
+        progress=candidate.s
+        projectedLateral=candidate.lateral
+        projectedSeg=candidate.seg
+        projectionDistance=candidate.distance
+        p.routeReacquired=true
+      end
+    end
+  end
   if p.spawnSeeded and
      (projectionDistance==nil or projectionDistance>8.0) then
     progress=nil
@@ -1383,19 +1409,37 @@ function Driver.update(carIndex, car, dt)
   end
   readWheelSlip(car,p)
 
+  local outsideBounds=false
+  if progress~=nil and projectedLateral~=nil then
+    local left,right=H.boundsAt(p.segIdx)
+    outsideBounds=projectedLateral<left or projectedLateral>right
+  end
+  if outsideBounds or p.projectionLost then
+    p.offTrackT=safeNumber(p.offTrackT)+dt
+  else
+    p.offTrackT=0
+  end
+
   p.rescueRetryT=math.max(0,safeNumber(p.rescueRetryT)-dt)
-  if speed<RESCUE_SPEED then
+  local blockingGap=nil
+  if not p.projectionLost then
+    blockingGap=select(1,carAheadInLane(carIndex,car,
+      safeNumber(p.coordinatorOffset,p.latOff or 0)))
+  end
+  local trafficBlocked=blockingGap~=nil and blockingGap<18.0
+  if speed<RESCUE_SPEED and not trafficBlocked and not p.projectionLost then
     p.stuck=p.stuck+dt
   else
     p.stuck=0
   end
-  -- Traffic ahead is not a reason to disable recovery forever. A car that
-  -- cannot make progress for ten seconds gets one safe respawn attempt.
-  if p.stuck>=RESCUE_TIME and p.rescueRetryT<=0 then
-    p.stuck=0
-    p.rescueRetryT=5.0
+  local rescueReason=nil
+  if p.stuck>=RESCUE_TIME then rescueReason="stuck_5s"
+  elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_10s" end
+  if rescueReason and p.rescueRetryT<=0 then
+    p.stuck=0;p.offTrackT=0;p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
-    H.log("RESCUE_ATTEMPT id=%d success=%s",carIndex,tostring(rescued))
+    H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s",
+      carIndex,rescueReason,tostring(rescued))
     if rescued then return end
   end
 
