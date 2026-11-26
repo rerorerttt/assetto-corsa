@@ -130,6 +130,7 @@ local function newPersonality(carIndex)
     overtakeSide = 0, passLat = 0, blockerOff = 0, followTimer = 0,
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
     overtakeRetryT = 0, emergencyPass = false, returningFromPass = false,
+    trafficPriority = 0,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -228,10 +229,6 @@ local function planTargetSpeed(p,speed)
   local target=p.cruiseSpeed
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local currentSpeed=math.max(0,safeNumber(speed))
-  if p.racingPlanTrafficBlockedDistance then
-    local stoppingRoom=math.max(0,p.racingPlanTrafficBlockedDistance-10.0)
-    target=math.min(target,math.sqrt(2.0*brakeAccel*stoppingRoom))
-  end
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
   if p.racingPlanBlockedDistance then
@@ -743,88 +740,6 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   return bestGap,bestSpeed,bestIndex,bestLateral
 end
 
-local function hasTrafficInCorridor(carIndex,car,p,baseOffset)
-  local sim=ac.getSim()
-  if not sim or not p.routeProgress then return true end
-  local ownSample=Geometry.sample(state.routeGeometry,p.routeProgress)
-  if not ownSample then return true end
-  local bl,br=H.boundsAt(p.segIdx)
-  local corridorMin,corridorMax=bl-1.0,br+1.0
-  for i=0,sim.carsCount-1 do
-    if i~=carIndex then
-      local other=ac.getCar(i)
-      if other and other.isActive then
-        local otherState=state.p[i]
-        local progress,lateral=routeProjection(other,
-          otherState and otherState.segIdx or p.segIdx,
-          not (otherState and otherState.routeLocked),
-          otherState and otherState.routeProgress,other.speedMs,0.05)
-        if otherState and progress~=nil then
-          otherState.routeProgress=progress
-          otherState.routeLocked=true
-        end
-        local otherFx,otherFz=normalize2(other.look.x,other.look.z)
-        local otherSample=progress and Geometry.sample(state.routeGeometry,progress)
-        local directionDot=otherSample and
-          (otherFx*otherSample.tx+otherFz*otherSample.tz) or 1.0
-        local gap,off
-        if progress~=nil and directionDot>=-0.25 then
-          gap=routeGap(p.routeProgress,progress)
-          off=lateral
-        else
-          gap,off=relativeToRoute(other.position,ownSample)
-        end
-        if gap~=nil and off~=nil and gap>-18.0 and gap<105.0 and
-           off>=corridorMin and off<=corridorMax then
-          return true
-        end
-      end
-    end
-  end
-  return false
-end
-
-local function buildTrafficObstacles(carIndex,car,p,speed)
-  local sim=ac.getSim()
-  if not sim or not state.routeGeometry or p.routeProgress==nil then return {} end
-  local obstacles={}
-  local ownHalf=math.max(0.75,safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
-  for i=0,sim.carsCount-1 do
-    if i~=carIndex then
-      local other=ac.getCar(i)
-      if other and other.isActive then
-        local otherState=state.p[i]
-        local op=otherState and otherState.routeProgress
-        local ol=otherState and otherState.latOff
-        -- Every active AI is updated by RoutePilot each frame. Reuse its
-        -- current projection; only project an unadopted car once as fallback.
-        if op==nil or ol==nil then
-          op,ol=routeProjection(other,
-            otherState and otherState.segIdx or p.segIdx,
-            not (otherState and otherState.routeLocked),
-            otherState and otherState.routeProgress,
-            safeNumber(other.speedMs),0.05)
-        end
-        if op~=nil and ol~=nil then
-          local otherSpeed=math.max(0,safeNumber(other.speedMs))
-          local half=math.max(0.75,safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
-          local longitudinalGap=routeGap(p.routeProgress,op)
-          -- Only cars that can occupy the same piece of road when we reach
-          -- the sample become obstacles. Rear traffic is handled by its own
-          -- planner and does not force us into a fixed lane.
-          if longitudinalGap>=-7.0 and longitudinalGap<=120.0 then
-            obstacles[#obstacles+1]={
-              progress=op,lateral=ol,speed=otherSpeed,
-              halfWidth=ownHalf+half+0.65
-            }
-          end
-        end
-      end
-    end
-  end
-  return obstacles
-end
-
 local function updateRacingPlan(carIndex,car,p,speed,dt)
   refreshRouteMetrics()
   if not state.routeGeometry or p.routeProgress==nil then
@@ -874,44 +789,26 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local v=math.max(0,speed)
   local horizon=clamp(math.max(CFG.PLAN_HORIZON,v*v/(2*brakeAccel)+v*1.5+35.0),CFG.PLAN_HORIZON,135.0)
   local planFailure=nil
-  local obstacles=fixedOffset==nil and
-    buildTrafficObstacles(carIndex,car,p,speed) or nil
-  local function obstacleAt(sample,distance)
-    local blocked={}
-    local travelTime=distance/math.max(8.0,speed)
-    for _,o in ipairs(obstacles or {}) do
-      local otherProgress=o.progress+o.speed*travelTime
-      local gap=routeGap(sample.s,otherProgress)
-      if gap>=-6.0 and gap<=7.0 then
-        blocked[#blocked+1]={o.lateral-o.halfWidth,o.lateral+o.halfWidth}
-      end
-    end
-    return blocked
-  end
+  -- Traffic is deliberately not fed into the geometric racing-line optimizer.
+  -- Following, passing and collision reservations have one owner below:
+  -- updateTrafficControl(). A blocked obstacle grid must never turn a valid
+  -- following situation into a planner NO_PATH hard stop.
   local previousPlan=p.racingPlanMode==mode and p.racingPlan or nil
   local previousAdvance=previousPlan and p.racingPlanStartProgress and
     math.max(0,routeGap(p.racingPlanStartProgress,p.routeProgress)) or 0
-  local nextPlan,trafficBlockedDistance
-  nextPlan,planFailure,trafficBlockedDistance=RacingLine.plan(
+  local nextPlan
+  nextPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
-    fixedOffset==nil and obstacleAt or nil,previousPlan,previousAdvance,
-    fixedTransitionDistance)
+    previousPlan,previousAdvance,fixedTransitionDistance)
   if nextPlan ~= p.racingPlan then
     p.racingPlanGeneration = (p.racingPlanGeneration or 0) + 1
   end
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
-  local wasTrafficBlocked=p.racingPlanTrafficBlocked==true
   p.racingPlanBlocked=planFailure=="NO_FIT"
-  p.racingPlanTrafficBlocked=planFailure=="NO_PATH"
-  p.racingPlanTrafficBlockedDistance=p.racingPlanTrafficBlocked and
-    safeNumber(trafficBlockedDistance) or nil
-  if p.racingPlanTrafficBlocked and not wasTrafficBlocked then
-    H.log("RACE_LINE_TRAFFIC_BLOCKED id=%d",carIndex)
-  elseif not p.racingPlanTrafficBlocked and wasTrafficBlocked then
-    H.log("RACE_LINE_TRAFFIC_CLEAR id=%d",carIndex)
-  end
+  p.racingPlanTrafficBlocked=false
+  p.racingPlanTrafficBlockedDistance=nil
   p.racingPlanBlockedDistance=p.racingPlan and
     p.racingPlan.blockedDistance or nil
   if p.racingPlanBlocked then
@@ -1171,17 +1068,28 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   return true
 end
 
-local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
+local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   p.overtakeRetryT=math.max(0,safeNumber(p.overtakeRetryT)-dt)
+  if p.overtakeSide~=0 then
+    p.trafficPriority=1000000+math.max(0,100-safeNumber(p.passT))
+  elseif p.returningFromPass then
+    p.trafficPriority=900000
+  else
+    p.trafficPriority=0
+  end
   local ownProgress, _, ownSeg = routeProjection(car, p.segIdx, not p.routeLocked, p.routeProgress, speed, dt)
   if ownProgress == nil then
     p.projectionLost = true
+    p.trafficPriority=0
     return 0
   end
   p.routeLocked = true
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
-  if p.returningFromPass then return targetSpeed end
+  if p.returningFromPass then
+    p.trafficPriority=900000
+    return targetSpeed
+  end
   local leftCenter,rightCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
   local defaultOffset=p.baseLaneOffset or leftCenter or ((bl+br)*0.5)
@@ -1305,6 +1213,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   if not gap or not leaderIndex then
     p.followTimer = 0
     p.blockedT = 0
+    p.trafficPriority=0
     return targetSpeed
   end
 
@@ -1342,10 +1251,24 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
     local urgent=canActuallyPass and gap<=urgentGap
     local passWindow=math.max(45.0,32.0+speed*1.5)
     p.followTimer=p.followTimer+dt
-    if canActuallyPass and gap<=passWindow and p.overtakeSide==0 and
-       p.overtakeRetryT<=0 then
+    local passRequestReady=canActuallyPass and gap<=passWindow and
+      p.overtakeSide==0 and p.overtakeRetryT<=0
+    if passRequestReady then
+      -- Requests are ranked by urgency before cars are updated. The next
+      -- frame's deterministic ordering lets the most urgent valid request
+      -- reserve first, instead of granting every simultaneous request to
+      -- whichever car happens to have the lowest simulation index.
+      p.trafficPriority=10000+
+        clamp(passWindow-gap,0,passWindow)*10+
+        clamp(speedAdvantage,0,50)*2+
+        (urgent and 1000 or 0)
+    else
+      p.trafficPriority=0
+    end
+    if passRequestReady then
       p.emergencyPassRequest=urgent
       if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,estimatedPassDistance) then
+        p.trafficPriority=1000000
         return targetSpeed
       end
       p.emergencyPassRequest=false
@@ -1356,6 +1279,7 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
 
   p.followTimer = 0
   p.blockedT = 0
+  p.trafficPriority=0
   local safe = safeFollowingSpeed(gap, leaderSpeed or 0,p.brakeAccelEstimate)
   return math.min(targetSpeed, safe)
 end
@@ -1604,7 +1528,7 @@ function Driver.update(carIndex, car, dt)
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
-  targetSpeed = updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
+  targetSpeed = updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
   if p.racingPlanBlocked then targetSpeed=0 end
   -- Overtake state can change in this frame; rebuild the steering path before
   -- issuing controls so the first lateral movement follows the reserved side.
