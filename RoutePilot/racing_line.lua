@@ -249,6 +249,8 @@ end
 
 function RacingLine.sample(plan, distance)
   if not plan or not plan.points or plan.count < 2 then return nil end
+  distance=safe(distance)
+  if distance<0 or distance>plan.horizon then return nil end
   local usableDistance=plan.blockedDistance and
     math.max(0,plan.blockedDistance-10.0) or distance
   local position = clamp(usableDistance / plan.spacing, 0, plan.count - 1)
