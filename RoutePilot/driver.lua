@@ -1491,7 +1491,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     local urgent=canActuallyPass and gap<=urgentGap
     local passWindow=math.max(45.0,32.0+speed*1.5)
     p.followTimer=p.followTimer+dt
-    local passRequestReady=(canActuallyPass and gap<=passWindow) and
+    local passRequestReady=canActuallyPass and gap<=passWindow and
+      p.overtakeSide==0 and p.overtakeRetryT<=0
       p.overtakeSide==0 and p.overtakeRetryT<=0
     if passRequestReady then
       p.trafficPriority=10000+
