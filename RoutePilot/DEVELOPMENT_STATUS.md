@@ -10,7 +10,7 @@ The previous trace was reviewed against the active Lua source. It showed that th
 
 The current implementation replaces that chain with a direct adjacent-lane policy:
 
-- All AI retain physics-limited speed; there is no arbitrary 40 km/h cap or index-based speed class. Overtake eligibility uses measured acceleration, current speed, leader speed, and the predicted distance needed to complete the pass.
+- All AI retain physics-limited speed; there is no arbitrary 40 km/h cap or index-based speed class. Overtake eligibility compares both cars' measured acceleration and reachable speed envelopes, current speed, and the predicted distance needed to complete the pass.
 - Outside overtakes, every AI continues to use the full-width racing-line optimizer; no permanent lane assignment or lane-centre bias is applied. For an overtake, the target is assigned to the logical slot nearest its current racing line and the faster car takes an adjacent slot.
 - Lane slots are derived from measured bounds: widths 3/7/11/15 m yield 1/2/3/4 slots. On a single-lane corridor there is no pass.
 - A fast car detecting a slower AI leader reserves a paired lane change: the target moves to its nearest logical lane slot and the overtaker moves to an adjacent slot in the same manoeuvre. Both begin immediately; there is no yield-ready handshake or timeout.
