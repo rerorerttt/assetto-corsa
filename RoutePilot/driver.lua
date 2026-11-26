@@ -1686,7 +1686,7 @@ function Driver.update(carIndex, car, dt)
     p.stuck=0
   end
   local rescueReason=nil
-  if p.emergencyBlockedT>=10.0 then rescueReason="traffic_blocked_10s"
+  if safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
   elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_recovery_failed_10s"
   elseif p.stuck>=RESCUE_TIME and not p.offTrackRecovering and
       safeNumber(p.emergencyBlockedT)<=0 then rescueReason="stuck_5s" end
