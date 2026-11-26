@@ -324,3 +324,7 @@ Corrected in source:
 - The speed planner and traffic controller remain separate but sequential: the racing-line planner supplies the geometric speed envelope; traffic control only reduces it when a same-corridor leader or reserved conflict requires following. Cars in a separate corridor must not cap one another's speed.
 
 This directly addresses the trace's false stops and the GDD's requirements that ordinary driving use the whole road and that planner failures must not stop cars on passable road. It is not yet a runtime-verified speed improvement. Static source validation and the next in-game trace are still required. New diagnostics should show no `TRAFFIC_HOLD` plan mode, no repeated `HARD_STOP_NO_SAFE_PATH` on passable road, and `RACE_LINE_FALLBACK type=ROAD_CENTRE` only when the dynamic search itself fails.
+
+
+### Steering fallback alignment
+The steering controller's non-plan fallback previously targeted the legacy left-lane centre, which could reintroduce a lane change whenever a preview sample was unavailable even after OPEN planning had been moved to the road midpoint. It now targets the road midpoint for ordinary driving, the explicitly reserved yield offset while yielding, the pass offset while passing, and the saved pre-pass racing-line offset while returning. This keeps the geometric planner and steering fallback on the same target policy.
