@@ -1447,16 +1447,9 @@ end
 local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,passDistance,forcedOffset)
   if p.overtakeRetryT>0 then return false end
   local offset=forcedOffset or findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,passDistance)
-  if forcedOffset~=nil then
-    local reserved=passingReservationBlocked(carIndex,p,offset,speed)
-    local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
-      p.laneOffsetCurrent or p.latOff or 0,offset,passDistance or 60.0,speed)
-    local ignored=p.pendingYieldGroup or leaderIndex
-    if reserved or laneOccupied(carIndex,car,offset,ignored) or not clear then
-      p.lastPassDeniedReason=reason or "yielded_corridor_no_longer_clear"
-      return false
-    end
-  end
+  -- A forced offset is issued only after the coordinator assigns the
+  -- matching group-wide yield command in this same frame.
+
   if offset==nil then
     p.overtakeRetryT=0.25
     if not p.overtakeDeniedLogged then
@@ -1944,14 +1937,14 @@ local function coordinateTrafficFrame(sim,dt,frame)
       end
     end
   end
+  -- Stronger cars get the first pass command; ETA is only a tie-breaker.
   table.sort(requests,function(a,b)
+    if math.abs(a.advantage-b.advantage)>0.001 then return a.advantage>b.advantage end
     if math.abs(a.eta-b.eta)>0.001 then return a.eta<b.eta end
     if math.abs(a.priority-b.priority)>0.001 then return a.priority>b.priority end
-    local pa,pb=state.p[a.index],state.p[b.index]
-    local ap,bp=safeNumber(pa and pa.routeProgress),safeNumber(pb and pb.routeProgress)
-    if ap~=bp then return ap<bp end
     return a.index<b.index
   end)
+
   for _,q in ipairs(requests) do
     local i=q.index;local car=ac.getCar(i);local p=state.p[i]
     local leader=ac.getCar(q.leader);local lp=state.p[q.leader]
@@ -2050,18 +2043,53 @@ local function coordinateTrafficFrame(sim,dt,frame)
             frame,i,q.leader,tostring(p.lastPassDeniedReason or "commit_validation_failed"))
         end
       else
-        -- Pack-wide yielding is optional. If the group cannot form a
-        -- coordinated corridor, try a safe individual pass around this leader.
+        -- Atomic command: the quicker car passes while the whole slower pack
+        -- moves to the opposite edge of its lane in this same frame.
         local singleOffset=findPassingOffset(i,car,p,q.leader,q.leaderLateral,
-          safeNumber(car.speedMs),q.distance,false,q.leader)
-        if singleOffset~=nil and beginOvertake(i,car,p,q.gap,q.leader,
-            q.leaderLateral,safeNumber(car.speedMs),q.distance,singleOffset) then
-          H.log("TRAFFIC_SINGLE_PASS frame=%d pass=%d leader=%d gap=%.2f eta=%.2f offset=%.2f",
-            frame,i,q.leader,q.gap,q.eta,singleOffset)
+          safeNumber(car.speedMs),q.distance,true,ignore)
+        if singleOffset~=nil then
+          local direction=singleOffset>sourceCenter and -1 or 1
+          local assigned=0
+          for k=1,#group do
+            local memberIndex=group[k]
+            local m=state.p[memberIndex];local mc=ac.getCar(memberIndex)
+            if m and mc then
+              local ml,mr=H.boundsAt(m.segIdx or lp.segIdx)
+              local mn=math.max(1,math.floor(((mr-ml)+1.0)/4.0))
+              local mw=(mr-ml)/mn
+              local ms=1
+              for si=2,mn do
+                if math.abs(ml+(si-0.5)*mw-safeNumber(m.latOff))<
+                   math.abs(ml+(ms-0.5)*mw-safeNumber(m.latOff)) then ms=si end
+              end
+              local half=math.max(0.75,safeNumber(mc.aabbSize and mc.aabbSize.x,2.0)*0.5)
+              local low=math.max(ml+half+BOUND_MARGIN,ml+(ms-1)*mw+half+0.12)
+              local high=math.min(mr-half-BOUND_MARGIN,ml+ms*mw-half-0.12)
+              local yieldOffset=direction<0 and low or high
+              m.yieldRequestBy=i;m.yieldOffset=yieldOffset;m.yieldReady=true
+              m.yieldFromOffset=safeNumber(m.latOff,yieldOffset)
+              m.yieldStartProgress=m.routeProgress
+              m.yieldTransitionDistance=math.max(3.0,safeNumber(mc.speedMs)*0.22)
+              assigned=assigned+1
+            end
+          end
+          p.pendingYieldGroup=group
+          p.overtakeRetryT=0
+          if assigned==#group and beginOvertake(i,car,p,q.gap,q.leader,
+              q.leaderLateral,safeNumber(car.speedMs),q.distance,singleOffset) then
+            H.log("TRAFFIC_ATOMIC_PASS frame=%d pass=%d leader=%d group=%d command=PASS_YIELD offset=%.2f",
+              frame,i,q.leader,assigned,singleOffset)
+          else
+            releaseYieldGroup(i,group);p.pendingYieldGroup=nil
+            H.log("TRAFFIC_ATOMIC_PASS_FAIL frame=%d pass=%d leader=%d assigned=%d",
+              frame,i,q.leader,assigned)
+          end
         else
           H.log("TRAFFIC_BATCH_DENY frame=%d pass=%d leader=%d reason=%s",
-            frame,i,q.leader,tostring(p.lastPassDeniedReason or "no_batch_corridor"))
+            frame,i,q.leader,tostring(p.lastPassDeniedReason or "no_passing_lane"))
         end
+      end
+
       end
     end
   end
