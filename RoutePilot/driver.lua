@@ -1172,6 +1172,60 @@ local function releaseYieldGroup(ownerIndex,group)
   end
 end
 
+-- Collect a compact single-file train in the same logical lane. A pack pass
+-- is allowed only when every member can yield into the same adjacent slot.
+local function collectYieldGroup(carIndex,car,p,leaderIndex,maxRange)
+  local sim=ac.getSim()
+  local leaderState=state.p[leaderIndex]
+  local leaderCar=ac.getCar(leaderIndex)
+  if not sim or not leaderState or not leaderCar then return {leaderIndex},0 end
+  local ownProgress=p.routeProgress
+  local leaderProgress=leaderState.routeProgress
+  if ownProgress==nil or leaderProgress==nil then return {leaderIndex},0 end
+  local leaderGap=routeGap(ownProgress,leaderProgress)
+  if leaderGap<=0 then return {leaderIndex},0 end
+  local leaderSeg=leaderState.segIdx or p.segIdx or 1
+  local left,right=H.boundsAt(leaderSeg)
+  local laneCount=math.max(1,math.floor(((right-left)+1.0)/4.0))
+  local slotWidth=(right-left)/laneCount
+  local leaderLat=safeNumber(leaderState.latOff,0)
+  local leaderSlot=clamp(math.floor((leaderLat-left)/math.max(0.1,slotWidth))+1,1,laneCount)
+  local candidates={{index=leaderIndex,gap=leaderGap}}
+  for i=0,sim.carsCount-1 do
+    if i~=carIndex and i~=leaderIndex then
+      local other=ac.getCar(i)
+      local os=state.p[i]
+      if other and other.isActive and os and os.overtakeSide==0 and
+         not os.returningFromPass and os.yieldRequestBy==nil then
+        local progress,lateral,seg=routeProjection(other,os.segIdx or p.segIdx,
+          not os.routeLocked,os.routeProgress,other.speedMs,0.05)
+        if progress~=nil and lateral~=nil then
+          local gap=routeGap(ownProgress,progress)
+          if gap>leaderGap and gap<=maxRange then
+            local ol,orr=H.boundsAt(seg or os.segIdx or leaderSeg)
+            local lanes=math.max(1,math.floor(((orr-ol)+1.0)/4.0))
+            local width=(orr-ol)/lanes
+            local slot=clamp(math.floor((lateral-ol)/math.max(0.1,width))+1,1,lanes)
+            if slot==leaderSlot and math.abs(lateral-leaderLat)<math.min(slotWidth,width)*0.38 then
+              candidates[#candidates+1]={index=i,gap=gap}
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(candidates,function(a,b)return a.gap<b.gap end)
+  local group={leaderIndex}
+  local previous=leaderGap
+  for i=2,#candidates do
+    local item=candidates[i]
+    if item.gap-previous>28.0 then break end
+    group[#group+1]=item.index
+    previous=item.gap
+  end
+  return group,previous
+end
+
 local function safeFollowingCurrentLane(carIndex,car,p,currentGap,currentSpeed)
   -- Follow only the leader in the car's current corridor. A vehicle in a
   -- separate usable lane must never reduce this car's target speed.
@@ -1206,6 +1260,8 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
     defaultCenter or ((bl+br)*0.5)
   p.overtakeDeniedLogged=false
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
+  p.passGroupTargets=p.pendingYieldGroup or {leaderIndex}
+  p.pendingYieldGroup=nil
   p.overtakeSide=offset<source and -1 or 1
   p.passTargetIndex=leaderIndex
   p.passT=0
@@ -1351,6 +1407,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.followTimer=0
       p.blockedT=0
       p.overtakeRetryT=2.0
+      releaseYieldGroup(carIndex,p.passGroupTargets)
+      p.passGroupTargets=nil
       if yielded and yielded.yieldRequestBy==carIndex then
         yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
       end
@@ -1359,10 +1417,12 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       return targetSpeed
     end
 
-    local target = p.passTargetIndex and ac.getCar(p.passTargetIndex) or nil
+    local clearanceTargetIndex=p.passGroupTargets and
+      p.passGroupTargets[#p.passGroupTargets] or p.passTargetIndex
+    local target = clearanceTargetIndex and ac.getCar(clearanceTargetIndex) or nil
     local passedClearance = false
     if target and target.isActive then
-      local targetState = state.p[p.passTargetIndex]
+      local targetState = state.p[clearanceTargetIndex]
       local targetProgress, _, targetSeg = routeProjection(target,
         targetState and targetState.segIdx or p.segIdx,
         not (targetState and targetState.routeLocked),
@@ -1411,6 +1471,8 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
       p.passDeadline=nil
       p.followTimer=0
       p.blockedT=0
+      releaseYieldGroup(carIndex,p.passGroupTargets)
+      p.passGroupTargets=nil
       if yielded and yielded.yieldRequestBy==carIndex then
         yielded.yieldRequestBy=nil;yielded.yieldOffset=nil;yielded.yieldReady=false;yielded.yieldRequestTimer=0
       end
