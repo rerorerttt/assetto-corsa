@@ -1205,8 +1205,8 @@ local function collectYieldGroup(carIndex,car,p,leaderIndex,maxRange)
   local leaderLat=safeNumber(leaderState.latOff,0)
   local leaderSlot=1
   for i=2,laneCount do
-    if math.abs(bl+(i-0.5)*slotWidth-leaderLat)<
-       math.abs(bl+(leaderSlot-0.5)*slotWidth-leaderLat) then leaderSlot=i end
+    if math.abs(left+(i-0.5)*slotWidth-leaderLat)<
+       math.abs(left+(leaderSlot-0.5)*slotWidth-leaderLat) then leaderSlot=i end
   end
   local candidates={{index=leaderIndex,gap=leaderGap}}
   for i=0,sim.carsCount-1 do
