@@ -10,8 +10,7 @@ The previous trace was reviewed against the active Lua source. It showed that th
 
 The current implementation replaces that chain with a direct adjacent-lane policy:
 
-- Odd AI indices (1, 3, 5, ...) are slow-class cars capped at 40 km/h.
-- Even AI indices (2, 4, 6, ...) are fast-class cars with no fixed cruise cap; only fast-class cars initiate overtakes.
+- All AI retain physics-limited speed; there is no arbitrary 40 km/h cap or index-based speed class. Overtake eligibility uses measured acceleration, current speed, leader speed, and the predicted distance needed to complete the pass.
 - Outside overtakes, every AI continues to use the full-width racing-line optimizer; no permanent lane assignment or lane-centre bias is applied. For an overtake, the target is assigned to the logical slot nearest its current racing line and the faster car takes an adjacent slot.
 - Lane slots are derived from measured bounds: widths 3/7/11/15 m yield 1/2/3/4 slots. On a single-lane corridor there is no pass.
 - A fast car detecting a slower AI leader reserves a paired lane change: the target moves to its nearest logical lane slot and the overtaker moves to an adjacent slot in the same manoeuvre. Both begin immediately; there is no yield-ready handshake or timeout.
@@ -31,7 +30,7 @@ The supplied `routepilot_trace.txt` showed:
 
 ## Files changed in 0.9.3
 
-- `RoutePilot/driver.lua`: deterministic slow/fast classes; simultaneous temporary lane assignment for target and overtaker; no yield-ready wait; target-inclusive predicted collision checks; exact pass-plan prevalidation; pass abort and replanning to the original racing line when safe.
+- `RoutePilot/driver.lua`: measured-acceleration overtake eligibility; simultaneous temporary lane assignment for target and overtaker; no yield-ready wait; target-inclusive predicted collision checks; exact pass-plan prevalidation; pass abort and replanning to the original racing line when safe.
 - `RoutePilot/racing_line.lua` remains full-width and unchanged; temporary lane-slot assignments are handled by `driver.lua` only during an overtake.
 - `RoutePilot/RoutePilot.lua`: traffic diagnostics now record speed class, target lane assignment, current offset, pass target, plan failure, stuck time, and control status; obsolete yield-queue scheduling removed; app version string updated.
 - `RoutePilot/manifest.ini`: version 0.9.3.
