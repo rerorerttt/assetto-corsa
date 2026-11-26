@@ -37,21 +37,6 @@ local function curvature(a, b, c)
   return 2 * cross / math.max(0.001, ab * bc * ca)
 end
 
-local function localCost(samples, bounds, offsets, index, baseOffset)
-  local n = #samples
-  if index <= 1 or index >= n then return 0 end
-  local a = pointAt(samples[index - 1], offsets[index - 1])
-  local b = pointAt(samples[index], offsets[index])
-  local c = pointAt(samples[index + 1], offsets[index + 1])
-  local k = curvature(a, b, c)
-  local second = offsets[index - 1] - 2 * offsets[index] + offsets[index + 1]
-  local clearance = math.min(offsets[index] - bounds[index][1],
-    bounds[index][2] - offsets[index])
-  local edgePenalty = 0.00008 / math.max(0.12, clearance + 0.12)
-  return k * k * 180.0 + second * second * 0.075 +
-    edgePenalty
-end
-
 -- boundsAt(sample) returns left/right offsets in the spline's local frame.
 -- fixedOffset is used while passing: it disables racing-line optimization and
 -- follows the reserved passing corridor instead.
