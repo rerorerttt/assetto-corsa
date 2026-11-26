@@ -1219,8 +1219,12 @@ local function collectYieldGroup(carIndex,car,p,leaderIndex,maxRange)
         local progress,lateral,seg=routeProjection(other,os.segIdx or p.segIdx,
           not os.routeLocked,os.routeProgress,other.speedMs,0.05)
         if progress~=nil and lateral~=nil then
+          local sample=Geometry.sample(state.routeGeometry,progress)
+          local ofx,ofz=normalize2(other.look.x,other.look.z)
+          local sameDirection=sample and
+            (ofx*sample.tx+ofz*sample.tz)>=-0.25
           local gap=routeGap(ownProgress,progress)
-          if gap>leaderGap and gap<=maxRange then
+          if sameDirection and gap>leaderGap and gap<=maxRange then
             local ol,orr=H.boundsAt(seg or os.segIdx or leaderSeg)
             local lanes=math.max(1,math.floor(((orr-ol)+1.0)/4.0))
             local width=(orr-ol)/lanes
