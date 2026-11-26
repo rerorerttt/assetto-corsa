@@ -1273,8 +1273,8 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   p.emergencyPass=p.emergencyPassRequest==true;p.emergencyPassRequest=false
   p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
   p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
-  H.log("CAR=%d OVERTAKE_BEGIN target=%d from=%.2f to=%.2f gap=%.1f mode=%s",
-    carIndex,leaderIndex or -1,source,offset,gap or -1,
+  H.log("CAR=%d OVERTAKE_BEGIN target=%d group=%d from=%.2f to=%.2f gap=%.1f mode=%s",
+    carIndex,leaderIndex or -1,#(p.passGroupTargets or {}),source,offset,gap or -1,
     p.emergencyPass and "URGENT" or "NORMAL")
   return true
 end
@@ -1568,7 +1568,12 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
             p.trafficTargetOffset=safeNumber(p.passLat)
             return targetSpeed
           end
+          releaseYieldGroup(carIndex,p.pendingYieldGroup)
+          p.pendingYieldGroup=nil
           targetState.yieldRequestBy=nil;targetState.yieldOffset=nil;targetState.yieldReady=false
+          p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0
+          p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil
+          p.pendingPassDistance=nil
         else
           local targetProgress=routeProjection(targetCar,targetState.segIdx,not targetState.routeLocked,targetState.routeProgress,targetCar.speedMs,dt)
           local queueGap=targetProgress and routeGap(p.routeProgress,targetProgress) or safeNumber(p.pendingYieldGap,12.0)
