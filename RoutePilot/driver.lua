@@ -1092,8 +1092,8 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
-  local source=safeNumber(p.laneOffsetCurrent,
-    p.laneOffset or p.baseLaneOffset or p.latOff or
+  local source=safeNumber(p.latOff,
+    p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
     defaultCenter or ((bl+br)*0.5))
   local candidates={}
   -- Passing uses discrete logical lane slots from the GDD (3/7/11/15 m
@@ -1168,7 +1168,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   if forcedOffset~=nil then
     local reserved=passingReservationBlocked(carIndex,p,offset,speed)
     local clear,reason=passingPathClear(carIndex,car,p,leaderIndex,
-      p.laneOffsetCurrent or p.latOff or 0,offset,passDistance or 60.0,speed)
+      p.latOff or p.laneOffsetCurrent or 0,offset,passDistance or 60.0,speed)
     if reserved or laneOccupied(carIndex,car,offset,leaderIndex) or not clear then
       p.lastPassDeniedReason=reason or "yielded_corridor_no_longer_clear"
       return false
@@ -1186,7 +1186,7 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
   end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
-  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
+  local source=p.latOff or p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
     defaultCenter or ((bl+br)*0.5)
   p.overtakeDeniedLogged=false
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
