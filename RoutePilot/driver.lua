@@ -1613,6 +1613,9 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   local leaderCap=leaderState and leaderState.trafficOwnTargetSpeed or 90.0
   local leaderPotential=math.min(90.0,math.max(leaderPace,
     math.min(leaderPace+leaderAcceleration*4.0,leaderCap)))
+  local ownEffectiveAccel=clamp((potentialSpeed-speed)/4.0,0,acceleration)
+  local leaderEffectiveAccel=clamp(
+    (leaderPotential-leaderPace)/4.0,0,leaderAcceleration)
   local speedAdvantage=potentialSpeed-leaderPotential
   p.trafficPotentialSpeed=potentialSpeed
   p.trafficSpeedAdvantage=speedAdvantage
@@ -1623,7 +1626,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     safeNumber(leaderCar and leaderCar.aabbSize and leaderCar.aabbSize.z,4.5))
   local requiredClosure=math.max(0,safeNumber(gap))+ownLength+leaderLength+5.0
   local relativeSpeed=speed-leaderPace
-  local relativeAcceleration=acceleration-leaderAcceleration
+  local relativeAcceleration=ownEffectiveAccel-leaderEffectiveAccel
   local passTime=math.huge
   if math.abs(relativeAcceleration)<0.25 then
     if relativeSpeed>0.5 then
@@ -1643,7 +1646,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   local estimatedPassDistance=math.huge
   if passTime<math.huge then
     estimatedPassDistance=speed*passTime+
-      0.5*acceleration*passTime*passTime
+      0.5*ownEffectiveAccel*passTime*passTime
   end
   local passLateralLimit=clamp(
     safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
