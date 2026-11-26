@@ -88,8 +88,31 @@ local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, d
   refreshRouteMetrics()
   if not state.routeGeometry then return nil end
   local locked=allowGlobal ~= true and hintProgress ~= nil
+  local projectionSpeed=speed or safeNumber(car.speedMs)
+  local projectionDt=dt or 0.05
   local result = Geometry.project(state.routeGeometry, car.position,
-    hintProgress, car.look, speed or safeNumber(car.speedMs), dt or 0.05, locked)
+    hintProgress, car.look, projectionSpeed, projectionDt, locked)
+  if not result and locked then
+    -- A temporary local-window miss must not turn into a full-brake command.
+    -- Reacquire globally only when the candidate is nearby, heading-compatible
+    -- and topologically close to the last known route progress.
+    local candidate=Geometry.project(state.routeGeometry,car.position,nil,
+      car.look,projectionSpeed,projectionDt,false)
+    if candidate and candidate.distance<=12.0 then
+      local hx,hz=normalize2(car.look.x,car.look.z)
+      local alignment=hx*candidate.tx+hz*candidate.tz
+      local delta=candidate.s-hintProgress
+      if state.loopRoute then
+        local total=state.routeLength or 0
+        if total>0 and delta>total*0.5 then delta=delta-total end
+        if total>0 and delta< -total*0.5 then delta=delta+total end
+      end
+      local continuityLimit=math.max(15.0,projectionSpeed*projectionDt*4.0+8.0)
+      if alignment>=-0.05 and math.abs(delta)<=continuityLimit then
+        result=candidate
+      end
+    end
+  end
   if not result then return nil end
   if not locked and not initialProjectionValid(result,car.look) then return nil end
   return result.s, result.lateral, result.seg, result.t, result.distance,
@@ -338,11 +361,10 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- Project onto the continuous spline, then aim at a point measured by
   -- arc distance. The controller never aims at the next raw recorded node.
   local locked=p.routeLocked and p.routeProgress~=nil
-  local projection=Geometry.project(route,car.position,p.routeProgress,car.look,
-    speed,dt,locked)
-  if not projection or
-     (not locked and not initialProjectionValid(projection,car.look)) or
-     (p.spawnSeeded and projection.distance>8.0) then
+  local ps,pl,pg,pt,pd,tx,tz=routeProjection(
+    car,p.segIdx,not locked,p.routeProgress,speed,dt)
+  local projection=ps and {s=ps,lateral=pl,seg=pg,t=pt,distance=pd,tx=tx,tz=tz} or nil
+  if not projection or (p.spawnSeeded and projection.distance>8.0) then
     p.projectionLost=true; p.targetSpeed=0; p.gas=0; p.brake=1; p.lineDist=999
     return 0
   end
