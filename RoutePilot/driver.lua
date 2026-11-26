@@ -820,9 +820,11 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     local safeSpeed=safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)
     targetSpeed=math.min(targetSpeed,safeSpeed)
   end
-  -- Until the car has physically left its old lane, continue braking for the
-  -- obstacle that triggered the escape. The destination lane being clear does
-  -- not mean the swept lateral transition is already collision-free.
+  -- Keep checking the lane being vacated during the transition. The specific
+  -- obstacle that triggered this emergency escape is exempt from longitudinal
+  -- following-distance braking (otherwise a stopped car at followGap cannot
+  -- move sideways); any other vehicle in the old lane remains a braking hazard.
+  -- The destination lane is checked independently above and must be reserved.
   if p.emergencyMode and p.emergencyFromOffset~=nil then
     local oldGap,oldLeaderSpeed,oldLeaderIndex=carAheadInLane(
       carIndex,car,p.emergencyFromOffset)
