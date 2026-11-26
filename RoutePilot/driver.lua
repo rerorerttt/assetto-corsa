@@ -132,6 +132,7 @@ local function newPersonality(carIndex)
     laneOffset = nil, passTargetIndex = nil, retireT = 2.0,
     yieldRequestBy = nil, yieldOffset = nil, yieldPlanBlocked = false,
     yieldAssignedTimer = 0,
+    trafficOwnTargetSpeed = math.huge,
     returnTargetIndex = nil, passTargetLaneFailed = false,
     speedClass = "DYNAMIC",
     canOvertake = true,
@@ -1339,6 +1340,7 @@ end
 
 local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.overtakeRetryT=math.max(0,safeNumber(p.overtakeRetryT)-dt)
+  p.trafficOwnTargetSpeed=targetSpeed
   p.trafficAction="OPEN"
   p.trafficReason="clear_path"
   p.trafficLeaderIndex=-1
@@ -1605,10 +1607,12 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   -- Compare attainable speed for both cars using their measured acceleration.
   -- This prevents identical cars from inventing an advantage merely because
   -- every AI has an unlimited software speed target.
-  local targetPotential=targetSpeed==math.huge and
-    (speed+acceleration*4.0) or safeNumber(targetSpeed)
+  local targetCap=targetSpeed==math.huge and 90.0 or safeNumber(targetSpeed)
+  local targetPotential=math.min(speed+acceleration*4.0,targetCap)
   local potentialSpeed=math.min(90.0,math.max(speed,targetPotential))
-  local leaderPotential=math.min(90.0,leaderPace+leaderAcceleration*4.0)
+  local leaderCap=leaderState and leaderState.trafficOwnTargetSpeed or 90.0
+  local leaderPotential=math.min(90.0,math.max(leaderPace,
+    math.min(leaderPace+leaderAcceleration*4.0,leaderCap)))
   local speedAdvantage=potentialSpeed-leaderPotential
   p.trafficPotentialSpeed=potentialSpeed
   p.trafficSpeedAdvantage=speedAdvantage
