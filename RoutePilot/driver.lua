@@ -1693,6 +1693,46 @@ function Driver.observePlayer(car, dt, steerInput)
   p.laneOffsetCurrent=0
   p.pace=0
   p.player=true
+
+  -- Manual player driving does not pass through Driver.update(), so the
+  -- AI-only steering diagnostics above would otherwise never run for CAR=0.
+  -- Keep the ordinary one-second CAR= snapshot unchanged and emit a separate,
+  -- higher-rate observation record when the Dev switch is enabled.
+  if state.steeringDiagnostics then
+    local diagDt=math.max(0,safeNumber(dt,0.016))
+    p.playerDiagTimer=(p.playerDiagTimer or 0)+diagDt
+    local localVelocity=car.localVelocity
+    local angular=car.localAngularVelocity
+    local velocity=car.velocity
+    local speedAbs=math.abs(safeNumber(car.speedMs))
+    local slip=math.abs(safeNumber(p.slipAngle))
+    local lateral=math.abs(safeNumber(p.lateralVelocity))
+    local yaw=math.abs(safeNumber(p.measuredYawRate))
+    local unstable=slip>0.035 or lateral>0.8 or yaw>0.20 or
+      math.abs(safeNumber(steerInput))>0.05
+    local interval=unstable and 0.05 or 0.10
+    if p.playerDiagTimer+1e-6>=interval then
+      p.playerDiagTimer=p.playerDiagTimer-interval
+      if p.playerDiagTimer>interval then p.playerDiagTimer=0 end
+      H.log("PLAYER_DYN_TRACE id=0 v=%.3f dt=%.4f pos=(%.3f,%.3f,%.3f) look=(%.5f,%.5f,%.5f) worldV=(%.4f,%.4f,%.4f) localV=(%.4f,%.4f,%.4f) omega=(%.5f,%.5f,%.5f) route=%.3f lateral=%.4f cross=%.4f head=%.5f roadK=%.6f slip=%.6f latV=%.5f yawLook=%.5f yawPhys=%.5f wheelSlip=%.5f steerInput=%.5f gas=%.4f brake=%.4f projection=%d",
+        speedAbs,diagDt,
+        safeNumber(car.position and car.position.x),safeNumber(car.position and car.position.y),
+        safeNumber(car.position and car.position.z),
+        safeNumber(car.look and car.look.x),safeNumber(car.look and car.look.y),
+        safeNumber(car.look and car.look.z),
+        safeNumber(velocity and velocity.x),safeNumber(velocity and velocity.y),
+        safeNumber(velocity and velocity.z),
+        safeNumber(localVelocity and localVelocity.x),safeNumber(localVelocity and localVelocity.y),
+        safeNumber(localVelocity and localVelocity.z),
+        safeNumber(angular and angular.x),safeNumber(angular and angular.y),
+        safeNumber(angular and angular.z),
+        safeNumber(p.routeProgress),safeNumber(p.latOff),safeNumber(p.crossTrackError),
+        safeNumber(p.headingError),safeNumber(p.pathCurvature),safeNumber(p.slipAngle),
+        safeNumber(p.lateralVelocity),safeNumber(p.yawRate),safeNumber(p.measuredYawRate),
+        safeNumber(p.wheelSlip),safeNumber(steerInput),safeNumber(car.gas),safeNumber(car.brake),
+        p.routeLocked and 1 or 0)
+    end
+  end
   return p
 end
 
