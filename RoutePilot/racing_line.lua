@@ -184,7 +184,12 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local off0=candidateSets[1][1]
       local off1=candidateSets[2][j]
       local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
+      -- Keep open-running cars in their assigned lane. Without this term,
+      -- the optimizer drifts toward the road center because that path can
+      -- have slightly lower curvature cost, leaving no usable passing lane.
+      local lanePreference=(off1-preferred)^2*4.0
       local cost=(off1-off0)^2*0.02+
+        lanePreference+
         0.00008/math.max(0.12,clearance+0.12)+
         stabilityCost(2,off1)
       firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
@@ -208,8 +213,13 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local slope=offC-offB
           local clearance=math.min(offC-bounds[station+1][1],
             bounds[station+1][2]-offC)
+          -- The preference is applied at every station, not only as a
+          -- candidate hint. This prevents temporal stability from locking a
+          -- car onto the centerline after an earlier unconstrained plan.
+          local lanePreference=(offC-preferred)^2*4.0
           local cost=node.cost+k*k*180.0+excess*excess*200000.0+
             second*second*0.18+slope*slope*0.075+
+            lanePreference+
             0.00008/math.max(0.12,clearance+0.12)+
             stabilityCost(station+1,offC)
           local key=node.b*100+c
