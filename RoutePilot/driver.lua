@@ -1361,7 +1361,10 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficAction="FOLLOW"
   p.trafficReason="leader_in_lane"
   local leaderPace=math.max(0,safeNumber(leaderSpeed))
-  local potentialSpeed=math.max(speed,safeNumber(targetSpeed))
+  -- Fast cars have no artificial cruise cap. Use a finite high estimate only
+  -- for overtaking-distance prediction when the open-road target is +infinity.
+  local targetPotential=targetSpeed==math.huge and 90.0 or safeNumber(targetSpeed)
+  local potentialSpeed=math.min(90.0,math.max(speed,targetPotential))
   local speedAdvantage=potentialSpeed-leaderPace
   local acceleration=clamp(safeNumber(p.accelEstimate,4.0),0.8,18.0)
   local ownLength=math.max(3.0,safeNumber(car.aabbSize and car.aabbSize.z,4.5))
@@ -1382,7 +1385,12 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     estimatedPassDistance=potentialSpeed*passTime+
       0.5*acceleration*passTime*passTime
   end
-  local passWindow=math.max(35.0,25.0+potentialSpeed*1.25)
+  local passLateralLimit=clamp(
+    safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+  local transitionOut=math.max(22.0,
+    speed*math.sqrt(6.0*math.abs(baseOffset-currentLaneOffset)/passLateralLimit))
+  estimatedPassDistance=math.max(estimatedPassDistance,transitionOut+12.0)
+  local passWindow=math.max(45.0,25.0+potentialSpeed*1.25)
   local laneSettled=math.abs(safeNumber(p.laneOffsetCurrent,baseOffset)-baseOffset)<=0.55 and
     math.abs(safeNumber(p.latOff,baseOffset)-baseOffset)<=0.90
   local canActuallyPass=p.canOvertake==true and laneSettled and
