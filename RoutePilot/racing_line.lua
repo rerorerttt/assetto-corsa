@@ -56,7 +56,8 @@ end
 -- fixedOffset is used while passing: it disables racing-line optimization and
 -- follows the reserved passing corridor instead.
 function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, baseOffset,
-    fixedOffset, horizon, spacing, obstacleAt, previousPlan, previousAdvance)
+    fixedOffset, horizon, spacing, obstacleAt, previousPlan, previousAdvance,
+    fixedTransitionDistance)
   if not route or not progress or not boundsAt then return nil end
   local size = car and car.aabbSize
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
@@ -109,7 +110,8 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
   if fixedOffset ~= nil then
     for i=1,n do
       local d=(i-1)*step
-      local t=clamp(d/22.0,0,1)
+      local t=clamp(d/math.max(22.0,safe(fixedTransitionDistance,22.0)),0,1)
+      t=t*t*(3.0-2.0*t)
       local desired=initial+(safe(fixedOffset,initial)-initial)*t
       offsets[i]=clamp(desired,bounds[i][1],bounds[i][2])
     end
