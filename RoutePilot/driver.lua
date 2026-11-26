@@ -387,9 +387,14 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   end
   local laneTarget=p.laneOffset or leftCenter
   local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
-  local raceTarget=p.racingPlan and RacingLine.sample(p.racingPlan,ahead+clamp(planAdvance,0,30.0)) or nil
+  local currentRace=p.racingPlan and
+    RacingLine.sample(p.racingPlan,clamp(planAdvance,0,30.0)) or nil
+  local raceTarget=p.racingPlan and
+    RacingLine.sample(p.racingPlan,ahead+clamp(planAdvance,0,30.0)) or nil
   if raceTarget then
-    p.laneOffsetCurrent=raceTarget.offset
+    p.raceOffsetRaw=raceTarget.offset
+    p.raceOffsetCurrent=currentRace and currentRace.offset or raceTarget.offset
+    p.laneOffsetCurrent=p.raceOffsetCurrent
   else
     local maxStep=(p.emergencyPass and 12.0 or 1.8)*math.max(0,dt or 0)
     local previousOffset=p.laneOffsetCurrent or laneTarget
@@ -446,7 +451,6 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
 
   p.headingError=signedAngle(fx,fz,future.tx,future.tz)
   p.crossTrackError=p.laneOffsetCurrent-projection.lateral
-  local currentRace= p.racingPlan and RacingLine.sample(p.racingPlan,0) or nil
   p.pathCurvature=safeNumber(currentRace and currentRace.k or current.k)
   p.steerCurvature=desiredCurvature
   p.projectionProgressDelta=projection.delta or 0
@@ -789,11 +793,19 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
 
   local fixedOffset=nil
+  local fixedTransitionDistance=22.0
   local mode=forcedMode or "OPEN"
   if mode=="PASS" then
     fixedOffset=safeNumber(p.passLat,p.laneOffset or base)
   elseif mode=="RETURN" then
     fixedOffset=safeNumber(p.baseLaneOffset,base)
+  end
+  if fixedOffset~=nil then
+    local lateralDelta=math.abs(fixedOffset-safeNumber(p.latOff,base))
+    local lateralLimit=clamp(
+      safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+    fixedTransitionDistance=math.max(22.0,
+      math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
   end
   -- Traffic does not reserve a permanent lane. In open running the optimizer
   -- may use the complete physical road width; only an active, validated pass
@@ -824,7 +836,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   nextPlan,planFailure=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
-    fixedOffset==nil and obstacleAt or nil,previousPlan,previousAdvance)
+    fixedOffset==nil and obstacleAt or nil,previousPlan,previousAdvance,
+    fixedTransitionDistance)
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
   p.racingPlanBlocked=planFailure=="NO_FIT"
@@ -936,9 +949,15 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
     end
   end
 
-  local urgent=p.emergencyPassRequest==true
-  local transitionOut=urgent and 6.0 or 22.0
-  local transitionBack=22.0
+  local lateralDelta=math.abs(targetOffset-source)
+  local lateralLimit=clamp(
+    safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+  -- A lane change is a spatial manoeuvre. Its minimum distance grows with
+  -- speed so the lateral acceleration remains bounded instead of shrinking
+  -- to a fixed 6/22 m at racing speeds.
+  local transitionOut=math.max(22.0,
+    math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
+  local transitionBack=transitionOut
   local totalDistance=math.max(20.0,passDistance)+transitionBack
   local step=urgent and 1.5 or 3.0
   local distance=0.0
@@ -1001,8 +1020,9 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   if not safeMin or not safeMax or safeMax-safeMin<1.15 then return nil end
   local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
-  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
-    defaultCenter or ((bl+br)*0.5)
+  local source=safeNumber(p.latOff,
+    p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
+    defaultCenter or ((bl+br)*0.5))
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
