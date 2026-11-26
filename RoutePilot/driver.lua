@@ -1458,6 +1458,7 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
           targetState.yieldRequestBy=nil
           targetState.yieldOffset=nil
           targetState.yieldPlanBlocked=false
+          targetState.yieldAssignedTimer=0
         end
         p.overtakeSide=0
         p.passTargetIndex=nil
@@ -1905,6 +1906,7 @@ function Driver.update(carIndex, car, dt)
     p.yieldRequestBy=nil
     p.yieldOffset=nil
     p.yieldPlanBlocked=true
+    p.yieldAssignedTimer=0
     p.laneOffset=nil
     updateRacingPlan(carIndex,car,p,speed,dt)
   end
@@ -1938,6 +1940,7 @@ function Driver.update(carIndex, car, dt)
         targetState.yieldRequestBy=nil
         targetState.yieldOffset=nil
         targetState.yieldPlanBlocked=false
+        targetState.yieldAssignedTimer=0
       end
       p.laneOffset=nil
       p.overtakeRetryT=1.5
