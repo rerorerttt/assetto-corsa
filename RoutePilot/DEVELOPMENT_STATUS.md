@@ -330,3 +330,17 @@ This directly addresses the trace's false stops and the GDD's requirements that 
 The steering controller's non-plan fallback previously targeted the legacy left-lane centre, which could reintroduce a lane change whenever a preview sample was unavailable even after OPEN planning had been moved to the road midpoint. It now targets the road midpoint for ordinary driving, the explicitly reserved yield offset while yielding, the pass offset while passing, and the saved pre-pass racing-line offset while returning. This keeps the geometric planner and steering fallback on the same target policy.
 
 The per-car baseline return offset is also initialized from the physical road midpoint, rather than the left logical lane centre. This ensures a new car, a missing preview sample, and a completed pass all share the same neutral baseline; discrete lane centres remain reserved for explicit passing/yielding.
+
+
+## 2026-11-26 proactive overtaking, convoy pass and acceleration
+
+Implemented in `driver.lua` and `RoutePilot.lua`:
+
+- Pass intent is now predictive and earlier: the speed-advantage estimate includes 1.5 s of measured acceleration, the trigger threshold is reduced from 3.0 to 1.5 m/s, and the pass approach window expands adaptively (minimum 65 m, speed-scaled). This makes AI search for a safe adjacent slot before it reaches the leader's bumper.
+- Existing deterministic request ordering is retained. One-car passes still reserve one leader at a time; followers wait on the same leader's reservation and receive the next turn after the active pass clears.
+- Added a bounded pack-pass mode for up to eight AI cars in a compact single-file train, provided they occupy the same logical lane slot and no member is already passing, returning or yielding to another request. The fastest eligible follower checks the whole pass path to the rear of the pack, requests every member to move away from the passing slot, waits until all members confirm their yield positions, passes the farthest member, then releases the group and returns only after clearance. If the pack cannot form one safe common corridor, it falls back to a normal one-car pass.
+- Fixed yield-slot selection at the road-centre boundary: the selected passing slot is now authoritative, so a car on the logical slot boundary is assigned to the other slot rather than accidentally being moved into the reserved passing lane.
+- Added group-aware occupancy checking: coordinated pack members are excluded from blocking one another's simultaneous yield move, while external cars remain checked. The requester itself is ignored only during the yield-position test; the complete pass path is independently checked against all traffic.
+- Throttle response increased (`GAS_GAIN=0.90`), low-speed launch cap raised from 0.60 to 0.82, and the additional corner-load torque reduction is capped at 10% rather than 22%. Wheel-slip traction control and the planned corner-speed envelope remain active.
+
+The group pass is intentionally limited to compact same-slot trains; it does not force a multi-lane pack into one side or invent a passing lane. Source was checked for balanced Lua blocks/delimiters and obvious undefined local references in the new group-selection path. No Lua compiler or Assetto Corsa runtime was available, so behaviour, pass timing, vehicle stability and FPS remain unverified in-game.
