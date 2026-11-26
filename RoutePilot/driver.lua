@@ -782,12 +782,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local mode=forcedMode or "OPEN"
   local fixedOffset=nil
   local fixedTransitionDistance=22.0
-  -- Normal racing always uses the complete road corridor, even when other
-  -- cars are nearby. Traffic spacing and conflict decisions belong to
-  -- updateTrafficControl(); converting every nearby car into a fixed-offset
-  -- TRAFFIC_HOLD path was locking the optimizer to stale lane offsets and
-  -- producing NO_PATH at the start grid. Only an explicitly reserved
-  -- PASS/RETURN/YIELD manoeuvre may constrain the racing-line corridor.
+  -- Normal racing uses the complete physical corridor but is biased toward
+  -- the assigned left lane. Only a reserved PASS/RETURN manoeuvre fixes the
+  -- offset; traffic occupancy is handled separately by updateTrafficControl().
   if p.racingPlanTimer>0 and p.racingPlanMode==mode then
     return
   end
@@ -803,8 +800,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     fixedTransitionDistance=math.max(22.0,
       math.max(0,speed)*math.sqrt(6.0*lateralDelta/lateralLimit))
   end
-  -- In OPEN running the optimizer uses the complete road width.
-  -- Only explicit PASS/RETURN/YIELD reservations constrain the path.
+  -- OPEN mode retains the full corridor and a preferred base-lane offset.
+  -- PASS/RETURN use a fixed, prevalidated lane transition.
 
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local v=math.max(0,speed)
@@ -827,24 +824,35 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     safeNumber(p.latOff,base),preferredOffset,fixedOffset,horizon,7.5,
     previousPlan,previousAdvance,fixedTransitionDistance,p.lateralAccelLimit)
 
-  -- A failed dynamic-programming search is not proof that the road is
-  -- physically blocked. In ordinary OPEN running, retry on the road centre
-  -- (the GDD's neutral fallback) using the same oriented full-body swept-path
-  -- validation. Do not retry on a stale lane offset: lane slots exist only
-  -- during explicit passing/yield manoeuvres. Reserved PASS/RETURN/YIELD
-  -- paths are never moved to another corridor by this fallback.
+  -- If the optimizer cannot find a route, first try the assigned base lane
+  -- with the same full-body swept-path validator. Only if that also fails do
+  -- we use the physical road centre as a neutral recovery corridor.
   local originalFailure=planFailure or (not nextPlan and "NO_PLAN" or nil)
   local fallbackKind=nil
   if not nextPlan and mode=="OPEN" then
     local fallbackFailure=nil
+    local laneDelta=math.abs(base-safeNumber(p.latOff,base))
+    local laneLimit=clamp(
+      safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+    local laneTransition=math.max(22.0,
+      math.max(0,speed)*math.sqrt(6.0*laneDelta/laneLimit))
     nextPlan,fallbackFailure=RacingLine.plan(
       state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
-      safeNumber(p.latOff,base),mid,mid,horizon,7.5,
-      nil,0,fixedTransitionDistance,p.lateralAccelLimit)
+      safeNumber(p.latOff,base),base,base,horizon,7.5,
+      nil,0,laneTransition,p.lateralAccelLimit)
     if nextPlan then
-      fallbackKind="ROAD_CENTRE"
+      fallbackKind="BASE_LANE"
     else
-      planFailure=fallbackFailure or originalFailure or "NO_SAFE_FALLBACK"
+      local centreFailure=nil
+      nextPlan,centreFailure=RacingLine.plan(
+        state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
+        safeNumber(p.latOff,base),mid,mid,horizon,7.5,
+        nil,0,laneTransition,p.lateralAccelLimit)
+      if nextPlan then
+        fallbackKind="ROAD_CENTRE"
+      else
+        planFailure=centreFailure or fallbackFailure or originalFailure or "NO_SAFE_FALLBACK"
+      end
     end
   end
 
@@ -853,9 +861,9 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   end
   p.racingPlan=nextPlan
   p.racingPlanStartProgress=p.routeProgress
-  -- A hard stop is reserved for the case where the optimizer and its
-  -- geometry-validated OPEN road-centre fallback both fail, or an explicitly
-  -- reserved PASS/RETURN/YIELD corridor cannot contain the complete vehicle body.
+  -- A hard stop is reserved for the case where the optimizer, base-lane
+  -- fallback, and validated road-centre fallback all fail, or a reserved
+  -- PASS/RETURN corridor cannot contain the complete vehicle body.
   p.racingPlanBlocked=nextPlan==nil
   p.racingPlanFailure=p.racingPlanBlocked and
     (planFailure or originalFailure or "NO_SAFE_PATH") or nil
