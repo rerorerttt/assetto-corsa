@@ -1393,6 +1393,48 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)
 end
 
+-- High-rate dynamics trace. This is observation-only: it never changes controls.
+-- Stable running is sampled at 10 Hz; suspected instability is sampled at 20 Hz.
+local function logDynamicsTrace(carIndex,car,p,dt,controlWriteOk)
+  local speed=math.max(0,safeNumber(car.speedMs))
+  if speed<15.0 then return end
+  local velocity=car.velocity
+  local localVelocity=car.localVelocity
+  local angular=car.localAngularVelocity
+  local look=car.look
+  local slip=math.abs(safeNumber(p.slipAngle))
+  local lateral=math.abs(safeNumber(p.lateralVelocity))
+  local yaw=math.abs(safeNumber(p.measuredYawRate))
+  local steering=math.abs(safeNumber(p.steerTarget))
+  local unstable=slip>0.035 or lateral>0.8 or yaw>0.20 or steering>0.05
+  local interval=unstable and 0.05 or 0.10
+  p.dynTraceTimer=(p.dynTraceTimer or 0)+math.max(0,safeNumber(dt))
+  if p.dynTraceTimer+1e-6<interval then return end
+  p.dynTraceTimer=p.dynTraceTimer-interval
+  if p.dynTraceTimer>interval then p.dynTraceTimer=0 end
+
+  H.log("DYN_TRACE id=%d v=%.3f dt=%.4f pos=(%.3f,%.3f,%.3f) look=(%.5f,%.5f,%.5f) worldV=(%.4f,%.4f,%.4f) localV=(%.4f,%.4f,%.4f) omega=(%.5f,%.5f,%.5f) route=%.3f lateral=%.4f cross=%.4f head=%.5f roadK=%.6f slip=%.6f latV=%.5f yawLook=%.5f yawPhys=%.5f axleF=%.5f axleR=%.5f wheelSlip=%.5f pp=%.5f boundK=%.5f bound=%.5f raw=%.5f target=%.5f filtered=%.5f rateDemand=%.5f rateApplied=%.5f final=%.5f gas=%.4f brake=%.4f targetSpeed=%.3f offset=%.4f planOffset=%.4f planGen=%d planMode=%s controlOK=%d",
+    carIndex,speed,math.max(0,safeNumber(dt)),
+    safeNumber(car.position and car.position.x),safeNumber(car.position and car.position.y),
+    safeNumber(car.position and car.position.z),
+    safeNumber(look and look.x),safeNumber(look and look.y),safeNumber(look and look.z),
+    safeNumber(velocity and velocity.x),safeNumber(velocity and velocity.y),safeNumber(velocity and velocity.z),
+    safeNumber(localVelocity and localVelocity.x),safeNumber(localVelocity and localVelocity.y),
+    safeNumber(localVelocity and localVelocity.z),
+    safeNumber(angular and angular.x),safeNumber(angular and angular.y),safeNumber(angular and angular.z),
+    safeNumber(p.routeProgress),safeNumber(p.latOff),safeNumber(p.crossTrackError),
+    safeNumber(p.headingError),safeNumber(p.roadCurvature0),safeNumber(p.slipAngle),
+    safeNumber(p.lateralVelocity),safeNumber(p.yawRate),safeNumber(p.measuredYawRate),
+    safeNumber(p.frontAxleSlip),safeNumber(p.rearAxleSlip),safeNumber(p.wheelSlip),
+    safeNumber(p.pursuitSteer),safeNumber(p.boundaryCurvatureSteer),safeNumber(p.boundarySteer),
+    safeNumber(p.rawSteer),safeNumber(p.steerTarget),safeNumber(p.steerFiltered),
+    safeNumber(p.steerRateLimitDemand),safeNumber(p.steerRateLimitApplied),
+    safeNumber(p.steer),safeNumber(p.gas),safeNumber(p.brake),safeNumber(p.targetSpeed),
+    safeNumber(p.laneOffsetCurrent),safeNumber(p.raceOffsetRaw),
+    safeNumber(p.racingPlanGeneration),tostring(p.racingPlanMode or "NONE"),
+    controlWriteOk and 1 or 0)
+end
+
 local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
   dt=math.max(0,safeNumber(dt))
   p.steerDiagTimer=(p.steerDiagTimer or 0)+dt
@@ -1570,6 +1612,7 @@ function Driver.update(carIndex, car, dt)
   end
   p.controlWriteOk=ok and controls~=nil
   logSteeringDiagnostics(carIndex,car,p,dt,p.controlWriteOk)
+  logDynamicsTrace(carIndex,car,p,dt,p.controlWriteOk)
 end
 
 -- Observe the human-driven car without touching its controls.
