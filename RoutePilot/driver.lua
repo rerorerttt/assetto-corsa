@@ -1986,7 +1986,7 @@ function Driver.update(carIndex, car, dt)
       p.laneOffset=nil
       p.overtakeRetryT=1.5
       p.trafficAction="FOLLOW"
-      p.trafficReason="pass_path_rejected_return_to_base_lane"
+      p.trafficReason="pass_path_rejected_return_to_racing_line"
       H.log("CAR=%d OVERTAKE_ABORT reason=pass_plan_no_path target=%d return=%.2f",
         carIndex,targetIndex or -1,returnOffset)
       updateRacingPlan(carIndex,car,p,speed,dt)
