@@ -227,6 +227,10 @@ local function planTargetSpeed(p,speed)
   local target=p.cruiseSpeed
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local currentSpeed=math.max(0,safeNumber(speed))
+  if p.racingPlanTrafficBlockedDistance then
+    local stoppingRoom=math.max(0,p.racingPlanTrafficBlockedDistance-10.0)
+    target=math.min(target,math.sqrt(2.0*brakeAccel*stoppingRoom))
+  end
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
   if p.racingPlanBlockedDistance then
@@ -760,6 +764,7 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     p.racingPlan=nil
     p.racingPlanBlocked=false
     p.racingPlanTrafficBlocked=false
+    p.racingPlanTrafficBlockedDistance=nil
     p.racingPlanBlockedDistance=nil
     return
   end
@@ -819,8 +824,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local previousPlan=p.racingPlanMode==mode and p.racingPlan or nil
   local previousAdvance=previousPlan and p.racingPlanStartProgress and
     math.max(0,routeGap(p.racingPlanStartProgress,p.routeProgress)) or 0
-  local nextPlan
-  nextPlan,planFailure=RacingLine.plan(
+  local nextPlan,trafficBlockedDistance
+  nextPlan,planFailure,trafficBlockedDistance=RacingLine.plan(
     state.routeGeometry,Geometry.sample,p.routeProgress,car,routeBoundsAtSample,
     safeNumber(p.latOff,base),base,fixedOffset,horizon,7.5,
     fixedOffset==nil and obstacleAt or nil,previousPlan,previousAdvance,
@@ -830,6 +835,8 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   local wasTrafficBlocked=p.racingPlanTrafficBlocked==true
   p.racingPlanBlocked=planFailure=="NO_FIT"
   p.racingPlanTrafficBlocked=planFailure=="NO_PATH"
+  p.racingPlanTrafficBlockedDistance=p.racingPlanTrafficBlocked and
+    safeNumber(trafficBlockedDistance) or nil
   if p.racingPlanTrafficBlocked and not wasTrafficBlocked then
     H.log("RACE_LINE_TRAFFIC_BLOCKED id=%d",carIndex)
   elseif not p.racingPlanTrafficBlocked and wasTrafficBlocked then
