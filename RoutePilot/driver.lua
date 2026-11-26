@@ -1,16 +1,41 @@
--- RoutePilot/driver.lua — v0.9.1 (CSP 0.3.2-preview2)
--- FUNDAMENTAL RETHINK:
---  * The user trace showed ZERO CAR_INIT lines: the main script never adopted
---    the cars (spawn gate blocked driving forever), so the cars drove on the
---    STOCK game AI — that is where the zigzags, burnouts, wall-hunting and
---    ignoring the player came from. The main script now adopts every AI car
---    instantly; this driver only does the driving.
---  * STEERING DEADBAND: on a straight the angle error is tiny — steering 0
---    instead of micro-correcting left/right every frame (zigzag source).
---  * DECISIVE OVERTAKES: side is picked ONCE from the free room and LOCKED
---    for the whole pass; no flapping between sides mid-manoeuvre.
---  * SOFT START: gas capped at low speed (no burnout launch).
---  * Route planned tens of meters ahead (lookahead 14 + 0.8*speed, max 50).
+-- RoutePilot/driver.lua — v0.9.2 (CSP 0.3.2-preview2)
+-- ROOT-CAUSE fixes for the 150+ km/h weave on a dead-straight road
+-- (ks_drag trace, 2026-11-26). Three defects, all confirmed from the trace:
+--
+--  1) JUMPING TARGET. The racing-line optimizer re-ran every 0.40 s and on
+--     a straight road (only recording noise, |k| 0.002..0.003) re-picked a
+--     lateral target each rebuild: trace LANE column flipped 0.00 -> -1.44
+--     -> +1.75 -> -2.16 -> +2.16 -> 1.75 -> 0.72. The steering controller
+--     chased a target that changed sides; the car wove until it lost
+--     control. Fixed in racing_line.lua v1.1 (STRAIGHT-ROAD FREEZE) and
+--     here: the base target on open road is now the RECORDED LINE (offset
+--     0), not a fictitious left-lane center. The optimizer now only runs
+--     when there is a real corner ahead.
+--
+--  2) SPEED-BLIND STEERING. Preview was capped at 28 m for any speed; at
+--     53 m/s that is 0.53 s ahead. The steering authority did not shrink
+--     with speed. Design doc §7.1: "the rate of steering change must
+--     account for the current speed". Preview is now TIME-based:
+--     0.9 s of travel (12..60 m). At 500 km/h the preview reaches 60 m and
+--     the same angular error demands proportionally less steering, so a
+--     straight stays straight at any speed.
+--
+--  3) PHANTOM BRAKING. The speed planner treated noise curvature 0.0028
+--     (radius 350 m) as a corner: trace TARGET_SPEED dropped to 72.78 and
+--     65.02 on a drag strip for no reason. The noise floor is now 0.004
+--     (radius 250 m) — real corners are far above it, noise is below.
+--
+--  Also: the AGA stabilizer (added experimentally in 0.9.2-aga) is not
+--  applied here. The ks_drag trace shows the actual STEER up to 5x the
+--  driver's own command (STEER_CURV) at the onset of the weave — the
+--  stabilizer's add-on was amplifying the oscillation on this track. Its
+--  rear-axle geometry was derived, not measured (wheel-midpoint instead of
+--  the axle, hand-derived signs for AC's left-handed frame). Until it is
+--  recalibrated against AGA's actual 3D axle math and validated in game,
+--  it stays out of the control loop (RoutePilot.lua 0.9.3 no longer calls
+--  it; the module remains in the folder for future work).
+--
+--  Everything else from v0.9.1 is retained verbatim.
 
 local Driver = {}
 local Geometry = require("route_geometry")
@@ -25,6 +50,7 @@ local PASS_TIMEOUT = 8.0
 local RESCUE_SPEED = 1.5
 local RESCUE_TIME  = 10.0
 local STEER_DEAD   = 0.001  -- only suppress numerical noise; never freeze real cornering input
+local SPEED_NOISE_K = 0.004 -- below this |k| (radius > 250 m) the planner does not brake: recording noise
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -140,7 +166,7 @@ local function newPersonality(carIndex)
     state.spawnHints[carIndex]=nil
   end
   state.p[carIndex] = p
-  H.log("CAR_INIT id=%d lane=LEFT cruise=PHYSICS_LIMITED",
+  H.log("CAR_INIT id=%d lane=LINE cruise=PHYSICS_LIMITED",
     carIndex)
 end
 
@@ -228,10 +254,11 @@ local function planTargetSpeed(p,speed)
     local sample=planned or Geometry.sample(route,p.routeProgress+distance)
     if not sample then break end
     local curvature=math.abs(safeNumber(planned and planned.k or sample.k))
-    -- Ignore curvature below the noise floor of a route recorded at 3 m.
-    -- The optimizer's path curvature, not the reference-line curvature,
-    -- determines braking on an open road.
-    if curvature>math.max(CFG.CURVE_MIN,0.0018) then
+    -- Noise floor: a 3 m-spaced hand recording shows |k| up to ~0.003 on a
+    -- dead-straight road (the ks_drag trace braked to 72 km/h for k=0.0028
+    -- — radius 350 m — on a drag strip). Below 0.004 (radius 250 m) there
+    -- is nothing to brake for. Real corners sit far above this line.
+    if curvature>SPEED_NOISE_K then
       local lateralLimit=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)*0.90
       local curveSpeed=math.sqrt(lateralLimit/curvature)
       local brakingDistanceAvailable=math.max(0,distance-currentSpeed*0.25)
@@ -333,8 +360,12 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
   -- Preview the complete vehicle footprint through the steering horizon.
   -- The common safe lateral interval forces the target to remain inside both
   -- saved boundaries before the car reaches a narrowing or a bend.
-  local ahead=clamp(CFG.LOOKAHEAD_BASE+speed*CFG.LOOKAHEAD_SPEED,
-    CFG.LOOKAHEAD_MIN,CFG.LOOKAHEAD_MAX)
+  -- SPEED-BLIND FIX: preview is now a TIME constant, not a distance cap.
+  -- 0.9 s of travel, clamped 12..60 m: at 150 km/h the preview is ~38 m
+  -- (was 28 m = 0.67 s), at 300 km/h it reaches the 60 m cap. The same
+  -- angular error then produces proportionally less steering as speed
+  -- rises — a straight stays straight at any speed (design doc §7.1).
+  local ahead=clamp(math.max(12.0,speed*0.9),12.0,60.0)
   local current=Geometry.sample(route,projection.s)
   local future=Geometry.sample(route,projection.s+ahead)
   local curvePreview=Geometry.sample(route,projection.s+ahead*0.55)
@@ -349,16 +380,24 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     safeMin,safeMax=center,center
   end
   local bodyEnvelope=halfWidth+BOUND_MARGIN
-  local laneLeft,laneRight=H.boundsAt(p.segIdx)
-  local mid,width=(laneLeft+laneRight)*0.5,laneRight-laneLeft
-  local leftCenter=width>=5.4 and ((mid+laneRight)*0.5) or mid
-  if p.overtakeSide==0 then
-    p.baseLaneOffset=p.baseLaneOffset or leftCenter
+
+  -- JUMPING-TARGET FIX: on open road the base target is the RECORDED LINE
+  -- (offset 0) — the driver's own recorded racing line. The old code biased
+  -- the base to a fictitious left-lane center (+half road on wide roads),
+  -- which fought the racing-plan optimizer every rebuild. During a pass or
+  -- its return the target is the reserved corridor, as before.
+  local laneTarget=0
+  if p.overtakeSide~=0 then
+    laneTarget=safeNumber(p.passLat,0)
+  elseif p.returningFromPass then
+    laneTarget=safeNumber(p.baseLaneOffset,0)
+  end
+  p.baseLaneOffset=p.baseLaneOffset or laneTarget
+  if p.overtakeSide==0 and not p.returningFromPass then
     p.laneOffset=p.baseLaneOffset
   else
-    p.laneOffset=p.passLat
+    p.laneOffset=laneTarget
   end
-  local laneTarget=p.laneOffset or leftCenter
   local planAdvance=p.racingPlanStartProgress and routeGap(p.racingPlanStartProgress,projection.s) or 0
   local raceTarget=p.racingPlan and RacingLine.sample(p.racingPlan,ahead+clamp(planAdvance,0,30.0)) or nil
   if raceTarget then
@@ -447,7 +486,7 @@ local function filterSteering(p, target, dt)
   local maxChange=steerRate*dt
   local steerLimit=p.emergencyPass and 1.0 or CFG.STEER_LIMIT
   p.steer = clamp(p.steer + clamp(p.steerFiltered - p.steer, -maxChange, maxChange),
-    -steerLimit, steerLimit)
+    -steerLimit,steerLimit)
   return p.steer
 end
 
@@ -735,12 +774,10 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     return
   end
   local bl,br=H.boundsAt(p.segIdx)
-  local mid=(bl+br)*0.5
-  local base=p.baseLaneOffset
-  if base==nil then
-    base=(br-bl)>=5.4 and ((mid+br)*0.5) or mid
-    p.baseLaneOffset=base
-  end
+  -- JUMPING-TARGET FIX: the base/preferred offset is the RECORDED LINE (0).
+  -- The old left-lane-center bias made the optimizer start every rebuild
+  -- from +1.75 m and re-decide the line each time on wide roads.
+  local base=p.baseLaneOffset or 0
 
   p.racingPlanTimer=math.max(0,safeNumber(p.racingPlanTimer)-dt)
   local forcedMode=nil
@@ -793,10 +830,11 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
     H.log("RACE_LINE_BLOCKED id=%d reason=%s",carIndex,tostring(planFailure))
   end
   if p.racingPlanMode~=mode then
-    H.log("RACE_LINE id=%d mode=%s base=%.2f target=%.2f curve=%.4f horizon=%.1f",
+    H.log("RACE_LINE id=%d mode=%s base=%.2f target=%.2f curve=%.4f horizon=%.1f straight=%s",
       carIndex,mode,base,safeNumber(p.racingPlan and p.racingPlan.points[2] and
       p.racingPlan.points[2].offset,base),
-      safeNumber(p.racingPlan and p.racingPlan.curvature[2]),horizon)
+      safeNumber(p.racingPlan and p.racingPlan.curvature[2]),horizon,
+      tostring(p.racingPlan and p.racingPlan.straight))
   end
   p.racingPlanMode=mode
   p.racingPlanTimer=0.40
@@ -957,10 +995,8 @@ local function findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,p.routeProgress,
     math.max(18.0,math.max(0,speed)*0.8+12.0),car,fx,fz)
   if not safeMin or not safeMax or safeMax-safeMin<1.15 then return nil end
-  local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
-  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
-    defaultCenter or ((bl+br)*0.5)
+  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or 0
   local target=ac.getCar(leaderIndex)
   local ownWidth=math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))
   local targetWidth=math.max(1.5,safeNumber(target and target.aabbSize and target.aabbSize.x,2.0))
@@ -1008,10 +1044,8 @@ local function beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,
     end
     return false
   end
-  local defaultCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
-  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or
-    defaultCenter or ((bl+br)*0.5)
+  local source=p.laneOffsetCurrent or p.laneOffset or p.baseLaneOffset or 0
   p.overtakeDeniedLogged=false
   p.passFromOffset=source;p.passLat=offset;p.laneOffset=offset
   p.overtakeSide=offset<source and -1 or 1
@@ -1035,9 +1069,8 @@ local function updateOvertake(carIndex, car, p, speed, targetSpeed, dt)
   if ownSeg then p.segIdx = ownSeg end
   p.routeProgress = ownProgress
   if p.returningFromPass then return targetSpeed end
-  local leftCenter,rightCenter=laneCenters(p.segIdx)
   local bl,br=H.boundsAt(p.segIdx)
-  local defaultOffset=p.baseLaneOffset or leftCenter or ((bl+br)*0.5)
+  local defaultOffset=0
   local currentLaneOffset=p.overtakeSide~=0 and (p.passLat or p.laneOffset) or
     (p.laneOffsetCurrent or p.laneOffset or defaultOffset)
   local gap,leaderSpeed,leaderIndex,leaderLateral=carAheadInLane(
