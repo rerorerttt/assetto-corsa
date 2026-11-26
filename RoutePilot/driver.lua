@@ -625,25 +625,31 @@ local function laneOccupied(carIndex,car,laneOffset,ignoreIndex)
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
-        local progress,lateral,otherSeg=trafficFrameProjection(
-          other,otherState,own and own.segIdx or 1)
-        if otherState then
-          if progress~=nil then otherState.routeProgress=progress end
-          otherState.routeLocked=progress~=nil
-          if otherSeg then otherState.segIdx=otherSeg end
-        end
-
+        -- Use the neighbour's live controller snapshot. Re-projecting every
+        -- active car here multiplied route-projection work by the fleet size.
+        local progress=otherState and otherState.routeProgress
+        local lateral=otherState and safeNumber(otherState.latOff) or nil
         local longitudinal,actualLateral
-        local otherFx,otherFz=normalize2(other.look.x,other.look.z)
-        local otherRouteSample=progress and Geometry.sample(state.routeGeometry,progress)
-        local directionDot=otherRouteSample and
-          (otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz) or 1.0
-        if progress~=nil and directionDot>=-0.25 then
-          longitudinal=routeGap(ownProgress,progress)
-          actualLateral=lateral
+        local directionDot=1.0
+        if progress~=nil then
+          local routeGapValue=routeGap(ownProgress,progress)
+          local dx=safeNumber(other.position.x)-ownSample.x
+          local dz=safeNumber(other.position.z)-ownSample.z
+          local nearby=dx*dx+dz*dz<=120.0*120.0
+          if math.abs(routeGapValue)<120.0 or nearby then
+            local otherRouteSample=Geometry.sample(state.routeGeometry,progress)
+            if otherRouteSample then
+              local otherFx,otherFz=normalize2(other.look.x,other.look.z)
+              directionDot=otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz
+            end
+          end
+          if directionDot>=-0.25 then
+            longitudinal=routeGapValue
+            actualLateral=lateral
+          elseif nearby then
+            longitudinal,actualLateral=relativeToRoute(other.position,ownSample)
+          end
         else
-          -- Opposing-direction traffic on a shared route is measured in the
-          -- local forward frame, not by same-direction loop progress.
           local dx=safeNumber(other.position.x)-ownSample.x
           local dz=safeNumber(other.position.z)-ownSample.z
           if dx*dx+dz*dz<=120.0*120.0 then
