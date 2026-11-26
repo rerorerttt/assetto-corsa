@@ -328,7 +328,8 @@ local function carAheadFull(carIndex,car,lateralWidth)
   if not sim then return nil,nil,nil end
   local bestGap,bestSpeed,bestIndex=nil,nil,nil
   for i=0,sim.carsCount-1 do
-    if i~=carIndex then
+    if i~=carIndex and
+       not (state.rescueWatch and state.rescueWatch[i] and state.rescueWatch[i].disabled) then
       local other=ac.getCar(i)
       if other and other.isActive then
         local dx=other.position.x-car.position.x
