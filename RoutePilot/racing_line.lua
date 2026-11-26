@@ -56,7 +56,7 @@ end
 -- fixedOffset is used while passing: it disables racing-line optimization and
 -- follows the reserved passing corridor instead.
 function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, baseOffset,
-    fixedOffset, horizon, spacing, obstacleAt)
+    fixedOffset, horizon, spacing, obstacleAt, previousPlan, previousAdvance)
   if not route or not progress or not boundsAt then return nil end
   local size = car and car.aabbSize
   local halfWidth = math.max(0.75, safe(size and size.x, 2.0) * 0.5)
@@ -90,6 +90,21 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
 
   local n = #samples
   if n < 3 then return nil end
+
+  local previousOffsets={}
+  if previousPlan then
+    for i=1,n do
+      local previous=RacingLine.sample(previousPlan,(i-1)*step+
+        math.max(0,safe(previousAdvance,0)))
+      previousOffsets[i]=previous and previous.offset or nil
+    end
+  end
+  local function stabilityCost(index,value)
+    local previous=previousOffsets[index]
+    if previous==nil then return 0 end
+    local delta=value-previous
+    return delta*delta*0.08
+  end
 
   if fixedOffset ~= nil then
     for i=1,n do
@@ -129,15 +144,9 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       end
       if not isBlocked(preferred) then addCandidate(list,preferred,lo,hi) end
       if #list==0 then
-        -- If traffic fills the usable width, keep a deterministic edge
-        -- candidate; longitudinal following control must then reduce speed.
-        local edge=lo
-        for _,interval in ipairs(forbidden or {}) do
-          if edge>=interval[1] and edge<=interval[2] then
-            edge=clamp(interval[2]+0.08,lo,hi)
-          end
-        end
-        addCandidate(list,edge,lo,hi)
+        -- Fail closed: never manufacture an edge candidate inside an
+        -- occupied corridor. Longitudinal following handles the blocked road.
+        return nil,"NO_PATH"
       end
       local previous=sampleFn(route,progress+math.max(0,d-step))
       local following=sampleFn(route,progress+d+step)
@@ -160,7 +169,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
       local clearance=math.min(off1-bounds[2][1],bounds[2][2]-off1)
       local cost=(off1-off0)^2*0.02+
         0.00008/math.max(0.12,clearance+0.12)+
-        0
+        stabilityCost(2,off1)
       firstLayer[#firstLayer+1]={a=1,b=j,cost=cost,prev=nil}
     end
     local layer=firstLayer
@@ -185,7 +194,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
           local cost=node.cost+k*k*180.0+excess*excess*200000.0+
             second*second*0.18+slope*slope*0.075+
             0.00008/math.max(0.12,clearance+0.12)+
-            0
+            stabilityCost(station+1,offC)
           local key=node.b*100+c
           local existing=bestByPair[key]
           if not existing or cost<existing.cost then
