@@ -962,7 +962,7 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
   -- the adjacent lane. Other active vehicles are checked across the full path.
   local currentSample=Geometry.sample(route,p.routeProgress)
   for i=0,sim.carsCount-1 do
-    if i~=carIndex and i~=leaderIndex then
+    if i~=carIndex then
       local other=ac.getCar(i)
       if other and other.isActive then
         local otherState=state.p[i]
@@ -971,21 +971,30 @@ local function passingPathClear(carIndex,car,p,leaderIndex,source,targetOffset,
           not (otherState and otherState.routeLocked),
           otherState and otherState.routeProgress,other.speedMs,0.05)
         if op==nil then
-          -- A failed route projection alone is not a collision. Check the
-          -- vehicle against the actual swept passing corridor in our local
-          -- route frame; cars on a nearby, separate track section are ignored.
+          -- A failed projection is not an automatic collision. The target
+          -- leader is checked only for immediate body overlap during the
+          -- initial lane transition; a leader farther ahead is still safe.
           if currentSample then
             local longitudinal,lateral=relativeToRoute(other.position,currentSample)
             local otherHalfWidth=math.max(0.75,
               safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+            local otherHalfLength=math.max(1.5,
+              safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
             local sweepLow=math.min(source,targetOffset)
             local sweepHigh=math.max(source,targetOffset)
             local lateralNear=lateral>=sweepLow-ownHalfWidth-otherHalfWidth-0.8 and
               lateral<=sweepHigh+ownHalfWidth+otherHalfWidth+0.8
-            local longitudinalNear=longitudinal>=-18.0 and
-              longitudinal<=math.max(35.0,safeNumber(passDistance,60.0)+25.0)
-            if lateralNear and longitudinalNear then
-              return false,"near_vehicle_unprojected"
+            local longitudinalLimit=ownHalfLength+otherHalfLength+3.0
+            if i==leaderIndex then
+              if lateralNear and math.abs(longitudinal)<longitudinalLimit then
+                return false,"leader_unprojected_conflict"
+              end
+            else
+              local longitudinalNear=longitudinal>=-18.0 and
+                longitudinal<=math.max(35.0,safeNumber(passDistance,60.0)+25.0)
+              if lateralNear and longitudinalNear then
+                return false,"near_vehicle_unprojected"
+              end
             end
           end
         else
