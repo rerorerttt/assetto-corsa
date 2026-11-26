@@ -1490,90 +1490,24 @@ local function updateTrafficControl(carIndex, car, p, speed, targetSpeed, dt)
     local passRequestReady=(p.pendingYieldTarget==leaderIndex or (canActuallyPass and gap<=passWindow)) and
       p.overtakeSide==0 and p.overtakeRetryT<=0
     if passRequestReady then
-      -- Requests are ranked by urgency before cars are updated. The next
-      -- frame's deterministic ordering lets the most urgent valid request
-      -- reserve first, instead of granting every simultaneous request to
-      -- whichever car happens to have the lowest simulation index.
-      p.trafficPriority=10000+
-        clamp(passWindow-gap,0,passWindow)*10+
-        clamp(speedAdvantage,0,50)*2+
-        (urgent and 1000 or 0)
-    else
-      p.trafficPriority=0
-    end
-    if passRequestReady then
-      local leaderState=state.p[leaderIndex]
-      local leaderCar=ac.getCar(leaderIndex)
-      if not leaderState or not leaderCar or not leaderCar.isActive or leaderState.overtakeSide~=0 or leaderState.returningFromPass then
-        p.lastPassDeniedReason="leader_not_yield_capable"
-      elseif leaderState.yieldRequestBy~=nil and leaderState.yieldRequestBy~=carIndex then
-        p.pendingYieldTarget=leaderIndex;p.pendingYieldGap=gap
-        if not p.pendingYieldOrder then state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1;p.pendingYieldOrder=state.trafficRequestSerial end
-        p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
-        p.trafficAction="WAIT_QUEUE";p.trafficReason="earlier_pass_has_slot"
+      -- Reserve a physically clear adjacent lane and start the pass immediately.
+      -- The overtaking car does not wait for a separate yield handshake; the
+      -- leader's own traffic scan can independently select a free adjacent lane.
+      local passOffset=findPassingOffset(carIndex,car,p,leaderIndex,
+        leaderLateral,speed,estimatedPassDistance)
+      if passOffset~=nil and beginOvertake(carIndex,car,p,gap,leaderIndex,
+          leaderLateral,speed,estimatedPassDistance,passOffset) then
+        p.trafficPriority=1000000
+        p.trafficAction="PASSING"
+        p.trafficReason="adjacent_lane_reserved"
         p.trafficLeaderIndex=leaderIndex
-        return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
-      else
-        local passOffset=p.pendingYieldTarget==leaderIndex and p.pendingPassOffset or nil
-        if passOffset==nil and p.overtakeRetryT<=0 then
-          passOffset=findPassingOffset(carIndex,car,p,leaderIndex,leaderLateral,speed,estimatedPassDistance)
-          if passOffset==nil then p.overtakeRetryT=0.25 end
-        end
-        if passOffset~=nil then
-          if leaderState.yieldRequestBy==nil or leaderState.yieldRequestBy==carIndex then
-            if leaderState.yieldRequestBy==nil then
-              local yieldOffset=chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset)
-              if yieldOffset~=nil then
-                leaderState.yieldRequestBy=carIndex;leaderState.yieldOffset=yieldOffset
-                leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
-                p.pendingYieldTarget=leaderIndex;p.pendingPassOffset=passOffset;p.pendingYieldTimer=0
-                if not p.pendingYieldOrder then
-                  state.trafficRequestSerial=(state.trafficRequestSerial or 0)+1
-                  p.pendingYieldOrder=state.trafficRequestSerial
-                end
-                p.pendingYieldGap=gap;p.pendingYieldSpeed=leaderSpeed or 0;p.pendingPassDistance=estimatedPassDistance
-                H.log("CAR=%d YIELD_REQUEST target=%d yield=%.2f pass=%.2f",carIndex,leaderIndex,yieldOffset,passOffset)
-              else
-                p.lastPassDeniedReason="leader_has_no_safe_yield_space";p.overtakeRetryT=0.25
-              end
-            end
-            if leaderState.yieldRequestBy==carIndex then
-              p.pendingYieldTimer=safeNumber(p.pendingYieldTimer)+dt
-              if leaderState.yieldReady then
-                p.emergencyPassRequest=urgent
-                if beginOvertake(carIndex,car,p,gap,leaderIndex,leaderLateral,speed,estimatedPassDistance,p.pendingPassOffset) then
-                  p.trafficPriority=1000000;p.trafficAction="PASSING"
-                  p.trafficReason="yield_confirmed";p.trafficLeaderIndex=leaderIndex
-                  p.trafficTargetOffset=safeNumber(p.passLat)
-                  return targetSpeed
-                end
-                leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
-                p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil;p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
-              else
-                p.trafficAction="WAIT_YIELD";p.trafficReason="leader_not_yet_clear"
-                p.trafficLeaderIndex=leaderIndex;p.trafficTargetOffset=safeNumber(p.pendingPassOffset)
-                if p.pendingYieldTimer>8.5 then
-                  leaderState.yieldRequestBy=nil;leaderState.yieldOffset=nil;leaderState.yieldReady=false;leaderState.yieldRequestTimer=0
-                  p.pendingYieldTarget=nil;p.pendingPassOffset=nil;p.pendingYieldTimer=0;p.pendingYieldOrder=nil
-                  p.pendingYieldGap=nil;p.pendingYieldSpeed=nil;p.pendingPassDistance=nil
-                  p.lastPassDeniedReason="yield_timeout"
-                else
-                  return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
-                end
-              end
-            else
-              p.lastPassDeniedReason="leader_has_no_safe_yield_space"
-              p.trafficAction="FOLLOW";p.trafficReason="leader_has_no_safe_yield_space"
-              return math.min(targetSpeed,safeFollowingCurrentLane(carIndex,car,p,gap,leaderSpeed or 0))
-            end
-          else
-            p.lastPassDeniedReason="yield_slot_owned_by_other_car"
-          end
-        end
+        p.trafficTargetOffset=safeNumber(p.passLat)
+        return targetSpeed
       end
       p.trafficAction="FOLLOW"
-      p.trafficReason=p.lastPassDeniedReason or "yield_not_available"
-      p.emergencyPassRequest=false
+      p.trafficReason=p.lastPassDeniedReason or "no_safe_adjacent_lane"
+      return math.min(targetSpeed,safeFollowingCurrentLane(
+        carIndex,car,p,gap,leaderSpeed or 0))
     elseif p.pendingYieldTarget~=nil then
       local oldLeader=state.p[p.pendingYieldTarget]
       if oldLeader and oldLeader.yieldRequestBy==carIndex then
