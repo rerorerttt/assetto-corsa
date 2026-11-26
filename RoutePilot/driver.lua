@@ -1073,16 +1073,25 @@ local function chooseYieldOffset(leaderIndex,leaderCar,leaderState,passOffset,re
   if not leaderCar or not leaderState or leaderState.routeProgress==nil then return nil end
   local lateral=safeNumber(leaderState.latOff,leaderState.laneOffsetCurrent or 0)
   local fx,fz=normalize2(leaderCar.look.x,leaderCar.look.z)
-  -- Validate the yielding edge over the same distance the pass is expected
-  -- to occupy the road, not just the first 20 metres.
-  local ahead=clamp(math.max(22.0,safeNumber(leaderCar.speedMs)*0.8+12.0,
-    safeNumber(passDistance,22.0)),22.0,260.0)
+  -- First locate the near-field edge, then validate the yielding corridor
+  -- through the full lane transition and expected pass duration.
   local safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,
+    leaderState.routeProgress,22.0,leaderCar,fx,fz)
+  if not safeMin or not safeMax or safeMax-safeMin<1.0 then return nil end
+  local desired=passOffset>lateral and safeMin or safeMax
+  local lateralLimit=clamp(
+    safeNumber(leaderState.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+  local transition=math.max(22.0,
+    math.max(0,safeNumber(leaderCar.speedMs))*
+      math.sqrt(6.0*math.abs(desired-lateral)/lateralLimit))
+  local ahead=clamp(math.max(22.0,safeNumber(leaderCar.speedMs)*0.8+12.0,
+    safeNumber(passDistance,22.0)+transition+10.0),22.0,260.0)
+  safeMin,safeMax=safeCorridorForPreview(state.routeGeometry,
     leaderState.routeProgress,ahead,leaderCar,fx,fz)
   if not safeMin or not safeMax or safeMax-safeMin<1.0 then return nil end
 
   -- Yield to the road edge opposite the attacker's reserved edge.
-  local desired=passOffset>lateral and safeMin or safeMax
+  desired=passOffset>lateral and safeMin or safeMax
   local requester=ac.getCar(requesterIndex)
   local ownHalf=math.max(0.75,safeNumber(leaderCar.aabbSize and leaderCar.aabbSize.x,2.0)*0.5)
   local passHalf=math.max(0.75,safeNumber(requester and requester.aabbSize and requester.aabbSize.x,2.0)*0.5)
