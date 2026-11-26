@@ -796,7 +796,11 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficLeaderIndex=leaderIndex or -1
   p.trafficGap=gap or -1
   p.trafficLeaderSpeed=leaderSpeed or 0
-  if p.passTargetIndex~=nil then
+  if p.emergencyMode then
+    p.trafficAction="EMERGENCY_ESCAPE"
+    p.trafficReason="leaving_blocking_vehicle"
+    p.trafficPriority=1100000
+  elseif p.passTargetIndex~=nil then
     p.trafficAction="PASSING"
     p.trafficReason="coordinator_lane_reserved"
     p.trafficPriority=1000000
@@ -820,12 +824,26 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   -- obstacle that triggered the escape. The destination lane being clear does
   -- not mean the swept lateral transition is already collision-free.
   if p.emergencyMode and p.emergencyFromOffset~=nil then
-    local oldGap,oldLeaderSpeed=carAheadInLane(
+    local oldGap,oldLeaderSpeed,oldLeaderIndex=carAheadInLane(
       carIndex,car,p.emergencyFromOffset)
     if oldGap~=nil and oldGap>=0 then
-      local oldLaneSafeSpeed=safeFollowingSpeed(
-        oldGap,oldLeaderSpeed or 0,p.brakeAccelEstimate)
-      targetSpeed=math.min(targetSpeed,oldLaneSafeSpeed)
+      if oldLeaderIndex==p.emergencyObstacleIndex then
+        -- This is the vehicle the emergency manoeuvre is specifically escaping.
+        -- Applying normal following-distance braking here creates a deadlock:
+        -- at the required 8 m gap the target speed becomes zero, so the car
+        -- cannot build the lateral motion needed to leave the lane.
+        -- Keep the destination-lane reservation/check authoritative instead.
+        if not p.emergencyOldLaneReleaseLogged then
+          p.emergencyOldLaneReleaseLogged=true
+          H.log("TRAFFIC_ESCAPE_RELEASE_OLD_LANE id=%d obstacle=%d gap=%.2f",
+            carIndex,oldLeaderIndex,oldGap)
+        end
+      else
+        -- A second vehicle in the lane being vacated remains a real hazard.
+        local oldLaneSafeSpeed=safeFollowingSpeed(
+          oldGap,oldLeaderSpeed or 0,p.brakeAccelEstimate)
+        targetSpeed=math.min(targetSpeed,oldLaneSafeSpeed)
+      end
     end
   end
   return targetSpeed
@@ -920,6 +938,7 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   p.coordinatorChangeT=0.10
   p.emergencyUntil=1.25
   p.emergencyMode=true
+  p.emergencyOldLaneReleaseLogged=false
   p.emergencyTargetLane=targetLane
   p.emergencyObstacleIndex=otherIndex
   p.emergencyTargetOffset=record.lanes.centers[targetLane]
