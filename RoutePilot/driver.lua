@@ -425,7 +425,9 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
     p.raceOffsetCurrent=currentRace and currentRace.offset or raceTarget.offset
     p.laneOffsetCurrent=p.raceOffsetCurrent
   else
-    local maxStep=(p.emergencyMode and 4.5 or 1.8)*math.max(0,dt or 0)
+    -- Limit lateral target motion to keep the body path smooth even during
+    -- emergency escape; steering slew is handled independently below.
+    local maxStep=(p.emergencyMode and 2.8 or 1.8)*math.max(0,dt or 0)
     local previousOffset=p.laneOffsetCurrent or laneTarget
     p.laneOffsetCurrent=previousOffset+
       clamp(laneTarget-previousOffset,-maxStep,maxStep)
@@ -569,7 +571,9 @@ local function filterSteering(p, target, dt)
   if emergencyActive then
     p.emergencyUntil=math.max(0,safeNumber(p.emergencyUntil)-dt)
   end
-  local maxChange=CFG.STEER_RATE*dt*(emergencyActive and 2.5 or 1.0)
+  -- Emergency steering is quicker, but not a step-change: the previous
+  -- 2.5x slew boost produced abrupt wheel snaps during adjacent-lane escape.
+  local maxChange=CFG.STEER_RATE*dt*(emergencyActive and 1.45 or 1.0)
   local requestedChange=p.steerFiltered-p.steer
   local appliedChange=clamp(requestedChange,-maxChange,maxChange)
   p.steerRateLimited=math.abs(requestedChange)>maxChange+1e-6
@@ -934,7 +938,7 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         else
           closingSpeed=math.max(0,other.speed-owner.speed)
         end
-        local dynamicWindow=math.max(window or 8.0,
+        local dynamicWindow=math.max(ownHalf+otherHalf+5.0,
           ownHalf+otherHalf+closingSpeed*transitionTime+5.0)
         local otherLane=other.p.coordinatedLane
         -- Lane IDs can diverge from physical occupancy on changing-width
@@ -946,10 +950,12 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local physicalClearance=ownHalfWidth+otherHalfWidth+0.65
         local physicalOverlap=math.abs(center-
           safeNumber(other.p.latOff,other.p.coordinatorOffset or center))<physicalClearance
-        if (otherLane==targetLane or physicalOverlap) and
-            math.abs(gap)<dynamicWindow then
-          return false,other.index,gap,
-            physicalOverlap and "physical_destination_overlap" or "occupied_destination"
+        -- Lane IDs are reservations, not physical occupancy. A stale lane ID
+        -- must not block a genuinely empty adjacent lane. Stable cars are
+        -- detected by their measured body footprint; cars in a transition
+        -- retain an explicit reservation below.
+        if physicalOverlap and math.abs(gap)<dynamicWindow then
+          return false,other.index,gap,"physical_destination_overlap"
         end
         -- Reserve both the destination and the lane being vacated until the
         -- full vehicle body has completed its lateral transition.
@@ -957,7 +963,8 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
             math.abs(gap)<dynamicWindow+4.0 then
           return false,other.index,gap,"crossing_destination"
         end
-        if other.p.coordinatorTargetLane==targetLane and
+        if other.p.coordinatorFromLane~=nil and
+            other.p.coordinatorTargetLane==targetLane and
             math.abs(gap)<dynamicWindow+4.0 then
           return false,other.index,gap,"reserved_destination"
         end
@@ -1061,7 +1068,9 @@ local function coordinatorMove(record,targetLane,records,reason,otherIndex)
   record.p.coordinatorOffset=record.lanes.centers[targetLane]
   record.p.baseLaneOffset=record.p.coordinatorOffset
   record.p.laneOffset=record.p.coordinatorOffset
-  record.p.coordinatorChangeT=3.0
+  -- Short anti-flap cooldown: avoid waiting several seconds before a
+   -- clearly available lane can be used.
+   record.p.coordinatorChangeT=0.45
   if reason=="PASS" then
     record.p.passTargetIndex=otherIndex
     record.p.yieldingFor=nil
