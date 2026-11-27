@@ -1140,10 +1140,14 @@ render.on('main.track.transparent', function()
       -- distance cull only for the finished track (long range view)
       if isRec or flatDist(player.position,node)<CFG.DRAW_RANGE then
         render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
-        render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
-          vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
-        render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
-          vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+        -- The CSP blue lines are already individual lane centerlines.
+        -- Do not overlay legacy synthetic red bounds on top of them.
+        if trafficLaneCount == 0 then
+          render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
+            vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*ar),RED)
+          render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
+            vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+        end
       end
       if i2==toI then break end
       i2=(i2%n)+1
@@ -1163,16 +1167,18 @@ local function computeMapBounds()
     local nd=state.nodes[i]
     local l,r=boundsAt(i)
     local b=segEnd(i)
-    local lx,lz=normalize2(b.x-nd.x,b.z-nd.z)
-    local pts={
-      {x=nd.x-lz*l,z=nd.z+lx*l},
-      {x=nd.x-lz*r,z=nd.z+lx*r},
-    }
-    for _,q in ipairs(pts) do
-      if q.x<minX then minX=q.x end
-      if q.x>maxX then maxX=q.x end
-      if q.z<minZ then minZ=q.z end
-      if q.z>maxZ then maxZ=q.z end
+    if b then
+      local lx,lz=normalize2(b.x-nd.x,b.z-nd.z)
+      local pts={
+        {x=nd.x-lz*l,z=nd.z+lx*l},
+        {x=nd.x-lz*r,z=nd.z+lx*r},
+      }
+      for _,q in ipairs(pts) do
+        if q.x<minX then minX=q.x end
+        if q.x>maxX then maxX=q.x end
+        if q.z<minZ then minZ=q.z end
+        if q.z>maxZ then maxZ=q.z end
+      end
     end
   end
   if minX==math.huge then return nil end
