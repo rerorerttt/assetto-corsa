@@ -1004,10 +1004,11 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local physicalGap=ownHalf+otherHalf
         local reservationGap=math.max(window or 8.0,ownHalf+otherHalf+5.0)
         local conflict=distance<=physicalGap
-        if not conflict and sameDirection and gap>0 and
-            distance<=reservationGap then
-          conflict=true
-        end
+        -- A same-direction leader ahead owns its line, but it does not
+        -- reserve the entire lane indefinitely. If it is pulling away (or
+        -- the follower is slower), the follower may merge behind it.
+        -- Only positive closing speed can turn the longitudinal gap into
+        -- a future conflict during the lane-change interval.
         if not conflict and closing>0.5 then
           conflict=distance-closing*transitionTime<=reservationGap
         end
@@ -1061,8 +1062,6 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           -- a close leader blocks the destination even while stopped, but a
           -- close follower does not: it matters only if it is catching up.
           if distance<=physicalGap then
-            timeToConflict=0
-          elseif sameDirection and gap>0 and distance<=minGap then
             timeToConflict=0
           elseif not sameDirection and distance<=minGap then
             timeToConflict=0
