@@ -1007,6 +1007,9 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
 end
 
 local function coordinatorMove(record,targetLane,records,reason,otherIndex)
+  -- A car already in emergency wait must never be released by an ordinary
+  -- PASS/YIELD/RETURN decision. Only coordinatorEmergencyMove may release it.
+  if record.p.emergencyWait then return false end
   local current=record.p.coordinatedLane or 1
   if targetLane<1 or targetLane>record.lanes.count or
       math.abs(targetLane-current)~=1 then return false end
@@ -1792,6 +1795,12 @@ function Driver.update(carIndex, car, dt)
   end
 
   calculateThrottle(p, speed, targetSpeed, dt)
+  -- No creep-through while an escape lane is unavailable. Hold the car fully
+  -- stopped until an emergency lane reservation succeeds or the rescue runs.
+  if p.emergencyWait and not p.emergencyMode then
+    p.gas=0
+    p.brake=1
+  end
   if p.emergencySteerActive then
     -- Keep enough drive to complete the lateral escape, but do not add full
     -- throttle while the tyres are already working near their grip limit.
