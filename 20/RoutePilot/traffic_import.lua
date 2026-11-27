@@ -434,6 +434,8 @@ local function decodeLanes(data)
     return nil, 'traffic.json has no lanes array'
   end
   local lanes = {}
+  local rules = type(data.rules) == 'table' and data.rules or {}
+  local laneRoles = type(rules.laneRoles) == 'table' and rules.laneRoles or {}
   for i = 1, #data.lanes do
     local source = data.lanes[i]
     if type(source) == 'table' then
@@ -441,15 +443,19 @@ local function decodeLanes(data)
       if points then
         -- A CSP lane is already a directed traffic lane. Preserve its authored
         -- loop flag exactly; endpoint proximity must never invent a loop.
+        local role = source.role or 3
+        local roleRule = laneRoles[role]
+        local priorityOffset = source.priorityOffset or 0
         lanes[#lanes + 1] = {
           id = source.id or i,
           name = source.name or ('Lane ' .. tostring(source.id or i)),
           points = points,
           loop = source.loop == true,
-          role = source.role or 3,
-          priority = source.priority,
-          priorityOffset = source.priorityOffset or 0,
-          speedLimit = source.speedLimit,
+          role = role,
+          priority = (source.priority ~= nil and source.priority or
+            (roleRule and roleRule.priority or 0)) + priorityOffset,
+          priorityOffset = priorityOffset,
+          speedLimit = source.speedLimit or (roleRule and roleRule.speedLimit) or 90,
           params = type(source.params) == 'table' and source.params or {},
           aabb = source.aabb,
           source = source
