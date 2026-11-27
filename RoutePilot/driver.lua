@@ -1135,14 +1135,15 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
       if gap~=nil then
         local otherHalf=math.max(1.5,
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
-        local otherLatHalf=math.max(0.75,
-          safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
         -- Include the other car's measured footprint and any committed
         -- lateral transition. Segment-local lane indices are deliberately
         -- ignored: a bend can change lane numbering without moving a car.
         local physicalOverlap=coordinatorLateralOverlap(owner,other,center)
         if physicalOverlap then
-          local minGap=ownHalf+otherHalf+3.0
+          -- Emergency lane changes need a larger buffer than ordinary
+          -- following: the target corridor must remain clear while the car
+          -- completes its lateral move, not merely until bumper overlap.
+          local minGap=ownHalf+otherHalf+8.0
           local closing
           local sameDirection=coordinatorSameDirection(owner,other)
           if sameDirection then
@@ -1168,7 +1169,7 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           -- close follower does not: it matters only if it is catching up.
           if distance<=physicalGap then
             timeToConflict=0
-          elseif sameDirection and gap>=0 and distance<=minGap then
+          elseif sameDirection and gap<0 and distance<=minGap then
             -- A stopped or slowly moving leader still occupies the escape
             -- lane. Do not require positive closing speed to reject a
             -- destination that is already inside the safe following gap.
