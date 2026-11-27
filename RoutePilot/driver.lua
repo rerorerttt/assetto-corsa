@@ -155,6 +155,7 @@ local function newPersonality(carIndex)
     yieldingFor = nil, coordinatorReturn = false,
     emergencyEscape = false, emergencyTargetOffset = nil,
     emergencyObstacleIndex = nil, emergencySteerFullLock = false,
+    routeTravelSign = 1,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -1697,6 +1698,9 @@ function Driver.update(carIndex, car, dt)
   end
   if progress ~= nil then
     p.frameProgressDelta=previousRouteProgress~=nil and routeGap(previousRouteProgress,progress) or 0
+    if math.abs(p.frameProgressDelta)>0.05 then
+      p.routeTravelSign=p.frameProgressDelta>0 and 1 or -1
+    end
     p.routeLocked = true
     p.routeProgress = progress
     p.latOff = projectedLateral or p.latOff
