@@ -23,11 +23,23 @@ if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 local okTrafficImporter, TrafficImporter = pcall(require, "traffic_import")
-if not okTrafficImporter or type(TrafficImporter) ~= "table" or
-    type(TrafficImporter.load) ~= "function" then TrafficImporter = nil end
+local trafficImporterRequireError = not okTrafficImporter and tostring(TrafficImporter) or nil
+if okTrafficImporter and type(TrafficImporter) ~= "table" then
+  trafficImporterRequireError = "module returned " .. type(TrafficImporter)
+  TrafficImporter = nil
+elseif okTrafficImporter and type(TrafficImporter.load) ~= "function" then
+  trafficImporterRequireError = "module has no load() function"
+  TrafficImporter = nil
+end
 local okTrafficNetwork, TrafficNetwork = pcall(require, "traffic_network")
-if not okTrafficNetwork or type(TrafficNetwork) ~= "table" or
-    type(TrafficNetwork.build) ~= "function" then TrafficNetwork = nil end
+local trafficNetworkRequireError = not okTrafficNetwork and tostring(TrafficNetwork) or nil
+if okTrafficNetwork and type(TrafficNetwork) ~= "table" then
+  trafficNetworkRequireError = "module returned " .. type(TrafficNetwork)
+  TrafficNetwork = nil
+elseif okTrafficNetwork and type(TrafficNetwork.build) ~= "function" then
+  trafficNetworkRequireError = "module has no build() function"
+  TrafficNetwork = nil
+end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -69,6 +81,12 @@ local function writeLog(fmt,...)
 end
 local function flushLog()
   if logger and logger.flush then pcall(logger.flush, logger) end
+end
+if trafficImporterRequireError then
+  writeLog("MODULE_LOAD_ERROR name=traffic_import error=%s", trafficImporterRequireError)
+end
+if trafficNetworkRequireError then
+  writeLog("MODULE_LOAD_ERROR name=traffic_network error=%s", trafficNetworkRequireError)
 end
 local function clamp(v,lo,hi) return math.max(lo,math.min(hi,v)) end
 local function lerp(a,b,t) return a+(b-a)*t end
