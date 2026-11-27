@@ -566,20 +566,21 @@ local function teleportHome(carIndex,car)
   end
   if #state.nodes<2 or not car or not car.position then return false end
 
-  -- Recovery always follows the recorded route direction. A stopped car's
-  -- look vector may point backwards after a head-on impact or spin, so it must
-  -- never be used to choose the teleport direction.
+  -- Follow this car's last measured direction along the route. The look
+  -- vector is unreliable after a spin/head-on stop; retain the last signed
+  -- route-progress direction while stationary. New cars default to route-forward.
   local driverState=state.p and state.p[carIndex]
   local hintSeg=driverState and driverState.segIdx or 1
   local seg,t,routeError=findNearestSeg(car.position,hintSeg,true,nil)
-  local sign=1
+  local sign=driverState and driverState.routeTravelSign or 1
+  if sign<0 then sign=-1 else sign=1 end
   if routeError>250 then
     writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f",carIndex,routeError)
     return false
   end
 
   -- Never search behind the disabled car. Candidate points are sampled only
-  -- forward along the recorded route, starting well beyond the obstruction
+  -- in the car's last measured route direction, starting beyond the obstruction
   -- so the car cannot be dropped back into the same jam.
   for distance=20,320,10 do
     local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
@@ -595,7 +596,7 @@ local function teleportHome(carIndex,car)
             state.p[carIndex]=nil
             state.rescueWatch=state.rescueWatch or {}
             state.rescueWatch[carIndex]={cooldown=3.0}
-            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=ROUTE_FORWARD pos=(%.2f,%.2f,%.2f)",
+            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=ROUTE_TRAVEL pos=(%.2f,%.2f,%.2f)",
               carIndex,distance,routeError,safePos.x,safePos.y,safePos.z)
             flushLog()
             return true
