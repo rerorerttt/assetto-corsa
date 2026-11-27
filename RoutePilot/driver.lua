@@ -1006,6 +1006,47 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   return true
 end
 
+local function coordinatorAbortUnsafeTransition(record,obstacleIndex)
+  local p=record.p
+  local actual=safeNumber(p.latOff,p.coordinatorOffset or 0)
+  local nearest,best=1,math.huge
+  for lane=1,record.lanes.count do
+    local error=math.abs(record.lanes.centers[lane]-actual)
+    if error<best then best=error;nearest=lane end
+  end
+  local oldLane=p.coordinatedLane or nearest
+  local hadTransition=p.coordinatorFromLane~=nil or
+    p.coordinatorTargetLane~=nil and p.coordinatorTargetLane~=oldLane or
+    p.passTargetIndex~=nil or p.yieldingFor~=nil
+  -- Cancel the uncompleted pass using the car's measured physical position,
+  -- not the lane ID that was reserved before the body actually moved.
+  p.coordinatedLane=nearest
+  p.homeLane=nearest
+  p.coordinatorOffset=record.lanes.centers[nearest]
+  p.baseLaneOffset=p.coordinatorOffset
+  p.laneOffset=p.coordinatorOffset
+  p.coordinatorFromLane=nil
+  p.coordinatorTargetLane=nearest
+  p.coordinatorChangeT=0
+  p.passTargetIndex=nil
+  p.yieldingFor=nil
+  p.coordinatorReturn=false
+  p.overtakeSide=0
+  p.racingPlanTimer=0
+  p.racingPlanTargetOffset=nil
+  p.racingPlan=nil
+  p.emergencyTargetLane=nil
+  p.emergencyObstacleIndex=nil
+  p.emergencyFromOffset=nil
+  p.emergencyTargetOffset=nil
+  p.emergencyMode=false
+  p.emergencySteerActive=false
+  if hadTransition then
+    H.log("TRAFFIC_ABORT_UNSAFE_CHANGE id=%d from=%d actual_lane=%d obstacle=%d lateral=%.2f",
+      record.index,oldLane,nearest,obstacleIndex or -1,actual)
+  end
+end
+
 local function coordinatorMove(record,targetLane,records,reason,otherIndex)
   -- A car already in emergency wait must never be released by an ordinary
   -- PASS/YIELD/RETURN decision. Only coordinatorEmergencyMove may release it.
@@ -1323,8 +1364,16 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           end
         end
         local dangerDistance=math.max(9.0,rec.speed*0.95+3.0)
-        local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
-          (nearestSpeed<math.max(1.0,rec.speed-0.8) or nearestGap<6.0)
+        -- Once an unsafe lane change has been aborted, keep the car in a
+        -- hard-stop state until the obstacle has opened a genuine following
+        -- gap. A 6 m threshold released the wait while the pass reservation
+        -- still pointed into the occupied lane.
+        local waitReleaseGap=math.max(12.0,rec.speed*1.2+5.0)
+        local latchedWait=p.emergencyWait and nearestGap~=nil and
+          nearestGap>=-2.0 and nearestGap<waitReleaseGap
+        local emergencyDanger=latchedWait or
+          (nearestGap~=nil and nearestGap<dangerDistance and
+            (nearestSpeed<math.max(1.0,rec.speed-0.8) or nearestGap<6.0))
         if emergencyDanger then
           p.emergencyWait=true
           p.emergencyWaitGap=nearestGap
@@ -1353,6 +1402,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             p.emergencyWaitSpeed=nil
             p.emergencyWaitObstacle=nil
           else
+            -- Do not keep steering toward an uncompleted PASS reservation.
+            -- Return the target to the lane nearest the measured body position
+            -- and follow the obstacle until it has actually cleared.
+            coordinatorAbortUnsafeTransition(rec,nearestIndex)
             p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
             p.emergencyRescueReady=p.emergencyBlockedT>=5.0
             p.trafficAction="EMERGENCY_WAIT"
