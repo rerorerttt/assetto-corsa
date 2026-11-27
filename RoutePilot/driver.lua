@@ -660,10 +660,24 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
             gap,actualLateral=relativeToRoute(other.position,ownSample)
           end
         end
-        local halfLengths=(safeNumber(car.aabbSize and car.aabbSize.z,4.5)+
-          safeNumber(other.aabbSize and other.aabbSize.z,4.5))*0.5
-        local lateralSeparation=(math.max(1.5,safeNumber(car.aabbSize and car.aabbSize.x,2.0))+
-          math.max(1.5,safeNumber(other.aabbSize and other.aabbSize.x,2.0)))*0.5+0.4
+        -- Compare the complete oriented vehicle footprints against the lane
+        -- corridor. A sideways player car can occupy BOTH lanes even though
+        -- its centre projects into only one lane. Using only aabbSize.x here
+        -- drops that obstacle as soon as its centre crosses a lane boundary.
+        local ownFx,ownFz=normalize2(car.look.x,car.look.z)
+        local ownHalfWidth=math.max(0.75,
+          safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
+        local ownHalfLength=math.max(1.5,
+          safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
+        local otherHalfWidth=math.max(0.75,
+          safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
+        local otherHalfLength=math.max(1.5,
+          safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
+        local ownLateralHalf=ownHalfWidth*math.abs(ownFx*ownSample.tx+ownFz*ownSample.tz)+
+          ownHalfLength*math.abs(ownFx*(-ownSample.tz)+ownFz*ownSample.tx)
+        local otherLateralHalf=otherHalfWidth*math.abs(otherFx*ownSample.tx+otherFz*ownSample.tz)+
+          otherHalfLength*math.abs(otherFx*(-ownSample.tz)+otherFz*ownSample.tx)
+        local lateralSeparation=ownLateralHalf+otherLateralHalf+0.4
         local otherSpeed=math.max(0,safeNumber(other.speedMs))
         local detectionHorizon=directionDot < -0.25 and
           (ownSpeed+otherSpeed)*2.0+30.0 or ownSpeed*3.0+30.0
