@@ -918,18 +918,23 @@ local function coordinatorTravelSign(record)
   if not record or not record.p or record.p.routeProgress==nil then return 1 end
   local sample=Geometry.sample(state.routeGeometry,record.p.routeProgress)
   if not sample then return 1 end
+  -- Direction is a property of the car's orientation relative to the route,
+  -- not its instantaneous velocity. In a tight bend, lateral slip can make
+  -- velocity project backwards onto the local tangent even while the car is
+  -- facing and driving along the route. That false sign change classifies two
+  -- same-direction cars as head-on and makes the coordinator stop both.
+  local look=record.car and record.car.look
+  if look then
+    local along=safeNumber(look.x)*sample.tx+safeNumber(look.z)*sample.tz
+    if math.abs(along)>0.25 then return along>0 and 1 or -1 end
+  end
+  local stored=record.p.routeTravelSign
+  if stored==1 or stored==-1 then return stored end
   local velocity=record.car and record.car.velocity
   if velocity then
     local along=safeNumber(velocity.x)*sample.tx+
       safeNumber(velocity.z)*sample.tz
     if math.abs(along)>1.0 then return along>0 and 1 or -1 end
-  end
-  local stored=record.p.routeTravelSign
-  if stored==1 or stored==-1 then return stored end
-  local look=record.car and record.car.look
-  if look then
-    local along=safeNumber(look.x)*sample.tx+safeNumber(look.z)*sample.tz
-    return along>=0 and 1 or -1
   end
   return 1
 end
