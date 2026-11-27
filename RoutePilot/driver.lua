@@ -24,7 +24,7 @@ local CFG, state, H
 
 local BOUND_MARGIN = 0.4
 local RESCUE_SPEED = 1.5
-local RESCUE_TIME  = 5.0
+local RESCUE_TIME  = 10.0
 local OFFTRACK_TIME = 10.0
 local STEER_DEAD   = 0.002  -- suppress only sub-resolution steering noise
 
