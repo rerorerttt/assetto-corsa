@@ -1086,7 +1086,7 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local sameDirection=coordinatorSameDirection(owner,other)
         local closing
         if sameDirection then
-          closing=gap<0 and owner.speed-other.speed or other.speed-owner.speed
+          closing=gap>0 and owner.speed-other.speed or other.speed-owner.speed
         else
           closing=owner.speed+other.speed
         end
@@ -1147,7 +1147,7 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           local closing
           local sameDirection=coordinatorSameDirection(owner,other)
           if sameDirection then
-            closing=gap<0 and owner.speed-other.speed or other.speed-owner.speed
+            closing=gap>0 and owner.speed-other.speed or other.speed-owner.speed
           else
             closing=owner.speed+other.speed
           end
@@ -1169,7 +1169,7 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           -- close follower does not: it matters only if it is catching up.
           if distance<=physicalGap then
             timeToConflict=0
-          elseif sameDirection and gap<0 and distance<=minGap then
+          elseif sameDirection and gap>0 and distance<=minGap then
             -- A stopped or slowly moving leader still occupies the escape
             -- lane. Do not require positive closing speed to reject a
             -- destination that is already inside the safe following gap.
