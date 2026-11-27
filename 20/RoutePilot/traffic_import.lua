@@ -190,30 +190,62 @@ local function buildDirectedChain(lanes, player)
     tostring(loopRoute), startProjection.distance)
 end
 
-function M.load()
+function M.load(log)
+  local function trace(message,...)
+    if type(log)=="function" then pcall(log,message,...) end
+  end
+  trace("IMPORT_STAGE begin")
   if not ac or type(ac.getTrackDataFilename) ~= 'function' then
+    trace("IMPORT_STAGE fail reason=getTrackDataFilename_unavailable")
     return nil, nil, 'ac.getTrackDataFilename unavailable'
   end
   if not io or type(io.load) ~= 'function' then
     return nil, nil, 'CSP io.load unavailable'
   end
   local okPath, path = pcall(ac.getTrackDataFilename, 'traffic.json')
+  trace("IMPORT_PATH ok=%s path=%s",tostring(okPath),tostring(path))
   if not okPath or type(path) ~= 'string' or path == '' then
+    trace("IMPORT_STAGE fail reason=traffic_path_unavailable")
     return nil, nil, 'traffic.json path unavailable'
   end
+  if not io or type(io.load) ~= 'function' then
+    trace("IMPORT_STAGE fail reason=io_load_unavailable")
+    return nil, nil, 'CSP io.load unavailable'
+  end
   local okRead, raw = pcall(io.load, path)
+  trace("IMPORT_READ ok=%s type=%s bytes=%s",tostring(okRead),type(raw),type(raw)=="string" and #raw or -1)
   if not okRead or type(raw) ~= 'string' or raw == '' then
-    return nil, nil, 'traffic.json not found'
+    trace("IMPORT_STAGE fail reason=traffic_file_unreadable value=%s",tostring(raw))
+    return nil, nil, 'traffic.json not found or unreadable: ' .. tostring(raw)
   end
   local okDecode, data = pcall(json.decode, raw)
-  if not okDecode then return nil, nil, 'traffic.json parse error: ' .. tostring(data) end
+  if not okDecode then
+    trace("IMPORT_STAGE fail reason=json_decode error=%s",tostring(data))
+    return nil, nil, 'traffic.json parse error: ' .. tostring(data)
+  end
+  trace("IMPORT_JSON_OK lanes_field_type=%s",type(data and data.lanes))
   local lanes, laneError = decodeLanes(data)
-  if not lanes then return nil, nil, laneError end
+  if not lanes then
+    trace("IMPORT_STAGE fail reason=lane_decode error=%s",tostring(laneError))
+    return nil, nil, laneError
+  end
+  local pointTotal=0
+  for i=1,#lanes do pointTotal=pointTotal+#lanes[i].points end
+  trace("IMPORT_LANES_OK lanes=%d points=%d",#lanes,pointTotal)
   local player = ac.getCar(0)
   if not player or not player.position or not player.look then
+    trace("IMPORT_STAGE defer reason=player_car_not_ready")
     return nil, nil, 'player car unavailable during import'
   end
-  return buildDirectedChain(lanes, player)
+  trace("IMPORT_PLAYER pos=(%.2f,%.2f,%.2f) heading=(%.3f,%.3f)",
+    player.position.x,player.position.y,player.position.z,player.look.x,player.look.z)
+  local nodes,loop,info=buildDirectedChain(lanes, player)
+  if nodes then
+    trace("IMPORT_CHAIN_OK points=%d loop=%s info=%s",#nodes,tostring(loop),tostring(info))
+  else
+    trace("IMPORT_CHAIN_FAIL reason=%s",tostring(info))
+  end
+  return nodes,loop,info
 end
 
 return M
