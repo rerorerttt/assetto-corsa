@@ -152,7 +152,7 @@ local function saveBounds()
   local verifyOk,verify=pcall(io.load,path)
   local verifyLines=0
   if verifyOk and type(verify)=="string" then
-    for _ in string.gmatch(verify,"[^\\r\\n]+") do verifyLines=verifyLines+1 end
+    for _ in string.gmatch(verify,"[^\r\n]+") do verifyLines=verifyLines+1 end
   end
   local success=verifyOk and type(verify)=="string" and verifyLines==n
   writeLog("BOUNDS_SAVE_%s path=%s points=%d verify_lines=%d width=7.00",
@@ -171,7 +171,7 @@ local function loadBounds()
   if io and type(io.load)=="function" then ok,raw=pcall(io.load,path) end
   if ok and type(raw)=="string" and raw~="" then
     local L,R={},{}
-    for line in string.gmatch(raw,"[^\\r\\n]+") do
+    for line in string.gmatch(raw,"[^\r\n]+") do
       local ls,rs=string.match(line,"^%s*([%-0-9%.]+)%s+([%-0-9%.]+)%s*$")
       if ls and rs then L[#L+1]=tonumber(ls); R[#R+1]=tonumber(rs) end
     end
