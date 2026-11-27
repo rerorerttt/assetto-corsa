@@ -842,6 +842,16 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   p.trafficTargetOffset=laneOffset
   local gap,leaderSpeed,leaderIndex,leaderLateral=
     carAheadInLane(carIndex,car,laneOffset)
+  -- Once a passing corridor is reserved, the vehicle being passed is no
+  -- longer a FOLLOW target. Treating its body as a same-lane leader while
+  -- the passer still straddles the lane markings applies braking at the
+  -- exact moment it must finish moving sideways.
+  if p.passTargetIndex~=nil and leaderIndex==p.passTargetIndex then
+    gap=nil
+    leaderSpeed=nil
+    leaderIndex=nil
+    leaderLateral=nil
+  end
   p.trafficLeaderIndex=leaderIndex or -1
   p.trafficGap=gap or -1
   p.trafficLeaderSpeed=leaderSpeed or 0
