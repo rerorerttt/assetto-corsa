@@ -514,14 +514,27 @@ local function trySpawnTeleport(sim,dt)
   local count=#aiCars
   local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
   if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
-  local startDistance=500.0
+  local startDistance=0
   local player=ac.getCar(0)
-  if player then
-    local routeDistance,routeError=findRouteDistanceAtPosition(
-      player.position,metrics,player.look)
-    if routeError<=50.0 then startDistance=routeDistance+500.0 end
-    writeLog("SPAWN_REFERENCE route=%.1f spawn_ahead=500 error=%.2f heading=(%.3f,%.3f)",
-      routeDistance,routeError,player.look.x,player.look.z)
+  if state.trafficToolImported then
+    startDistance=500.0
+    if player then
+      local routeDistance,routeError=findRouteDistanceAtPosition(
+        player.position,metrics,player.look)
+      if routeError<=50.0 then startDistance=routeDistance+500.0 end
+      writeLog("SPAWN_REFERENCE route=%.1f spawn_ahead=500 error=%.2f heading=(%.3f,%.3f)",
+        routeDistance,routeError,player.look.x,player.look.z)
+    end
+  elseif metrics.loop then
+    if player then
+      local routeDistance,routeError=findRouteDistanceAtPosition(
+        player.position,metrics,player.look)
+      startDistance=routeDistance+gap
+      writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f)",
+        routeDistance,routeError,player.look.x,player.look.z)
+    else
+      startDistance=gap
+    end
   end
   local moved,failed=0,0
   for order=1,count do
