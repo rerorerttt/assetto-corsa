@@ -1643,9 +1643,12 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             coordinatorSameDirection(rec,other) then
           local gap=coordinatorGap(rec,other)
           local sample=Geometry.sample(state.routeGeometry,rec.p.routeProgress)
-          local ownHalf,ownLong=sample and vehicleRouteFootprint(rec.car,sample,0) or 0,0
-          local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
-          local otherHalf=sample and vehicleRouteFootprint(other.car,sample,playerMargin) or 0
+          local ownHalf,otherHalf=0,0
+          if sample then
+            ownHalf=select(1,vehicleRouteFootprint(rec.car,sample,0))
+            local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
+            otherHalf=select(1,vehicleRouteFootprint(other.car,sample,playerMargin))
+          end
           local lateralOverlap=sample~=nil and math.abs(
             safeNumber(other.p.latOff)-safeNumber(p.latOff))<
             ownHalf+otherHalf+0.35
