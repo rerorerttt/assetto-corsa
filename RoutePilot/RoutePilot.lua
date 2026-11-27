@@ -624,7 +624,7 @@ local function updateRescueWatchdog(carIndex,car,dt)
   state.rescueWatch=state.rescueWatch or {}
   local w=state.rescueWatch[carIndex]
   if not w then
-    w={rolloverT=0,gasStallT=0,lastPosition=vec3(car.position.x,car.position.y,car.position.z),cooldown=0}
+    w={rolloverT=0,gasStallT=0,lastPosition=vec3(car.position.x,car.position.y,car.position.z),progressPositionX=car.position.x,progressPositionZ=car.position.z,progressCheckT=0,cooldown=0}
     state.rescueWatch[carIndex]=w
   end
   w.cooldown=math.max(0,(w.cooldown or 0)-dt)
