@@ -1071,7 +1071,12 @@ end
 local function coordinatorMove(record,targetLane,records,reason,otherIndex)
   -- Emergency escape owns its lane reservation until the physical manoeuvre
   -- finishes. Ordinary PASS/YIELD/RETURN must never overwrite that decision.
-  if record.p.emergencyEscape then return false end
+  -- A lane reservation is a single in-flight manoeuvre. Do not let a
+  -- second PASS/YIELD/RETURN decision reverse it before the car reaches
+  -- its reserved lane.
+  if record.p.emergencyEscape or record.p.coordinatorFromLane~=nil then
+    return false
+  end
   local current=record.p.coordinatedLane or 1
   if targetLane<1 or targetLane>record.lanes.count or
       math.abs(targetLane-current)~=1 then return false end
@@ -1354,6 +1359,16 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
     if rec.managed and not rec.p.emergencyEscape then
       local p=rec.p
       local current=p.coordinatedLane or 1
+      -- During an ordinary lane change the logical lane has already been
+      -- reserved, while the car is still physically crossing from its source
+      -- lane. Evaluate danger in the DESTINATION lane, not under the car's
+      -- current body; otherwise the old-lane leader immediately commands an
+      -- emergency return into the lane the car is trying to leave.
+      local laneChangeInProgress=p.coordinatorFromLane~=nil and
+        p.coordinatorTargetLane~=nil and
+        p.coordinatedLane==p.coordinatorTargetLane
+      local dangerLateralCenter=laneChangeInProgress and
+        rec.lanes.centers[p.coordinatorTargetLane] or safeNumber(p.latOff)
       local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
       for _,other in ipairs(records) do
         if other.index~=rec.index and
@@ -1364,7 +1379,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local otherHalf=math.max(0.75,
             safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
           local lateralOverlap=math.abs(
-            safeNumber(other.p.latOff)-safeNumber(p.latOff))<
+            safeNumber(other.p.latOff)-dangerLateralCenter)<
             ownHalf+otherHalf+0.35
           if lateralOverlap and gap and gap>=-2.0 and
               (not nearestGap or gap<nearestGap) then
@@ -1377,7 +1392,23 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local dangerDistance=math.max(14.0,rec.speed*0.95+5.0)
       local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
         (nearestSpeed<math.max(1.5,rec.speed-0.8) or nearestGap<6.0)
-      if emergencyDanger then
+      if emergencyDanger and laneChangeInProgress then
+        -- Never reverse a partially completed lane change into its source
+        -- lane. If the destination becomes blocked, brake and wait there;
+        -- retry emergency planning after the current transition is resolved.
+        p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
+        p.emergencyRescueReady=p.emergencyBlockedT>=10.0
+        p.trafficAction="EMERGENCY_WAIT"
+        p.trafficReason="lane_change_destination_blocked"
+        p.emergencyWaitObstacleIndex=nearestIndex
+        p.emergencyWaitGap=nearestGap
+        p.emergencyWaitSpeed=nearestSpeed
+        if not p.emergencyWaitLogged then
+          p.emergencyWaitLogged=true
+          H.log("TRAFFIC_EMERGENCY_WAIT_LANE_CHANGE id=%d target=%d obstacle=%d gap=%.2f",
+            rec.index,p.coordinatorTargetLane or -1,nearestIndex or -1,nearestGap)
+        end
+      elseif emergencyDanger then
         local candidates={}
         for lane=1,rec.lanes.count do
           if math.abs(lane-current)==1 then
