@@ -206,7 +206,7 @@ local function buildNeighbours(lanes, cellIndex, cellSize, log)
               end
               item.distances[#item.distances + 1] = projected.distance
               item.alignments[#item.alignments + 1] = dot
-              item.side = signed >= 0 and "left" or "right"
+              item.side = signed >= 0 and "right" or "left"
             end
           end
         end
@@ -317,7 +317,7 @@ end
 
 function Network.getLaneCorridor(lane, safetyMargin)
   if not lane then return nil end
-  local margin = finite(safetyMargin) and math.max(0, safetyMargin) or 0.45
+  local margin = finite(safetyMargin) and math.max(0, safetyMargin) or 1.0
   local usable = math.max(0, lane.halfWidth - margin)
   return -usable, usable
 end
