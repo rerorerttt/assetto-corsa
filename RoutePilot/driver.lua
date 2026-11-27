@@ -1231,10 +1231,17 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
             -- Signed route gap matters: a car behind only threatens this
             -- slot when it is gaining on the owner, not when it is pulling away.
             if gap>=0 then
-              if gap<=minGap then
-                timeToConflict=0
-              elseif closing>0.5 then
-                timeToConflict=(gap-minGap)/closing
+              -- A same-direction vehicle ahead that is not being caught is
+              -- moving away from the escape path. Its current short gap must
+              -- not veto an emergency lane change: the merge is behind it,
+              -- not into an approaching vehicle. Only positive closing speed
+              -- can turn this forward reservation into a future conflict.
+              if closing>0.5 then
+                if gap<=minGap then
+                  timeToConflict=0
+                else
+                  timeToConflict=(gap-minGap)/closing
+                end
               end
             elseif closing>0.5 then
               timeToConflict=math.max(0,math.abs(gap)-minGap)/closing
