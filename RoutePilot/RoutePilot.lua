@@ -22,6 +22,12 @@ local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
+local okTrafficImporter, TrafficImporter = pcall(require, "traffic_import")
+if not okTrafficImporter or type(TrafficImporter) ~= "table" or
+    type(TrafficImporter.load) ~= "function" then TrafficImporter = nil end
+local okTrafficNetwork, TrafficNetwork = pcall(require, "traffic_network")
+if not okTrafficNetwork or type(TrafficNetwork) ~= "table" or
+    type(TrafficNetwork.build) ~= "function" then TrafficNetwork = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -48,6 +54,7 @@ local state = {
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
+  trafficNetwork=nil, trafficNetworkReady=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -1141,7 +1148,38 @@ if ac.onRelease then
     end
   end)
 end
+local function initializeTrafficNetwork()
+  if not TrafficImporter or not TrafficNetwork then
+    writeLog("NETWORK_INIT_FAILED importer=%s network=%s",
+      tostring(TrafficImporter ~= nil), tostring(TrafficNetwork ~= nil))
+    return false
+  end
+  local okImport, importedNodes, importedLoop, importInfo, importedLanes, sourceNetwork =
+    pcall(TrafficImporter.load, writeLog)
+  if not okImport then
+    writeLog("NETWORK_IMPORT_ERROR err=%s", tostring(importedNodes))
+    return false
+  end
+  if type(sourceNetwork) ~= "table" then
+    writeLog("NETWORK_IMPORT_FAILED info=%s", tostring(importInfo))
+    return false
+  end
+  local okBuild, built, buildError =
+    pcall(TrafficNetwork.build, sourceNetwork, { laneWidth = 3.0 }, writeLog)
+  if not okBuild or not built then
+    writeLog("NETWORK_BUILD_FAILED error=%s", tostring(okBuild and buildError or built))
+    return false
+  end
+  state.trafficNetwork = built
+  state.trafficNetworkReady = true
+  writeLog("NETWORK_INITIALIZED track=%s lanes=%d intersections=%d",
+    getTrackTag(), built.laneCount, built.intersectionCount)
+  return true
+end
+
 loadLine()
 loadBounds()
-writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+initializeTrafficNetwork()
+writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d network=%s",
+  getTrackTag(), #state.nodes, tostring(state.trafficNetworkReady))
 flushLog()
