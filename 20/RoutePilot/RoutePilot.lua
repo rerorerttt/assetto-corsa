@@ -49,7 +49,8 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  trafficToolImported=false, respawnAccum=0, respawnCooldown={},
+  trafficToolImported=false, trafficImportPending=true, trafficImportRetry=0,
+  trafficImportLastError="not_attempted", respawnAccum=0, respawnCooldown={},
   playerAutopilotLast=false, steeringDiagnostics=false,
 }
 local logger=nil
@@ -126,57 +127,85 @@ local function parseNodes(raw)
 end
 local function saveBounds()
   local n=#state.nodes
-  if n<2 then return end
+  if n<2 then
+    writeLog("BOUNDS_SAVE_SKIP reason=too_few_nodes points=%d",n)
+    return false
+  end
   local parts={}
   for i=1,n do
     parts[#parts+1]=string.format("%.2f %.2f",
-      safeNumber(state.boundsL[i],-1.5),safeNumber(state.boundsR[i],1.5))
+      safeNumber(state.boundsL[i],-3.5),safeNumber(state.boundsR[i],3.5))
   end
-  if io and io.open then
-    local ok,f=pcall(io.open,getBoundsFilePath(),"w")
-    if ok and f then
-      pcall(function() f:write(table.concat(parts,"\n")) f:close() end)
-      writeLog("SAVE_BOUNDS points=%d",n)
-    end
+  local path=getBoundsFilePath()
+  local data=table.concat(parts,"\\n").."\\n"
+  if not io or type(io.save)~="function" then
+    writeLog("BOUNDS_SAVE_FAIL reason=io.save_unavailable path=%s",tostring(path))
+    flushLog()
+    return false
   end
+  local ok,err=pcall(io.save,path,data,true)
+  if not ok then
+    writeLog("BOUNDS_SAVE_FAIL path=%s error=%s",tostring(path),tostring(err))
+    flushLog()
+    return false
+  end
+  local verifyOk,verify=pcall(io.load,path)
+  local verifyLines=0
+  if verifyOk and type(verify)=="string" then
+    for _ in string.gmatch(verify,"[^\\r\\n]+") do verifyLines=verifyLines+1 end
+  end
+  local success=verifyOk and type(verify)=="string" and verifyLines==n
+  writeLog("BOUNDS_SAVE_%s path=%s points=%d verify_lines=%d width=7.00",
+    success and "OK" or "VERIFY_FAIL",tostring(path),n,verifyLines)
+  flushLog()
+  return success
 end
 local function loadBounds()
   local n=#state.nodes
-  if n<2 then return false end
-  if io and io.open then
-    local ok,f=pcall(io.open,getBoundsFilePath(),"r")
-    if ok and f then
-      local success,raw=pcall(function()
-        local c=f:read("*all"); f:close(); return c
-      end)
-      if success and type(raw)=="string" and raw~="" then
-        local L,R={},{}
-        for line in string.gmatch(raw,"[^\r\n]+") do
-          local ls,rs=string.match(line,"^%s*([%-0-9%.]+)%s+([%-0-9%.]+)%s*$")
-          L[#L+1]=tonumber(ls) or -1.5
-          R[#R+1]=tonumber(rs) or 1.5
-        end
-        if #L==n then
-          state.boundsL,state.boundsR=L,R
-          writeLog("BOUNDS_LOADED points=%d",n)
-          return true
-        end
-      end
+  if n<2 then
+    writeLog("BOUNDS_LOAD_SKIP reason=too_few_nodes points=%d",n)
+    return false
+  end
+  local path=getBoundsFilePath()
+  local ok,raw=false,nil
+  if io and type(io.load)=="function" then ok,raw=pcall(io.load,path) end
+  if ok and type(raw)=="string" and raw~="" then
+    local L,R={},{}
+    for line in string.gmatch(raw,"[^\\r\\n]+") do
+      local ls,rs=string.match(line,"^%s*([%-0-9%.]+)%s+([%-0-9%.]+)%s*$")
+      if ls and rs then L[#L+1]=tonumber(ls); R[#R+1]=tonumber(rs) end
     end
+    if #L==n then
+      state.boundsL,state.boundsR=L,R
+      writeLog("BOUNDS_LOAD_OK path=%s points=%d",tostring(path),n)
+      return true
+    end
+    writeLog("BOUNDS_LOAD_INVALID path=%s expected=%d actual=%d",tostring(path),n,#L)
+  else
+    writeLog("BOUNDS_LOAD_MISS path=%s io_ok=%s value_type=%s",
+      tostring(path),tostring(ok),type(raw))
   end
   state.boundsL,state.boundsR={},{}
-  local half=WIDTH_PRESETS[state.widthPreset]/2
-  for i=1,n do state.boundsL[i]=-half state.boundsR[i]=half end
-  writeLog("BOUNDS_DEFAULT points=%d",n)
+  for i=1,n do state.boundsL[i]=-3.5 state.boundsR[i]=3.5 end
+  writeLog("BOUNDS_DEFAULT_CREATED points=%d half_width=3.5",n)
   return false
 end
 local function saveLine()
   if #state.nodes<2 then state.status="Недостаточно точек" return end
   local data=serializeNodes(state.nodes)
   local wroteFile=false
-  if io and io.open then
-    local ok,f=pcall(io.open,getLineFilePath(),"w")
-    if ok and f then wroteFile=pcall(function() f:write(data) f:close() end) end
+  local linePath=getLineFilePath()
+  if io and type(io.save)=="function" then
+    local okSave,errSave=pcall(io.save,linePath,data,true)
+    if okSave then
+      local okVerify,rawVerify=pcall(io.load,linePath)
+      wroteFile=okVerify and type(rawVerify)=="string" and #rawVerify>0
+      writeLog("LINE_SAVE_%s path=%s bytes=%d",wroteFile and "OK" or "VERIFY_FAIL",tostring(linePath),#data)
+    else
+      writeLog("LINE_SAVE_FAIL path=%s error=%s",tostring(linePath),tostring(errSave))
+    end
+  else
+    writeLog("LINE_SAVE_FAIL reason=io.save_unavailable path=%s",tostring(linePath))
   end
   if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
   saveBounds()
@@ -189,13 +218,18 @@ end
 local function loadLine()
   if TrafficImport then
     local imported, importedLoop, importInfo = nil, nil, nil
-    local okImport, a, b, c = pcall(TrafficImport.load)
+    local okImport, a, b, c = pcall(TrafficImport.load, writeLog)
     if okImport then imported, importedLoop, importInfo = a, b, c
     else importInfo = tostring(a) end
+    state.trafficImportLastError=imported and "" or tostring(importInfo or "unknown")
+    state.trafficImportPending=not (imported and #imported>=2)
+    writeLog("IMPORT_ATTEMPT result=%s detail=%s",state.trafficImportPending and "FAILED" or "SUCCESS",tostring(importInfo))
     if imported and #imported>=2 then
       state.nodes=imported
       state.loopRoute=importedLoop==true
       state.trafficToolImported=true
+      state.trafficImportPending=false
+      state.trafficImportLastError=""
       state.widthPreset=2
       state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
@@ -208,17 +242,14 @@ local function loadLine()
       return true
     end
     writeLog("TRAFFIC_TOOL_IMPORT_SKIP reason=%s",tostring(importInfo or "no directed route"))
+    state.trafficImportLastError=tostring(importInfo or "no directed route")
+    state.trafficImportPending=true
   end
   state.trafficToolImported=false
   local loaded=nil
-  if io and io.open then
-    local ok,f=pcall(io.open,getLineFilePath(),"r")
-    if ok and f then
-      local success,raw=pcall(function()
-        local c=f:read("*all"); f:close(); return c
-      end)
-      if success then loaded=parseNodes(raw) end
-    end
+  if io and type(io.load)=="function" then
+    local ok,raw=pcall(io.load,getLineFilePath())
+    if ok then loaded=parseNodes(raw) end
   end
   if not loaded and ac.storage then
     local ok,raw=pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag())
@@ -864,6 +895,15 @@ function script.update(dt)
   local ok,err=pcall(function()
     local sim=ac.getSim()
     if not sim then return end
+    if state.trafficImportPending and not state.trafficToolImported then
+      state.trafficImportRetry=state.trafficImportRetry+dt
+      if state.trafficImportRetry>=2.0 then
+        state.trafficImportRetry=0
+        writeLog("IMPORT_RETRY_BEGIN player_ready=%s",tostring(ac.getCar(0)~=nil))
+        loadLine()
+        flushLog()
+      end
+    end
     local player=ac.getCar(0)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
@@ -1143,6 +1183,11 @@ function windowMain(dt)
     ui.tabBar("RoutePilotTabs", function()
       ui.tabItem("Маршрут", function()
     ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
+    if state.trafficToolImported then
+      ui.text("Traffic Tool: импортирован | ширина 7 м")
+    else
+      ui.text("Traffic Tool: ожидание/ошибка — "..tostring(state.trafficImportLastError))
+    end
     for idx=1,4 do
       local label=string.format("%d %s",idx,idx==1 and "машина" or "машины")
       if idx>1 then ui.sameLine(0,4) end
@@ -1206,6 +1251,11 @@ function windowMain(dt)
     end
       end)
       ui.tabItem("Dev", function()
+        ui.text("Traffic Tool import: "..tostring(state.trafficToolImported and "OK" or "PENDING/FAILED"))
+        ui.text("Причина: "..tostring(state.trafficImportLastError))
+        ui.text("Повторная загрузка выполняется автоматически каждые 2 секунды до успеха.")
+        ui.text("Лог: routepilot_trace.txt; ищи IMPORT_, BOUNDS_, LINE_SAVE_.")
+        ui.separator()
         ui.text("Диагностика контроллера RoutePilot")
         ui.text("Подробная телеметрия рулевого управления и динамики автомобиля.")
         if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
