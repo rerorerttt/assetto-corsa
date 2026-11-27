@@ -947,13 +947,13 @@ local function coordinatorGap(a,b)
   if not a or not b or a.p.routeProgress==nil or b.p.routeProgress==nil then return nil end
   local ownSample=Geometry.sample(state.routeGeometry,a.p.routeProgress)
   if not ownSample then return nil end
-  local aMoving=safeNumber(a.speed)>0.75
-  local bMoving=safeNumber(b.speed)>0.75
-  -- A stationary vehicle has no meaningful travel direction. In particular,
-  -- the player may be stopped sideways or facing across the road while
-  -- physically blocking both lanes. Use the moving vehicle's direction to
-  -- establish which side of that obstacle it is on; never classify a stopped
-  -- obstacle as oncoming from its steering orientation alone.
+  -- A stopped OR crawling vehicle is a physical obstacle, not a reliable
+  -- directional participant. The trace showed the player creeping at 1.5-1.7
+  -- m/s after the first impact; the old 0.75 threshold reclassified that car
+  -- as moving, trusted its reversed heading, and released the AI back to gas.
+  -- Keep low-speed obstacles direction-neutral until they are clearly moving.
+  local aMoving=safeNumber(a.speed)>3.0
+  local bMoving=safeNumber(b.speed)>3.0
   local reference=(not aMoving and bMoving) and b or a
   local referenceSign=coordinatorTravelSign(reference)
   local ownSign=coordinatorTravelSign(a)
@@ -969,10 +969,11 @@ local function coordinatorGap(a,b)
 end
 
 local function coordinatorSameDirection(a,b)
-  -- A stopped car is an obstacle, not an oncoming participant. Its heading
-  -- must not switch the pair into head-on handling or provoke a blind ram.
+  -- A stopped or crawling car is an obstacle, not an oncoming participant.
+  -- Use the same 3 m/s threshold as coordinatorGap so direction classification
+  -- cannot flip as a blocked vehicle rolls a short distance after braking.
   if not a or not b then return false end
-  if safeNumber(a.speed)<=0.75 or safeNumber(b.speed)<=0.75 then return true end
+  if safeNumber(a.speed)<=3.0 or safeNumber(b.speed)<=3.0 then return true end
   return coordinatorTravelSign(a)==coordinatorTravelSign(b)
 end
 
