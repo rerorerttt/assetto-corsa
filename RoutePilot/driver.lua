@@ -958,13 +958,74 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
   return true
 end
 
+-- Emergency lane checks use predicted collision time, not the normal
+-- reservation horizon. A distant car travelling away from the escape slot
+-- must not make a physically empty adjacent lane appear occupied.
+local function coordinatorEmergencyLaneFree(owner,targetLane,records)
+  local center=owner.lanes.centers[targetLane]
+  if center==nil then return false,"NO_LANE_GEOMETRY" end
+  local ownHalf=math.max(1.5,
+    safeNumber(owner.car.aabbSize and owner.car.aabbSize.z,4.5)*0.5)
+  local ownLatHalf=math.max(0.75,
+    safeNumber(owner.car.aabbSize and owner.car.aabbSize.x,2.0)*0.5)
+  local lateralDelta=math.abs(center-safeNumber(owner.p.latOff,center))
+  local lateralAccel=clamp(
+    safeNumber(owner.p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.45,2.0,8.0)
+  local transitionTime=clamp(math.sqrt(2.0*math.max(0.15,lateralDelta)/lateralAccel),
+    0.65,2.5)
+  for _,other in ipairs(records) do
+    if other.index~=owner.index and other.p.routeProgress~=nil then
+      local gap=coordinatorGap(owner,other)
+      if gap~=nil then
+        local otherHalf=math.max(1.5,
+          safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
+        local otherLatHalf=math.max(0.75,
+          safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
+        local physicalOverlap=math.abs(center-safeNumber(other.p.latOff,center))<
+          ownLatHalf+otherLatHalf+0.35
+        local reserved=(other.p.coordinatedLane==targetLane or
+          other.p.coordinatorFromLane==targetLane or
+          other.p.coordinatorTargetLane==targetLane)
+        if physicalOverlap or (other.managed and reserved) then
+          local minGap=ownHalf+otherHalf+3.0
+          local closing
+          local sameDirection=coordinatorSameDirection(owner,other)
+          if sameDirection then
+            closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
+          else
+            closing=owner.speed+other.speed
+          end
+          local timeToConflict=math.huge
+          if math.abs(gap)<=minGap then
+            timeToConflict=0
+          elseif closing>0.5 then
+            timeToConflict=math.max(0,math.abs(gap)-minGap)/closing
+          end
+          if timeToConflict<=transitionTime+0.65 then
+            return false,string.format("PREDICTED_OCCUPANCY_%d",other.index),
+              gap,closing,timeToConflict
+          end
+        end
+      end
+    end
+  end
+  return true
+end
+
 local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   local p=record.p
   local current=p.coordinatedLane or 1
   if targetLane<1 or targetLane>record.lanes.count or targetLane==current then
     return false
   end
-  if not coordinatorLaneFree(record,targetLane,records,4.0) then return false end
+  local laneFree,rejectReason,rejectGap,rejectClosing,rejectTTC=
+    coordinatorEmergencyLaneFree(record,targetLane,records)
+  if not laneFree then
+    H.log("TRAFFIC_EMERGENCY_LANE_REJECT id=%d lane=%d reason=%s gap=%.2f closing=%.2f ttc=%.2f",
+      record.index,targetLane,tostring(rejectReason),safeNumber(rejectGap,999),
+      safeNumber(rejectClosing),safeNumber(rejectTTC,999))
+    return false
+  end
   p.coordinatorFromLane=current
   p.coordinatorTargetLane=targetLane
   p.coordinatedLane=targetLane
@@ -1201,8 +1262,8 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local lane=follower.p.coordinatedLane
           local moved=false
           local emergencyCandidate=sameDirection and
-            distance<math.max(9.0,follower.speed*0.95+3.0) and
-            (leader.speed<math.max(1.0,follower.speed-0.8) or distance<6.0)
+            distance<math.max(14.0,follower.speed*0.95+5.0) and
+            (leader.speed<math.max(1.5,follower.speed-0.8) or distance<6.0)
           if emergencyCandidate then
             -- Let the dedicated escape controller below own stopped obstacles;
             -- ordinary PASS/YIELD must not seize the lane first.
@@ -1299,22 +1360,28 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           end
         end
       end
-      local dangerDistance=math.max(9.0,rec.speed*0.95+3.0)
+      local dangerDistance=math.max(14.0,rec.speed*0.95+5.0)
       local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
-        (nearestSpeed<math.max(1.0,rec.speed-0.8) or nearestGap<6.0)
+        (nearestSpeed<math.max(1.5,rec.speed-0.8) or nearestGap<6.0)
       if emergencyDanger then
         local chosen=nil
         local bestCost=math.huge
         for lane=1,rec.lanes.count do
-          if math.abs(lane-current)==1 and
-              coordinatorLaneFree(rec,lane,records,4.0) then
+          if math.abs(lane-current)==1 then
             local cost=math.abs(lane-current)*10.0+
               math.abs(rec.lanes.centers[lane]-safeNumber(p.latOff,rec.lanes.centers[current]))
             if cost<bestCost then bestCost=cost;chosen=lane end
           end
         end
         if chosen then
-          coordinatorEmergencyMove(rec,chosen,records,nearestIndex)
+          local moved=coordinatorEmergencyMove(rec,chosen,records,nearestIndex)
+          if moved then
+            p.emergencyBlockedT=0
+          else
+            chosen=nil
+          end
+        end
+        if chosen then
           p.emergencyBlockedT=0
           p.emergencyRescueReady=false
           p.emergencyWaitLogged=false
