@@ -994,7 +994,13 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
           safeNumber(owner.p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
         local transitionDistance=math.max(22.0,
           owner.speed*math.sqrt(6.0*lateralDelta/lateralLimit))
-        local transitionTime=transitionDistance/math.max(8.0,owner.speed)
+        -- The lane reservation must cover the complete physical lane
+        -- change, not only the optimistic lateral-acceleration estimate.
+        -- coordinatorMove commits a 3 s transition; releasing the target
+        -- corridor after ~1 s lets a fast follower enter a lane that is still
+        -- occupied by a car ahead, producing a three-car corner deadlock.
+        local transitionTime=math.max(3.0,
+          transitionDistance/math.max(8.0,owner.speed))
         -- Only a real lateral footprint intersection can occupy this slot.
         -- Longitudinal separation and closing speed then decide whether that
         -- intersection is relevant before the lane change completes.
