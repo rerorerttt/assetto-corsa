@@ -579,8 +579,8 @@ local function teleportHome(carIndex,car)
   end
 
   -- Never search behind the disabled car. Candidate points are sampled only
-  -- along the route in the car's current direction of travel, starting well
-  -- beyond the obstruction so the car cannot be dropped back into the same jam.
+  -- forward along the recorded route, starting well beyond the obstruction
+  -- so the car cannot be dropped back into the same jam.
   for distance=20,320,10 do
     local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
     if pos then
@@ -595,8 +595,8 @@ local function teleportHome(carIndex,car)
             state.p[carIndex]=nil
             state.rescueWatch=state.rescueWatch or {}
             state.rescueWatch[carIndex]={cooldown=3.0}
-            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f sign=%d pos=(%.2f,%.2f,%.2f)",
-              carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
+            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=ROUTE_FORWARD pos=(%.2f,%.2f,%.2f)",
+              carIndex,distance,routeError,safePos.x,safePos.y,safePos.z)
             flushLog()
             return true
           end
