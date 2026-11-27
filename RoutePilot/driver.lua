@@ -1544,8 +1544,14 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           return distance/math.max(8.0,rec.speed)
         end
         local maneuverTime=math.max(transitionTime(follower),transitionTime(leader))
+        -- carAheadInLane() reports bumper-to-bumper gap, while `distance`
+        -- here is centre-to-centre route distance. Include the configured
+        -- follow gap in the coordinator trigger; otherwise FOLLOW brakes at
+        -- 8 m bumper gap before this pass detector (9.5 m centre gap) can
+        -- ever request the adjacent lane, leaving a permanent standstill.
         local trigger=followerHalf+leaderHalf+
-          math.max(5.0,math.max(0,closing)*maneuverTime+5.0)
+          math.max(safeNumber(state.followGap,8.0)+2.0,
+            math.max(0,closing)*maneuverTime+5.0)
         local sameDirection=coordinatorSameDirection(follower,leader)
         -- Compare the complete footprints in each car's own route frame.
         -- Raw latOff values from different stations are not a safe collision
