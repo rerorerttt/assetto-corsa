@@ -596,8 +596,8 @@ local function teleportHome(carIndex,car)
             state.p[carIndex]=nil
             state.rescueWatch=state.rescueWatch or {}
             state.rescueWatch[carIndex]={cooldown=3.0}
-            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=ROUTE_TRAVEL pos=(%.2f,%.2f,%.2f)",
-              carIndex,distance,routeError,safePos.x,safePos.y,safePos.z)
+            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=ROUTE_TRAVEL sign=%d pos=(%.2f,%.2f,%.2f)",
+              carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
             flushLog()
             return true
           end
