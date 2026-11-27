@@ -643,10 +643,19 @@ local function updateRescueWatchdog(carIndex,car,dt)
   local moved=math.sqrt(dx*dx+dz*dz)
   local gas=safeNumber(car.gas)
   local speed=math.abs(safeNumber(car.speedMs))
-  if gas>=0.55 and (speed<1.5 or moved<0.12) then
-    w.gasStallT=w.gasStallT+dt
-  elseif moved>=0.35 or gas<0.35 then
-    w.gasStallT=0
+  w.progressCheckT=safeNumber(w.progressCheckT)+dt
+  if w.progressCheckT>=1.0 then
+    local px=car.position.x-safeNumber(w.progressPositionX,car.position.x)
+    local pz=car.position.z-safeNumber(w.progressPositionZ,car.position.z)
+    local progress=math.sqrt(px*px+pz*pz)
+    if gas>=0.55 and progress<0.5 then
+      w.gasStallT=w.gasStallT+w.progressCheckT
+    else
+      w.gasStallT=0
+    end
+    w.progressPositionX=car.position.x
+    w.progressPositionZ=car.position.z
+    w.progressCheckT=0
   end
   w.lastPosition=vec3(car.position.x,car.position.y,car.position.z)
 
@@ -656,7 +665,8 @@ local function updateRescueWatchdog(carIndex,car,dt)
   if w.rolloverT>=10.0 then reason="rollover_10s"
   elseif offTrackT>=10.0 then reason="offtrack_10s"
   elseif w.gasStallT>=10.0 then reason="gas_no_progress_10s" end
-  if reason then
+  w.retryT=math.max(0,safeNumber(w.retryT)-dt)
+  if reason and w.retryT<=0 then
     local rescued=teleportHome(carIndex,car)
     writeLog("RESCUE_WATCHDOG id=%d reason=%s success=%s rollover=%.1f offtrack=%.1f gas_stall=%.1f speed=%.2f gas=%.2f",
       carIndex,reason,tostring(rescued),w.rolloverT,offTrackT,w.gasStallT,speed,gas)
@@ -664,10 +674,8 @@ local function updateRescueWatchdog(carIndex,car,dt)
       state.rescueWatch[carIndex]={cooldown=3.0}
       return true
     end
-    -- Avoid hammering the physics API every frame when no safe forward point
-    -- is currently available. Re-scan periodically while keeping the timer.
-    w.retryT=math.max(0,safeNumber(w.retryT)-dt)
-    if w.retryT<=0 then w.retryT=2.0 end
+    -- Keep the fault timers, but retry the forward-point scan only every two seconds.
+    w.retryT=2.0
   end
   return false
 end
