@@ -132,7 +132,9 @@ local function buildDirectedChain(lanes, player)
     local traversed = 0
     while traversed < segmentCount and #nodes < MAX_POINTS do
       local nextIndex = lane.loop and (segment % #points + 1) or (segment + 1)
-      appendPoint(nodes, points[nextIndex])
+      if not (lane.loop and nextIndex == firstSegment) then
+        appendPoint(nodes, points[nextIndex])
+      end
       segment = nextIndex
       traversed = traversed + 1
       if lane.loop and segment == firstSegment then
