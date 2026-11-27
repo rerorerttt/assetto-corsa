@@ -850,6 +850,20 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     -- lateral movement. Keep a controlled crawl until the target line is met.
     return clamp(math.max(0,safeNumber(gap,8.0))*0.55,2.5,5.0)
   end
+  -- EMERGENCY_WAIT is a hard safety state, not a coordinator hint. Do not
+  -- let ordinary FOLLOW/PASS logic overwrite it and feed throttle into a
+  -- blocked lane. Brake against the exact obstacle that denied the escape.
+  if p.trafficAction=="EMERGENCY_WAIT" then
+    local waitGap=safeNumber(p.emergencyWaitGap,0)
+    local waitSpeed=safeNumber(p.emergencyWaitSpeed,0)
+    local safeSpeed=safeFollowingSpeed(waitGap,waitSpeed,p.brakeAccelEstimate)
+    p.trafficReason="no_safe_evasion_lane"
+    p.trafficPriority=1200000
+    p.trafficLeaderIndex=safeNumber(p.emergencyWaitObstacleIndex,-1)
+    p.trafficGap=waitGap
+    p.trafficLeaderSpeed=waitSpeed
+    return math.min(targetSpeed,safeSpeed)
+  end
   if p.passTargetIndex~=nil then
     p.trafficAction="PASSING"
     p.trafficReason="coordinator_lane_reserved"
@@ -1391,6 +1405,9 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           p.emergencyRescueReady=p.emergencyBlockedT>=10.0
           p.trafficAction="EMERGENCY_WAIT"
           p.trafficReason="all_lanes_occupied"
+          p.emergencyWaitObstacleIndex=nearestIndex
+          p.emergencyWaitGap=nearestGap
+          p.emergencyWaitSpeed=nearestSpeed
           if not p.emergencyWaitLogged then
             p.emergencyWaitLogged=true
             H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f",
@@ -1401,6 +1418,13 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         p.emergencyBlockedT=0
         p.emergencyRescueReady=false
         p.emergencyWaitLogged=false
+        p.emergencyWaitObstacleIndex=nil
+        p.emergencyWaitGap=nil
+        p.emergencyWaitSpeed=nil
+        if p.trafficAction=="EMERGENCY_WAIT" then
+          p.trafficAction=nil
+          p.trafficReason=nil
+        end
       end
     end
   end
