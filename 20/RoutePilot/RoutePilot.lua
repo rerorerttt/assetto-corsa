@@ -23,7 +23,11 @@ if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 local okTrafficImport, TrafficImport = pcall(require, "traffic_import")
-if not okTrafficImport or type(TrafficImport) ~= "table" or type(TrafficImport.load) ~= "function" then TrafficImport = nil end
+local trafficImportLoadError = not okTrafficImport and tostring(TrafficImport) or nil
+if not okTrafficImport or type(TrafficImport) ~= "table" or type(TrafficImport.load) ~= "function" then
+  if not trafficImportLoadError then trafficImportLoadError="traffic_import.load unavailable" end
+  TrafficImport = nil
+end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -67,6 +71,7 @@ end
 local function flushLog()
   if logger and logger.flush then pcall(logger.flush, logger) end
 end
+writeLog("LOGGER_READY path=%s init_error=%s",tostring(logger and logger.path),tostring(logger and logger.writeError))
 local function clamp(v,lo,hi) return math.max(lo,math.min(hi,v)) end
 local function lerp(a,b,t) return a+(b-a)*t end
 local function flatDist(a,b)
@@ -216,6 +221,11 @@ local function saveLine()
   else state.status="Ошибка сохранения" end
 end
 local function loadLine()
+  if not TrafficImport then
+    state.trafficImportLastError="module_load_failed: "..tostring(trafficImportLoadError)
+    state.trafficImportPending=false
+    writeLog("IMPORT_MODULE_FAIL error=%s",tostring(trafficImportLoadError))
+  end
   if TrafficImport then
     local imported, importedLoop, importInfo = nil, nil, nil
     local okImport, a, b, c = pcall(TrafficImport.load, writeLog)
@@ -1254,7 +1264,8 @@ function windowMain(dt)
         ui.text("Traffic Tool import: "..tostring(state.trafficToolImported and "OK" or "PENDING/FAILED"))
         ui.text("Причина: "..tostring(state.trafficImportLastError))
         ui.text("Повторная загрузка выполняется автоматически каждые 2 секунды до успеха.")
-        ui.text("Лог: routepilot_trace.txt; ищи IMPORT_, BOUNDS_, LINE_SAVE_.")
+        ui.text("Лог: "..tostring(logger and logger.path or "путь не определён"))
+        ui.text("Метки: IMPORT_, BOUNDS_, LINE_SAVE_, LOGGER_READY.")
         ui.separator()
         ui.text("Диагностика контроллера RoutePilot")
         ui.text("Подробная телеметрия рулевого управления и динамики автомобиля.")
