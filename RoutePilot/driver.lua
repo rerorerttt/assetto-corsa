@@ -686,6 +686,21 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         local otherSpeed=math.max(0,safeNumber(other.speedMs))
         local ownLateralHalf,ownLongitudinalHalf=
           vehicleRouteFootprint(car,ownSample,0)
+        -- A managed car committed to the other lane is not a FOLLOW
+        -- leader merely because the two swept bodies overlap temporarily
+        -- while both finish their already-reserved lane transitions. The
+        -- coordinator explicitly preserves distinct same-direction lane
+        -- reservations; this detector must honour the same ownership or
+        -- both cars brake against each other before reaching their targets.
+        local ownLane=own.coordinatorTargetLane or own.coordinatedLane
+        local otherLane=otherState and
+          (otherState.coordinatorTargetLane or otherState.coordinatedLane)
+        local sameDirection=not otherState or
+          own.routeTravelSign==nil or otherState.routeTravelSign==nil or
+          own.routeTravelSign==otherState.routeTravelSign
+        local distinctReservedLanes=otherState~=nil and
+          ownLane~=nil and otherLane~=nil and ownLane~=otherLane and
+          sameDirection
         local playerCornerMargin=(i==0 and otherSpeed<=3.0 and
           math.abs(directionDot)<0.85) and 1.5 or 0
         local otherLateralHalf,otherLongitudinalHalf=
@@ -701,7 +716,8 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         -- Keep a car as an immediate obstacle while its physical body
         -- still overlaps longitudinally. Center-point ordering alone can
         -- release braking while bumpers/front corners are still in contact.
-        if gap and actualLateral and gap>-longitudinalOverlap and
+        if not distinctReservedLanes and gap and actualLateral and
+           gap>-longitudinalOverlap and
            gap<math.max(110.0,detectionHorizon) and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or math.max(0.1,gap-longitudinalOverlap)<bestGap) then
