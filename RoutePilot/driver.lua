@@ -1028,14 +1028,11 @@ local function coordinatorLateralOverlap(owner,other,targetCenter)
   local otherHalf=vehicleRouteFootprint(other.car,otherSample,0)
   local current=safeNumber(other.p.latOff,0)
 
-  -- Lane centres are offsets from the local road centre. Transfer the
-  -- requested corridor by signed lateral offset, not lane index; the player
-  -- can expose a one-lane geometry while physically occupying either lane.
-  local ownerLeft,ownerRight=H.boundsAt(owner.p.segIdx)
-  local otherLeft,otherRight=H.boundsAt(other.p.segIdx)
-  local ownerRoadCenter=(ownerLeft+ownerRight)*0.5
-  local otherRoadCenter=(otherLeft+otherRight)*0.5
-  local targetInOtherFrame=otherRoadCenter+(targetCenter-ownerRoadCenter)
+  -- latOff and lane centres are both signed offsets from the route
+  -- centreline. They already share the same lateral coordinate convention;
+  -- translating by each segment's road midpoint shifts the target corridor
+  -- a second time and can falsely mark the genuinely free adjacent lane busy.
+  local targetInOtherFrame=targetCenter
 
   local occupiedMin=current
   local occupiedMax=current
@@ -1494,16 +1491,11 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         local trigger=followerHalf+leaderHalf+
           math.max(5.0,math.max(0,closing)*maneuverTime+5.0)
         local sameDirection=coordinatorSameDirection(follower,leader)
-        local followerHalfWidth=math.max(0.75,
-          safeNumber(follower.car.aabbSize and follower.car.aabbSize.x,2.0)*0.5)
-        local leaderHalfWidth=math.max(0.75,
-          safeNumber(leader.car.aabbSize and leader.car.aabbSize.x,2.0)*0.5)
-        -- Two cars are in conflict only when their physical lateral footprints
-        -- overlap (or this is the explicitly paired emergency manoeuvre).
-        -- Matching lane IDs alone is insufficient on a curved route.
-        local lateralOverlap=math.abs(
-          safeNumber(follower.p.latOff)-safeNumber(leader.p.latOff))<
-          followerHalfWidth+leaderHalfWidth+0.35
+        -- Compare the complete footprints in each car's own route frame.
+        -- Raw latOff values from different stations are not a safe collision
+        -- test through bends.
+        local lateralOverlap=coordinatorLateralOverlap(
+          follower,leader,safeNumber(follower.p.latOff,0))
         local emergencyPair=
           (follower.p.emergencyEscape and follower.p.emergencyObstacleIndex==leader.index) or
           (leader.p.emergencyEscape and leader.p.emergencyObstacleIndex==follower.index)
@@ -1700,18 +1692,11 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         -- backwards-facing vehicles must trigger the same lane-escape scan.
         if other.index~=rec.index then
           local gap=coordinatorGap(rec,other)
-          local sample=Geometry.sample(state.routeGeometry,rec.p.routeProgress)
-          local ownHalf,otherHalf=0,0
-          if sample then
-            ownHalf=select(1,vehicleRouteFootprint(rec.car,sample,0))
-            -- The measured oriented footprint already covers a stationary
-            -- player's occupied lane. An extra 1.5 m falsely blocked the
-            -- neighbouring lane even when it was physically clear.
-            otherHalf=select(1,vehicleRouteFootprint(other.car,sample,0))
-          end
-          local lateralOverlap=sample~=nil and math.abs(
-            safeNumber(other.p.latOff)-safeNumber(p.latOff))<
-            ownHalf+otherHalf+0.35
+          -- Use the same route-frame swept-footprint test as lane
+          -- reservation. Comparing two local latOff values directly is
+          -- unreliable on bends and can miss the obstacle on the current line.
+          local lateralOverlap=coordinatorLateralOverlap(
+            rec,other,safeNumber(p.latOff,0))
           -- A transient footprint overlap during a managed pass must not
           -- revoke the distinct lane reservations of the two cars.
           local distinctReservedLanes=other.managed and
