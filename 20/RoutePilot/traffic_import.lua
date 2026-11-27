@@ -607,7 +607,11 @@ function M.load(log)
   end
   local pointTotal=0
   for i=1,#lanes do pointTotal=pointTotal+#lanes[i].points end
-  local loopCount=0\n  for i=1,#lanes do if lanes[i].loop then loopCount=loopCount+1 end end\n  trace("IMPORT_LANES_OK lanes=%d points=%d detected_closed=%d",#lanes,pointTotal,loopCount)
+  local loopCount=0
+  for i=1,#lanes do
+    if lanes[i].loop then loopCount=loopCount+1 end
+  end
+  trace("IMPORT_LANES_OK lanes=%d points=%d detected_closed=%d",#lanes,pointTotal,loopCount)
   local player = ac.getCar(0)
   if not player or not player.position or not player.look then
     trace("IMPORT_STAGE defer reason=player_car_not_ready")
