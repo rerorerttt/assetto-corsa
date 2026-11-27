@@ -532,7 +532,9 @@ local function teleportHome(carIndex,car)
   local routeDistance=findRouteDistanceAtPosition(car.position,metrics,car.look)
   local bestPosition,bestDirection=nil,nil
   local bestClearance=-1
+  local bestDistance=0
   local preferredPosition,preferredDirection=nil,nil
+  local preferredDistance=0
   local preferredClearance=8.0
   local step=math.max(4.0,math.min(6.0,metrics.length/160.0))
   local distance=step
@@ -555,12 +557,14 @@ local function teleportHome(carIndex,car)
       end
       if nearest>bestClearance then
         bestClearance=nearest
+        bestDistance=distance
         bestPosition=pos
         bestDirection=dir
       end
       if nearest>=preferredClearance then
         preferredPosition=pos
         preferredDirection=dir
+        preferredDistance=distance
         break
       end
     end
@@ -580,7 +584,7 @@ local function teleportHome(carIndex,car)
   if ok and result~=false then
     state.p[carIndex]=nil
     writeLog("RESCUE id=%d route_distance=%.1f clearance=%.2f mode=%s",
-      carIndex,distance,bestClearance,
+      carIndex,preferredPosition and preferredDistance or bestDistance,bestClearance,
       preferredPosition and "CLEAR" or "BEST_AVAILABLE")
     flushLog()
     return true
