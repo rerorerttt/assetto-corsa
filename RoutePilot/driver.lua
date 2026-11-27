@@ -1364,21 +1364,22 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
         (nearestSpeed<math.max(1.5,rec.speed-0.8) or nearestGap<6.0)
       if emergencyDanger then
-        local chosen=nil
-        local bestCost=math.huge
+        local candidates={}
         for lane=1,rec.lanes.count do
           if math.abs(lane-current)==1 then
-            local cost=math.abs(lane-current)*10.0+
-              math.abs(rec.lanes.centers[lane]-safeNumber(p.latOff,rec.lanes.centers[current]))
-            if cost<bestCost then bestCost=cost;chosen=lane end
+            candidates[#candidates+1]={
+              lane=lane,
+              cost=math.abs(rec.lanes.centers[lane]-
+                safeNumber(p.latOff,rec.lanes.centers[current]))
+            }
           end
         end
-        if chosen then
-          local moved=coordinatorEmergencyMove(rec,chosen,records,nearestIndex)
-          if moved then
-            p.emergencyBlockedT=0
-          else
-            chosen=nil
+        table.sort(candidates,function(a,b) return a.cost<b.cost end)
+        local chosen=nil
+        for _,candidate in ipairs(candidates) do
+          if coordinatorEmergencyMove(rec,candidate.lane,records,nearestIndex) then
+            chosen=candidate.lane
+            break
           end
         end
         if chosen then
