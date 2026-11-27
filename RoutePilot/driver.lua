@@ -1021,8 +1021,11 @@ local function coordinatorLateralOverlap(owner,other,targetCenter)
   -- adjacent lane look empty. Evaluate each oriented footprint in the route
   -- frame at that vehicle's own longitudinal station.
   local ownHalf=vehicleRouteFootprint(owner.car,ownSample,0)
-  local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
-  local otherHalf=vehicleRouteFootprint(other.car,otherSample,playerMargin)
+  -- Use the player's measured oriented body only. The old unconditional
+  -- 1.5 m stopped-player margin expanded a normally aligned car across both
+  -- lanes, so a clear adjacent lane was rejected even when the player was
+  -- parked straight ahead or facing backwards in the other lane.
+  local otherHalf=vehicleRouteFootprint(other.car,otherSample,0)
   local current=safeNumber(other.p.latOff,0)
 
   -- Lane centres are offsets from the local road centre. Transfer the
@@ -1693,15 +1696,18 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local current=p.coordinatedLane or 1
       local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
       for _,other in ipairs(records) do
-        if other.index~=rec.index and
-            coordinatorSameDirection(rec,other) then
+        -- Escape from obstacles ahead regardless of heading. Oncoming and
+        -- backwards-facing vehicles must trigger the same lane-escape scan.
+        if other.index~=rec.index then
           local gap=coordinatorGap(rec,other)
           local sample=Geometry.sample(state.routeGeometry,rec.p.routeProgress)
           local ownHalf,otherHalf=0,0
           if sample then
             ownHalf=select(1,vehicleRouteFootprint(rec.car,sample,0))
-            local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
-            otherHalf=select(1,vehicleRouteFootprint(other.car,sample,playerMargin))
+            -- The measured oriented footprint already covers a stationary
+            -- player's occupied lane. An extra 1.5 m falsely blocked the
+            -- neighbouring lane even when it was physically clear.
+            otherHalf=select(1,vehicleRouteFootprint(other.car,sample,0))
           end
           local lateralOverlap=sample~=nil and math.abs(
             safeNumber(other.p.latOff)-safeNumber(p.latOff))<
