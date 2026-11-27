@@ -116,6 +116,29 @@ local function serializeNodes(nodes)
   end
   return table.concat(out,"\n")
 end
+local function saveImportedRoute()
+  if not state.trafficToolImported or #state.nodes<2 then return false end
+  local pathOk,path=pcall(ac.getTrackDataFilename,"routepilot_line.txt")
+  if not pathOk or type(path)~="string" or path=="" then
+    writeLog("IMPORTED_LINE_SAVE_FAIL reason=track_data_path_unavailable path=%s",tostring(path))
+    return false
+  end
+  local data=serializeNodes(state.nodes).."\\n"
+  local ok,err=pcall(io.save,path,data,true)
+  if not ok then
+    writeLog("IMPORTED_LINE_SAVE_FAIL path=%s error=%s",tostring(path),tostring(err))
+    return false
+  end
+  local verifyOk,raw=pcall(io.load,path)
+  local count=0
+  if verifyOk and type(raw)=="string" then
+    for _ in string.gmatch(raw,"[^\\r\\n]+") do count=count+1 end
+  end
+  local success=verifyOk and count==#state.nodes
+  writeLog("IMPORTED_LINE_SAVE_%s path=%s points=%d verified=%d",
+    success and "OK" or "VERIFY_FAIL",tostring(path),#state.nodes,count)
+  return success
+end
 local function parseNodes(raw)
   if type(raw)~="string" or raw=="" then return nil end
   local loaded={}
@@ -245,7 +268,9 @@ local function loadLine()
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
       state.respawnAccum=0; state.respawnCooldown={}
       state.status=string.format("Traffic Tool: %d точек | ширина 7 м",#imported)
+      state.showWorldLines=true
       writeLog("TRAFFIC_TOOL_IMPORT_OK points=%d loop=%s %s",#imported,tostring(state.loopRoute),tostring(importInfo))
+      saveImportedRoute()
       local boundsLoaded=loadBounds()
       if not boundsLoaded then saveBounds() end
       flushLog()
