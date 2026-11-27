@@ -137,7 +137,7 @@ local function saveBounds()
       safeNumber(state.boundsL[i],-3.5),safeNumber(state.boundsR[i],3.5))
   end
   local path=getBoundsFilePath()
-  local data=table.concat(parts,"\\n").."\\n"
+  local data=table.concat(parts,"\n").."\n"
   if not io or type(io.save)~="function" then
     writeLog("BOUNDS_SAVE_FAIL reason=io.save_unavailable path=%s",tostring(path))
     flushLog()
