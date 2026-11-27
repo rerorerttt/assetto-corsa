@@ -1136,8 +1136,6 @@ function windowMain(dt)
     ui.sameLine(0,4)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
     ui.sameLine(0,4)
-    if ui.button("Импорт Traffic Tool",vec2(-0.25,22)) then importTrafficTool() end
-    ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
@@ -1190,7 +1188,17 @@ if ac.onRelease then
     end
   end)
 end
-loadLine()
+local routeLoaded=loadLine()
+if not routeLoaded then
+  writeLog("TRAFFIC_AUTO_IMPORT_BEGIN track=%s",getTrackTag())
+  local imported=importTrafficTool()
+  if not imported then
+    writeLog("TRAFFIC_AUTO_IMPORT_UNAVAILABLE track=%s status=%s",getTrackTag(),tostring(state.status))
+  else
+    writeLog("TRAFFIC_AUTO_IMPORT_COMPLETE track=%s points=%d loop=%s",
+      getTrackTag(),#state.nodes,tostring(state.loopRoute))
+  end
+end
 loadBounds()
-writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+writeLog("ROUTEPILOT 0.9.2 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
 flushLog()
