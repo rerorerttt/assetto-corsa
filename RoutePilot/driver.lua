@@ -966,19 +966,29 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local transitionDistance=math.max(22.0,
           owner.speed*math.sqrt(6.0*lateralDelta/lateralLimit))
         local transitionTime=transitionDistance/math.max(8.0,owner.speed)
-        local dynamicWindow=math.max(window or 8.0,
-          ownHalf+otherHalf+math.abs(owner.speed-other.speed)*transitionTime+5.0)
         local otherLane=other.p.coordinatedLane
-        if (otherLane==targetLane or targetLateralOverlap) and
-            math.abs(gap)<dynamicWindow then
-          return false
+        local laneReserved=other.p.coordinatorFromLane==targetLane or
+          other.p.coordinatorTargetLane==targetLane
+        if otherLane==targetLane or targetLateralOverlap or laneReserved then
+          -- A vehicle behind is not an obstacle unless it is actually closing
+          -- the gap. Using abs(gap) alone made a stationary follower block
+          -- every lane change, producing a reciprocal deadlock.
+          local sameDirection=coordinatorSameDirection(owner,other)
+          local closing
+          if sameDirection then
+            closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
+          else
+            closing=owner.speed+other.speed
+          end
+          local distance=math.abs(gap)
+          local physicalGap=ownHalf+otherHalf+0.5
+          local reservationGap=math.max(window or 8.0,ownHalf+otherHalf+5.0)
+          local conflict=distance<=physicalGap
+          if not conflict and closing>0.5 then
+            conflict=distance-closing*transitionTime<=reservationGap
+          end
+          if conflict then return false end
         end
-        -- Reserve both the destination and the lane being vacated until the
-        -- full vehicle body has completed its lateral transition.
-        if other.p.coordinatorFromLane==targetLane and
-            math.abs(gap)<dynamicWindow+4.0 then return false end
-        if other.p.coordinatorTargetLane==targetLane and
-            math.abs(gap)<dynamicWindow+4.0 then return false end
       end
     end
   end
@@ -1022,11 +1032,17 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           else
             closing=owner.speed+other.speed
           end
+          local distance=math.abs(gap)
+          local physicalGap=ownHalf+otherHalf+0.5
           local timeToConflict=math.huge
-          if math.abs(gap)<=minGap then
+          -- Only an actual body overlap is an unconditional conflict. Being
+          -- inside the extra safety buffer is dangerous only while closing.
+          -- This preserves rear-approach protection without treating a car
+          -- behind at equal/slower speed as an obstacle ahead.
+          if distance<=physicalGap then
             timeToConflict=0
           elseif closing>0.5 then
-            timeToConflict=math.max(0,math.abs(gap)-minGap)/closing
+            timeToConflict=math.max(0,distance-minGap)/closing
           end
           if timeToConflict<=transitionTime+0.65 then
             return false,string.format("PREDICTED_OCCUPANCY_%d",other.index),
