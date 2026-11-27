@@ -1269,23 +1269,9 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             -- ordinary PASS/YIELD must not seize the lane first.
             moved=true
           elseif not sameDirection then
-            -- Oncoming cars are separated laterally before the meeting point.
-            if follower.managed and follower.p.coordinatorChangeT<=0 and
-                lane<follower.lanes.count then
-              moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
-            end
-            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
-                lane<leader.lanes.count then
-              moved=coordinatorMove(leader,lane+1,records,"PASS",follower.index)
-            end
-            if not moved and follower.managed and follower.p.coordinatorChangeT<=0 and
-                lane>1 then
-              moved=coordinatorMove(follower,lane-1,records,"YIELD",leader.index)
-            end
-            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
-                lane>1 then
-              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
-            end
+            -- Head-on conflicts are handled only by the emergency controller
+            -- below. Do not start a normal lane transition here: it can be
+            -- too slow and can send both cars toward the same lane.
           elseif follower.managed and leader.managed then
             -- A slower leading car yields right; otherwise the faster follower
             -- takes the adjacent left lane. Only one adjacent slot is changed.
