@@ -1017,11 +1017,25 @@ local function coordinatorLateralOverlap(owner,other,targetCenter)
   local ownHalf=vehicleRouteFootprint(owner.car,sample,0)
   local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
   local otherHalf=vehicleRouteFootprint(other.car,sample,playerMargin)
-  local current=safeNumber(other.p.latOff,targetCenter)
+
+  -- latOff and lane centres belong to each vehicle's own route tangent.
+  -- Comparing those local numbers directly is invalid in a bend: two cars
+  -- can have very different local lateral coordinates while occupying the
+  -- same world-space lane. Project both the current body and its reserved
+  -- target point into the OWNER's route frame before testing occupancy.
+  local current=select(2,relativeToRoute(other.car.position,sample))
+  if current==nil then return false end
   local target=current
-  if other.managed and other.lanes then
+  if other.managed and other.lanes and other.p.routeProgress~=nil then
     local targetLane=other.p.coordinatorTargetLane or other.p.coordinatedLane
-    target=safeNumber(other.lanes.centers[targetLane],current)
+    local targetOffset=targetLane and other.lanes.centers[targetLane]
+    local otherSample=Geometry.sample(state.routeGeometry,other.p.routeProgress)
+    if targetOffset~=nil and otherSample then
+      local targetX=otherSample.x-otherSample.tz*targetOffset
+      local targetZ=otherSample.z+otherSample.tx*targetOffset
+      local projected=select(2,relativeToRoute({x=targetX,z=targetZ},sample))
+      if projected~=nil then target=projected end
+    end
   end
   local occupiedMin=math.min(current,target)-otherHalf
   local occupiedMax=math.max(current,target)+otherHalf
@@ -2077,6 +2091,20 @@ function Driver.update(carIndex, car, dt)
       safeNumber(p.coordinatorOffset,p.latOff or 0)))
   end
   local trafficBlocked=blockingGap~=nil and blockingGap<18.0
+  -- Traffic deadlocks must be timed independently of the emergency-lane
+  -- scan. That scan can briefly lose its nearest obstacle as cars overlap,
+  -- change lane reservations, or crawl; resetting its timer on that frame
+  -- allowed the first stopped cars to remain in the queue forever.
+  local trafficControlActive=trafficBlocked or p.emergencyEscape or
+    p.trafficAction=="EMERGENCY_WAIT" or
+    p.trafficAction=="CONFLICT_BRAKE" or
+    p.trafficAction=="EMERGENCY_ESCAPE"
+  if speed<0.75 and trafficControlActive and
+      not p.projectionLost and not p.offTrackRecovering then
+    p.trafficStallT=safeNumber(p.trafficStallT)+dt
+  else
+    p.trafficStallT=0
+  end
   if speed<RESCUE_SPEED and safeNumber(car.gas)>=0.55 and
       not trafficBlocked and not p.projectionLost and
       not p.offTrackRecovering and safeNumber(p.emergencyBlockedT)<=0 then
@@ -2085,13 +2113,15 @@ function Driver.update(carIndex, car, dt)
     p.stuck=0
   end
   local rescueReason=nil
-  if safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
+  if safeNumber(p.trafficStallT)>=10.0 then rescueReason="traffic_stalled_10s"
+  elseif safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
   elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_recovery_failed_10s"
   elseif p.stuck>=RESCUE_TIME and safeNumber(car.gas)>=0.55 and
       not p.offTrackRecovering and safeNumber(p.emergencyBlockedT)<=0 then
     rescueReason="stuck_gas_10s" end
   if rescueReason and p.rescueRetryT<=0 then
     p.stuck=0
+    p.trafficStallT=0
     p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
     H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s elapsed=%.2f",
