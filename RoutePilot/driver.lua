@@ -981,9 +981,16 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
             closing=owner.speed+other.speed
           end
           local distance=math.abs(gap)
-          local physicalGap=ownHalf+otherHalf+0.5
+          local physicalGap=ownHalf+otherHalf
           local reservationGap=math.max(window or 8.0,ownHalf+otherHalf+5.0)
           local conflict=distance<=physicalGap
+          -- A close vehicle ahead occupies the slot even when it is stopped;
+          -- a vehicle behind occupies it only if its closing speed predicts
+          -- that it will reach the manoeuvre before it finishes.
+          if not conflict and sameDirection and gap>0 and
+              distance<=reservationGap then
+            conflict=true
+          end
           if not conflict and closing>0.5 then
             conflict=distance-closing*transitionTime<=reservationGap
           end
@@ -1033,13 +1040,16 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
             closing=owner.speed+other.speed
           end
           local distance=math.abs(gap)
-          local physicalGap=ownHalf+otherHalf+0.5
+          local physicalGap=ownHalf+otherHalf
           local timeToConflict=math.huge
-          -- Only an actual body overlap is an unconditional conflict. Being
-          -- inside the extra safety buffer is dangerous only while closing.
-          -- This preserves rear-approach protection without treating a car
-          -- behind at equal/slower speed as an obstacle ahead.
+          -- A body overlap is always a conflict. For same-direction traffic,
+          -- a close leader blocks the destination even while stopped, but a
+          -- close follower does not: it matters only if it is catching up.
           if distance<=physicalGap then
+            timeToConflict=0
+          elseif sameDirection and gap>0 and distance<=minGap then
+            timeToConflict=0
+          elseif not sameDirection and distance<=minGap then
             timeToConflict=0
           elseif closing>0.5 then
             timeToConflict=math.max(0,distance-minGap)/closing
