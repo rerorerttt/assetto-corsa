@@ -519,35 +519,155 @@ local function trySpawnTeleport(sim,dt)
   writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
   flushLog()
 end
+local function walkLineSigned(startSeg,startT,distance,sign)
+  local segs=segmentCount()
+  if segs<1 then return nil end
+  local seg=startSeg
+  local t=startT
+  local remaining=distance
+  for _=1,segs+2 do
+    local a=state.nodes[seg]
+    local b=segEnd(seg)
+    local length=flatDist(a,b)
+    if length>=0.0001 then
+      local room=sign>=0 and length*(1-t) or length*t
+      if room>=remaining then
+        local nt=(length*t+sign*remaining)/length
+        return vec3(lerp(a.x,b.x,nt),lerp(a.y,b.y,nt),lerp(a.z,b.z,nt)),seg,nt
+      end
+      remaining=remaining-room
+      if sign>=0 then
+        if state.loopRoute then seg=(seg%segs)+1
+        elseif seg<segs then seg=seg+1 else return nil end
+        t=0
+      else
+        if state.loopRoute then seg=((seg-2)%segs)+1
+        elseif seg>1 then seg=seg-1 else return nil end
+        t=1
+      end
+    else
+      if sign>=0 then
+        if state.loopRoute then seg=(seg%segs)+1
+        elseif seg<segs then seg=seg+1 else return nil end
+        t=0
+      else
+        if state.loopRoute then seg=((seg-2)%segs)+1
+        elseif seg>1 then seg=seg-1 else return nil end
+        t=1
+      end
+    end
+  end
+  return nil
+end
 local function teleportHome(carIndex,car)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
+    writeLog("RESCUE_FAILED id=%d reason=no_teleport_api",carIndex)
     return false
   end
-  local n=#state.nodes
-  if n<2 then return false end
-  local bestI,bestD=1,math.huge
-  for i=1,n do
-    local d=flatDist(car.position,state.nodes[i])
-    if d<bestD then bestD,bestI=d,i end
+  if #state.nodes<2 or not car or not car.position then return false end
+
+  -- Route nodes are recorded in the driver's travel direction, while the
+  -- CSP placement API uses the opposite direction vector (verified by spawn).
+  -- Determine which route direction is physically forward for this car.
+  local heading=car.look or car.velocity
+  if not heading then return false end
+  local hx,hz=normalize2(heading.x,heading.z)
+  local seg,t,routeError=findNearestSeg(car.position,1,true,heading)
+  local a=state.nodes[seg]
+  local b=segEnd(seg)
+  local tx,tz=normalize2(b.x-a.x,b.z-a.z)
+  local sign=(tx*hx+tz*hz)>=0 and 1 or -1
+  if routeError>250 then
+    writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f",carIndex,routeError)
+    return false
   end
-  for k=0,n-1 do
-    local i=((bestI-1+k)%n)+1
-    local node=state.nodes[i]
-    local nxt=state.nodes[(i%n)+1]
-    local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
-    local pos=vec3(node.x-dx*4,node.y+0.1,node.z-dz*4)
-    -- Check the actual spawn point, not the route node four metres ahead.
-    if spotIsClear(pos,carIndex) then
-      local ok,result=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
-      if ok and result~=false then
-        state.p[carIndex]=nil
-        writeLog("RESCUE id=%d node=%d offset=%d",carIndex,i,k)
-        flushLog()
-        return true
+
+  -- Never search behind the disabled car. Candidate points are sampled only
+  -- along the route in the car's current direction of travel, starting well
+  -- beyond the obstruction so the car cannot be dropped back into the same jam.
+  for distance=20,320,10 do
+    local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
+    if pos then
+      local nextPos=walkLineSigned(sampleSeg,sampleT,3.0,sign)
+      if nextPos then
+        local dx,dz=normalize2(nextPos.x-pos.x,nextPos.z-pos.z)
+        local safePos=vec3(pos.x,pos.y+0.15,pos.z)
+        if spotIsClear(safePos,carIndex) then
+          local ok,result=pcall(physics.setAICarPosition,carIndex,
+            safePos,vec3(-dx,0,-dz))
+          if ok and result~=false then
+            state.p[carIndex]=nil
+            state.rescueWatch=state.rescueWatch or {}
+            state.rescueWatch[carIndex]={cooldown=3.0}
+            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f sign=%d pos=(%.2f,%.2f,%.2f)",
+              carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
+            flushLog()
+            return true
+          end
+          writeLog("RESCUE_FORWARD_FAILED id=%d distance=%.1f error=%s",
+            carIndex,distance,tostring(result))
+        end
       end
-      writeLog("RESCUE_FAILED id=%d node=%d offset=%d error=%s",
-        carIndex,i,k,tostring(result))
     end
+  end
+  writeLog("RESCUE_FAILED id=%d reason=no_clear_forward_point route_error=%.1f",
+    carIndex,routeError)
+  flushLog()
+  return false
+end
+
+local function updateRescueWatchdog(carIndex,car,dt)
+  if not car or not car.isActive or not car.isAIControlled then
+    if state.rescueWatch then state.rescueWatch[carIndex]=nil end
+    return false
+  end
+  state.rescueWatch=state.rescueWatch or {}
+  local w=state.rescueWatch[carIndex]
+  if not w then
+    w={rolloverT=0,gasStallT=0,lastPosition=vec3(car.position.x,car.position.y,car.position.z),cooldown=0}
+    state.rescueWatch[carIndex]=w
+  end
+  w.cooldown=math.max(0,(w.cooldown or 0)-dt)
+  if w.cooldown>0 then
+    w.lastPosition=vec3(car.position.x,car.position.y,car.position.z)
+    w.gasStallT=0
+    w.rolloverT=0
+    return false
+  end
+
+  local upY=car.up and safeNumber(car.up.y,1) or 1
+  if upY<0.55 then w.rolloverT=w.rolloverT+dt else w.rolloverT=0 end
+
+  local dx=car.position.x-w.lastPosition.x
+  local dz=car.position.z-w.lastPosition.z
+  local moved=math.sqrt(dx*dx+dz*dz)
+  local gas=safeNumber(car.gas)
+  local speed=math.abs(safeNumber(car.speedMs))
+  if gas>=0.55 and (speed<1.5 or moved<0.12) then
+    w.gasStallT=w.gasStallT+dt
+  elseif moved>=0.35 or gas<0.35 then
+    w.gasStallT=0
+  end
+  w.lastPosition=vec3(car.position.x,car.position.y,car.position.z)
+
+  local p=state.p and state.p[carIndex]
+  local offTrackT=safeNumber(p and p.offTrackT)
+  local reason=nil
+  if w.rolloverT>=10.0 then reason="rollover_10s"
+  elseif offTrackT>=10.0 then reason="offtrack_10s"
+  elseif w.gasStallT>=10.0 then reason="gas_no_progress_10s" end
+  if reason then
+    local rescued=teleportHome(carIndex,car)
+    writeLog("RESCUE_WATCHDOG id=%d reason=%s success=%s rollover=%.1f offtrack=%.1f gas_stall=%.1f speed=%.2f gas=%.2f",
+      carIndex,reason,tostring(rescued),w.rolloverT,offTrackT,w.gasStallT,speed,gas)
+    if rescued then
+      state.rescueWatch[carIndex]={cooldown=3.0}
+      return true
+    end
+    -- Avoid hammering the physics API every frame when no safe forward point
+    -- is currently available. Re-scan periodically while keeping the timer.
+    w.retryT=math.max(0,safeNumber(w.retryT)-dt)
+    if w.retryT<=0 then w.retryT=2.0 end
   end
   return false
 end
@@ -726,6 +846,8 @@ function script.update(dt)
           if not okc then
             writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
             releaseCar(i)
+          else
+            pcall(updateRescueWatchdog,i,car,dt)
           end
         end
       end
