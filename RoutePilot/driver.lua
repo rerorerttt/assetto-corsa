@@ -1134,6 +1134,25 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
       if gap~=nil then
         local otherHalf=math.max(1.5,
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
+        -- The player's body can span both lanes, especially when stopped
+        -- sideways. Comparing it in the AI's route frame is unreliable on
+        -- bends because the two route tangents may differ substantially.
+        -- Evaluate the player's oriented footprint in the player's own route
+        -- frame and map the requested lane by lane order. Keep a generous
+        -- longitudinal guard so an escape cannot begin toward a player that
+        -- is farther ahead on the same curved road.
+        if other.index==0 and math.abs(gap)<=40.0 then
+          local playerSample=Geometry.sample(state.routeGeometry,other.p.routeProgress)
+          local playerLane=clamp(targetLane,1,other.lanes.count)
+          local playerCenter=other.lanes.centers[playerLane]
+          if playerSample and playerCenter~=nil then
+            local playerHalf=vehicleRouteFootprint(other.car,playerSample,1.0)
+            local playerLateral=math.abs(safeNumber(other.p.latOff)-playerCenter)
+            if playerLateral<=playerHalf+ownLatHalf+0.35 then
+              return false,"PLAYER_PHYSICAL_OCCUPANCY",gap,0,0
+            end
+          end
+        end
         local otherLatHalf=math.max(0.75,
           safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
         -- Include the other car's measured footprint and any committed
