@@ -1012,47 +1012,48 @@ end
 -- segment and are not globally meaningful around bends; never use lane-index
 -- equality as proof that two vehicles occupy the same space.
 local function coordinatorLateralOverlap(owner,other,targetCenter)
-  local sample=Geometry.sample(state.routeGeometry,owner.p.routeProgress)
-  if not sample then return false end
-  local ownHalf=vehicleRouteFootprint(owner.car,sample,0)
-  local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
-  local otherHalf=vehicleRouteFootprint(other.car,sample,playerMargin)
+  local ownSample=Geometry.sample(state.routeGeometry,owner.p.routeProgress)
+  local otherSample=Geometry.sample(state.routeGeometry,other.p.routeProgress)
+  if not ownSample or not otherSample then return false end
 
-  -- latOff and lane centres belong to each vehicle's own route tangent.
-  -- Comparing those local numbers directly is invalid in a bend: two cars
-  -- can have very different local lateral coordinates while occupying the
-  -- same world-space lane. Project both the current body and its reserved
-  -- target point into the OWNER's route frame before testing occupancy.
-  local current=select(2,relativeToRoute(other.car.position,sample))
-  if current==nil then return false end
-  local target=current
-  local source=nil
-  if other.managed and other.lanes and other.p.routeProgress~=nil then
-    local otherSample=Geometry.sample(state.routeGeometry,other.p.routeProgress)
-    local function projectLane(lane)
-      local offset=lane and other.lanes.centers[lane]
-      if offset==nil or not otherSample then return nil end
-      local x=otherSample.x-otherSample.tz*offset
-      local z=otherSample.z+otherSample.tx*offset
-      return select(2,relativeToRoute({x=x,z=z},sample))
-    end
+  -- Never project a distant vehicle onto the owner's tangent. On a bend that
+  -- projection can move a car several metres sideways and make an occupied
+  -- adjacent lane look empty. Evaluate each oriented footprint in the route
+  -- frame at that vehicle's own longitudinal station.
+  local ownHalf=vehicleRouteFootprint(owner.car,ownSample,0)
+  local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
+  local otherHalf=vehicleRouteFootprint(other.car,otherSample,playerMargin)
+  local current=safeNumber(other.p.latOff,0)
+
+  -- Lane centres are offsets from the local road centre. Transfer the
+  -- requested corridor by signed lateral offset, not lane index; the player
+  -- can expose a one-lane geometry while physically occupying either lane.
+  local ownerLeft,ownerRight=H.boundsAt(owner.p.segIdx)
+  local otherLeft,otherRight=H.boundsAt(other.p.segIdx)
+  local ownerRoadCenter=(ownerLeft+ownerRight)*0.5
+  local otherRoadCenter=(otherLeft+otherRight)*0.5
+  local targetInOtherFrame=otherRoadCenter+(targetCenter-ownerRoadCenter)
+
+  local occupiedMin=current
+  local occupiedMax=current
+  if other.managed and other.lanes then
     local targetLane=other.p.coordinatorTargetLane or other.p.coordinatedLane
-    local projectedTarget=projectLane(targetLane)
-    if projectedTarget~=nil then target=projectedTarget end
-    -- A RETURN/PASS reservation owns the complete swept corridor until the
-    -- vehicle physically reaches its destination. The old check covered only
-    -- current body -> target centre; on a tight bend the projected body could
-    -- already have drifted away from the source lane, allowing the next car to
-    -- reserve that same lane while the first car was still crossing it.
-    -- Explicitly retain the source lane in the occupied envelope.
-    if other.p.coordinatorFromLane~=nil then
-      source=projectLane(other.p.coordinatorFromLane)
+    local target=targetLane and other.lanes.centers[targetLane]
+    local source=other.p.coordinatorFromLane and
+      other.lanes.centers[other.p.coordinatorFromLane] or nil
+    if target~=nil then
+      occupiedMin=math.min(occupiedMin,target)
+      occupiedMax=math.max(occupiedMax,target)
+    end
+    if source~=nil then
+      occupiedMin=math.min(occupiedMin,source)
+      occupiedMax=math.max(occupiedMax,source)
     end
   end
-  local occupiedMin=math.min(current,target,source or current)-otherHalf
-  local occupiedMax=math.max(current,target,source or current)+otherHalf
-  return targetCenter+ownHalf+0.35>occupiedMin and
-    targetCenter-ownHalf-0.35<occupiedMax
+  occupiedMin=occupiedMin-otherHalf
+  occupiedMax=occupiedMax+otherHalf
+  return targetInOtherFrame+ownHalf+0.35>occupiedMin and
+    targetInOtherFrame-ownHalf-0.35<occupiedMax
 end
 
 local function coordinatorLaneFree(owner,targetLane,records,window)
@@ -1085,7 +1086,7 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local sameDirection=coordinatorSameDirection(owner,other)
         local closing
         if sameDirection then
-          closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
+          closing=gap<0 and owner.speed-other.speed or other.speed-owner.speed
         else
           closing=owner.speed+other.speed
         end
@@ -1134,25 +1135,6 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
       if gap~=nil then
         local otherHalf=math.max(1.5,
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
-        -- The player's body can span both lanes, especially when stopped
-        -- sideways. Comparing it in the AI's route frame is unreliable on
-        -- bends because the two route tangents may differ substantially.
-        -- Evaluate the player's oriented footprint in the player's own route
-        -- frame and map the requested lane by lane order. Keep a generous
-        -- longitudinal guard so an escape cannot begin toward a player that
-        -- is farther ahead on the same curved road.
-        if other.index==0 and math.abs(gap)<=40.0 then
-          local playerSample=Geometry.sample(state.routeGeometry,other.p.routeProgress)
-          local playerLane=clamp(targetLane,1,other.lanes.count)
-          local playerCenter=other.lanes.centers[playerLane]
-          if playerSample and playerCenter~=nil then
-            local playerHalf=vehicleRouteFootprint(other.car,playerSample,1.0)
-            local playerLateral=math.abs(safeNumber(other.p.latOff)-playerCenter)
-            if playerLateral<=playerHalf+ownLatHalf+0.35 then
-              return false,"PLAYER_PHYSICAL_OCCUPANCY",gap,0,0
-            end
-          end
-        end
         local otherLatHalf=math.max(0.75,
           safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
         -- Include the other car's measured footprint and any committed
@@ -1164,7 +1146,7 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           local closing
           local sameDirection=coordinatorSameDirection(owner,other)
           if sameDirection then
-            closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
+            closing=gap<0 and owner.speed-other.speed or other.speed-owner.speed
           else
             closing=owner.speed+other.speed
           end
