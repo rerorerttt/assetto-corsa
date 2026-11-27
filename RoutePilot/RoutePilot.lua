@@ -523,32 +523,69 @@ local function teleportHome(carIndex,car)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
     return false
   end
-  local n=#state.nodes
-  if n<2 then return false end
-  local bestI,bestD=1,math.huge
-  for i=1,n do
-    local d=flatDist(car.position,state.nodes[i])
-    if d<bestD then bestD,bestI=d,i end
-  end
-  for k=0,n-1 do
-    local i=((bestI-1+k)%n)+1
-    local node=state.nodes[i]
-    local nxt=state.nodes[(i%n)+1]
-    local dx,dz=normalize2(nxt.x-node.x,nxt.z-node.z)
-    local pos=vec3(node.x-dx*4,node.y+0.1,node.z-dz*4)
-    -- Check the actual spawn point, not the route node four metres ahead.
-    if spotIsClear(pos,carIndex) then
-      local ok,result=pcall(physics.setAICarPosition,carIndex,pos,vec3(-dx,0,-dz))
-      if ok and result~=false then
-        state.p[carIndex]=nil
-        writeLog("RESCUE id=%d node=%d offset=%d",carIndex,i,k)
-        flushLog()
-        return true
+  local metrics=buildSpawnRouteMetrics()
+  if not metrics or metrics.length<20.0 then return false end
+
+  -- Search the entire route at regular arc-length intervals. The old
+  -- node-only search could reject every node because each was within 8 m of
+  -- some car, even though a safe gap existed between nodes elsewhere.
+  local routeDistance=findRouteDistanceAtPosition(car.position,metrics,car.look)
+  local bestPosition,bestDirection=nil,nil
+  local bestClearance=-1
+  local preferredPosition,preferredDirection=nil,nil
+  local preferredClearance=8.0
+  local step=math.max(4.0,math.min(6.0,metrics.length/160.0))
+  local distance=step
+  while distance<metrics.length do
+    local pos,dir=sampleSpawnRoute(metrics,routeDistance+distance)
+    if pos and dir then
+      local nearest=math.huge
+      local sim=ac.getSim()
+      if sim then
+        for i=0,sim.carsCount-1 do
+          if i~=carIndex then
+            local other=ac.getCar(i)
+            if other and other.isActive then
+              local dx=other.position.x-pos.x
+              local dz=other.position.z-pos.z
+              nearest=math.min(nearest,math.sqrt(dx*dx+dz*dz))
+            end
+          end
+        end
       end
-      writeLog("RESCUE_FAILED id=%d node=%d offset=%d error=%s",
-        carIndex,i,k,tostring(result))
+      if nearest>bestClearance then
+        bestClearance=nearest
+        bestPosition=pos
+        bestDirection=dir
+      end
+      if nearest>=preferredClearance then
+        preferredPosition=pos
+        preferredDirection=dir
+        break
+      end
     end
+    distance=distance+step
   end
+
+  local pos=preferredPosition or bestPosition
+  local dir=preferredDirection or bestDirection
+  if not pos or not dir or bestClearance<5.0 then
+    writeLog("RESCUE_NO_CLEAR_SPOT id=%d best_clearance=%.2f route=%.1f",
+      carIndex,bestClearance,metrics.length)
+    return false
+  end
+
+  local ok,result=pcall(physics.setAICarPosition,carIndex,
+    vec3(pos.x,pos.y+0.1,pos.z),vec3(-dir.x,-dir.y,-dir.z))
+  if ok and result~=false then
+    state.p[carIndex]=nil
+    writeLog("RESCUE id=%d route_distance=%.1f clearance=%.2f mode=%s",
+      carIndex,distance,bestClearance,
+      preferredPosition and "CLEAR" or "BEST_AVAILABLE")
+    flushLog()
+    return true
+  end
+  writeLog("RESCUE_FAILED id=%d error=%s",carIndex,tostring(result))
   return false
 end
 local function addPoint(pos)
