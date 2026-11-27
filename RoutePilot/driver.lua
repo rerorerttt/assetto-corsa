@@ -849,8 +849,15 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     p.trafficReason="physical_lateral_clearance"
     p.trafficPriority=1100000
     -- FOLLOW braking against the obstacle being escaped would prevent any
-    -- lateral movement. Keep a controlled crawl until the target line is met.
-    return clamp(math.max(0,safeNumber(gap,8.0))*0.55,2.5,5.0)
+    -- lateral movement. Keep a controlled crawl, unless another oncoming
+    -- conflict has explicitly ordered this car to stop.
+    local escapeSpeed=clamp(math.max(0,safeNumber(gap,8.0))*0.55,2.5,5.0)
+    if p.coordinatorConflictSpeed~=nil then
+      escapeSpeed=math.min(escapeSpeed,p.coordinatorConflictSpeed)
+      p.trafficAction="CONFLICT_BRAKE"
+      p.trafficReason="head_on_yield"
+    end
+    return escapeSpeed
   end
   if p.passTargetIndex~=nil then
     p.trafficAction="PASSING"
@@ -1334,7 +1341,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             -- Head-on conflict: exactly one managed car gets the escape lane.
             -- The other car is held at zero speed until lateral clearance exists.
             local evasive,blocker
-            if follower.p.emergencyEscape then
+            if follower.p.emergencyEscape and leader.p.emergencyEscape then
+              if follower.index<leader.index then evasive,blocker=follower,leader
+              else evasive,blocker=leader,follower end
+            elseif follower.p.emergencyEscape then
               evasive,blocker=follower,leader
             elseif leader.p.emergencyEscape then
               evasive,blocker=leader,follower
