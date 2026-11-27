@@ -22,6 +22,8 @@ local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
+local okTrafficImport, TrafficImport = pcall(require, "traffic_import")
+if not okTrafficImport or type(TrafficImport) ~= "table" or type(TrafficImport.load) ~= "function" then TrafficImport = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -47,6 +49,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  trafficToolImported=false, respawnAccum=0, respawnCooldown={},
   playerAutopilotLast=false, steeringDiagnostics=false,
 }
 local logger=nil
@@ -93,6 +96,10 @@ local function getLineFilePath()
   return "line_"..tag..".txt"
 end
 local function getBoundsFilePath()
+  if state.trafficToolImported and ac.getTrackDataFilename then
+    local ok,path=pcall(ac.getTrackDataFilename,"routepilot_bounds.txt")
+    if ok and type(path)=="string" and path~="" then return path end
+  end
   return string.gsub(getLineFilePath(),"%.txt$","_bounds.txt")
 end
 local function serializeNodes(nodes)
@@ -180,6 +187,29 @@ local function saveLine()
   else state.status="Ошибка сохранения" end
 end
 local function loadLine()
+  if TrafficImport then
+    local imported, importedLoop, importInfo = nil, nil, nil
+    local okImport, a, b, c = pcall(TrafficImport.load)
+    if okImport then imported, importedLoop, importInfo = a, b, c
+    else importInfo = tostring(a) end
+    if imported and #imported>=2 then
+      state.nodes=imported
+      state.loopRoute=importedLoop==true
+      state.trafficToolImported=true
+      state.widthPreset=2
+      state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
+      state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
+      state.respawnAccum=0; state.respawnCooldown={}
+      state.status=string.format("Traffic Tool: %d точек | ширина 7 м",#imported)
+      writeLog("TRAFFIC_TOOL_IMPORT_OK points=%d loop=%s %s",#imported,tostring(state.loopRoute),tostring(importInfo))
+      local boundsLoaded=loadBounds()
+      if not boundsLoaded then saveBounds() end
+      flushLog()
+      return true
+    end
+    writeLog("TRAFFIC_TOOL_IMPORT_SKIP reason=%s",tostring(importInfo or "no directed route"))
+  end
+  state.trafficToolImported=false
   local loaded=nil
   if io and io.open then
     local ok,f=pcall(io.open,getLineFilePath(),"r")
@@ -484,16 +514,14 @@ local function trySpawnTeleport(sim,dt)
   local count=#aiCars
   local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
   if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
-  local startDistance=0
-  if metrics.loop then
-    local player=ac.getCar(0)
-    if player then
-      local routeDistance,routeError=findRouteDistanceAtPosition(
-        player.position,metrics,player.look)
-      startDistance=routeDistance+gap
-      writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f)",
-        routeDistance,routeError,player.look.x,player.look.z)
-    else startDistance=gap end
+  local startDistance=500.0
+  local player=ac.getCar(0)
+  if player then
+    local routeDistance,routeError=findRouteDistanceAtPosition(
+      player.position,metrics,player.look)
+    if routeError<=50.0 then startDistance=routeDistance+500.0 end
+    writeLog("SPAWN_REFERENCE route=%.1f spawn_ahead=500 error=%.2f heading=(%.3f,%.3f)",
+      routeDistance,routeError,player.look.x,player.look.z)
   end
   local moved,failed=0,0
   for order=1,count do
@@ -518,6 +546,74 @@ local function trySpawnTeleport(sim,dt)
   state.spawnDone=true
   writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
   flushLog()
+end
+-- Traffic Tool sessions keep the active traffic around the player.
+-- Cars beyond 500 m are returned to a clear point 500 m ahead on the
+-- imported, authored-direction route; the source lane is never reversed.
+local function respawnDistantTrafficCars(sim,dt)
+  if not state.trafficToolImported or not state.spawnDone or not state.loaded then return end
+  state.respawnAccum=safeNumber(state.respawnAccum)+dt
+  if state.respawnAccum<0.5 then return end
+  state.respawnAccum=0
+  local player=ac.getCar(0)
+  if not player or not player.isActive then return end
+  local metrics=buildSpawnRouteMetrics()
+  if not metrics then return end
+  local playerRoute,playerError=findRouteDistanceAtPosition(player.position,metrics,player.look)
+  if playerError>50.0 then
+    writeLog("RESPAWN_SKIP player_route_error=%.1f",playerError)
+    return
+  end
+  local spacing=math.max(CFG.SPAWN_MIN_GAP,CFG.SPAWN_GAP)
+  local order=0
+  for carIndex=1,sim.carsCount-1 do
+    local car=ac.getCar(carIndex)
+    local cooldown=safeNumber(state.respawnCooldown[carIndex])
+    if cooldown>0 then state.respawnCooldown[carIndex]=math.max(0,cooldown-0.5) end
+    if car and car.isActive and car.isAIControlled and
+       safeNumber(state.respawnCooldown[carIndex])<=0 then
+      local dx=car.position.x-player.position.x
+      local dz=car.position.z-player.position.z
+      local worldDistance=math.sqrt(dx*dx+dz*dz)
+      if worldDistance>500.0 then
+        local carRoute,carError=findRouteDistanceAtPosition(car.position,metrics,car.look)
+        if carError<=50.0 then
+          local routeDelta=carRoute-playerRoute
+          if metrics.loop then
+            if routeDelta>metrics.length*0.5 then routeDelta=routeDelta-metrics.length end
+            if routeDelta< -metrics.length*0.5 then routeDelta=routeDelta+metrics.length end
+          end
+          if math.abs(routeDelta)>500.0 or worldDistance>500.0 then
+            order=order+1
+            local targetDistance=playerRoute+500.0+(order-1)*spacing
+            local position,direction,routeSegment,routeParameter=
+              sampleSpawnRoute(metrics,targetDistance)
+            if position and direction and spotIsClear(position,carIndex) and
+               type(physics)=="table" and type(physics.setAICarPosition)=="function" then
+              local ok,result=pcall(physics.setAICarPosition,carIndex,position,
+                vec3(-direction.x,-direction.y,-direction.z))
+              if ok and result~=false then
+                state.p[carIndex]=nil
+                state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
+                state.respawnCooldown[carIndex]=5.0
+                writeLog("RESPAWN_TRAFFIC id=%d old_distance=%.1f route_delta=%.1f ahead=%.1f segment=%d",
+                  carIndex,worldDistance,routeDelta,targetDistance-playerRoute,routeSegment)
+              else
+                state.respawnCooldown[carIndex]=1.0
+                writeLog("RESPAWN_TRAFFIC_FAILED id=%d error=%s",carIndex,tostring(result))
+              end
+            else
+              state.respawnCooldown[carIndex]=1.0
+            end
+          end
+        else
+          state.respawnCooldown[carIndex]=1.0
+          writeLog("RESPAWN_SKIP id=%d route_error=%.1f world_distance=%.1f",
+            carIndex,carError,worldDistance)
+        end
+      end
+    end
+  end
 end
 local function walkLineSigned(startSeg,startT,distance,sign)
   local segs=segmentCount()
@@ -774,6 +870,7 @@ function script.update(dt)
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 then
       trySpawnTeleport(sim,dt)
+      respawnDistantTrafficCars(sim,dt)
     end
     -- Ctrl+8 switches the player car into Assetto Corsa's native AI state.
     -- RoutePilot adopts car 0 only in that state and runs the same route,
