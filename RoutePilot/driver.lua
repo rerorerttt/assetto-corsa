@@ -1204,20 +1204,39 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
         local reserved=(other.p.coordinatedLane==targetLane or
           other.p.coordinatorFromLane==targetLane or
           other.p.coordinatorTargetLane==targetLane)
-        if physicalOverlap or (other.managed and reserved) then
-          local minGap=ownHalf+otherHalf+3.0
-          local closing
-          local sameDirection=coordinatorSameDirection(owner,other)
-          if sameDirection then
-            closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
-          else
-            closing=owner.speed+other.speed
-          end
+        local minGap=ownHalf+otherHalf+3.0
+        local sameDirection=coordinatorSameDirection(owner,other)
+        local closing
+        if sameDirection then
+          closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
+        else
+          closing=owner.speed+other.speed
+        end
+        -- A lane reservation behind the owner is not an obstacle when both
+        -- cars travel in the same direction and the rear car is falling back.
+        -- The old abs(gap)<=minGap test assigned TTC=0 to that receding car,
+        -- falsely declaring the free escape lane occupied and trapping the
+        -- owner behind a stopped vehicle.
+        local reservationRelevant=other.managed and reserved and
+          (not sameDirection or gap>=0 or closing>0.5)
+        if physicalOverlap or reservationRelevant then
           local timeToConflict=math.huge
-          if math.abs(gap)<=minGap then
+          if sameDirection then
+            -- Signed route gap matters: a car behind only threatens this
+            -- slot when it is gaining on the owner, not when it is pulling away.
+            if gap>=0 then
+              if gap<=minGap then
+                timeToConflict=0
+              elseif closing>0.5 then
+                timeToConflict=(gap-minGap)/closing
+              end
+            elseif closing>0.5 then
+              timeToConflict=math.max(0,math.abs(gap)-minGap)/closing
+            end
+          elseif math.abs(gap)<=minGap then
             timeToConflict=0
           elseif closing>0.5 then
-            timeToConflict=math.max(0,math.abs(gap)-minGap)/closing
+            timeToConflict=(math.abs(gap)-minGap)/closing
           end
           if timeToConflict<=transitionTime+0.65 then
             return false,string.format("PREDICTED_OCCUPANCY_%d",other.index),
