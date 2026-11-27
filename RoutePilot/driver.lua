@@ -937,8 +937,19 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local dynamicWindow=math.max(window or 8.0,
           ownHalf+otherHalf+closingSpeed*transitionTime+5.0)
         local otherLane=other.p.coordinatedLane
-        if otherLane==targetLane and math.abs(gap)<dynamicWindow then
-          return false,other.index,gap,"occupied_destination"
+        -- Lane IDs can diverge from physical occupancy on changing-width
+        -- segments. Check the actual body footprint at the destination too.
+        local ownHalfWidth=math.max(0.75,
+          safeNumber(owner.car.aabbSize and owner.car.aabbSize.x,2.0)*0.5)
+        local otherHalfWidth=math.max(0.75,
+          safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
+        local physicalClearance=ownHalfWidth+otherHalfWidth+0.65
+        local physicalOverlap=math.abs(center-
+          safeNumber(other.p.latOff,other.p.coordinatorOffset or center))<physicalClearance
+        if (otherLane==targetLane or physicalOverlap) and
+            math.abs(gap)<dynamicWindow then
+          return false,other.index,gap,
+            physicalOverlap and "physical_destination_overlap" or "occupied_destination"
         end
         -- Reserve both the destination and the lane being vacated until the
         -- full vehicle body has completed its lateral transition.
@@ -1744,7 +1755,10 @@ function Driver.update(carIndex, car, dt)
     local errorAbs=math.abs(lateralError)
     if math.abs(actualError)>0.35 then
       local steerLimit=clamp(safeNumber(CFG.STEER_LIMIT,1.0),0.1,1.0)
-      local magnitude=clamp(errorAbs*0.42,0.0,steerLimit*0.82)
+      -- Prediction chooses correction direction; actual offset retains
+      -- steering authority until the body reaches the escape target.
+      local commandError=math.max(errorAbs,math.abs(actualError)*0.55)
+      local magnitude=clamp(commandError*0.62,0.32,steerLimit*0.95)
       local yaw=safeNumber(p.yawRate)
       local grip=clamp(safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL),7.5,20.0)
       local lateralLoad=math.abs(safeNumber(p.lateralAccel))/grip
@@ -1763,6 +1777,9 @@ function Driver.update(carIndex, car, dt)
       if safeNumber(p.wheelSlip)>0.35 then
         magnitude=magnitude*0.75
       end
+      -- Stability feedback may soften the command, but not reduce an active
+      -- escape to a negligible tangential correction.
+      magnitude=math.max(magnitude,math.min(0.28,steerLimit*0.28))
       steer=direction*magnitude
       p.steer=steer
       p.steerFiltered=steer
