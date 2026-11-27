@@ -1516,8 +1516,14 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         -- Compare the complete footprints in each car's own route frame.
         -- Raw latOff values from different stations are not a safe collision
         -- test through bends.
+        -- Traffic ownership is defined by the committed lane corridor,
+        -- not by a transient off-centre position while steering into it.
+        -- Using latOff here made a car near the lane edge falsely occupy
+        -- both lanes and triggered CONFLICT_BRAKE against a player in the
+        -- adjacent, otherwise clear lane.
         local lateralOverlap=coordinatorLateralOverlap(
-          follower,leader,safeNumber(follower.p.latOff,0))
+          follower,leader,safeNumber(follower.p.coordinatorOffset,
+            follower.p.latOff or 0))
         local emergencyPair=
           (follower.p.emergencyEscape and follower.p.emergencyObstacleIndex==leader.index) or
           (leader.p.emergencyEscape and leader.p.emergencyObstacleIndex==follower.index)
@@ -1717,8 +1723,11 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           -- Use the same route-frame swept-footprint test as lane
           -- reservation. Comparing two local latOff values directly is
           -- unreliable on bends and can miss the obstacle on the current line.
+          -- Test the lane the car is committed to. A temporary lateral
+          -- offset during normal steering must not turn a neighbouring lane
+          -- into a phantom obstacle and force an emergency stop.
           local lateralOverlap=coordinatorLateralOverlap(
-            rec,other,safeNumber(p.latOff,0))
+            rec,other,safeNumber(p.coordinatorOffset,p.latOff or 0))
           -- A transient footprint overlap during a managed pass must not
           -- revoke the distinct lane reservations of the two cars.
           local distinctReservedLanes=other.managed and
