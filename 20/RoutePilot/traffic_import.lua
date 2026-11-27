@@ -447,8 +447,7 @@ local function decodeLanes(data)
         local roleRule = laneRoles[role]
         local priorityOffset = source.priorityOffset or 0
         local endpointGap = #points >= 3 and flatDistance(points[1], points[#points]) or math.huge
-        local firstTX, firstTZ = normalized(points[1].x, points[1].z)
-        firstTX, firstTZ = normalized(points[2].x - points[1].x, points[2].z - points[1].z)
+        local firstTX, firstTZ = normalized(points[2].x - points[1].x, points[2].z - points[1].z)
         local lastTX, lastTZ = normalized(points[#points].x - points[#points - 1].x,
           points[#points].z - points[#points - 1].z)
         local tangentDot = firstTX * lastTX + firstTZ * lastTZ
