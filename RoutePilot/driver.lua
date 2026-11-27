@@ -941,24 +941,38 @@ local function coordinatorSameDirection(a,b)
   return coordinatorTravelSign(a)==coordinatorTravelSign(b)
 end
 
+-- Test the physical lateral corridor occupied by another car, including
+-- its already-reserved lane transition. Lane numbers are local to a road
+-- segment and are not globally meaningful around bends; never use lane-index
+-- equality as proof that two vehicles occupy the same space.
+local function coordinatorLateralOverlap(owner,other,targetCenter)
+  local ownHalf=math.max(0.75,
+    safeNumber(owner.car.aabbSize and owner.car.aabbSize.x,2.0)*0.5)
+  local otherHalf=math.max(0.75,
+    safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
+  local current=safeNumber(other.p.latOff,targetCenter)
+  local target=current
+  if other.managed and other.lanes then
+    local targetLane=other.p.coordinatorTargetLane or other.p.coordinatedLane
+    target=safeNumber(other.lanes.centers[targetLane],current)
+  end
+  local occupiedMin=math.min(current,target)-otherHalf
+  local occupiedMax=math.max(current,target)+otherHalf
+  return targetCenter+ownHalf+0.35>occupiedMin and
+    targetCenter-ownHalf-0.35<occupiedMax
+end
+
 local function coordinatorLaneFree(owner,targetLane,records,window)
   local center=owner.lanes.centers[targetLane]
   if center==nil then return false end
   for _,other in ipairs(records) do
     if other.index~=owner.index and other.p.routeProgress~=nil then
       local gap=coordinatorGap(owner,other)
-      if gap~=nil then
+      if gap~=nil and coordinatorLateralOverlap(owner,other,center) then
         local otherHalf=math.max(1.5,
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
         local ownHalf=math.max(1.5,
           safeNumber(owner.car.aabbSize and owner.car.aabbSize.z,4.5)*0.5)
-        local ownLateralHalf=math.max(0.75,
-          safeNumber(owner.car.aabbSize and owner.car.aabbSize.x,2.0)*0.5)
-        local otherLateralHalf=math.max(0.75,
-          safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
-        local targetLateralOverlap=math.abs(center-
-          safeNumber(other.p.latOff,center))<
-          ownLateralHalf+otherLateralHalf+0.35
         local lateralDelta=math.abs(center-
           safeNumber(owner.p.latOff,owner.p.coordinatorOffset or center))
         local lateralLimit=clamp(
@@ -966,36 +980,28 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local transitionDistance=math.max(22.0,
           owner.speed*math.sqrt(6.0*lateralDelta/lateralLimit))
         local transitionTime=transitionDistance/math.max(8.0,owner.speed)
-        local otherLane=other.p.coordinatedLane
-        local laneReserved=other.p.coordinatorFromLane==targetLane or
-          other.p.coordinatorTargetLane==targetLane
-        if otherLane==targetLane or targetLateralOverlap or laneReserved then
-          -- A vehicle behind is not an obstacle unless it is actually closing
-          -- the gap. Using abs(gap) alone made a stationary follower block
-          -- every lane change, producing a reciprocal deadlock.
-          local sameDirection=coordinatorSameDirection(owner,other)
-          local closing
-          if sameDirection then
-            closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
-          else
-            closing=owner.speed+other.speed
-          end
-          local distance=math.abs(gap)
-          local physicalGap=ownHalf+otherHalf
-          local reservationGap=math.max(window or 8.0,ownHalf+otherHalf+5.0)
-          local conflict=distance<=physicalGap
-          -- A close vehicle ahead occupies the slot even when it is stopped;
-          -- a vehicle behind occupies it only if its closing speed predicts
-          -- that it will reach the manoeuvre before it finishes.
-          if not conflict and sameDirection and gap>0 and
-              distance<=reservationGap then
-            conflict=true
-          end
-          if not conflict and closing>0.5 then
-            conflict=distance-closing*transitionTime<=reservationGap
-          end
-          if conflict then return false end
+        -- Only a real lateral footprint intersection can occupy this slot.
+        -- Longitudinal separation and closing speed then decide whether that
+        -- intersection is relevant before the lane change completes.
+        local sameDirection=coordinatorSameDirection(owner,other)
+        local closing
+        if sameDirection then
+          closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
+        else
+          closing=owner.speed+other.speed
         end
+        local distance=math.abs(gap)
+        local physicalGap=ownHalf+otherHalf
+        local reservationGap=math.max(window or 8.0,ownHalf+otherHalf+5.0)
+        local conflict=distance<=physicalGap
+        if not conflict and sameDirection and gap>0 and
+            distance<=reservationGap then
+          conflict=true
+        end
+        if not conflict and closing>0.5 then
+          conflict=distance-closing*transitionTime<=reservationGap
+        end
+        if conflict then return false end
       end
     end
   end
@@ -1025,12 +1031,11 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
         local otherLatHalf=math.max(0.75,
           safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
-        local physicalOverlap=math.abs(center-safeNumber(other.p.latOff,center))<
-          ownLatHalf+otherLatHalf+0.35
-        local reserved=(other.p.coordinatedLane==targetLane or
-          other.p.coordinatorFromLane==targetLane or
-          other.p.coordinatorTargetLane==targetLane)
-        if physicalOverlap or (other.managed and reserved) then
+        -- Include the other car's measured footprint and any committed
+        -- lateral transition. Segment-local lane indices are deliberately
+        -- ignored: a bend can change lane numbering without moving a car.
+        local physicalOverlap=coordinatorLateralOverlap(owner,other,center)
+        if physicalOverlap then
           local minGap=ownHalf+otherHalf+3.0
           local closing
           local sameDirection=coordinatorSameDirection(owner,other)
@@ -1343,18 +1348,20 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         local trigger=followerHalf+leaderHalf+
           math.max(5.0,math.max(0,closing)*maneuverTime+5.0)
         local sameDirection=coordinatorSameDirection(follower,leader)
-        local assignedSameLane=follower.p.coordinatedLane==leader.p.coordinatedLane
         local followerHalfWidth=math.max(0.75,
           safeNumber(follower.car.aabbSize and follower.car.aabbSize.x,2.0)*0.5)
         local leaderHalfWidth=math.max(0.75,
           safeNumber(leader.car.aabbSize and leader.car.aabbSize.x,2.0)*0.5)
+        -- Two cars are in conflict only when their physical lateral footprints
+        -- overlap (or this is the explicitly paired emergency manoeuvre).
+        -- Matching lane IDs alone is insufficient on a curved route.
         local lateralOverlap=math.abs(
           safeNumber(follower.p.latOff)-safeNumber(leader.p.latOff))<
           followerHalfWidth+leaderHalfWidth+0.35
         local emergencyPair=
           (follower.p.emergencyEscape and follower.p.emergencyObstacleIndex==leader.index) or
           (leader.p.emergencyEscape and leader.p.emergencyObstacleIndex==follower.index)
-        local sameLane=assignedSameLane or lateralOverlap or emergencyPair
+        local sameLane=lateralOverlap or emergencyPair
         local conflictDistance=sameDirection and distance<trigger or
           (not sameDirection and math.abs(gap)<math.max(5.0,
             (follower.speed+leader.speed)*1.5+5.0))
