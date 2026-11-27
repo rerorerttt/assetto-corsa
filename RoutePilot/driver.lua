@@ -155,6 +155,8 @@ local function newPersonality(carIndex)
     yieldingFor = nil, coordinatorReturn = false,
     emergencyEscape = false, emergencyTargetOffset = nil,
     emergencyObstacleIndex = nil, emergencySteerFullLock = false,
+    routeTravelSign = 1, emergencyBlockedByOncoming = false,
+    headOnWaitLogged = false, headOnEvasionLogged = false,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -574,7 +576,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
       -- whenever lateral speed crossed the threshold, causing steering kicks.
       -- Proportional position demand plus velocity damping gives one smooth,
       -- progressively reducing steering command throughout the escape.
-      rawSteer=clamp(escapeError*0.32-lateralVelocity*0.12,-0.62,0.62)
+      rawSteer=clamp(escapeError*0.55-lateralVelocity*0.18,-0.85,0.85)
       p.emergencySteerFullLock=false
     end
   else
@@ -894,24 +896,41 @@ local function coordinatorLaneGeometry(seg,car)
   return {left=left,right=right,count=count,slotWidth=slotWidth,centers=centers}
 end
 
+local function coordinatorTravelSign(record)
+  if not record or not record.p or record.p.routeProgress==nil then return 1 end
+  local sample=Geometry.sample(state.routeGeometry,record.p.routeProgress)
+  if not sample then return 1 end
+  local velocity=record.car and record.car.velocity
+  if velocity then
+    local along=safeNumber(velocity.x)*sample.tx+
+      safeNumber(velocity.z)*sample.tz
+    if math.abs(along)>1.0 then return along>0 and 1 or -1 end
+  end
+  local stored=record.p.routeTravelSign
+  if stored==1 or stored==-1 then return stored end
+  local look=record.car and record.car.look
+  if look then
+    local along=safeNumber(look.x)*sample.tx+safeNumber(look.z)*sample.tz
+    return along>=0 and 1 or -1
+  end
+  return 1
+end
+
 local function coordinatorGap(a,b)
   if not a or not b or a.p.routeProgress==nil or b.p.routeProgress==nil then return nil end
   local ownSample=Geometry.sample(state.routeGeometry,a.p.routeProgress)
   if not ownSample then return nil end
-  local bx,bz=normalize2(b.car.look.x,b.car.look.z)
-  local directionDot=bx*ownSample.tx+bz*ownSample.tz
-  if directionDot>=-0.25 then
-    return routeGap(a.p.routeProgress,b.p.routeProgress)
+  local ownSign=coordinatorTravelSign(a)
+  local otherSign=coordinatorTravelSign(b)
+  if ownSign==otherSign then
+    return routeGap(a.p.routeProgress,b.p.routeProgress)*ownSign
   end
   local longitudinal=relativeToRoute(b.car.position,ownSample)
-  return longitudinal
+  return longitudinal*ownSign
 end
 
 local function coordinatorSameDirection(a,b)
-  local sample=Geometry.sample(state.routeGeometry,a.p.routeProgress)
-  if not sample then return true end
-  local fx,fz=normalize2(b.car.look.x,b.car.look.z)
-  return fx*sample.tx+fz*sample.tz>=-0.25
+  return coordinatorTravelSign(a)==coordinatorTravelSign(b)
 end
 
 local function coordinatorLaneFree(owner,targetLane,records,window)
@@ -1054,6 +1073,25 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   return true
 end
 
+local function coordinatorEmergencyHold(record,obstacleIndex,dt,reason)
+  if not record or not record.managed then return end
+  local p=record.p
+  p.coordinatorConflictSpeed=0.0
+  if not p.emergencyBlockedByOncoming then
+    p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
+  end
+  p.emergencyBlockedByOncoming=true
+  p.emergencyRescueReady=p.emergencyBlockedT>=10.0
+  p.trafficAction="EMERGENCY_WAIT"
+  p.trafficReason=reason or "head_on_no_safe_lane"
+  if not p.headOnWaitLogged then
+    p.headOnWaitLogged=true
+    H.log("TRAFFIC_HEADON_HOLD id=%d obstacle=%d reason=%s blocked=%.2f",
+      record.index,obstacleIndex or -1,tostring(p.trafficReason),
+      safeNumber(p.emergencyBlockedT))
+  end
+end
+
 local function coordinatorMove(record,targetLane,records,reason,otherIndex)
   -- Emergency escape owns its lane reservation until the physical manoeuvre
   -- finishes. Ordinary PASS/YIELD/RETURN must never overwrite that decision.
@@ -1105,9 +1143,27 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local p=state.p[index]
       if not p then newPersonality(index);p=state.p[index] end
       local speed=math.max(0,safeNumber(car.speedMs))
+      local previousProgress=p.routeProgress
       local progress,lateral,seg=routeProjection(car,p.segIdx,
         not p.routeLocked,p.routeProgress,speed,dt)
       if progress~=nil then
+        local routeSample=Geometry.sample(state.routeGeometry,progress)
+        local velocity=car.velocity
+        if routeSample and velocity then
+          local along=safeNumber(velocity.x)*routeSample.tx+
+            safeNumber(velocity.z)*routeSample.tz
+          if math.abs(along)>1.0 then
+            p.routeTravelSign=along>0 and 1 or -1
+          elseif previousProgress~=nil then
+            local delta=routeGap(previousProgress,progress)
+            if math.abs(delta)>0.08 then
+              p.routeTravelSign=delta>0 and 1 or -1
+            end
+          end
+        end
+        p.routeTravelSign=p.routeTravelSign or 1
+        p._headOnWasBlocked=p.emergencyBlockedByOncoming==true
+        p.emergencyBlockedByOncoming=false
         p.routeProgress=progress;p.routeLocked=true
         p.segIdx=seg or p.segIdx;p.latOff=lateral or p.latOff
         p.projectionLost=false
@@ -1251,12 +1307,22 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         local trigger=followerHalf+leaderHalf+
           math.max(5.0,math.max(0,closing)*maneuverTime+5.0)
         local sameDirection=coordinatorSameDirection(follower,leader)
-        local sameLane=follower.p.coordinatedLane==leader.p.coordinatedLane
+        local assignedSameLane=follower.p.coordinatedLane==leader.p.coordinatedLane
+        local followerHalfWidth=math.max(0.75,
+          safeNumber(follower.car.aabbSize and follower.car.aabbSize.x,2.0)*0.5)
+        local leaderHalfWidth=math.max(0.75,
+          safeNumber(leader.car.aabbSize and leader.car.aabbSize.x,2.0)*0.5)
+        local lateralOverlap=math.abs(
+          safeNumber(follower.p.latOff)-safeNumber(leader.p.latOff))<
+          followerHalfWidth+leaderHalfWidth+0.35
+        local emergencyPair=
+          (follower.p.emergencyEscape and follower.p.emergencyObstacleIndex==leader.index) or
+          (leader.p.emergencyEscape and leader.p.emergencyObstacleIndex==follower.index)
+        local sameLane=assignedSameLane or lateralOverlap or emergencyPair
         local conflictDistance=sameDirection and distance<trigger or
           (not sameDirection and math.abs(gap)<math.max(5.0,
             (follower.speed+leader.speed)*1.5+5.0))
         if sameLane and conflictDistance and
-            not follower.p.emergencyEscape and not leader.p.emergencyEscape and
             not handled[follower.index..":"..leader.index] then
           handled[follower.index..":"..leader.index]=true
           local lane=follower.p.coordinatedLane
@@ -1264,28 +1330,65 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local emergencyCandidate=sameDirection and
             distance<math.max(14.0,follower.speed*0.95+5.0) and
             (leader.speed<math.max(1.5,follower.speed-0.8) or distance<6.0)
-          if emergencyCandidate then
-            -- Let the dedicated escape controller below own stopped obstacles;
-            -- ordinary PASS/YIELD must not seize the lane first.
+          if not sameDirection then
+            -- Head-on conflict: exactly one managed car gets the escape lane.
+            -- The other car is held at zero speed until lateral clearance exists.
+            local evasive,blocker
+            if follower.p.emergencyEscape then
+              evasive,blocker=follower,leader
+            elseif leader.p.emergencyEscape then
+              evasive,blocker=leader,follower
+            elseif follower.managed and leader.managed then
+              if follower.index<leader.index then evasive,blocker=follower,leader
+              else evasive,blocker=leader,follower end
+            elseif follower.managed then
+              evasive,blocker=follower,leader
+            elseif leader.managed then
+              evasive,blocker=leader,follower
+            end
+            if evasive and evasive.p.emergencyEscape then
+              moved=true
+            elseif evasive and evasive.managed then
+              local candidates={}
+              local current=evasive.p.coordinatedLane or 1
+              for targetLane=1,evasive.lanes.count do
+                if math.abs(targetLane-current)==1 then
+                  candidates[#candidates+1]={
+                    lane=targetLane,
+                    cost=math.abs(evasive.lanes.centers[targetLane]-
+                      safeNumber(evasive.p.latOff,evasive.lanes.centers[current]))
+                  }
+                end
+              end
+              table.sort(candidates,function(x,y) return x.cost<y.cost end)
+              for _,candidate in ipairs(candidates) do
+                if coordinatorEmergencyMove(evasive,candidate.lane,records,blocker and blocker.index) then
+                  moved=true
+                  break
+                end
+              end
+            end
+            if moved then
+              if evasive and evasive.managed then
+                evasive.p.emergencyBlockedT=0
+                evasive.p.emergencyRescueReady=false
+                evasive.p.emergencyBlockedByOncoming=false
+                if not evasive.p.headOnEvasionLogged then
+                  evasive.p.headOnEvasionLogged=true
+                  H.log("TRAFFIC_HEADON_EVASION id=%d obstacle=%d lane=%d",
+                    evasive.index,blocker and blocker.index or -1,
+                    safeNumber(evasive.p.coordinatedLane,-1))
+                end
+              end
+              coordinatorEmergencyHold(blocker,evasive and evasive.index,dt,
+                "head_on_evasion_wait")
+            else
+              coordinatorEmergencyHold(follower,leader.index,dt,"head_on_no_safe_lane")
+              coordinatorEmergencyHold(leader,follower.index,dt,"head_on_no_safe_lane")
+            end
+          elseif emergencyCandidate then
+            -- The dedicated same-direction emergency scan below owns the escape.
             moved=true
-          elseif not sameDirection then
-            -- Oncoming cars are separated laterally before the meeting point.
-            if follower.managed and follower.p.coordinatorChangeT<=0 and
-                lane<follower.lanes.count then
-              moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
-            end
-            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
-                lane<leader.lanes.count then
-              moved=coordinatorMove(leader,lane+1,records,"PASS",follower.index)
-            end
-            if not moved and follower.managed and follower.p.coordinatorChangeT<=0 and
-                lane>1 then
-              moved=coordinatorMove(follower,lane-1,records,"YIELD",leader.index)
-            end
-            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
-                lane>1 then
-              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
-            end
           elseif follower.managed and leader.managed then
             -- A slower leading car yields right; otherwise the faster follower
             -- takes the adjacent left lane. Only one adjacent slot is changed.
@@ -1330,6 +1433,20 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           end
         end
       end
+    end
+  end
+
+  -- Clear an oncoming wait timer only after that pair has actually separated.
+  for _,rec in ipairs(records) do
+    if rec.managed then
+      local p=rec.p
+      if p._headOnWasBlocked and not p.emergencyBlockedByOncoming then
+        p.emergencyBlockedT=0
+        p.emergencyRescueReady=false
+        p.headOnWaitLogged=false
+        p.headOnEvasionLogged=false
+      end
+      p._headOnWasBlocked=nil
     end
   end
 
@@ -1389,6 +1506,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         else
           p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
           p.emergencyRescueReady=p.emergencyBlockedT>=10.0
+          p.coordinatorConflictSpeed=0.0
           p.trafficAction="EMERGENCY_WAIT"
           p.trafficReason="all_lanes_occupied"
           if not p.emergencyWaitLogged then
@@ -1397,7 +1515,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
               rec.index,nearestIndex or -1,nearestGap)
           end
         end
-      else
+      elseif not p.emergencyBlockedByOncoming then
         p.emergencyBlockedT=0
         p.emergencyRescueReady=false
         p.emergencyWaitLogged=false
