@@ -1088,6 +1088,7 @@ local function coordinatorEmergencyHold(record,obstacleIndex,dt,reason)
     p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
   end
   p.emergencyBlockedByOncoming=true
+  p._headOnActive=true
   p.emergencyRescueReady=p.emergencyBlockedT>=10.0
   p.trafficAction="EMERGENCY_WAIT"
   p.trafficReason=reason or "head_on_no_safe_lane"
@@ -1170,6 +1171,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         end
         p.routeTravelSign=p.routeTravelSign or 1
         p._headOnWasBlocked=p.emergencyBlockedByOncoming==true
+        p._headOnActive=false
         p.emergencyBlockedByOncoming=false
         p.routeProgress=progress;p.routeLocked=true
         p.segIdx=seg or p.segIdx;p.latOff=lateral or p.latOff
@@ -1380,6 +1382,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             end
             if moved then
               if evasive and evasive.managed then
+                evasive.p._headOnActive=true
                 evasive.p.emergencyBlockedT=0
                 evasive.p.emergencyRescueReady=false
                 evasive.p.emergencyBlockedByOncoming=false
@@ -1450,13 +1453,16 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   for _,rec in ipairs(records) do
     if rec.managed then
       local p=rec.p
-      if p._headOnWasBlocked and not p.emergencyBlockedByOncoming then
+      if p._headOnWasBlocked and not p._headOnActive then
         p.emergencyBlockedT=0
         p.emergencyRescueReady=false
+      end
+      if not p._headOnActive then
         p.headOnWaitLogged=false
         p.headOnEvasionLogged=false
       end
       p._headOnWasBlocked=nil
+      p._headOnActive=nil
     end
   end
 
