@@ -577,7 +577,7 @@ local function calculateSteering(car, p, speed, fx, fz, dt)
       -- whenever lateral speed crossed the threshold, causing steering kicks.
       -- Proportional position demand plus velocity damping gives one smooth,
       -- progressively reducing steering command throughout the escape.
-      rawSteer=clamp(escapeError*0.55-lateralVelocity*0.18,-0.85,0.85)
+      rawSteer=clamp(escapeError*0.32-lateralVelocity*0.12,-0.62,0.62)
       p.emergencySteerFullLock=false
     end
   else
@@ -1194,54 +1194,27 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
       if gap~=nil then
         local otherHalf=math.max(1.5,
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
-        -- Include the other car's measured footprint and any committed
-        -- lateral transition. Segment-local lane indices are deliberately
-        -- ignored: a bend can change lane numbering without moving a car.
-        local clearingBehind=coordinatorClearingBehind(owner,other,center,gap)
-        local physicalOverlap=not clearingBehind and
-          coordinatorLateralOverlap(owner,other,center)
-        if physicalOverlap then
-          -- Emergency lane changes need a larger buffer than ordinary
-          -- following: the target corridor must remain clear while the car
-          -- completes its lateral move, not merely until bumper overlap.
-          local minGap=ownHalf+otherHalf+8.0
+        local otherLatHalf=math.max(0.75,
+          safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
+        local physicalOverlap=math.abs(center-safeNumber(other.p.latOff,center))<
+          ownLatHalf+otherLatHalf+0.35
+        local reserved=(other.p.coordinatedLane==targetLane or
+          other.p.coordinatorFromLane==targetLane or
+          other.p.coordinatorTargetLane==targetLane)
+        if physicalOverlap or (other.managed and reserved) then
+          local minGap=ownHalf+otherHalf+3.0
           local closing
           local sameDirection=coordinatorSameDirection(owner,other)
           if sameDirection then
-            closing=gap>0 and owner.speed-other.speed or other.speed-owner.speed
+            closing=gap>=0 and owner.speed-other.speed or other.speed-owner.speed
           else
             closing=owner.speed+other.speed
           end
-          local distance=math.abs(gap)
-          local physicalGap=ownHalf+otherHalf
-          -- An active emergency escape reserves its entire swept corridor,
-          -- not just the lane centre it is heading toward. Without this
-          -- pairwise lock, two nearby cars can each see the other's current
-          -- lane as free and start opposite emergency moves in the same frame.
-          -- Closing speed is irrelevant here: both manoeuvres are already
-          -- committed and their lateral paths can intersect while crawling.
-          if other.managed and other.p.emergencyEscape and physicalOverlap and
-              distance<=physicalGap+12.0 then
-            return false,"ACTIVE_EMERGENCY_RESERVATION",gap,closing,0
-          end
           local timeToConflict=math.huge
-          -- A body overlap is always a conflict. For same-direction traffic,
-          -- a close leader blocks the destination even while stopped, but a
-          -- close follower does not: it matters only if it is catching up.
-          if distance<=physicalGap then
+          if math.abs(gap)<=minGap then
             timeToConflict=0
-          elseif sameDirection and gap>0 and distance<=minGap then
-            -- A stopped or slowly moving leader still occupies the escape
-            -- lane. Do not require positive closing speed to reject a
-            -- destination that is already inside the safe following gap.
-            timeToConflict=0
-          elseif not sameDirection and distance<=minGap then
-            timeToConflict=0
-          elseif closing>0.05 then
-            -- Include low-speed closing during an emergency lane change;
-            -- the ordinary 0.5 m/s threshold can hide a slow crawl into a
-            -- stationary queue.
-            timeToConflict=math.max(0,distance-minGap)/closing
+          elseif closing>0.5 then
+            timeToConflict=math.max(0,math.abs(gap)-minGap)/closing
           end
           if timeToConflict<=transitionTime+0.65 then
             return false,string.format("PREDICTED_OCCUPANCY_%d",other.index),
@@ -1256,25 +1229,12 @@ end
 
 local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   local p=record.p
-  -- An active emergency escape owns its reservation until the vehicle has
-  -- physically reached the target lane.
-  if p.emergencyEscape then return false end
   local current=p.coordinatedLane or 1
   if targetLane<1 or targetLane>record.lanes.count or targetLane==current then
     return false
   end
-  local step=targetLane>current and 1 or -1
-  local laneFree,rejectReason,rejectGap,rejectClosing,rejectTTC=true,nil,nil,nil,nil
-  -- A multi-slot escape is allowed only when every crossed slot is clear.
-  -- This prevents the controller from cutting through an occupied lane.
-  local lane=current+step
-  while true do
-    laneFree,rejectReason,rejectGap,rejectClosing,rejectTTC=
-      coordinatorEmergencyLaneFree(record,lane,records)
-    if not laneFree then break end
-    if lane==targetLane then break end
-    lane=lane+step
-  end
+  local laneFree,rejectReason,rejectGap,rejectClosing,rejectTTC=
+    coordinatorEmergencyLaneFree(record,targetLane,records)
   if not laneFree then
     H.log("TRAFFIC_EMERGENCY_LANE_REJECT id=%d lane=%d reason=%s gap=%.2f closing=%.2f ttc=%.2f",
       record.index,targetLane,tostring(rejectReason),safeNumber(rejectGap,999),
