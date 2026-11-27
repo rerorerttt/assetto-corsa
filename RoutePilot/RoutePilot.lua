@@ -566,21 +566,21 @@ local function teleportHome(carIndex,car)
   end
   if #state.nodes<2 or not car or not car.position then return false end
 
-  -- Follow this car's last measured direction along the route. The look
-  -- vector is unreliable after a spin/head-on stop; retain the last signed
-  -- route-progress direction while stationary. New cars default to route-forward.
+  -- Recovery teleports ALWAYS follow the recorded route direction:
+  -- from node 1 toward the final node (and forward through the loop).
+  -- Vehicle heading and its previous route-progress sign must never reverse
+  -- the recovery direction after a spin or a head-on collision.
   local driverState=state.p and state.p[carIndex]
   local hintSeg=driverState and driverState.segIdx or 1
   local seg,t,routeError=findNearestSeg(car.position,hintSeg,true,nil)
-  local sign=driverState and driverState.routeTravelSign or 1
-  if sign<0 then sign=-1 else sign=1 end
+  local sign=1
   if routeError>250 then
     writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f",carIndex,routeError)
     return false
   end
 
-  -- Never search behind the disabled car. Candidate points are sampled only
-  -- in the car's last measured route direction, starting beyond the obstruction
+  -- Never search backward along the recorded line. Candidate points are sampled
+  -- only in route-forward direction, starting beyond the obstruction
   -- so the car cannot be dropped back into the same jam.
   for distance=20,320,10 do
     local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
@@ -596,8 +596,8 @@ local function teleportHome(carIndex,car)
             state.p[carIndex]=nil
             state.rescueWatch=state.rescueWatch or {}
             state.rescueWatch[carIndex]={cooldown=3.0}
-            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=ROUTE_TRAVEL sign=%d pos=(%.2f,%.2f,%.2f)",
-              carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
+            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=RECORDED_LINE_FORWARD pos=(%.2f,%.2f,%.2f)",
+              carIndex,distance,routeError,safePos.x,safePos.y,safePos.z)
             flushLog()
             return true
           end
