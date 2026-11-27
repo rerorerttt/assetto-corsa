@@ -651,6 +651,8 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   if not ownSample then return nil,nil,nil,nil end
   local bestGap,bestSpeed,bestIndex,bestLateral=nil,nil,nil,nil
   local ownSpeed=math.max(0,safeNumber(car.speedMs))
+  local ownFx,ownFz=normalize2(car.look and car.look.x,car.look and car.look.z)
+  local ownDirectionDot=ownFx*ownSample.tx+ownFz*ownSample.tz
   for i=0,sim.carsCount-1 do
     if i~=carIndex and i~=ignoreIndex then
       local other=ac.getCar(i)
@@ -695,9 +697,13 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         local ownLane=own.coordinatorTargetLane or own.coordinatedLane
         local otherLane=otherState and
           (otherState.coordinatorTargetLane or otherState.coordinatedLane)
-        local sameDirection=not otherState or
-          own.routeTravelSign==nil or otherState.routeTravelSign==nil or
-          own.routeTravelSign==otherState.routeTravelSign
+        -- Determine direction from each car's current orientation in its
+        -- own route frame. Stored routeTravelSign is velocity-derived and can
+        -- retain the opposite sign after a tight-corner slide or a stop; using
+        -- it here made cars in separate reserved lanes FOLLOW-brake each other
+        -- to zero, preventing both from completing their lane changes.
+        local sameDirection=(ownDirectionDot>=0 and directionDot>=0) or
+          (ownDirectionDot<0 and directionDot<0)
         local distinctReservedLanes=otherState~=nil and
           ownLane~=nil and otherLane~=nil and ownLane~=otherLane and
           sameDirection
@@ -1765,8 +1771,27 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       -- the full road; waiting until the vehicle is already within 14-20 m
       -- leaves no reliable margin at higher speeds.
       local braking=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),3.0,14.0)
+      -- Begin an escape early enough to finish the lateral transition before
+      -- reaching the obstacle. Braking distance alone is insufficient: at
+      -- speed the car may still be unable to reach the adjacent lane when it
+      -- arrives at the stopped vehicle.
+      local nearestLaneShift=math.huge
+      for lane=1,rec.lanes.count do
+        if lane~=current then
+          nearestLaneShift=math.min(nearestLaneShift,
+            math.abs(rec.lanes.centers[lane]-safeNumber(p.latOff,
+              rec.lanes.centers[current])))
+        end
+      end
+      local lateralLimit=clamp(
+        safeNumber(p.lateralAccelLimit,CFG.MAX_LATERAL_ACCEL)*0.65,4.0,12.0)
+      local transitionDistance=nearestLaneShift<math.huge and
+        math.max(22.0,rec.speed*math.sqrt(6.0*nearestLaneShift/lateralLimit)) or 0
+      local ownHalf=math.max(1.5,
+        safeNumber(rec.car.aabbSize and rec.car.aabbSize.z,4.5)*0.5)
       local dangerDistance=math.max(14.0,
-        rec.speed*0.40+rec.speed*rec.speed/(2.0*braking)+4.0)
+        rec.speed*0.40+rec.speed*rec.speed/(2.0*braking)+
+        transitionDistance+ownHalf+4.0)
       local emergencyDanger=nearestGap~=nil and
         nearestGap<dangerDistance and
         nearestSpeed<=EMERGENCY_TARGET_MAX_SPEED
