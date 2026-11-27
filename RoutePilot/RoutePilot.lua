@@ -642,12 +642,15 @@ local function updateRescueWatchdog(carIndex,car,dt)
 
   local gas=safeNumber(car.gas)
   local speed=math.abs(safeNumber(car.speedMs))
+  local p=state.p and state.p[carIndex]
+  local trafficWaiting=p and
+    (safeNumber(p.emergencyBlockedT)>0 or p.trafficAction=="EMERGENCY_WAIT")
   w.progressCheckT=safeNumber(w.progressCheckT)+dt
   if w.progressCheckT>=1.0 then
     local px=car.position.x-safeNumber(w.progressPositionX,car.position.x)
     local pz=car.position.z-safeNumber(w.progressPositionZ,car.position.z)
     local progress=math.sqrt(px*px+pz*pz)
-    if gas>=0.55 and progress<0.5 then
+    if not trafficWaiting and gas>=0.55 and progress<0.5 then
       w.gasStallT=w.gasStallT+w.progressCheckT
     else
       w.gasStallT=0
@@ -658,7 +661,6 @@ local function updateRescueWatchdog(carIndex,car,dt)
   end
   w.lastPosition=vec3(car.position.x,car.position.y,car.position.z)
 
-  local p=state.p and state.p[carIndex]
   local offTrackT=safeNumber(p and p.offTrackT)
   local reason=nil
   if w.rolloverT>=10.0 then reason="rollover_10s"
