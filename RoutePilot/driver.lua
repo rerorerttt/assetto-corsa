@@ -1250,7 +1250,20 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         local trigger=followerHalf+leaderHalf+
           math.max(5.0,math.max(0,closing)*maneuverTime+5.0)
         local sameDirection=coordinatorSameDirection(follower,leader)
-        local sameLane=follower.p.coordinatedLane==leader.p.coordinatedLane
+        local followerLateral=safeNumber(follower.p.latOff,
+          follower.p.coordinatorOffset or 0)
+        local leaderLateral=safeNumber(leader.p.latOff,
+          leader.p.coordinatorOffset or 0)
+        local followerHalfWidth=math.max(0.75,
+          safeNumber(follower.car.aabbSize and follower.car.aabbSize.x,2.0)*0.5)
+        local leaderHalfWidth=math.max(0.75,
+          safeNumber(leader.car.aabbSize and leader.car.aabbSize.x,2.0)*0.5)
+        local physicalLateralOverlap=math.abs(followerLateral-leaderLateral)<
+          followerHalfWidth+leaderHalfWidth+0.45
+        -- Lane assignments can be stale during a transition. A real body
+        -- overlap is a conflict even when the coordinator lane IDs differ.
+        local sameLane=physicalLateralOverlap or
+          follower.p.coordinatedLane==leader.p.coordinatedLane
         local conflictDistance=sameDirection and distance<trigger or
           (not sameDirection and math.abs(gap)<math.max(5.0,
             (follower.speed+leader.speed)*1.5+5.0))
@@ -1316,26 +1329,55 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             -- a braking command immediately. Previously this branch only
             -- logged the conflict; the car kept its previous throttle target
             -- and could drive straight into a stopped player.
-            if follower.managed and sameDirection and not follower.p.emergencyMode then
-              local stoppingDecel=clamp(
-                safeNumber(follower.p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
-              local stoppingDistance=follower.speed*0.45+
-                follower.speed*follower.speed/(2.0*stoppingDecel)+
-                followerHalf+leaderHalf+2.0
-              if closing>0.5 and distance<stoppingDistance or distance<6.0 then
-                local fp=follower.p
-                if fp.coordinatorFromLane~=nil or fp.passTargetIndex~=nil or
-                    fp.yieldingFor~=nil then
-                  coordinatorAbortUnsafeTransition(follower,leader.index)
+            if sameDirection then
+              if follower.managed and not follower.p.emergencyMode then
+                local stoppingDecel=clamp(
+                  safeNumber(follower.p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+                local stoppingDistance=follower.speed*0.45+
+                  follower.speed*follower.speed/(2.0*stoppingDecel)+
+                  followerHalf+leaderHalf+2.0
+                if closing>0.5 and distance<stoppingDistance or distance<6.0 then
+                  local fp=follower.p
+                  if fp.coordinatorFromLane~=nil or fp.passTargetIndex~=nil or
+                      fp.yieldingFor~=nil then
+                    coordinatorAbortUnsafeTransition(follower,leader.index)
+                  end
+                  fp.emergencyWait=true
+                  fp.emergencyWaitGap=distance
+                  fp.emergencyWaitSpeed=leader.speed
+                  fp.emergencyWaitObstacle=leader.index
+                  fp.trafficAction="EMERGENCY_WAIT"
+                  fp.trafficReason="no_safe_lane_hard_brake"
+                  H.log("TRAFFIC_HARD_STOP_NO_SLOT id=%d obstacle=%d gap=%.2f closing=%.2f stop_dist=%.2f",
+                    follower.index,leader.index,distance,closing,stoppingDistance)
                 end
-                fp.emergencyWait=true
-                fp.emergencyWaitGap=distance
-                fp.emergencyWaitSpeed=leader.speed
-                fp.emergencyWaitObstacle=leader.index
-                fp.trafficAction="EMERGENCY_WAIT"
-                fp.trafficReason="no_safe_lane_hard_brake"
-                H.log("TRAFFIC_HARD_STOP_NO_SLOT id=%d obstacle=%d gap=%.2f closing=%.2f stop_dist=%.2f",
-                  follower.index,leader.index,distance,closing,stoppingDistance)
+              end
+            else
+              -- Oncoming traffic is a closing-speed problem for BOTH drivers.
+              -- If neither can reserve a clear side corridor, both brake using
+              -- the opposing vehicle's speed in the stopping-distance solver.
+              for _,pair in ipairs({{follower,leader},{leader,follower}}) do
+                local own,opposing=pair[1],pair[2]
+                if own.managed and not own.p.emergencyMode then
+                  local decel=clamp(
+                    safeNumber(own.p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+                  local safeSpeed=safeFollowingSpeed(distance,-opposing.speed,decel)
+                  if own.speed>safeSpeed+0.05 or distance<6.0 then
+                    if own.p.coordinatorFromLane~=nil or
+                        own.p.passTargetIndex~=nil or own.p.yieldingFor~=nil then
+                      coordinatorAbortUnsafeTransition(own,opposing.index)
+                    end
+                    own.p.emergencyWait=true
+                    own.p.emergencyWaitGap=distance
+                    own.p.emergencyWaitSpeed=-opposing.speed
+                    own.p.emergencyWaitObstacle=opposing.index
+                    own.p.trafficAction="EMERGENCY_WAIT"
+                    own.p.trafficReason="oncoming_no_safe_lane"
+                    H.log("TRAFFIC_HARD_STOP_NO_SLOT id=%d obstacle=%d gap=%.2f closing=%.2f safe_speed=%.2f",
+                      own.index,opposing.index,distance,
+                      own.speed+opposing.speed,safeSpeed)
+                  end
+                end
               end
             end
           end
@@ -1433,11 +1475,17 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           for _,other in ipairs(records) do
             if other.index==p.emergencyWaitObstacle then
               local heldGap=coordinatorGap(rec,other)
-              if heldGap~=nil and heldGap>=-2.0 and
-                  coordinatorSameDirection(rec,other) then
-                nearestGap=heldGap
-                nearestIndex=other.index
-                nearestSpeed=other.speed
+              if heldGap~=nil then
+                local sameDirection=coordinatorSameDirection(rec,other)
+                if sameDirection and heldGap>=-2.0 then
+                  nearestGap=heldGap
+                  nearestIndex=other.index
+                  nearestSpeed=other.speed
+                elseif not sameDirection and heldGap>=0 then
+                  nearestGap=heldGap
+                  nearestIndex=other.index
+                  nearestSpeed=-other.speed
+                end
               end
               break
             end
