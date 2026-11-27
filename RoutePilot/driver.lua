@@ -870,10 +870,17 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
   end
   -- Keep the coordinator's no-slot decision authoritative even if the
   -- ordinary lane-based detector misses an off-line or partially displaced car.
+  if p.emergencyWaitSpeed~=nil then
+    targetSpeed=math.min(targetSpeed,p.emergencyWaitSpeed)
+    p.trafficAction="EMERGENCY_WAIT"
+    p.trafficReason="all_lanes_occupied"
+  end
   if p.coordinatorConflictSpeed~=nil then
     targetSpeed=math.min(targetSpeed,p.coordinatorConflictSpeed)
-    p.trafficAction="CONFLICT_BRAKE"
-    p.trafficReason="no_safe_lane_reserved"
+    if p.trafficAction~="EMERGENCY_WAIT" then
+      p.trafficAction="CONFLICT_BRAKE"
+      p.trafficReason="no_safe_lane_reserved"
+    end
   end
   return targetSpeed
 end
@@ -943,8 +950,11 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local dynamicWindow=math.max(window or 8.0,
           ownHalf+otherHalf+math.abs(owner.speed-other.speed)*transitionTime+5.0)
         local otherLane=other.p.coordinatedLane
-        if (otherLane==targetLane or targetLateralOverlap) and
-            math.abs(gap)<dynamicWindow then
+        -- A lane assignment alone is not physical occupancy. A car may be
+        -- assigned to this slot while still travelling in another lane.
+        -- Block the destination only for actual lateral overlap; in-progress
+        -- lane reservations are checked separately below.
+        if targetLateralOverlap and math.abs(gap)<dynamicWindow then
           return false
         end
         -- Reserve both the destination and the lane being vacated until the
@@ -1106,7 +1116,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   if #records==0 then return end
   -- Clear the per-frame coordinator safety cap before resolving this frame.
   for _,rec in ipairs(records) do
-    if rec.managed then rec.p.coordinatorConflictSpeed=nil end
+    if rec.managed then
+      rec.p.coordinatorConflictSpeed=nil
+      rec.p.emergencyWaitSpeed=nil
+    end
   end
 
   -- Initialise the field by measured acceleration rank, then place nearby
@@ -1206,9 +1219,9 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             distance<math.max(9.0,follower.speed*0.95+3.0) and
             (leader.speed<math.max(1.0,follower.speed-0.8) or distance<6.0)
           if emergencyCandidate then
-            -- Let the dedicated escape controller below own stopped obstacles;
-            -- ordinary PASS/YIELD must not seize the lane first.
-            moved=true
+            -- Do not mark the manoeuvre as completed here. The dedicated
+            -- escape pass below must actually reserve a physically clear lane.
+            -- Until it succeeds, the normal conflict speed cap remains active.
           elseif not sameDirection then
             -- Oncoming cars are separated laterally before the meeting point.
             if follower.managed and follower.p.coordinatorChangeT<=0 and
@@ -1323,6 +1336,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         else
           p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
           p.emergencyRescueReady=p.emergencyBlockedT>=10.0
+          -- Hold a safe stopping speed while retrying lane selection every
+          -- frame. This prevents throttle from pushing the car into the obstacle.
+          p.emergencyWaitSpeed=safeFollowingSpeed(
+            nearestGap,nearestSpeed or 0,p.brakeAccelEstimate)
           p.trafficAction="EMERGENCY_WAIT"
           p.trafficReason="all_lanes_occupied"
           if not p.emergencyWaitLogged then
