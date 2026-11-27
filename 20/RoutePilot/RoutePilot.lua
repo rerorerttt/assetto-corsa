@@ -123,6 +123,10 @@ local function saveImportedRoute()
     writeLog("IMPORTED_LINE_SAVE_FAIL reason=track_data_path_unavailable path=%s",tostring(path))
     return false
   end
+  if not io or type(io.save)~="function" or type(io.load)~="function" then
+    writeLog("IMPORTED_LINE_SAVE_FAIL reason=csp_io_unavailable path=%s",tostring(path))
+    return false
+  end
   local data=serializeNodes(state.nodes).."\n"
   local ok,err=pcall(io.save,path,data,true)
   if not ok then
