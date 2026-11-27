@@ -1196,8 +1196,11 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
         local otherLatHalf=math.max(0.75,
           safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
-        local physicalOverlap=math.abs(center-safeNumber(other.p.latOff,center))<
-          ownLatHalf+otherLatHalf+0.35
+        -- Compare the candidate lane against the other vehicle in the
+        -- owner's route frame. Raw latOff values belong to different local
+        -- route stations and diverge through bends; comparing them directly
+        -- can make a genuinely empty adjacent lane appear occupied.
+        local physicalOverlap=coordinatorLateralOverlap(owner,other,center)
         local reserved=(other.p.coordinatedLane==targetLane or
           other.p.coordinatorFromLane==targetLane or
           other.p.coordinatorTargetLane==targetLane)
