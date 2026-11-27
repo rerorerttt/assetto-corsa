@@ -454,7 +454,7 @@ local function decodeLanes(data)
         -- Some CSP exports leave loop=false even for a geometrically closed
         -- circuit. Keep sourceLoop untouched, but expose a separate routeLoop
         -- only when both endpoint gap and tangent continuity prove closure.
-        local routeLoop = source.loop == true or (endpointGap <= 15.0 and tangentDot >= 0.90)
+        local routeLoop = source.loop == true or (endpointGap <= 3.0 and tangentDot >= 0.90)
         lanes[#lanes + 1] = {
           id = source.id or i,
           name = source.name or ('Lane ' .. tostring(source.id or i)),
