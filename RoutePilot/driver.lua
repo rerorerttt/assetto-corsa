@@ -1313,6 +1313,33 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
   for _,rec in ipairs(records) do
     if rec.managed then
       local p=rec.p
+      -- A lane reservation is not proof that the car has physically moved
+      -- there. Revalidate the destination throughout every ordinary lane
+      -- transition; another car (including the manual player) can enter the
+      -- swept corridor after the initial reservation was granted.
+      if not p.emergencyMode and p.coordinatorFromLane~=nil then
+        local target=p.coordinatorTargetLane or p.coordinatedLane
+        if target and target>=1 and target<=rec.lanes.count then
+          local free,blocker,blockerGap,blockReason=
+            coordinatorLaneFree(rec,target,records,4.0)
+          if not free then
+            local blockerSpeed=0
+            for _,other in ipairs(records) do
+              if other.index==blocker then blockerSpeed=other.speed;break end
+            end
+            coordinatorAbortUnsafeTransition(rec,blocker)
+            p.emergencyWait=true
+            p.emergencyWaitGap=math.abs(safeNumber(blockerGap,0))
+            p.emergencyWaitSpeed=blockerSpeed
+            p.emergencyWaitObstacle=blocker
+            p.trafficAction="EMERGENCY_WAIT"
+            p.trafficReason="transition_corridor_became_occupied"
+            H.log("TRAFFIC_TRANSITION_ABORT id=%d blocker=%d gap=%.2f reason=%s",
+              rec.index,blocker or -1,blockerGap or -1,
+              tostring(blockReason or "destination_occupied"))
+          end
+        end
+      end
       if p.emergencyMode then
         local obstacle=nil
         for _,other in ipairs(records) do
@@ -1360,6 +1387,22 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
               nearestGap=gap
               nearestIndex=other.index
               nearestSpeed=other.speed
+            end
+          end
+        end
+        -- Preserve the identity of the obstacle that invalidated a lane
+        -- transition even if lane IDs differ from the physical overlap.
+        if p.emergencyWait and p.emergencyWaitObstacle~=nil then
+          for _,other in ipairs(records) do
+            if other.index==p.emergencyWaitObstacle then
+              local heldGap=coordinatorGap(rec,other)
+              if heldGap~=nil and heldGap>=-2.0 and
+                  coordinatorSameDirection(rec,other) then
+                nearestGap=heldGap
+                nearestIndex=other.index
+                nearestSpeed=other.speed
+              end
+              break
             end
           end
         end
