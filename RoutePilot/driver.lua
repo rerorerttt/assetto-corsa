@@ -155,7 +155,6 @@ local function newPersonality(carIndex)
     yieldingFor = nil, coordinatorReturn = false,
     emergencyEscape = false, emergencyTargetOffset = nil,
     emergencyObstacleIndex = nil, emergencySteerFullLock = false,
-    routeTravelSign = 1,
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
@@ -1270,9 +1269,23 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             -- ordinary PASS/YIELD must not seize the lane first.
             moved=true
           elseif not sameDirection then
-            -- Head-on conflicts are handled only by the emergency controller
-            -- below. Do not start a normal lane transition here: it can be
-            -- too slow and can send both cars toward the same lane.
+            -- Oncoming cars are separated laterally before the meeting point.
+            if follower.managed and follower.p.coordinatorChangeT<=0 and
+                lane<follower.lanes.count then
+              moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
+            end
+            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
+                lane<leader.lanes.count then
+              moved=coordinatorMove(leader,lane+1,records,"PASS",follower.index)
+            end
+            if not moved and follower.managed and follower.p.coordinatorChangeT<=0 and
+                lane>1 then
+              moved=coordinatorMove(follower,lane-1,records,"YIELD",leader.index)
+            end
+            if not moved and leader.managed and leader.p.coordinatorChangeT<=0 and
+                lane>1 then
+              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
+            end
           elseif follower.managed and leader.managed then
             -- A slower leading car yields right; otherwise the faster follower
             -- takes the adjacent left lane. Only one adjacent slot is changed.
@@ -1328,10 +1341,9 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local p=rec.p
       local current=p.coordinatedLane or 1
       local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
-      local nearestOncoming,nearestManaged=false,false
       for _,other in ipairs(records) do
-        if other.index~=rec.index then
-          local sameDirection=coordinatorSameDirection(rec,other)
+        if other.index~=rec.index and
+            coordinatorSameDirection(rec,other) then
           local gap=coordinatorGap(rec,other)
           local ownHalf=math.max(0.75,
             safeNumber(rec.car.aabbSize and rec.car.aabbSize.x,2.0)*0.5)
@@ -1340,42 +1352,26 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local lateralOverlap=math.abs(
             safeNumber(other.p.latOff)-safeNumber(p.latOff))<
             ownHalf+otherHalf+0.35
-          local candidateGap=sameDirection and gap or
-            (gap and math.abs(gap) or nil)
-          if lateralOverlap and candidateGap and
-              (not sameDirection or gap>=-2.0) and
-              (not nearestGap or candidateGap<nearestGap) then
-            nearestGap=candidateGap
+          if lateralOverlap and gap and gap>=-2.0 and
+              (not nearestGap or gap<nearestGap) then
+            nearestGap=gap
             nearestIndex=other.index
             nearestSpeed=other.speed
-            nearestOncoming=not sameDirection
-            nearestManaged=other.managed==true
           end
         end
       end
-      local closing=nearestOncoming and (rec.speed+safeNumber(nearestSpeed)) or
-        (rec.speed-safeNumber(nearestSpeed))
-      local dangerDistance=math.max(14.0,
-        (nearestOncoming and closing or rec.speed)*0.95+5.0)
+      local dangerDistance=math.max(14.0,rec.speed*0.95+5.0)
       local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
-        (nearestOncoming or nearestSpeed<math.max(1.5,rec.speed-0.8) or
-          nearestGap<6.0)
+        (nearestSpeed<math.max(1.5,rec.speed-0.8) or nearestGap<6.0)
       if emergencyDanger then
         local candidates={}
-        -- For a head-on pair, exactly one managed car initiates the lateral
-        -- escape. The other brakes and holds its lane; this prevents both cars
-        -- from choosing the same empty lane at the same time.
-        local mayEscape=not nearestOncoming or not nearestManaged or
-          rec.index<nearestIndex
-        if mayEscape then
-          for lane=1,rec.lanes.count do
-            if math.abs(lane-current)==1 then
-              candidates[#candidates+1]={
-                lane=lane,
-                cost=math.abs(rec.lanes.centers[lane]-
-                  safeNumber(p.latOff,rec.lanes.centers[current]))
-              }
-            end
+        for lane=1,rec.lanes.count do
+          if math.abs(lane-current)==1 then
+            candidates[#candidates+1]={
+              lane=lane,
+              cost=math.abs(rec.lanes.centers[lane]-
+                safeNumber(p.latOff,rec.lanes.centers[current]))
+            }
           end
         end
         table.sort(candidates,function(a,b) return a.cost<b.cost end)
@@ -1393,14 +1389,12 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         else
           p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
           p.emergencyRescueReady=p.emergencyBlockedT>=10.0
-          p.coordinatorConflictSpeed=0.0
           p.trafficAction="EMERGENCY_WAIT"
-          p.trafficReason=nearestOncoming and "oncoming_no_safe_lane" or
-            "all_lanes_occupied"
+          p.trafficReason="all_lanes_occupied"
           if not p.emergencyWaitLogged then
             p.emergencyWaitLogged=true
-            H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f oncoming=%s",
-              rec.index,nearestIndex or -1,nearestGap,tostring(nearestOncoming))
+            H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f",
+              rec.index,nearestIndex or -1,nearestGap)
           end
         end
       else
@@ -1698,9 +1692,6 @@ function Driver.update(carIndex, car, dt)
   end
   if progress ~= nil then
     p.frameProgressDelta=previousRouteProgress~=nil and routeGap(previousRouteProgress,progress) or 0
-    if math.abs(p.frameProgressDelta)>0.05 then
-      p.routeTravelSign=p.frameProgressDelta>0 and 1 or -1
-    end
     p.routeLocked = true
     p.routeProgress = progress
     p.latOff = projectedLateral or p.latOff
