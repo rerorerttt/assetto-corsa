@@ -1298,9 +1298,37 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
               end
             end
           end
-          if not moved and math.abs(gap)<5.0 then
-            H.log("TRAFFIC_CONFLICT_NO_SLOT follower=%d leader=%d gap=%.2f lane=%d",
-              follower.index,leader.index,math.abs(gap),lane)
+          if not moved then
+            if math.abs(gap)<5.0 then
+              H.log("TRAFFIC_CONFLICT_NO_SLOT follower=%d leader=%d gap=%.2f lane=%d",
+                follower.index,leader.index,math.abs(gap),lane)
+            end
+            -- A detected conflict with no available lane change must become
+            -- a braking command immediately. Previously this branch only
+            -- logged the conflict; the car kept its previous throttle target
+            -- and could drive straight into a stopped player.
+            if follower.managed and sameDirection and not follower.p.emergencyMode then
+              local stoppingDecel=clamp(
+                safeNumber(follower.p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
+              local stoppingDistance=follower.speed*0.45+
+                follower.speed*follower.speed/(2.0*stoppingDecel)+
+                followerHalf+leaderHalf+2.0
+              if closing>0.5 and distance<stoppingDistance or distance<6.0 then
+                local fp=follower.p
+                if fp.coordinatorFromLane~=nil or fp.passTargetIndex~=nil or
+                    fp.yieldingFor~=nil then
+                  coordinatorAbortUnsafeTransition(follower,leader.index)
+                end
+                fp.emergencyWait=true
+                fp.emergencyWaitGap=distance
+                fp.emergencyWaitSpeed=leader.speed
+                fp.emergencyWaitObstacle=leader.index
+                fp.trafficAction="EMERGENCY_WAIT"
+                fp.trafficReason="no_safe_lane_hard_brake"
+                H.log("TRAFFIC_HARD_STOP_NO_SLOT id=%d obstacle=%d gap=%.2f closing=%.2f stop_dist=%.2f",
+                  follower.index,leader.index,distance,closing,stoppingDistance)
+              end
+            end
           end
         end
       end
