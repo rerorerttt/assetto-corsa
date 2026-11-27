@@ -1026,19 +1026,31 @@ local function coordinatorLateralOverlap(owner,other,targetCenter)
   local current=select(2,relativeToRoute(other.car.position,sample))
   if current==nil then return false end
   local target=current
+  local source=nil
   if other.managed and other.lanes and other.p.routeProgress~=nil then
-    local targetLane=other.p.coordinatorTargetLane or other.p.coordinatedLane
-    local targetOffset=targetLane and other.lanes.centers[targetLane]
     local otherSample=Geometry.sample(state.routeGeometry,other.p.routeProgress)
-    if targetOffset~=nil and otherSample then
-      local targetX=otherSample.x-otherSample.tz*targetOffset
-      local targetZ=otherSample.z+otherSample.tx*targetOffset
-      local projected=select(2,relativeToRoute({x=targetX,z=targetZ},sample))
-      if projected~=nil then target=projected end
+    local function projectLane(lane)
+      local offset=lane and other.lanes.centers[lane]
+      if offset==nil or not otherSample then return nil end
+      local x=otherSample.x-otherSample.tz*offset
+      local z=otherSample.z+otherSample.tx*offset
+      return select(2,relativeToRoute({x=x,z=z},sample))
+    end
+    local targetLane=other.p.coordinatorTargetLane or other.p.coordinatedLane
+    local projectedTarget=projectLane(targetLane)
+    if projectedTarget~=nil then target=projectedTarget end
+    -- A RETURN/PASS reservation owns the complete swept corridor until the
+    -- vehicle physically reaches its destination. The old check covered only
+    -- current body -> target centre; on a tight bend the projected body could
+    -- already have drifted away from the source lane, allowing the next car to
+    -- reserve that same lane while the first car was still crossing it.
+    -- Explicitly retain the source lane in the occupied envelope.
+    if other.p.coordinatorFromLane~=nil then
+      source=projectLane(other.p.coordinatorFromLane)
     end
   end
-  local occupiedMin=math.min(current,target)-otherHalf
-  local occupiedMax=math.max(current,target)+otherHalf
+  local occupiedMin=math.min(current,target,source or current)-otherHalf
+  local occupiedMax=math.max(current,target,source or current)+otherHalf
   return targetCenter+ownHalf+0.35>occupiedMin and
     targetCenter-ownHalf-0.35<occupiedMax
 end
