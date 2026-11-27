@@ -53,7 +53,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  trafficToolImported=false, trafficImportPending=true, trafficImportRetry=0,
+  trafficToolImported=false, trafficToolLanes={}, trafficImportPending=true, trafficImportRetry=0,
   trafficImportLastError="not_attempted", respawnAccum=0, respawnCooldown={},
   playerAutopilotLast=false, steeringDiagnostics=false,
 }
@@ -247,6 +247,37 @@ local function saveLine()
     flushLog()
   else state.status="Ошибка сохранения" end
 end
+local function saveTrafficToolLanes(lanes)
+  if type(lanes)~="table" or #lanes==0 then return 0 end
+  if not ac or type(ac.getTrackDataFilename)~="function" or
+     not io or type(io.save)~="function" then
+    writeLog("TRAFFIC_LANES_SAVE_SKIP reason=track_path_or_io_save_unavailable")
+    return 0
+  end
+  local saved=0
+  for i=1,#lanes do
+    local lane=lanes[i]
+    if lane and type(lane.points)=="table" and #lane.points>=2 then
+      local filename=string.format("routepilot_lane_%02d.txt",i)
+      local okPath,path=pcall(ac.getTrackDataFilename,filename)
+      if okPath and type(path)=="string" and path~="" then
+        local okSave,err=pcall(io.save,path,serializeNodes(lane.points).."\n",true)
+        if okSave then
+          saved=saved+1
+          writeLog("TRAFFIC_LANE_CONVERT_OK index=%d id=%s points=%d path=%s",
+            i,tostring(lane.id),#lane.points,tostring(path))
+        else
+          writeLog("TRAFFIC_LANE_CONVERT_FAIL index=%d id=%s error=%s",
+            i,tostring(lane.id),tostring(err))
+        end
+      else
+        writeLog("TRAFFIC_LANE_PATH_FAIL index=%d id=%s",i,tostring(lane.id))
+      end
+    end
+  end
+  writeLog("TRAFFIC_LANES_CONVERTED total=%d saved=%d",#lanes,saved)
+  return saved
+end
 local function loadLine()
   if not TrafficImport then
     state.trafficImportLastError="module_load_failed: "..tostring(trafficImportLoadError)
@@ -254,10 +285,16 @@ local function loadLine()
     writeLog("IMPORT_MODULE_FAIL error=%s",tostring(trafficImportLoadError))
   end
   if TrafficImport then
-    local imported, importedLoop, importInfo = nil, nil, nil
-    local okImport, a, b, c = pcall(TrafficImport.load, writeLog)
-    if okImport then imported, importedLoop, importInfo = a, b, c
+    local imported, importedLoop, importInfo, importedLanes = nil, nil, nil, nil
+    local okImport, a, b, c, d = pcall(TrafficImport.load, writeLog)
+    if okImport then imported, importedLoop, importInfo, importedLanes = a, b, c, d
     else importInfo = tostring(a) end
+    if type(importedLanes)=="table" and #importedLanes>0 then
+      state.trafficToolLanes=importedLanes
+      state.showWorldLines=true
+      saveTrafficToolLanes(importedLanes)
+      writeLog("TRAFFIC_TOOL_ALL_LANES_READY lanes=%d",#importedLanes)
+    end
     state.trafficImportLastError=imported and "" or tostring(importInfo or "unknown")
     state.trafficImportPending=not (imported and #imported>=2)
     writeLog("IMPORT_ATTEMPT result=%s detail=%s",state.trafficImportPending and "FAILED" or "SUCCESS",tostring(importInfo))
@@ -1053,7 +1090,8 @@ end
 -- Finished track ("Показать линии"): the whole route at long distance.
 render.on('main.track.transparent', function()
   local n=#state.nodes
-  if n<2 then return end
+  local trafficLaneCount=type(state.trafficToolLanes)=="table" and #state.trafficToolLanes or 0
+  if n<2 and trafficLaneCount==0 then return end
   local isRec=state.recLine or state.recBounds
   if not (state.showWorldLines or isRec) then return end
   local ok=pcall(function()
@@ -1062,6 +1100,32 @@ render.on('main.track.transparent', function()
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
+    local TRAFFIC_LINE=rgbm(0.10,0.65,1.0,0.95)
+    -- Render every Traffic Tool lane independently. Keep authored direction
+    -- and topology; never join branches just because their endpoints are close.
+    if state.showWorldLines and trafficLaneCount>0 then
+      for laneIndex=1,trafficLaneCount do
+        local lane=state.trafficToolLanes[laneIndex]
+        local pts=lane and lane.points or nil
+        local pn=type(pts)=="table" and #pts or 0
+        if pn>=2 then
+          local segmentCount=lane.loop and pn or (pn-1)
+          for j=1,segmentCount do
+            local a=pts[j]
+            local b=pts[(j%pn)+1]
+            if flatDist(player.position,a)<CFG.DRAW_RANGE then
+              local dx,dz=normalize2(b.x-a.x,b.z-a.z)
+              render.debugLine(vec3(a.x,a.y+0.07,a.z),vec3(b.x,b.y+0.07,b.z),TRAFFIC_LINE)
+              render.debugLine(vec3(a.x-dz*3.5,a.y+0.06,a.z+dx*3.5),
+                vec3(b.x-dz*3.5,b.y+0.06,b.z+dx*3.5),RED)
+              render.debugLine(vec3(a.x+dz*3.5,a.y+0.06,a.z-dx*3.5),
+                vec3(b.x+dz*3.5,b.y+0.06,b.z-dx*3.5),RED)
+            end
+          end
+        end
+      end
+    end
+    if n>=2 then
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
     if isRec then
@@ -1108,6 +1172,7 @@ render.on('main.track.transparent', function()
       if i2==toI then break end
       i2=(i2%n)+1
     end
+    end -- selected RoutePilot driving line
   end)
   if not ok then
     writeLog("DRAW3D_ERROR"); flushLog()
