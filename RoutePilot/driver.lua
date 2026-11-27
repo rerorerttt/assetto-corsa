@@ -617,6 +617,25 @@ local function relativeToRoute(position, sample)
   return longitudinal,lateral
 end
 
+-- Project the complete oriented vehicle footprint onto the road's lateral
+-- and longitudinal axes. A slow, rotated player car gets an extra safety
+-- margin because its front/rear corners can intrude into the adjacent lane.
+local function vehicleRouteFootprint(car,sample,extra)
+  local fx,fz=normalize2(car and car.look and car.look.x,
+    car and car.look and car.look.z)
+  local halfWidth=math.max(0.75,
+    safeNumber(car and car.aabbSize and car.aabbSize.x,2.0)*0.5)
+  local halfLength=math.max(1.5,
+    safeNumber(car and car.aabbSize and car.aabbSize.z,4.5)*0.5)
+  local forwardDot=fx*sample.tx+fz*sample.tz
+  local lateralDot=fx*(-sample.tz)+fz*sample.tx
+  local lateralHalf=halfWidth*math.abs(forwardDot)+
+    halfLength*math.abs(lateralDot)+math.max(0,safeNumber(extra))
+  local longitudinalHalf=halfWidth*math.abs(lateralDot)+
+    halfLength*math.abs(forwardDot)
+  return lateralHalf,longitudinalHalf,forwardDot
+end
+
 local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
   local sim=ac.getSim()
   local own=state.p[carIndex]
@@ -664,32 +683,29 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         -- corridor. A sideways player car can occupy BOTH lanes even though
         -- its centre projects into only one lane. Using only aabbSize.x here
         -- drops that obstacle as soon as its centre crosses a lane boundary.
-        local ownFx,ownFz=normalize2(car.look.x,car.look.z)
-        local ownHalfWidth=math.max(0.75,
-          safeNumber(car.aabbSize and car.aabbSize.x,2.0)*0.5)
-        local ownHalfLength=math.max(1.5,
-          safeNumber(car.aabbSize and car.aabbSize.z,4.5)*0.5)
-        local otherHalfWidth=math.max(0.75,
-          safeNumber(other.aabbSize and other.aabbSize.x,2.0)*0.5)
-        local otherHalfLength=math.max(1.5,
-          safeNumber(other.aabbSize and other.aabbSize.z,4.5)*0.5)
-        local ownLateralHalf=ownHalfWidth*math.abs(ownFx*ownSample.tx+ownFz*ownSample.tz)+
-          ownHalfLength*math.abs(ownFx*(-ownSample.tz)+ownFz*ownSample.tx)
-        local otherLateralHalf=otherHalfWidth*math.abs(otherFx*ownSample.tx+otherFz*ownSample.tz)+
-          otherHalfLength*math.abs(otherFx*(-ownSample.tz)+otherFz*ownSample.tx)
-        local lateralSeparation=ownLateralHalf+otherLateralHalf+0.4
         local otherSpeed=math.max(0,safeNumber(other.speedMs))
+        local ownLateralHalf,ownLongitudinalHalf=
+          vehicleRouteFootprint(car,ownSample,0)
+        local playerCornerMargin=(i==0 and otherSpeed<=3.0 and
+          math.abs(directionDot)<0.85) and 1.5 or 0
+        local otherLateralHalf,otherLongitudinalHalf=
+          vehicleRouteFootprint(other,ownSample,playerCornerMargin)
+        local lateralSeparation=ownLateralHalf+otherLateralHalf+0.4
+        local longitudinalOverlap=ownLongitudinalHalf+otherLongitudinalHalf
         local detectionHorizon=directionDot < -0.25 and
           (ownSpeed+otherSpeed)*2.0+30.0 or ownSpeed*3.0+30.0
         -- A same-direction car behind is never a FOLLOW leader. The old
         -- negative-gap allowance made a just-overtaken vehicle look like an
         -- obstacle ahead, so the passer braked to zero immediately after
         -- clearing it.
-        if gap and actualLateral and gap>0.0 and
+        -- Keep a car as an immediate obstacle while its physical body
+        -- still overlaps longitudinally. Center-point ordering alone can
+        -- release braking while bumpers/front corners are still in contact.
+        if gap and actualLateral and gap>-longitudinalOverlap and
            gap<math.max(110.0,detectionHorizon) and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
-           (not bestGap or gap<bestGap) then
-          bestGap=gap
+           (not bestGap or math.max(0.1,gap-longitudinalOverlap)<bestGap) then
+          bestGap=math.max(0.1,gap-longitudinalOverlap)
           local measuredOtherSpeed=math.max(0,safeNumber(other.speedMs))
           bestSpeed=directionDot < -0.25 and -measuredOtherSpeed or measuredOtherSpeed
           bestIndex=i;bestLateral=actualLateral
@@ -996,10 +1012,11 @@ end
 -- segment and are not globally meaningful around bends; never use lane-index
 -- equality as proof that two vehicles occupy the same space.
 local function coordinatorLateralOverlap(owner,other,targetCenter)
-  local ownHalf=math.max(0.75,
-    safeNumber(owner.car.aabbSize and owner.car.aabbSize.x,2.0)*0.5)
-  local otherHalf=math.max(0.75,
-    safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
+  local sample=Geometry.sample(state.routeGeometry,owner.p.routeProgress)
+  if not sample then return false end
+  local ownHalf=vehicleRouteFootprint(owner.car,sample,0)
+  local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
+  local otherHalf=vehicleRouteFootprint(other.car,sample,playerMargin)
   local current=safeNumber(other.p.latOff,targetCenter)
   local target=current
   if other.managed and other.lanes then
@@ -1625,11 +1642,11 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         if other.index~=rec.index and
             coordinatorSameDirection(rec,other) then
           local gap=coordinatorGap(rec,other)
-          local ownHalf=math.max(0.75,
-            safeNumber(rec.car.aabbSize and rec.car.aabbSize.x,2.0)*0.5)
-          local otherHalf=math.max(0.75,
-            safeNumber(other.car.aabbSize and other.car.aabbSize.x,2.0)*0.5)
-          local lateralOverlap=math.abs(
+          local sample=Geometry.sample(state.routeGeometry,rec.p.routeProgress)
+          local ownHalf,ownLong=sample and vehicleRouteFootprint(rec.car,sample,0) or 0,0
+          local playerMargin=(other.index==0 and other.speed<=3.0) and 1.5 or 0
+          local otherHalf=sample and vehicleRouteFootprint(other.car,sample,playerMargin) or 0
+          local lateralOverlap=sample~=nil and math.abs(
             safeNumber(other.p.latOff)-safeNumber(p.latOff))<
             ownHalf+otherHalf+0.35
           -- A transient footprint overlap during a managed pass must not
