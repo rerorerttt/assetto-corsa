@@ -1341,9 +1341,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local p=rec.p
       local current=p.coordinatedLane or 1
       local nearestGap,nearestIndex,nearestSpeed=nil,nil,nil
+      local nearestOncoming,nearestManaged=false,false
       for _,other in ipairs(records) do
-        if other.index~=rec.index and
-            coordinatorSameDirection(rec,other) then
+        if other.index~=rec.index then
+          local sameDirection=coordinatorSameDirection(rec,other)
           local gap=coordinatorGap(rec,other)
           local ownHalf=math.max(0.75,
             safeNumber(rec.car.aabbSize and rec.car.aabbSize.x,2.0)*0.5)
@@ -1352,26 +1353,42 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local lateralOverlap=math.abs(
             safeNumber(other.p.latOff)-safeNumber(p.latOff))<
             ownHalf+otherHalf+0.35
-          if lateralOverlap and gap and gap>=-2.0 and
-              (not nearestGap or gap<nearestGap) then
-            nearestGap=gap
+          local candidateGap=sameDirection and gap or
+            (gap and math.abs(gap) or nil)
+          if lateralOverlap and candidateGap and
+              (not sameDirection or gap>=-2.0) and
+              (not nearestGap or candidateGap<nearestGap) then
+            nearestGap=candidateGap
             nearestIndex=other.index
             nearestSpeed=other.speed
+            nearestOncoming=not sameDirection
+            nearestManaged=other.managed==true
           end
         end
       end
-      local dangerDistance=math.max(14.0,rec.speed*0.95+5.0)
+      local closing=nearestOncoming and (rec.speed+safeNumber(nearestSpeed)) or
+        (rec.speed-safeNumber(nearestSpeed))
+      local dangerDistance=math.max(14.0,
+        (nearestOncoming and closing or rec.speed)*0.95+5.0)
       local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
-        (nearestSpeed<math.max(1.5,rec.speed-0.8) or nearestGap<6.0)
+        (nearestOncoming or nearestSpeed<math.max(1.5,rec.speed-0.8) or
+          nearestGap<6.0)
       if emergencyDanger then
         local candidates={}
-        for lane=1,rec.lanes.count do
-          if math.abs(lane-current)==1 then
-            candidates[#candidates+1]={
-              lane=lane,
-              cost=math.abs(rec.lanes.centers[lane]-
-                safeNumber(p.latOff,rec.lanes.centers[current]))
-            }
+        -- For a head-on pair, exactly one managed car initiates the lateral
+        -- escape. The other brakes and holds its lane; this prevents both cars
+        -- from choosing the same empty lane at the same time.
+        local mayEscape=not nearestOncoming or not nearestManaged or
+          rec.index<nearestIndex
+        if mayEscape then
+          for lane=1,rec.lanes.count do
+            if math.abs(lane-current)==1 then
+              candidates[#candidates+1]={
+                lane=lane,
+                cost=math.abs(rec.lanes.centers[lane]-
+                  safeNumber(p.latOff,rec.lanes.centers[current]))
+              }
+            end
           end
         end
         table.sort(candidates,function(a,b) return a.cost<b.cost end)
@@ -1389,12 +1406,14 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         else
           p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
           p.emergencyRescueReady=p.emergencyBlockedT>=10.0
+          p.coordinatorConflictSpeed=0.0
           p.trafficAction="EMERGENCY_WAIT"
-          p.trafficReason="all_lanes_occupied"
+          p.trafficReason=nearestOncoming and "oncoming_no_safe_lane" or
+            "all_lanes_occupied"
           if not p.emergencyWaitLogged then
             p.emergencyWaitLogged=true
-            H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f",
-              rec.index,nearestIndex or -1,nearestGap)
+            H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f oncoming=%s",
+              rec.index,nearestIndex or -1,nearestGap,tostring(nearestOncoming))
           end
         end
       else
