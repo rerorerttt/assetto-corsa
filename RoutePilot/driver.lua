@@ -1038,10 +1038,27 @@ local function coordinatorLateralOverlap(owner,other,targetCenter)
   local otherSample=Geometry.sample(state.routeGeometry,other.p.routeProgress)
   if not ownSample or not otherSample then return false end
 
-  -- Never project a distant vehicle onto the owner's tangent. On a bend that
-  -- projection can move a car several metres sideways and make an occupied
-  -- adjacent lane look empty. Evaluate each oriented footprint in the route
-  -- frame at that vehicle's own longitudinal station.
+  -- Route progress is cyclic. At a loop crossing or when two route sections
+  -- pass near one another, the signed route gap can describe a short arc even
+  -- though the cars are physically far apart. Never treat that alias as lane
+  -- occupancy: an apparent 31 m head-on gap between cars 80 m apart is not a
+  -- collision threat and must not trigger an emergency hold or lane rejection.
+  local ownPosition=owner.car and owner.car.position
+  local otherPosition=other.car and other.car.position
+  if ownPosition and otherPosition then
+    local dx=safeNumber(otherPosition.x)-safeNumber(ownPosition.x)
+    local dz=safeNumber(otherPosition.z)-safeNumber(ownPosition.z)
+    local worldDistance=math.sqrt(dx*dx+dz*dz)
+    local routeSeparation=coordinatorGap(owner,other)
+    if routeSeparation~=nil and
+        worldDistance>math.max(14.0,math.abs(routeSeparation)+10.0) then
+      return false
+    end
+  end
+
+  -- After the physical-distance gate, evaluate each oriented footprint in its
+  -- own route frame. This avoids projecting a distant vehicle onto a tangent
+  -- that belongs to a different part of a curved or looping route.
   local ownHalf=vehicleRouteFootprint(owner.car,ownSample,0)
   -- Use the player's measured oriented body only. The old unconditional
   -- 1.5 m stopped-player margin expanded a normally aligned car across both
