@@ -542,7 +542,7 @@ local function decodeNetwork(data, lanes)
   }
 end
 
-local function projectToLane(lane, position, hx, hz)
+local function projectToLane(lane, position, hx, hz, allowOpposite)
   local points = lane.points
   local segmentCount = lane.routeLoop and #points or (#points - 1)
   local best = nil
@@ -562,7 +562,7 @@ local function projectToLane(lane, position, hx, hz)
       -- Direction is never reversed: a lane facing away from the player
       -- cannot win over a lane whose authored direction matches the player.
       local score = distanceSq + (1 - alignment) * 100
-      if alignment >= -0.05 and (not best or score < best.score) then
+      if (allowOpposite or alignment >= -0.05) and (not best or score < best.score) then
         best = { score = score, distance = math.sqrt(distanceSq),
           segment = i, t = t, tx = tx, tz = tz }
       end
@@ -595,7 +595,7 @@ local function buildDirectedChain(lanes, player, trace)
     if length>longestLength then longestIndex,longestLength=i,length end
     if lane.routeLoop and player and player.position and player.look then
       local hx,hz=normalized(player.look.x,player.look.z)
-      local projection=projectToLane(lane,player.position,hx,hz)
+      local projection=projectToLane(lane,player.position,hx,hz,true)
       if projection then
         local score=projection.distance*projection.distance+(1-(hx*projection.tx+hz*projection.tz))*100
         if score<bestLoopScore then bestLoopIndex,bestLoopProjection,bestLoopScore=i,projection,score end
