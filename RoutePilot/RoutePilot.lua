@@ -569,7 +569,9 @@ local function teleportHome(carIndex,car)
   -- Route nodes are recorded in the driver's travel direction, while the
   -- CSP placement API uses the opposite direction vector (verified by spawn).
   -- Determine which route direction is physically forward for this car.
-  local heading=car.look or car.velocity
+  local velocity=car.velocity
+  local velocitySpeed=velocity and math.sqrt(velocity.x*velocity.x+velocity.z*velocity.z) or 0
+  local heading=velocitySpeed>0.5 and velocity or car.look
   if not heading then return false end
   local hx,hz=normalize2(heading.x,heading.z)
   local seg,t,routeError=findNearestSeg(car.position,1,true,heading)
@@ -850,12 +852,13 @@ function script.update(dt)
       for _,i in ipairs(driveOrder) do
         local car=ac.getCar(i)
         if car and car.isActive and car.isAIControlled then
-          local okc,erc=pcall(Driver.update,i,car,dt)
-          if not okc then
-            writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
-            releaseCar(i)
-          else
-            pcall(updateRescueWatchdog,i,car,dt)
+          local rescued=updateRescueWatchdog(i,car,dt)
+          if not rescued then
+            local okc,erc=pcall(Driver.update,i,car,dt)
+            if not okc then
+              writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
+              releaseCar(i)
+            end
           end
         end
       end
