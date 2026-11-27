@@ -535,7 +535,7 @@ local function teleportHome(carIndex,car)
   local bestDistance=0
   local preferredPosition,preferredDirection=nil,nil
   local preferredDistance=0
-  local preferredClearance=8.0
+  local preferredClearance=12.0
   local step=math.max(4.0,math.min(6.0,metrics.length/160.0))
   local distance=step
   while distance<metrics.length do
@@ -573,7 +573,7 @@ local function teleportHome(carIndex,car)
 
   local pos=preferredPosition or bestPosition
   local dir=preferredDirection or bestDirection
-  if not pos or not dir or bestClearance<5.0 then
+  if not pos or not dir or bestClearance<8.0 then
     writeLog("RESCUE_NO_CLEAR_SPOT id=%d best_clearance=%.2f route=%.1f",
       carIndex,bestClearance,metrics.length)
     return false
