@@ -1679,7 +1679,8 @@ function Driver.update(carIndex, car, dt)
       safeNumber(p.coordinatorOffset,p.latOff or 0)))
   end
   local trafficBlocked=blockingGap~=nil and blockingGap<18.0
-  if speed<RESCUE_SPEED and not trafficBlocked and not p.projectionLost and
+  if speed<RESCUE_SPEED and safeNumber(car.gas)>=0.55 and
+      not trafficBlocked and not p.projectionLost and
       not p.offTrackRecovering and safeNumber(p.emergencyBlockedT)<=0 then
     p.stuck=p.stuck+dt
   else
@@ -1688,8 +1689,9 @@ function Driver.update(carIndex, car, dt)
   local rescueReason=nil
   if safeNumber(p.emergencyBlockedT)>=10.0 then rescueReason="traffic_blocked_10s"
   elseif p.offTrackT>=OFFTRACK_TIME then rescueReason="offtrack_recovery_failed_10s"
-  elseif p.stuck>=RESCUE_TIME and not p.offTrackRecovering and
-      safeNumber(p.emergencyBlockedT)<=0 then rescueReason="stuck_5s" end
+  elseif p.stuck>=RESCUE_TIME and safeNumber(car.gas)>=0.55 and
+      not p.offTrackRecovering and safeNumber(p.emergencyBlockedT)<=0 then
+    rescueReason="stuck_gas_10s" end
   if rescueReason and p.rescueRetryT<=0 then
     p.stuck=0
     p.rescueRetryT=5.0
