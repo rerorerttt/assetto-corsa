@@ -1206,10 +1206,9 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             distance<math.max(9.0,follower.speed*0.95+3.0) and
             (leader.speed<math.max(1.0,follower.speed-0.8) or distance<6.0)
           if emergencyCandidate then
-            -- The dedicated escape pass below gets first refusal, but a
-            -- pending escape is NOT a successful manoeuvre. If no lane is
-            -- available it must still trigger the hard safety-speed cap.
-            moved=false
+            -- Let the dedicated escape controller below own stopped obstacles;
+            -- ordinary PASS/YIELD must not seize the lane first.
+            moved=true
           elseif not sameDirection then
             -- Oncoming cars are separated laterally before the meeting point.
             if follower.managed and follower.p.coordinatorChangeT<=0 and
@@ -1257,34 +1256,14 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
               end
             end
           end
-          if not moved then
-            -- A failed reservation is never permission to continue into the
-            -- obstacle. For same-direction traffic cap the follower; for
-            -- oncoming traffic both managed cars receive a closing-speed cap.
-            if sameDirection then
-              if follower.managed then
-                local safeSpeed=safeFollowingSpeed(distance,leader.speed,
-                  follower.p.brakeAccelEstimate)
-                follower.p.coordinatorConflictSpeed=math.min(
-                  safeNumber(follower.p.coordinatorConflictSpeed,math.huge),
-                  safeSpeed)
-              end
-            else
-              if follower.managed then
-                local safeSpeed=safeFollowingSpeed(distance,-leader.speed,
-                  follower.p.brakeAccelEstimate)
-                follower.p.coordinatorConflictSpeed=math.min(
-                  safeNumber(follower.p.coordinatorConflictSpeed,math.huge),
-                  safeSpeed)
-              end
-              if leader.managed then
-                local safeSpeed=safeFollowingSpeed(distance,-follower.speed,
-                  leader.p.brakeAccelEstimate)
-                leader.p.coordinatorConflictSpeed=math.min(
-                  safeNumber(leader.p.coordinatorConflictSpeed,math.huge),
-                  safeSpeed)
-              end
-            end
+          if not moved and sameDirection and follower.managed then
+            -- A failed lane reservation is a mandatory braking decision,
+            -- not permission to continue at the previous target speed.
+            local safeSpeed=safeFollowingSpeed(distance,leader.speed,
+              follower.p.brakeAccelEstimate)
+            follower.p.coordinatorConflictSpeed=math.min(
+              safeNumber(follower.p.coordinatorConflictSpeed,math.huge),
+              safeSpeed)
           end
           if not moved and math.abs(gap)<5.0 then
             H.log("TRAFFIC_CONFLICT_NO_SLOT follower=%d leader=%d gap=%.2f lane=%d",
@@ -1346,12 +1325,6 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           p.emergencyRescueReady=p.emergencyBlockedT>=10.0
           p.trafficAction="EMERGENCY_WAIT"
           p.trafficReason="all_lanes_occupied"
-          -- Keep the vehicle below the speed that can be stopped in the
-          -- remaining gap while the adjacent lane is occupied.
-          local waitSpeed=safeFollowingSpeed(nearestGap,nearestSpeed,
-            p.brakeAccelEstimate)
-          p.coordinatorConflictSpeed=math.min(
-            safeNumber(p.coordinatorConflictSpeed,math.huge),waitSpeed)
           if not p.emergencyWaitLogged then
             p.emergencyWaitLogged=true
             H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f",
@@ -1397,11 +1370,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
     if rec.managed and not p.emergencyEscape and p.coordinatorReturn and p.homeLane and
         p.coordinatedLane~=p.homeLane and p.coordinatorChangeT<=0 then
       local step=p.homeLane>p.coordinatedLane and 1 or -1
-      -- Do not pull a car back into a dense platoon immediately after
-      -- passing/yielding. Keep the acquired lane until a genuinely large gap
-      -- exists; this prevents repeated lane changes from collapsing the pack
-      -- into one queue.
-      if coordinatorLaneFree(rec,p.coordinatedLane+step,records,28.0) then
+      if coordinatorLaneFree(rec,p.coordinatedLane+step,records,8.0) then
         coordinatorMove(rec,p.coordinatedLane+step,records,"RETURN",nil)
       end
       if p.coordinatedLane==p.homeLane then p.coordinatorReturn=false end
