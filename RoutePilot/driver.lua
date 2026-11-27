@@ -2126,7 +2126,9 @@ function Driver.update(carIndex, car, dt)
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
     H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s elapsed=%.2f",
       carIndex,rescueReason,tostring(rescued),
-      rescueReason=="traffic_blocked_10s" and safeNumber(p.emergencyBlockedT) or safeNumber(p.offTrackT))
+      rescueReason=="traffic_stalled_10s" and safeNumber(p.trafficStallT) or
+      (rescueReason=="traffic_blocked_10s" and safeNumber(p.emergencyBlockedT) or
+      safeNumber(p.offTrackT)))
     if rescued then return end
   end
 
