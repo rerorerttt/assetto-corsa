@@ -667,7 +667,11 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         local otherSpeed=math.max(0,safeNumber(other.speedMs))
         local detectionHorizon=directionDot < -0.25 and
           (ownSpeed+otherSpeed)*2.0+30.0 or ownSpeed*3.0+30.0
-        if gap and actualLateral and gap>-halfLengths-2.0 and
+        -- A same-direction car behind is never a FOLLOW leader. The old
+        -- negative-gap allowance made a just-overtaken vehicle look like an
+        -- obstacle ahead, so the passer braked to zero immediately after
+        -- clearing it.
+        if gap and actualLateral and gap>0.0 and
            gap<math.max(110.0,detectionHorizon) and
            math.abs(actualLateral-laneOffset)<lateralSeparation and
            (not bestGap or gap<bestGap) then
@@ -1398,7 +1402,14 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         local emergencyPair=
           (follower.p.emergencyEscape and follower.p.emergencyObstacleIndex==leader.index) or
           (leader.p.emergencyEscape and leader.p.emergencyObstacleIndex==follower.index)
-        local sameLane=lateralOverlap or emergencyPair
+        -- Distinct reserved lanes remain authoritative while two cars settle
+        -- into their lane centres after a pass. A temporary swept-body
+        -- overlap must not revoke lane ownership or stop the trailing car.
+        local distinctReservedLanes=sameDirection and
+          follower.managed and leader.managed and
+          follower.p.coordinatedLane~=nil and leader.p.coordinatedLane~=nil and
+          follower.p.coordinatedLane~=leader.p.coordinatedLane
+        local sameLane=emergencyPair or (lateralOverlap and not distinctReservedLanes)
         local conflictDistance=sameDirection and distance<trigger or
           (not sameDirection and math.abs(gap)<math.max(5.0,
             (follower.speed+leader.speed)*1.5+5.0))
@@ -1590,10 +1601,15 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local lateralOverlap=math.abs(
             safeNumber(other.p.latOff)-safeNumber(p.latOff))<
             ownHalf+otherHalf+0.35
+          -- A transient footprint overlap during a managed pass must not
+          -- revoke the distinct lane reservations of the two cars.
+          local distinctReservedLanes=other.managed and
+            other.p.coordinatedLane~=nil and p.coordinatedLane~=nil and
+            other.p.coordinatedLane~=p.coordinatedLane
           -- Only a vehicle ahead can trigger a same-direction emergency.
           -- A car just behind/alongside must not be mistaken for an obstacle
           -- and force both vehicles into an emergency-stop deadlock.
-          if lateralOverlap and gap and gap>0.0 and
+          if lateralOverlap and not distinctReservedLanes and gap and gap>0.0 and
               (not nearestGap or gap<nearestGap) then
             nearestGap=gap
             nearestIndex=other.index
