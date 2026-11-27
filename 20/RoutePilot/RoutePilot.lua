@@ -589,40 +589,26 @@ local function respawnDistantTrafficCars(sim,dt)
       local dz=car.position.z-player.position.z
       local worldDistance=math.sqrt(dx*dx+dz*dz)
       if worldDistance>500.0 then
-        local carRoute,carError=findRouteDistanceAtPosition(car.position,metrics,car.look)
-        if carError<=50.0 then
-          local routeDelta=carRoute-playerRoute
-          if metrics.loop then
-            if routeDelta>metrics.length*0.5 then routeDelta=routeDelta-metrics.length end
-            if routeDelta< -metrics.length*0.5 then routeDelta=routeDelta+metrics.length end
-          end
-          if math.abs(routeDelta)>500.0 or worldDistance>500.0 then
-            order=order+1
-            local targetDistance=playerRoute+500.0+(order-1)*spacing
-            local position,direction,routeSegment,routeParameter=
-              sampleSpawnRoute(metrics,targetDistance)
-            if position and direction and spotIsClear(position,carIndex) and
-               type(physics)=="table" and type(physics.setAICarPosition)=="function" then
-              local ok,result=pcall(physics.setAICarPosition,carIndex,position,
-                vec3(-direction.x,-direction.y,-direction.z))
-              if ok and result~=false then
-                state.p[carIndex]=nil
-                state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
-                state.respawnCooldown[carIndex]=5.0
-                writeLog("RESPAWN_TRAFFIC id=%d old_distance=%.1f route_delta=%.1f ahead=%.1f segment=%d",
-                  carIndex,worldDistance,routeDelta,targetDistance-playerRoute,routeSegment)
-              else
-                state.respawnCooldown[carIndex]=1.0
-                writeLog("RESPAWN_TRAFFIC_FAILED id=%d error=%s",carIndex,tostring(result))
-              end
-            else
-              state.respawnCooldown[carIndex]=1.0
-            end
+        order=order+1
+        local targetDistance=playerRoute+500.0+(order-1)*spacing
+        local position,direction,routeSegment,routeParameter=
+          sampleSpawnRoute(metrics,targetDistance)
+        if position and direction and spotIsClear(position,carIndex) and
+           type(physics)=="table" and type(physics.setAICarPosition)=="function" then
+          local ok,result=pcall(physics.setAICarPosition,carIndex,position,
+            vec3(-direction.x,-direction.y,-direction.z))
+          if ok and result~=false then
+            state.p[carIndex]=nil
+            state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
+            state.respawnCooldown[carIndex]=5.0
+            writeLog("RESPAWN_TRAFFIC id=%d old_distance=%.1f ahead=%.1f segment=%d",
+              carIndex,worldDistance,targetDistance-playerRoute,routeSegment)
+          else
+            state.respawnCooldown[carIndex]=1.0
+            writeLog("RESPAWN_TRAFFIC_FAILED id=%d error=%s",carIndex,tostring(result))
           end
         else
           state.respawnCooldown[carIndex]=1.0
-          writeLog("RESPAWN_SKIP id=%d route_error=%.1f world_distance=%.1f",
-            carIndex,carError,worldDistance)
         end
       end
     end
