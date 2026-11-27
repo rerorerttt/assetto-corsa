@@ -22,6 +22,10 @@ local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
+local okTrafficImport, TrafficImport = pcall(require, "traffic_import")
+if not okTrafficImport or type(TrafficImport) ~= "table" or type(TrafficImport.load) ~= "function" then
+  TrafficImport = nil
+end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -171,7 +175,10 @@ local function saveLine()
     local ok,f=pcall(io.open,getLineFilePath(),"w")
     if ok and f then wroteFile=pcall(function() f:write(data) f:close() end) end
   end
-  if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
+  if ac.storage then
+    pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data)
+    pcall(ac.storage,"RP_LOOP_"..getTrackTag(),state.loopRoute and "1" or "0")
+  end
   saveBounds()
   if wroteFile then
     state.status=string.format("Сохранено: %d точек",#state.nodes)
@@ -195,6 +202,10 @@ local function loadLine()
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
+    if ac.storage then
+      local okLoop,storedLoop=pcall(ac.storage,"RP_LOOP_"..getTrackTag())
+      if okLoop and (storedLoop=="0" or storedLoop=="1") then state.loopRoute=storedLoop=="1" end
+    end
     state.nodes=loaded; state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
     if not state.spawnPerformed then
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
@@ -742,6 +753,41 @@ local function applyWidthPreset(preset)
   end
   writeLog("WIDTH_PRESET preset=%d width=%dm",preset,WIDTH_PRESETS[preset])
 end
+local function importTrafficTool()
+  if not TrafficImport then
+    state.status="Импортёр Traffic Tool не загружен"
+    writeLog("TRAFFIC_IMPORT_FAIL reason=module_unavailable")
+    return false
+  end
+  local ok,nodes,loopRoute,info=pcall(TrafficImport.load,writeLog)
+  if not ok then
+    state.status="Ошибка импорта Traffic Tool"
+    writeLog("TRAFFIC_IMPORT_FAIL error=%s",tostring(nodes))
+    flushLog()
+    return false
+  end
+  if type(nodes)~="table" or #nodes<2 then
+    state.status="Traffic Tool: линия не найдена"
+    writeLog("TRAFFIC_IMPORT_FAIL reason=%s",tostring(info))
+    flushLog()
+    return false
+  end
+  state.nodes=nodes
+  state.loopRoute=loopRoute==true
+  state.widthPreset=2
+  state.p={}; state.spawnHints={}; state.playerTelemetry=nil
+  state.routeGeometry=nil; state.loaded=true
+  state.recLine=false; state.recBounds=false
+  state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
+  state.boundsL={}; state.boundsR={}
+  for i=1,#nodes do state.boundsL[i]=-3.5; state.boundsR[i]=3.5 end
+  state.showWorldLines=true
+  state.status=string.format("Traffic Tool: %s, %d точек",state.loopRoute and "замкнутая" or "открытая",#nodes)
+  saveLine()
+  writeLog("TRAFFIC_IMPORT_OK loop=%s points=%d detail=%s width=7.0",tostring(state.loopRoute),#nodes,tostring(info))
+  flushLog()
+  return true
+end
 local function releaseCar(carIndex)
   local ok,controls=pcall(ac.overrideCarControls,carIndex)
   if ok and controls then
@@ -914,12 +960,13 @@ render.on('main.track.transparent', function()
     end
     -- draw all segments in [fromI..toI] (loop-aware); finished track: all
     local count=0
-    local maxSteps=n
+    local maxSteps=state.loopRoute and n or (n-1)
     local i2=fromI
     while count<=maxSteps do
       count=count+1
       local node=state.nodes[i2]
-      local nx=state.nodes[(i2%n)+1]
+      local nx=state.loopRoute and state.nodes[(i2%n)+1] or state.nodes[i2+1]
+      if not nx then break end
       local lx,lz=normalize2(nx.x-node.x,nx.z-node.z)
       local al,ar=boundsAt(i2)
       -- distance cull only for the finished track (long range view)
@@ -1088,6 +1135,8 @@ function windowMain(dt)
     if ui.button("Сохранить",vec2(-0.25,22)) then saveLine() end
     ui.sameLine(0,4)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
+    ui.sameLine(0,4)
+    if ui.button("Импорт Traffic Tool",vec2(-0.25,22)) then importTrafficTool() end
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
