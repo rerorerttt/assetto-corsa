@@ -2120,15 +2120,16 @@ function Driver.update(carIndex, car, dt)
       not p.offTrackRecovering and safeNumber(p.emergencyBlockedT)<=0 then
     rescueReason="stuck_gas_10s" end
   if rescueReason and p.rescueRetryT<=0 then
+    local rescueElapsed=rescueReason=="traffic_stalled_10s" and
+      safeNumber(p.trafficStallT) or
+      (rescueReason=="traffic_blocked_10s" and safeNumber(p.emergencyBlockedT) or
+      safeNumber(p.offTrackT))
     p.stuck=0
     p.trafficStallT=0
     p.rescueRetryT=5.0
     local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
     H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s elapsed=%.2f",
-      carIndex,rescueReason,tostring(rescued),
-      rescueReason=="traffic_stalled_10s" and safeNumber(p.trafficStallT) or
-      (rescueReason=="traffic_blocked_10s" and safeNumber(p.emergencyBlockedT) or
-      safeNumber(p.offTrackT)))
+      carIndex,rescueReason,tostring(rescued),rescueElapsed)
     if rescued then return end
   end
 
