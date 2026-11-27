@@ -566,19 +566,13 @@ local function teleportHome(carIndex,car)
   end
   if #state.nodes<2 or not car or not car.position then return false end
 
-  -- Route nodes are recorded in the driver's travel direction, while the
-  -- CSP placement API uses the opposite direction vector (verified by spawn).
-  -- Determine which route direction is physically forward for this car.
-  local velocity=car.velocity
-  local velocitySpeed=velocity and math.sqrt(velocity.x*velocity.x+velocity.z*velocity.z) or 0
-  local heading=velocitySpeed>0.5 and velocity or car.look
-  if not heading then return false end
-  local hx,hz=normalize2(heading.x,heading.z)
-  local seg,t,routeError=findNearestSeg(car.position,1,true,heading)
-  local a=state.nodes[seg]
-  local b=segEnd(seg)
-  local tx,tz=normalize2(b.x-a.x,b.z-a.z)
-  local sign=(tx*hx+tz*hz)>=0 and 1 or -1
+  -- Recovery always follows the recorded route direction. A stopped car's
+  -- look vector may point backwards after a head-on impact or spin, so it must
+  -- never be used to choose the teleport direction.
+  local driverState=state.p and state.p[carIndex]
+  local hintSeg=driverState and driverState.segIdx or 1
+  local seg,t,routeError=findNearestSeg(car.position,hintSeg,true,nil)
+  local sign=1
   if routeError>250 then
     writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f",carIndex,routeError)
     return false
