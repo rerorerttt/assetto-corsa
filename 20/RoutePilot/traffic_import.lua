@@ -117,6 +117,7 @@ local function buildDirectedChain(lanes, player)
     local points = lane.points
     local firstSegment = currentIndex == startIndex and startProjection.segment or 1
     local firstT = currentIndex == startIndex and startProjection.t or 0
+    if currentIndex ~= startIndex then appendPoint(nodes, points[1]) end
     local a = points[firstSegment]
     local b = points[firstSegment % #points + 1]
     if currentIndex == startIndex then
