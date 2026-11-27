@@ -615,7 +615,7 @@ function M.load(log)
   local player = ac.getCar(0)
   if not player or not player.position or not player.look then
     trace("IMPORT_STAGE defer reason=player_car_not_ready")
-    return nil, nil, 'player car unavailable during import'
+    return nil, nil, 'player car unavailable during import', lanes
   end
   trace("IMPORT_PLAYER pos=(%.2f,%.2f,%.2f) heading=(%.3f,%.3f)",
     player.position.x,player.position.y,player.position.z,player.look.x,player.look.z)
@@ -625,7 +625,7 @@ function M.load(log)
   else
     trace("IMPORT_CHAIN_FAIL reason=%s",tostring(info))
   end
-  return nodes,loop,info
+  return nodes,loop,info,lanes
 end
 
 return M
