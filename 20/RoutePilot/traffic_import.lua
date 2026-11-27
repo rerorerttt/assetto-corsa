@@ -544,7 +544,7 @@ end
 
 local function projectToLane(lane, position, hx, hz)
   local points = lane.points
-  local segmentCount = lane.loop and #points or (#points - 1)
+  local segmentCount = lane.routeLoop and #points or (#points - 1)
   local best = nil
   for i = 1, segmentCount do
     local a = points[i]
@@ -598,15 +598,17 @@ local function buildDirectedChain(lanes, player, trace)
     end
   end
 
-  -- Prefer a real closed circuit whenever the player is actually on/near it.
-  -- This prevents short access/merge lanes from replacing the complete lap.
-  local startIndex, startProjection
-  if bestLoopIndex and bestLoopProjection.distance <= 25.0 then
-    startIndex, startProjection = bestLoopIndex, bestLoopProjection
-  else
-    startIndex, startProjection = bestAnyIndex, bestAnyProjection
+  -- RoutePilot drives one complete closed centerline only. Never fall back
+  -- to an open access/merge lane: that would create a partial yellow route.
+  local startIndex, startProjection = bestLoopIndex, bestLoopProjection
+  if not startIndex then
+    return nil, nil, 'no complete closed lane matches player heading'
   end
-  if not startIndex then return nil, nil, 'no lane matches player heading' end
+  if startProjection.distance > 60.0 then
+    return nil, nil, string.format(
+      'complete closed lane is too far from player: %.2fm',
+      startProjection.distance)
+  end
 
   local lane = lanes[startIndex]
   local points = lane.points
