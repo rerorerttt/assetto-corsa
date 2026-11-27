@@ -284,7 +284,7 @@ local function loadLine()
       for laneIndex=1,#(state.trafficToolLanes or {}) do
         importedPointTotal=importedPointTotal+#state.trafficToolLanes[laneIndex].points
       end
-      state.status=string.format("Traffic Tool: %d линий / %d точек",#(state.trafficToolLanes or {}),importedPointTotal)
+      state.status=string.format("Одна замкнутая линия: %d точек",#imported)
       state.showWorldLines=true
       writeLog("TRAFFIC_TOOL_IMPORT_OK lanes=%d lane_points=%d active_points=%d loop=%s %s",
         #(state.trafficToolLanes or {}),importedPointTotal,#imported,
@@ -295,9 +295,23 @@ local function loadLine()
       flushLog()
       return true
     end
-    writeLog("TRAFFIC_TOOL_IMPORT_SKIP reason=%s",tostring(importInfo or "no directed route"))
-    state.trafficImportLastError=tostring(importInfo or "no directed route")
+    writeLog("TRAFFIC_TOOL_IMPORT_SKIP reason=%s",tostring(importInfo or "no complete closed route"))
+    state.trafficImportLastError=tostring(importInfo or "no complete closed route")
     state.trafficImportPending=true
+    -- Do not silently fall back to an old recorded/open line: the app must
+    -- either drive the complete imported circuit or stay stopped without
+    -- pretending that a partial route covers the track.
+    if type(importedLanes)=="table" and #importedLanes>0 then
+      state.nodes={}
+      state.p={}
+      state.routeGeometry=nil
+      state.loaded=false
+      state.trafficToolImported=false
+      state.loopRoute=false
+      state.status="Не найдена полная замкнутая линия CSP"
+      flushLog()
+      return false
+    end
   end
   state.trafficToolImported=false
   local loaded=nil
