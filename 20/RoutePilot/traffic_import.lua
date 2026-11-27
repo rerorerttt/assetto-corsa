@@ -446,11 +446,24 @@ local function decodeLanes(data)
         local role = source.role or 3
         local roleRule = laneRoles[role]
         local priorityOffset = source.priorityOffset or 0
+        local endpointGap = #points >= 3 and flatDistance(points[1], points[#points]) or math.huge
+        local firstTX, firstTZ = normalized(points[1].x, points[1].z)
+        firstTX, firstTZ = normalized(points[2].x - points[1].x, points[2].z - points[1].z)
+        local lastTX, lastTZ = normalized(points[#points].x - points[#points - 1].x,
+          points[#points].z - points[#points - 1].z)
+        local tangentDot = firstTX * lastTX + firstTZ * lastTZ
+        -- Some CSP exports leave loop=false even for a geometrically closed
+        -- circuit. Keep sourceLoop untouched, but expose a separate routeLoop
+        -- only when both endpoint gap and tangent continuity prove closure.
+        local routeLoop = source.loop == true or (endpointGap <= 15.0 and tangentDot >= 0.90)
         lanes[#lanes + 1] = {
           id = source.id or i,
           name = source.name or ('Lane ' .. tostring(source.id or i)),
           points = points,
           loop = source.loop == true,
+          routeLoop = routeLoop,
+          endpointGap = endpointGap,
+          endpointTangentDot = tangentDot,
           role = role,
           priority = (source.priority ~= nil and source.priority or
             (roleRule and roleRule.priority or 0)) + priorityOffset,
@@ -580,7 +593,7 @@ local function buildDirectedChain(lanes, player, trace)
       if score < bestAnyScore then
         bestAnyIndex, bestAnyProjection, bestAnyScore = i, projection, score
       end
-      if lane.loop and score < bestLoopScore then
+      if lane.routeLoop and score < bestLoopScore then
         bestLoopIndex, bestLoopProjection, bestLoopScore = i, projection, score
       end
     end
@@ -607,7 +620,7 @@ local function buildDirectedChain(lanes, player, trace)
     a.z + (b.z - a.z) * startProjection.t)
   appendPoint(nodes, start)
 
-  if lane.loop then
+  if lane.routeLoop then
     -- Rotate the complete directed lane so node[1] is the player's projection.
     -- Each source point is visited once in authored order, then Geometry closes
     -- the final short segment back to the projection. No lane is concatenated.
@@ -618,7 +631,7 @@ local function buildDirectedChain(lanes, player, trace)
     if #nodes < 3 then return nil, nil, 'closed lane produced too few points' end
     return nodes, true, string.format(
       'lane=%s source_loop=%s geometric_loop=true points=%d endpoint_gap=%.2f start_error=%.2f',
-      tostring(lane.id), tostring(lane.sourceLoop), #nodes,
+      tostring(lane.id), tostring(lane.loop), #nodes,
       lane.endpointGap or 0, startProjection.distance)
   end
 
