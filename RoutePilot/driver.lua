@@ -949,19 +949,18 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         local transitionTime=transitionDistance/math.max(8.0,owner.speed)
         local dynamicWindow=math.max(window or 8.0,
           ownHalf+otherHalf+math.abs(owner.speed-other.speed)*transitionTime+5.0)
-        local otherLane=other.p.coordinatedLane
         -- A lane assignment alone is not physical occupancy. A car may be
         -- assigned to this slot while still travelling in another lane.
-        -- Block the destination only for actual lateral overlap; in-progress
-        -- lane reservations are checked separately below.
+        -- Block the destination for actual lateral overlap or a live transition.
         if targetLateralOverlap and math.abs(gap)<dynamicWindow then
           return false
         end
-        -- Reserve both the destination and the lane being vacated until the
-        -- full vehicle body has completed its lateral transition.
-        if other.p.coordinatorFromLane==targetLane and
-            math.abs(gap)<dynamicWindow+4.0 then return false end
-        if other.p.coordinatorTargetLane==targetLane and
+        -- coordinatorTargetLane is also populated for a car's static home
+        -- assignment. Treat it as a reservation only while a lane change is
+        -- actually in progress (coordinatorFromLane is set).
+        if other.p.coordinatorFromLane~=nil and
+            (other.p.coordinatorFromLane==targetLane or
+             other.p.coordinatorTargetLane==targetLane) and
             math.abs(gap)<dynamicWindow+4.0 then return false end
       end
     end
