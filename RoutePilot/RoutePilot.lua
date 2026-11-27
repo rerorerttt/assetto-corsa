@@ -640,9 +640,6 @@ local function updateRescueWatchdog(carIndex,car,dt)
   local upY=car.up and safeNumber(car.up.y,1) or 1
   if upY<0.55 then w.rolloverT=w.rolloverT+dt else w.rolloverT=0 end
 
-  local dx=car.position.x-w.lastPosition.x
-  local dz=car.position.z-w.lastPosition.z
-  local moved=math.sqrt(dx*dx+dz*dz)
   local gas=safeNumber(car.gas)
   local speed=math.abs(safeNumber(car.speedMs))
   w.progressCheckT=safeNumber(w.progressCheckT)+dt
