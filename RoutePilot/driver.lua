@@ -1079,7 +1079,12 @@ local function coordinatorLaneFree(owner,targetLane,records,window)
         end
         local distance=math.abs(gap)
         local physicalGap=ownHalf+otherHalf
-        local reservationGap=math.max(window or 8.0,ownHalf+otherHalf+5.0)
+        -- A lane change is not complete when its target is first selected.
+        -- Keep a full 10 m longitudinal safety reserve beyond both half-lengths
+        -- throughout the 3 s lateral transition. The previous 5 m reserve
+        -- allowed a fast follower to enter behind a slower car already in the
+        -- destination lane, then close the gap before reaching the lane centre.
+        local reservationGap=math.max(window or 8.0,ownHalf+otherHalf+10.0)
         local conflict=distance<=physicalGap
         -- A same-direction leader ahead owns its line, but it does not
         -- reserve the entire lane indefinitely. If it is pulling away (or
