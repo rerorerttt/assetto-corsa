@@ -1087,7 +1087,7 @@ render.on('main.track.transparent', function()
         local pts=lane and lane.points or nil
         local pn=type(pts)=="table" and #pts or 0
         if pn>=2 then
-          local segmentCount=lane.loop and pn or (pn-1)
+          local segmentCount=lane.routeLoop and pn or (pn-1)
           for j=1,segmentCount do
             local a=pts[j]
             local b=pts[(j%pn)+1]
@@ -1144,7 +1144,7 @@ render.on('main.track.transparent', function()
         -- Do not overlay legacy synthetic red bounds on top of them.
         if trafficLaneCount == 0 then
           render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
-            vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*ar),RED)
+            vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
           render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
             vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
         end
