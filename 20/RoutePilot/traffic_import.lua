@@ -431,12 +431,27 @@ local function decodeLanes(data)
         if p then points[#points + 1] = p end
         if #points >= MAX_POINTS then break end
       end
-      if #points >= (source.loop == true and 3 or 2) then
+      if #points >= 2 then
+        -- Traffic Tool sometimes exports a geometrically closed circuit with
+        -- loop=false. Detect closure from both endpoint distance and tangent
+        -- continuity; never infer a loop from distance alone.
+        local geometricLoop = false
+        if #points >= 3 then
+          local gap = flatDistance(points[1], points[#points])
+          local sx, sz = normalized(
+            points[2].x - points[1].x, points[2].z - points[1].z)
+          local ex, ez = normalized(
+            points[#points].x - points[#points - 1].x,
+            points[#points].z - points[#points - 1].z)
+          geometricLoop = gap <= 15.0 and (sx * ex + sz * ez) >= 0.90
+        end
         lanes[#lanes + 1] = {
           id = source.id or i,
           name = source.name or ('Lane ' .. tostring(source.id or i)),
           points = points,
-          loop = source.loop == true
+          loop = source.loop == true or geometricLoop,
+          sourceLoop = source.loop == true,
+          endpointGap = #points >= 2 and flatDistance(points[1], points[#points]) or 0
         }
       end
     end
@@ -481,102 +496,73 @@ local function appendPoint(out, p)
   end
 end
 
-local function buildDirectedChain(lanes, player)
+local function buildDirectedChain(lanes, player, trace)
   local hx, hz = normalized(player.look.x, player.look.z)
-  local startIndex, startProjection, startScore = nil, nil, math.huge
+  local bestLoopIndex, bestLoopProjection, bestLoopScore = nil, nil, math.huge
+  local bestAnyIndex, bestAnyProjection, bestAnyScore = nil, nil, math.huge
+
   for i = 1, #lanes do
-    local projection = projectToLane(lanes[i], player.position, hx, hz)
-    if projection and projection.score < startScore then
-      startIndex, startProjection, startScore = i, projection, projection.score
+    local lane = lanes[i]
+    local projection = projectToLane(lane, player.position, hx, hz)
+    if projection then
+      local score = projection.distance * projection.distance +
+        (1 - (hx * projection.tx + hz * projection.tz)) * 100
+      if score < bestAnyScore then
+        bestAnyIndex, bestAnyProjection, bestAnyScore = i, projection, score
+      end
+      if lane.loop and score < bestLoopScore then
+        bestLoopIndex, bestLoopProjection, bestLoopScore = i, projection, score
+      end
     end
+  end
+
+  -- Prefer a real closed circuit whenever the player is actually on/near it.
+  -- This prevents short access/merge lanes from replacing the complete lap.
+  local startIndex, startProjection
+  if bestLoopIndex and bestLoopProjection.distance <= 25.0 then
+    startIndex, startProjection = bestLoopIndex, bestLoopProjection
+  else
+    startIndex, startProjection = bestAnyIndex, bestAnyProjection
   end
   if not startIndex then return nil, nil, 'no lane matches player heading' end
 
+  local lane = lanes[startIndex]
+  local points = lane.points
   local nodes = {}
-  local visited = {}
-  local currentIndex = startIndex
-  local firstPoint = nil
-  local loopRoute = false
-  local chainCount = 0
+  local a = points[startProjection.segment]
+  local b = points[startProjection.segment % #points + 1]
+  local start = vec3(
+    a.x + (b.x - a.x) * startProjection.t,
+    a.y + (b.y - a.y) * startProjection.t,
+    a.z + (b.z - a.z) * startProjection.t)
+  appendPoint(nodes, start)
 
-  while currentIndex and not visited[currentIndex] and #nodes < MAX_POINTS do
-    local lane = lanes[currentIndex]
-    visited[currentIndex] = true
-    chainCount = chainCount + 1
-    local points = lane.points
-    local firstSegment = currentIndex == startIndex and startProjection.segment or 1
-    local firstT = currentIndex == startIndex and startProjection.t or 0
-    if currentIndex ~= startIndex then appendPoint(nodes, points[1]) end
-    local a = points[firstSegment]
-    local b = points[firstSegment % #points + 1]
-    if currentIndex == startIndex then
-      local start = vec3(a.x + (b.x-a.x)*firstT,
-        a.y + (b.y-a.y)*firstT, a.z + (b.z-a.z)*firstT)
-      appendPoint(nodes, start)
-      firstPoint = start
+  if lane.loop then
+    -- Rotate the complete directed lane so node[1] is the player's projection.
+    -- Each source point is visited once in authored order, then Geometry closes
+    -- the final short segment back to the projection. No lane is concatenated.
+    for step = 1, #points do
+      local index = ((startProjection.segment - 1 + step) % #points) + 1
+      appendPoint(nodes, points[index])
     end
-
-    local segmentCount = lane.loop and #points or (#points - firstSegment)
-    local segment = firstSegment
-    local traversed = 0
-    while traversed < segmentCount and #nodes < MAX_POINTS do
-      local nextIndex = lane.loop and (segment % #points + 1) or (segment + 1)
-      if not (lane.loop and nextIndex == firstSegment) then
-        appendPoint(nodes, points[nextIndex])
-      end
-      segment = nextIndex
-      traversed = traversed + 1
-      if lane.loop and segment == firstSegment then
-        loopRoute = true
-        currentIndex = nil
-        break
-      end
-    end
-    if currentIndex == nil then break end
-    if lane.loop then
-      loopRoute = true
-      break
-    end
-
-    local endpoint = nodes[#nodes]
-    local prev = nodes[#nodes - 1]
-    if not endpoint or not prev then break end
-    local dx, dz = normalized(endpoint.x - prev.x, endpoint.z - prev.z)
-    local bestIndex, bestScore = nil, math.huge
-    for candidateIndex = 1, #lanes do
-      if not visited[candidateIndex] then
-        local candidate = lanes[candidateIndex]
-        local start = candidate.points[1]
-        local distance = flatDistance(endpoint, start)
-        if distance <= CONNECT_DISTANCE then
-          local nextPoint = candidate.points[2]
-          local cx, cz = normalized(nextPoint.x - start.x, nextPoint.z - start.z)
-          local alignment = dx * cx + dz * cz
-          if alignment > 0.35 then
-            local score = distance * 4 + (1 - alignment) * 10
-            if score < bestScore then
-              bestScore, bestIndex = score, candidateIndex
-            end
-          end
-        end
-      end
-    end
-    if not bestIndex then
-      -- A directed lane can close only by reaching the original start point
-      -- in the same authored direction. No lane is ever reversed to force a loop.
-      if firstPoint and flatDistance(endpoint, firstPoint) <= CONNECT_DISTANCE then
-        loopRoute = true
-      end
-      break
-    end
-    currentIndex = bestIndex
+    if #nodes < 3 then return nil, nil, 'closed lane produced too few points' end
+    return nodes, true, string.format(
+      'lane=%s source_loop=%s geometric_loop=true points=%d endpoint_gap=%.2f start_error=%.2f',
+      tostring(lane.id), tostring(lane.sourceLoop), #nodes,
+      lane.endpointGap or 0, startProjection.distance)
   end
 
-  if #nodes < 2 then return nil, nil, 'directed lane chain is too short' end
-  return nodes, loopRoute, string.format(
-    'lane=%s chain=%d points=%d loop=%s start_error=%.2f',
-    tostring(lanes[startIndex].id), chainCount, #nodes,
-    tostring(loopRoute), startProjection.distance)
+  -- Open Traffic Tool lanes are not stitched to arbitrary nearby lane starts.
+  -- A nearby start can be a parallel lane or a junction branch, not a continuation.
+  -- Keep the selected directed lane intact rather than inventing topology.
+  local segment = startProjection.segment
+  for step = 1, (#points - segment) do
+    appendPoint(nodes, points[segment + step])
+  end
+  if #nodes < 2 then return nil, nil, 'directed open lane is too short from player projection' end
+  return nodes, false, string.format(
+    'lane=%s open_lane=true points=%d start_error=%.2f; no unambiguous successor',
+    tostring(lane.id), #nodes, startProjection.distance)
 end
 
 function M.load(log)
@@ -621,7 +607,7 @@ function M.load(log)
   end
   local pointTotal=0
   for i=1,#lanes do pointTotal=pointTotal+#lanes[i].points end
-  trace("IMPORT_LANES_OK lanes=%d points=%d",#lanes,pointTotal)
+  local loopCount=0\n  for i=1,#lanes do if lanes[i].loop then loopCount=loopCount+1 end end\n  trace("IMPORT_LANES_OK lanes=%d points=%d detected_closed=%d",#lanes,pointTotal,loopCount)
   local player = ac.getCar(0)
   if not player or not player.position or not player.look then
     trace("IMPORT_STAGE defer reason=player_car_not_ready")
@@ -629,7 +615,7 @@ function M.load(log)
   end
   trace("IMPORT_PLAYER pos=(%.2f,%.2f,%.2f) heading=(%.3f,%.3f)",
     player.position.x,player.position.y,player.position.z,player.look.x,player.look.z)
-  local nodes,loop,info=buildDirectedChain(lanes, player)
+  local nodes,loop,info=buildDirectedChain(lanes, player, trace)
   if nodes then
     trace("IMPORT_CHAIN_OK points=%d loop=%s info=%s",#nodes,tostring(loop),tostring(info))
   else
