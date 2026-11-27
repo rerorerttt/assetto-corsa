@@ -1078,29 +1078,8 @@ render.on('main.track.transparent', function()
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
-    local TRAFFIC_LINE=rgbm(0.10,0.65,1.0,0.95)
-    -- Render every Traffic Tool lane independently. Keep authored direction
-    -- and topology; never join branches just because their endpoints are close.
-    if state.showWorldLines and trafficLaneCount>0 then
-      for laneIndex=1,trafficLaneCount do
-        local lane=state.trafficToolLanes[laneIndex]
-        local pts=lane and lane.points or nil
-        local pn=type(pts)=="table" and #pts or 0
-        if pn>=2 then
-          local segmentCount=lane.routeLoop and pn or (pn-1)
-          for j=1,segmentCount do
-            local a=pts[j]
-            local b=pts[(j%pn)+1]
-            if flatDist(player.position,a)<CFG.DRAW_RANGE then
-              -- CSP traffic.json stores lane centerlines, not side boundaries.
-              -- Do not fabricate two borders around every lane: adjacent lanes
-              -- would create overlapping and misleading boundary lines.
-              render.debugLine(vec3(a.x,a.y+0.07,a.z),vec3(b.x,b.y+0.07,b.z),TRAFFIC_LINE)
-            end
-          end
-        end
-      end
-    end
+    -- Traffic Tool lanes are import sources only. The sole visible and
+    -- drivable line is state.nodes, rendered below in yellow.
     if n>=2 then
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
