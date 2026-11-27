@@ -1725,8 +1725,21 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           -- Test the lane the car is committed to. A temporary lateral
           -- offset during normal steering must not turn a neighbouring lane
           -- into a phantom obstacle and force an emergency stop.
-          local lateralOverlap=coordinatorLateralOverlap(
-            rec,other,safeNumber(p.coordinatorOffset,p.latOff or 0))
+          local committedCenter=safeNumber(p.coordinatorOffset,
+            rec.lanes.centers[current] or p.latOff or 0)
+          local lateralOverlap=coordinatorLateralOverlap(rec,other,committedCenter)
+          -- The route-frame footprint test can under-report a stopped player
+          -- on a different route segment/tangent even when the measured
+          -- lateral offsets put both vehicles in the same lane. Use the
+          -- committed corridor as a conservative fallback for obstacle
+          -- detection only; target-lane clearance is still checked separately.
+          local ownWidth=math.max(1.6,
+            safeNumber(rec.car.aabbSize and rec.car.aabbSize.z,4.5)*0.5)
+          local otherWidth=math.max(1.6,
+            safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
+          local sameCommittedCorridor=
+            math.abs(committedCenter-safeNumber(other.p.latOff,0))<=
+              ownWidth+otherWidth+0.25
           -- A transient footprint overlap during a managed pass must not
           -- revoke the distinct lane reservations of the two cars.
           local distinctReservedLanes=other.managed and
@@ -1735,7 +1748,8 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           -- Only a vehicle ahead can trigger a same-direction emergency.
           -- A car just behind/alongside must not be mistaken for an obstacle
           -- and force both vehicles into an emergency-stop deadlock.
-          if lateralOverlap and not distinctReservedLanes and gap and gap>0.0 and
+          if (lateralOverlap or sameCommittedCorridor) and
+              not distinctReservedLanes and gap and gap>0.0 and
               (not nearestGap or gap<nearestGap) then
             nearestGap=gap
             nearestIndex=other.index
