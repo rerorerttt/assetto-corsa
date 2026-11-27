@@ -1633,7 +1633,13 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           end
         end
       end
-      local dangerDistance=math.max(14.0,rec.speed*0.95+5.0)
+      -- If every lane is occupied, begin braking at the actual stopping
+      -- distance, not at a fixed short headway. A stationary player can block
+      -- the full road; waiting until the vehicle is already within 14-20 m
+      -- leaves no reliable margin at higher speeds.
+      local braking=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),3.0,14.0)
+      local dangerDistance=math.max(14.0,
+        rec.speed*0.40+rec.speed*rec.speed/(2.0*braking)+4.0)
       local emergencyDanger=nearestGap~=nil and
         nearestGap<dangerDistance and
         nearestSpeed<=EMERGENCY_TARGET_MAX_SPEED
