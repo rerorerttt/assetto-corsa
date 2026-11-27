@@ -1481,8 +1481,11 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
                   nearestGap=heldGap
                   nearestIndex=other.index
                   nearestSpeed=other.speed
-                elseif not sameDirection and heldGap>=0 then
-                  nearestGap=heldGap
+                elseif not sameDirection then
+                  -- For opposing headings the route-tangent sign depends on
+                  -- which way this car is facing. Keep the measured separation
+                  -- magnitude while retaining negative speed for closing motion.
+                  nearestGap=math.abs(heldGap)
                   nearestIndex=other.index
                   nearestSpeed=-other.speed
                 end
