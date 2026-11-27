@@ -417,6 +417,18 @@ local function normalized(x, z)
   return x / length, z / length
 end
 
+local function decodePointList(sourcePoints, minimum)
+  if type(sourcePoints) ~= 'table' then return nil end
+  local points = {}
+  for i = 1, #sourcePoints do
+    local point = pointFromTable(sourcePoints[i])
+    if point then points[#points + 1] = point end
+    if #points >= MAX_POINTS then break end
+  end
+  if #points < (minimum or 1) then return nil end
+  return points
+end
+
 local function decodeLanes(data)
   if type(data) ~= 'table' or type(data.lanes) ~= 'table' then
     return nil, 'traffic.json has no lanes array'
@@ -424,40 +436,92 @@ local function decodeLanes(data)
   local lanes = {}
   for i = 1, #data.lanes do
     local source = data.lanes[i]
-    if type(source) == 'table' and type(source.points) == 'table' then
-      local points = {}
-      for j = 1, #source.points do
-        local p = pointFromTable(source.points[j])
-        if p then points[#points + 1] = p end
-        if #points >= MAX_POINTS then break end
-      end
-      if #points >= 2 then
-        -- Traffic Tool sometimes exports a geometrically closed circuit with
-        -- loop=false. Detect closure from both endpoint distance and tangent
-        -- continuity; never infer a loop from distance alone.
-        local geometricLoop = false
-        if #points >= 3 then
-          local gap = flatDistance(points[1], points[#points])
-          local sx, sz = normalized(
-            points[2].x - points[1].x, points[2].z - points[1].z)
-          local ex, ez = normalized(
-            points[#points].x - points[#points - 1].x,
-            points[#points].z - points[#points - 1].z)
-          geometricLoop = gap <= 15.0 and (sx * ex + sz * ez) >= 0.90
-        end
+    if type(source) == 'table' then
+      local points = decodePointList(source.points, source.loop == true and 3 or 2)
+      if points then
+        -- A CSP lane is already a directed traffic lane. Preserve its authored
+        -- loop flag exactly; endpoint proximity must never invent a loop.
         lanes[#lanes + 1] = {
           id = source.id or i,
           name = source.name or ('Lane ' .. tostring(source.id or i)),
           points = points,
-          loop = source.loop == true or geometricLoop,
-          sourceLoop = source.loop == true,
-          endpointGap = #points >= 2 and flatDistance(points[1], points[#points]) or 0
+          loop = source.loop == true,
+          role = source.role or 3,
+          priority = source.priority,
+          priorityOffset = source.priorityOffset or 0,
+          speedLimit = source.speedLimit,
+          params = type(source.params) == 'table' and source.params or {},
+          aabb = source.aabb,
+          source = source
         }
       end
     end
   end
   if #lanes == 0 then return nil, 'traffic.json contains no usable directed lanes' end
   return lanes
+end
+
+local function decodeIntersections(data)
+  local result = {}
+  local sourceList = type(data.intersections) == 'table' and data.intersections or {}
+  for i = 1, #sourceList do
+    local source = sourceList[i]
+    if type(source) == 'table' then
+      local points = decodePointList(source.points, 3)
+      if points then
+        result[#result + 1] = {
+          id = source.id or i,
+          name = source.name or ('Intersection ' .. tostring(source.id or i)),
+          points = points,
+          disallowedTrajectories = source.disallowedTrajectories or {},
+          trajectoryAttributes = source.trajectoryAttributes or {},
+          entryOffsets = source.entryOffsets or {},
+          entryPriorityOffsets = source.entryPriorityOffsets or {},
+          trafficLight = source.trafficLight,
+          source = source
+        }
+      end
+    end
+  end
+  return result
+end
+
+local function decodeAreas(data)
+  local result = {}
+  local sourceList = type(data.areas) == 'table' and data.areas or {}
+  for i = 1, #sourceList do
+    local source = sourceList[i]
+    if type(source) == 'table' then
+      local shapes = {}
+      if type(source.shapes) == 'table' then
+        for j = 1, #source.shapes do
+          local shape = decodePointList(source.shapes[j], 3)
+          if shape then shapes[#shapes + 1] = shape end
+        end
+      elseif type(source.points) == 'table' then
+        local shape = decodePointList(source.points, 3)
+        if shape then shapes[1] = shape end
+      end
+      result[#result + 1] = {
+        id = source.id or i,
+        name = source.name or ('Area ' .. tostring(source.id or i)),
+        shapes = shapes,
+        params = type(source.params) == 'table' and source.params or {},
+        source = source
+      }
+    end
+  end
+  return result
+end
+
+local function decodeNetwork(data, lanes)
+  return {
+    lanes = lanes,
+    intersections = decodeIntersections(data),
+    areas = decodeAreas(data),
+    rules = type(data.rules) == 'table' and data.rules or {},
+    source = data
+  }
 end
 
 local function projectToLane(lane, position, hx, hz)
@@ -605,17 +669,19 @@ function M.load(log)
     trace("IMPORT_STAGE fail reason=lane_decode error=%s",tostring(laneError))
     return nil, nil, laneError
   end
+  local network = decodeNetwork(data, lanes)
   local pointTotal=0
   for i=1,#lanes do pointTotal=pointTotal+#lanes[i].points end
   local loopCount=0
   for i=1,#lanes do
     if lanes[i].loop then loopCount=loopCount+1 end
   end
-  trace("IMPORT_LANES_OK lanes=%d points=%d detected_closed=%d",#lanes,pointTotal,loopCount)
+  trace("IMPORT_NETWORK_OK lanes=%d points=%d loops=%d intersections=%d areas=%d",
+    #lanes,pointTotal,loopCount,#network.intersections,#network.areas)
   local player = ac.getCar(0)
   if not player or not player.position or not player.look then
     trace("IMPORT_STAGE defer reason=player_car_not_ready")
-    return nil, nil, 'player car unavailable during import', lanes
+    return nil, nil, 'player car unavailable during import', lanes, network
   end
   trace("IMPORT_PLAYER pos=(%.2f,%.2f,%.2f) heading=(%.3f,%.3f)",
     player.position.x,player.position.y,player.position.z,player.look.x,player.look.z)
@@ -625,7 +691,7 @@ function M.load(log)
   else
     trace("IMPORT_CHAIN_FAIL reason=%s",tostring(info))
   end
-  return nodes,loop,info,lanes
+  return nodes,loop,info,lanes,network
 end
 
 return M
