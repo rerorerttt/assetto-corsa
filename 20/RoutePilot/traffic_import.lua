@@ -200,6 +200,7 @@ function M.load(log)
     return nil, nil, 'ac.getTrackDataFilename unavailable'
   end
   if not io or type(io.load) ~= 'function' then
+    trace("IMPORT_STAGE fail reason=io_load_unavailable")
     return nil, nil, 'CSP io.load unavailable'
   end
   local okPath, path = pcall(ac.getTrackDataFilename, 'traffic.json')
