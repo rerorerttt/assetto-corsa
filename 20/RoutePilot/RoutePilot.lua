@@ -132,7 +132,7 @@ local function saveImportedRoute()
   local verifyOk,raw=pcall(io.load,path)
   local count=0
   if verifyOk and type(raw)=="string" then
-    for _ in string.gmatch(raw,"[^\\r\\n]+") do count=count+1 end
+    for _ in string.gmatch(raw,"[^\r\n]+") do count=count+1 end
   end
   local success=verifyOk and count==#state.nodes
   writeLog("IMPORTED_LINE_SAVE_%s path=%s points=%d verified=%d",
