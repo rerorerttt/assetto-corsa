@@ -1202,25 +1202,29 @@ local function drawMapInRect(q0,q1)
   end
   local n=#state.nodes
   local minOff=CFG.MAP_MIN_OFFSET
-  -- bounds: dark red, thick, min offset from the line
-  for pass=1,2 do
-    local prev
-    for i=1,n do
-      local node=state.nodes[i]
-      local nxt=state.nodes[(i%n)+1]
-      local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
-      local l,r=boundsAt(i)
-      local off=(pass==1) and l or r
-      if math.abs(off)*scale<minOff then
-        off=(off>=0 and 1 or -1)*(minOff/math.max(scale,0.0001))
+  -- Legacy RoutePilot boundaries belong only to hand-authored routes.
+  -- Traffic Tool already supplies lane centerlines; drawing offsets here
+  -- creates misleading red curves over the imported network.
+  if not (type(state.trafficToolLanes)=="table" and #state.trafficToolLanes>0) then
+    for pass=1,2 do
+      local prev
+      for i=1,n do
+        local node=state.nodes[i]
+        local nxt=state.nodes[(i%n)+1]
+        local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
+        local l,r=boundsAt(i)
+        local off=(pass==1) and l or r
+        if math.abs(off)*scale<minOff then
+          off=(off>=0 and 1 or -1)*(minOff/math.max(scale,0.0001))
+        end
+        local px,pz=node.x-lz*off,node.z+lx*off
+        local sx=mx+(px-cx)*scale
+        local sy=my+(pz-cz)*scale
+        if prev and segVisible(prev.x,prev.y,sx,sy) then
+          ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),3)
+        end
+        prev=vec2(sx,sy)
       end
-      local px,pz=node.x-lz*off,node.z+lx*off
-      local sx=mx+(px-cx)*scale
-      local sy=my+(pz-cz)*scale
-      if prev and segVisible(prev.x,prev.y,sx,sy) then
-        ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),3)
-      end
-      prev=vec2(sx,sy)
     end
   end
   -- AI line: yellow, thick
