@@ -27,6 +27,7 @@ local RESCUE_SPEED = 1.5
 local RESCUE_TIME  = 10.0
 local OFFTRACK_TIME = 10.0
 local STEER_DEAD   = 0.002  -- suppress only sub-resolution steering noise
+local EMERGENCY_TARGET_MAX_SPEED = 1.5 -- m/s: emergency sidestep is only for stopped/crawling leaders
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
 local function lerp(a, b, t) return a + (b - a) * t end
@@ -1336,9 +1337,13 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           handled[follower.index..":"..leader.index]=true
           local lane=follower.p.coordinatedLane
           local moved=false
+          -- Emergency sidestep is reserved for a genuinely stopped/crawling
+          -- vehicle ahead. A merely slower moving car is handled by normal
+          -- pass/follow logic; relative speed alone must never trigger escape.
           local emergencyCandidate=sameDirection and
+            distance>0.0 and
             distance<math.max(14.0,follower.speed*0.95+5.0) and
-            (leader.speed<math.max(1.5,follower.speed-0.8) or distance<6.0)
+            leader.speed<=EMERGENCY_TARGET_MAX_SPEED
           if not sameDirection then
             -- Head-on conflict: exactly one managed car gets the escape lane.
             -- The other car is held at zero speed until lateral clearance exists.
@@ -1485,7 +1490,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           local lateralOverlap=math.abs(
             safeNumber(other.p.latOff)-safeNumber(p.latOff))<
             ownHalf+otherHalf+0.35
-          if lateralOverlap and gap and gap>=-2.0 and
+          -- Only a vehicle ahead can trigger a same-direction emergency.
+          -- A car just behind/alongside must not be mistaken for an obstacle
+          -- and force both vehicles into an emergency-stop deadlock.
+          if lateralOverlap and gap and gap>0.0 and
               (not nearestGap or gap<nearestGap) then
             nearestGap=gap
             nearestIndex=other.index
@@ -1494,8 +1502,9 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
         end
       end
       local dangerDistance=math.max(14.0,rec.speed*0.95+5.0)
-      local emergencyDanger=nearestGap~=nil and nearestGap<dangerDistance and
-        (nearestSpeed<math.max(1.5,rec.speed-0.8) or nearestGap<6.0)
+      local emergencyDanger=nearestGap~=nil and
+        nearestGap<dangerDistance and
+        nearestSpeed<=EMERGENCY_TARGET_MAX_SPEED
       if emergencyDanger then
         local candidates={}
         for lane=1,rec.lanes.count do
