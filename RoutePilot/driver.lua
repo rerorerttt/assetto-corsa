@@ -1056,13 +1056,33 @@ local function coordinatorLateralOverlap(owner,other,targetCenter)
     targetInOtherFrame-ownHalf-0.35<occupiedMax
 end
 
+-- A same-direction car behind may still be physically straddling a lane
+-- while completing a move OUT of it. Its swept reservation must not block
+-- the lane that the leading car is entering when both cars' committed
+-- destination corridors are physically separated. Keep the longitudinal
+-- body-overlap guard; only release the stale trailing reservation.
+local function coordinatorClearingBehind(owner,other,targetCenter,gap)
+  if gap==nil or gap>=0 or not other.managed or
+      not coordinatorSameDirection(owner,other) then return false end
+  local targetLane=other.p.coordinatorTargetLane or other.p.coordinatedLane
+  local otherTarget=targetLane and other.lanes and other.lanes.centers[targetLane]
+  if otherTarget==nil then return false end
+  local ownSample=Geometry.sample(state.routeGeometry,owner.p.routeProgress)
+  local otherSample=Geometry.sample(state.routeGeometry,other.p.routeProgress)
+  if not ownSample or not otherSample then return false end
+  local ownHalf=vehicleRouteFootprint(owner.car,ownSample,0)
+  local otherHalf=vehicleRouteFootprint(other.car,otherSample,0)
+  return math.abs(targetCenter-otherTarget)>ownHalf+otherHalf+0.35
+end
+
 local function coordinatorLaneFree(owner,targetLane,records,window)
   local center=owner.lanes.centers[targetLane]
   if center==nil then return false end
   for _,other in ipairs(records) do
     if other.index~=owner.index and other.p.routeProgress~=nil then
       local gap=coordinatorGap(owner,other)
-      if gap~=nil and coordinatorLateralOverlap(owner,other,center) then
+      local clearingBehind=coordinatorClearingBehind(owner,other,center,gap)
+      if gap~=nil and not clearingBehind and coordinatorLateralOverlap(owner,other,center) then
         local otherHalf=math.max(1.5,
           safeNumber(other.car.aabbSize and other.car.aabbSize.z,4.5)*0.5)
         local ownHalf=math.max(1.5,
@@ -1138,7 +1158,9 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
         -- Include the other car's measured footprint and any committed
         -- lateral transition. Segment-local lane indices are deliberately
         -- ignored: a bend can change lane numbering without moving a car.
-        local physicalOverlap=coordinatorLateralOverlap(owner,other,center)
+        local clearingBehind=coordinatorClearingBehind(owner,other,center,gap)
+        local physicalOverlap=not clearingBehind and
+          coordinatorLateralOverlap(owner,other,center)
         if physicalOverlap then
           -- Emergency lane changes need a larger buffer than ordinary
           -- following: the target corridor must remain clear while the car
