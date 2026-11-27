@@ -308,9 +308,15 @@ local function loadLine()
       state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
       state.respawnAccum=0; state.respawnCooldown={}
-      state.status=string.format("Traffic Tool: %d точек | ширина 7 м",#imported)
+      local importedPointTotal=0
+      for laneIndex=1,#(state.trafficToolLanes or {}) do
+        importedPointTotal=importedPointTotal+#state.trafficToolLanes[laneIndex].points
+      end
+      state.status=string.format("Traffic Tool: %d линий / %d точек",#(state.trafficToolLanes or {}),importedPointTotal)
       state.showWorldLines=true
-      writeLog("TRAFFIC_TOOL_IMPORT_OK points=%d loop=%s %s",#imported,tostring(state.loopRoute),tostring(importInfo))
+      writeLog("TRAFFIC_TOOL_IMPORT_OK lanes=%d lane_points=%d active_points=%d loop=%s %s",
+        #(state.trafficToolLanes or {}),importedPointTotal,#imported,
+        tostring(state.loopRoute),tostring(importInfo))
       saveImportedRoute()
       local boundsLoaded=loadBounds()
       if not boundsLoaded then saveBounds() end
