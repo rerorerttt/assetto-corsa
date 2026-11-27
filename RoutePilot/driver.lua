@@ -939,7 +939,13 @@ local function updateTrafficControl(carIndex,car,p,speed,targetSpeed,dt)
     p.trafficReason=gap and "same_lane_vehicle" or "assigned_lane_clear"
     p.trafficPriority=0
   end
-  if gap~=nil then
+  -- During a committed emergency sidestep, the obstacle in the old lane
+  -- must not apply FOLLOW braking. That braking can reduce the escape crawl
+  -- back to zero, leaving the car stopped directly behind the obstacle; once
+  -- the emergency state clears, normal throttle can send it straight forward.
+  -- The target-lane reservation and the explicit oncoming-conflict brake
+  -- below remain authoritative while the lateral escape is in progress.
+  if gap~=nil and not p.emergencyEscape then
     local safeSpeed=safeFollowingSpeed(gap,leaderSpeed or 0,p.brakeAccelEstimate)
     targetSpeed=math.min(targetSpeed,safeSpeed)
   end
