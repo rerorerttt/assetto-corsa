@@ -566,27 +566,24 @@ local function teleportHome(carIndex,car)
   end
   if #state.nodes<2 or not car or not car.position then return false end
 
-  -- Route nodes are recorded in the driver's travel direction, while the
-  -- CSP placement API uses the opposite direction vector (verified by spawn).
-  -- Determine which route direction is physically forward for this car.
-  local velocity=car.velocity
-  local velocitySpeed=velocity and math.sqrt(velocity.x*velocity.x+velocity.z*velocity.z) or 0
-  local heading=velocitySpeed>0.5 and velocity or car.look
-  if not heading then return false end
-  local hx,hz=normalize2(heading.x,heading.z)
-  local seg,t,routeError=findNearestSeg(car.position,1,true,heading)
-  local a=state.nodes[seg]
-  local b=segEnd(seg)
-  local tx,tz=normalize2(b.x-a.x,b.z-a.z)
-  local sign=(tx*hx+tz*hz)>=0 and 1 or -1
+  -- Recovery direction is fixed by the recorded line order, never by
+  -- the vehicle's current heading or velocity after a spin/collision.
+  -- Reuse the car's last route segment to disambiguate nearby track branches.
+  local driverState=state.p and state.p[carIndex]
+  local hintSeg=driverState and driverState.segIdx or 1
+  local allowGlobal=not (driverState and driverState.routeLocked and driverState.segIdx)
+  local seg,t,routeError=findNearestSeg(car.position,hintSeg,allowGlobal,nil)
+  if not allowGlobal and routeError>15.0 then
+    seg,t,routeError=findNearestSeg(car.position,hintSeg,true,nil)
+  end
+  local sign=1
   if routeError>250 then
     writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f",carIndex,routeError)
     return false
   end
 
-  -- Never search behind the disabled car. Candidate points are sampled only
-  -- along the route in the car's current direction of travel, starting well
-  -- beyond the obstruction so the car cannot be dropped back into the same jam.
+  -- Never search backward along the recorded line. Candidate points are
+  -- sampled strictly in increasing route-node order, beyond the obstruction.
   for distance=20,320,10 do
     local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
     if pos then
@@ -601,7 +598,7 @@ local function teleportHome(carIndex,car)
             state.p[carIndex]=nil
             state.rescueWatch=state.rescueWatch or {}
             state.rescueWatch[carIndex]={cooldown=3.0}
-            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f sign=%d pos=(%.2f,%.2f,%.2f)",
+            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=RECORDED_LINE_FORWARD sign=%d pos=(%.2f,%.2f,%.2f)",
               carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
             flushLog()
             return true
