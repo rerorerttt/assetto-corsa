@@ -1076,8 +1076,18 @@ local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   if targetLane<1 or targetLane>record.lanes.count or targetLane==current then
     return false
   end
-  local laneFree,rejectReason,rejectGap,rejectClosing,rejectTTC=
-    coordinatorEmergencyLaneFree(record,targetLane,records)
+  local step=targetLane>current and 1 or -1
+  local laneFree,rejectReason,rejectGap,rejectClosing,rejectTTC=true,nil,nil,nil,nil
+  -- A multi-slot escape is allowed only when every crossed slot is clear.
+  -- This prevents the controller from cutting through an occupied lane.
+  local lane=current+step
+  while true do
+    laneFree,rejectReason,rejectGap,rejectClosing,rejectTTC=
+      coordinatorEmergencyLaneFree(record,lane,records)
+    if not laneFree then break end
+    if lane==targetLane then break end
+    lane=lane+step
+  end
   if not laneFree then
     H.log("TRAFFIC_EMERGENCY_LANE_REJECT id=%d lane=%d reason=%s gap=%.2f closing=%.2f ttc=%.2f",
       record.index,targetLane,tostring(rejectReason),safeNumber(rejectGap,999),
@@ -1137,9 +1147,16 @@ local function coordinatorMove(record,targetLane,records,reason,otherIndex)
   -- finishes. Ordinary PASS/YIELD/RETURN must never overwrite that decision.
   if record.p.emergencyEscape then return false end
   local current=record.p.coordinatedLane or 1
-  if targetLane<1 or targetLane>record.lanes.count or
-      math.abs(targetLane-current)~=1 then return false end
-  if not coordinatorLaneFree(record,targetLane,records,8.0) then return false end
+  if targetLane<1 or targetLane>record.lanes.count or targetLane==current then
+    return false
+  end
+  local step=targetLane>current and 1 or -1
+  local lane=current+step
+  while true do
+    if not coordinatorLaneFree(record,lane,records,8.0) then return false end
+    if lane==targetLane then break end
+    lane=lane+step
+  end
   record.p.coordinatorFromLane=current
   record.p.coordinatorTargetLane=targetLane
   record.p.coordinatedLane=targetLane
@@ -1441,22 +1458,52 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             -- The dedicated same-direction emergency scan below owns the escape.
             moved=true
           elseif follower.managed and leader.managed then
-            -- A slower leading car yields right; otherwise the faster follower
-            -- takes the adjacent left lane. Only one adjacent slot is changed.
-            if closing>0.5 and lane>1 and leader.p.coordinatorChangeT<=0 then
-              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
-            end
-            if not moved and lane<follower.lanes.count and
-                follower.p.coordinatorChangeT<=0 then
-              moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
-            end
-            if not moved and lane>1 and leader.p.coordinatorChangeT<=0 then
-              moved=coordinatorMove(leader,lane-1,records,"YIELD",follower.index)
+            -- The leading car has right of way and keeps its chosen line.
+            -- Only the follower searches for a passing corridor. Try every
+            -- available lane, nearest first; never make the leader move aside.
+            if follower.p.coordinatorChangeT<=0 then
+              local candidates={}
+              for targetLane=1,follower.lanes.count do
+                if targetLane~=lane then
+                  candidates[#candidates+1]={
+                    lane=targetLane,
+                    cost=math.abs(follower.lanes.centers[targetLane]-
+                      safeNumber(follower.p.latOff,
+                        follower.lanes.centers[lane]))
+                  }
+                end
+              end
+              table.sort(candidates,function(x,y) return x.cost<y.cost end)
+              for _,candidate in ipairs(candidates) do
+                if coordinatorMove(follower,candidate.lane,records,
+                    "PASS",leader.index) then
+                  moved=true
+                  break
+                end
+              end
             end
           elseif follower.managed then
             -- The leading obstacle is not controlled by RoutePilot.
-            if lane<follower.lanes.count and follower.p.coordinatorChangeT<=0 then
-              moved=coordinatorMove(follower,lane+1,records,"PASS",leader.index)
+            if follower.p.coordinatorChangeT<=0 then
+              local candidates={}
+              for targetLane=1,follower.lanes.count do
+                if targetLane~=lane then
+                  candidates[#candidates+1]={
+                    lane=targetLane,
+                    cost=math.abs(follower.lanes.centers[targetLane]-
+                      safeNumber(follower.p.latOff,
+                        follower.lanes.centers[lane]))
+                  }
+                end
+              end
+              table.sort(candidates,function(x,y) return x.cost<y.cost end)
+              for _,candidate in ipairs(candidates) do
+                if coordinatorMove(follower,candidate.lane,records,
+                    "PASS",leader.index) then
+                  moved=true
+                  break
+                end
+              end
             end
           elseif leader.managed then
             -- A non-managed faster vehicle behind: RoutePilot's car yields
@@ -1541,7 +1588,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       if emergencyDanger then
         local candidates={}
         for lane=1,rec.lanes.count do
-          if math.abs(lane-current)==1 then
+          if lane~=current then
             candidates[#candidates+1]={
               lane=lane,
               cost=math.abs(rec.lanes.centers[lane]-
