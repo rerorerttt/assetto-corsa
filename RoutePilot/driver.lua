@@ -1126,9 +1126,17 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           -- close follower does not: it matters only if it is catching up.
           if distance<=physicalGap then
             timeToConflict=0
+          elseif sameDirection and gap>=0 and distance<=minGap then
+            -- A stopped or slowly moving leader still occupies the escape
+            -- lane. Do not require positive closing speed to reject a
+            -- destination that is already inside the safe following gap.
+            timeToConflict=0
           elseif not sameDirection and distance<=minGap then
             timeToConflict=0
-          elseif closing>0.5 then
+          elseif closing>0.05 then
+            -- Include low-speed closing during an emergency lane change;
+            -- the ordinary 0.5 m/s threshold can hide a slow crawl into a
+            -- stationary queue.
             timeToConflict=math.max(0,distance-minGap)/closing
           end
           if timeToConflict<=transitionTime+0.65 then
@@ -1144,6 +1152,9 @@ end
 
 local function coordinatorEmergencyMove(record,targetLane,records,otherIndex)
   local p=record.p
+  -- An active emergency escape owns its reservation until the vehicle has
+  -- physically reached the target lane.
+  if p.emergencyEscape then return false end
   local current=p.coordinatedLane or 1
   if targetLane<1 or targetLane>record.lanes.count or targetLane==current then
     return false
@@ -1678,7 +1689,10 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local emergencyDanger=nearestGap~=nil and
         nearestGap<dangerDistance and
         nearestSpeed<=EMERGENCY_TARGET_MAX_SPEED
-      if emergencyDanger then
+      -- Finish the currently reserved physical escape before considering
+      -- another obstacle. Replanning here made the car alternate lanes while
+      -- it was still crossing the road.
+      if emergencyDanger and not p.emergencyEscape then
         local candidates={}
         for lane=1,rec.lanes.count do
           if lane~=current then
