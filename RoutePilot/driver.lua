@@ -1134,6 +1134,16 @@ local function coordinatorEmergencyLaneFree(owner,targetLane,records)
           end
           local distance=math.abs(gap)
           local physicalGap=ownHalf+otherHalf
+          -- An active emergency escape reserves its entire swept corridor,
+          -- not just the lane centre it is heading toward. Without this
+          -- pairwise lock, two nearby cars can each see the other's current
+          -- lane as free and start opposite emergency moves in the same frame.
+          -- Closing speed is irrelevant here: both manoeuvres are already
+          -- committed and their lateral paths can intersect while crawling.
+          if other.managed and other.p.emergencyEscape and physicalOverlap and
+              distance<=physicalGap+12.0 then
+            return false,"ACTIVE_EMERGENCY_RESERVATION",gap,closing,0
+          end
           local timeToConflict=math.huge
           -- A body overlap is always a conflict. For same-direction traffic,
           -- a close leader blocks the destination even while stopped, but a
