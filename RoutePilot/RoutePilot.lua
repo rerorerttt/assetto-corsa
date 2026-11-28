@@ -1080,6 +1080,7 @@ function script.update(dt)
           releaseCar(i)
         end
       end
+
       if useCSPRoute then
         routeSnapshot={
           nodes=state.nodes,boundsL=state.boundsL,boundsR=state.boundsR,
@@ -1087,61 +1088,135 @@ function script.update(dt)
           routeLength=state.routeLength,routeMetricCount=state.routeMetricCount,
           routeMetricLoop=state.routeMetricLoop
         }
-        state.nodes=graphRoute.nodes
-        state.boundsL=graphRoute.boundsL
-        state.boundsR=graphRoute.boundsR
-        state.loopRoute=true
-        state.routeGeometry=graphRoute.geometry
-        state.routeLength=graphRoute.length
-        state.routeMetricCount=#graphRoute.nodes
-        state.routeMetricLoop=true
         if playerAI then state.p[0]=nil end
-      end
-      -- Resolve every car's lane and near-future traffic conflicts as one batch.
-      -- The coordinator runs before controls are written, so requests cannot
-      -- race against per-car update order.
-      if Driver.prepareTraffic then
-        local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,driveOrder,dt)
-        if not okTraffic then writeLog("TRAFFIC_COORDINATOR_ERROR err=%s",tostring(errTraffic)) end
-      end
-      if useCSPRoute then
+        local routes=trafficCSP.previewRoutes or {graphRoute}
+        local routeOrders={}
+        for ri=1,#routes do routeOrders[ri]={} end
         for _,i in ipairs(driveOrder) do
-          local person=state.p[i]
-          if person then person.cruiseSpeed=200.0/3.6 end
+          local ri=trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[i] or nil
+          if i==0 and playerAI then ri=1 end
+          if ri and routeOrders[ri] then routeOrders[ri][#routeOrders[ri]+1]=i end
         end
-      end
-      -- The coordinator has already resolved all lane decisions. Update cars
-      -- in deterministic route order; no per-car yield queue or pass handshake.
-      local okLoop,errLoop=pcall(function()
-      table.sort(driveOrder,function(a,b)
-        local pa,pb=state.p[a],state.p[b]
-        local priorityA=safeNumber(pa and pa.trafficPriority)
-        local priorityB=safeNumber(pb and pb.trafficPriority)
-        if priorityA~=priorityB then return priorityA>priorityB end
-        local progressA=pa and pa.routeProgress
-        local progressB=pb and pb.routeProgress
-        if progressA~=nil and progressB~=nil and progressA~=progressB then
-          return progressA<progressB
-        end
-        if progressA~=nil and progressB==nil then return true end
-        if progressA==nil and progressB~=nil then return false end
-        return a<b
-      end)
-      for _,i in ipairs(driveOrder) do
-        local car=ac.getCar(i)
-        if car and car.isActive and car.isAIControlled then
-          local rescued=updateRescueWatchdog(i,car,dt)
-          if not rescued then
-            local okc,erc=pcall(Driver.update,i,car,dt)
-            if not okc then
-              writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
-              releaseCar(i)
+
+        for ri=1,#routes do
+          local order=routeOrders[ri]
+          if #order>0 then
+            local route=routes[ri]
+            state.nodes=route.nodes
+            state.boundsL=route.boundsL
+            state.boundsR=route.boundsR
+            state.loopRoute=true
+            state.routeGeometry=route.geometry
+            state.routeLength=route.length
+            state.routeMetricCount=#route.nodes
+            state.routeMetricLoop=true
+
+            local savedOther={}
+            for idx,person in pairs(state.p) do
+              local assigned=trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[idx] or nil
+              if idx==0 and playerAI then assigned=1 end
+              if assigned~=ri then
+                savedOther[idx]={
+                  routeProgress=person.routeProgress,
+                  routeLocked=person.routeLocked,
+                  segIdx=person.segIdx
+                }
+                person.routeProgress=nil
+                person.routeLocked=false
+                person.segIdx=1
+              end
             end
+
+            local okGroup,errGroup=pcall(function()
+              local coordinatorOK=true
+              if Driver.prepareTraffic then
+                local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,order,dt)
+                if not okTraffic then
+                  coordinatorOK=false
+                  writeLog("TRAFFIC_COORDINATOR_ERROR route=%d err=%s",ri,tostring(errTraffic))
+                end
+              end
+              if coordinatorOK then
+                for _,i in ipairs(order) do
+                  local person=state.p[i]
+                  if person then person.cruiseSpeed=200.0/3.6 end
+                end
+                table.sort(order,function(a,b)
+                  local pa,pb=state.p[a],state.p[b]
+                  local priorityA=safeNumber(pa and pa.trafficPriority)
+                  local priorityB=safeNumber(pb and pb.trafficPriority)
+                  if priorityA~=priorityB then return priorityA>priorityB end
+                  local progressA=pa and pa.routeProgress
+                  local progressB=pb and pb.routeProgress
+                  if progressA~=nil and progressB~=nil and progressA~=progressB then
+                    return progressA<progressB
+                  end
+                  if progressA~=nil and progressB==nil then return true end
+                  if progressA==nil and progressB~=nil then return false end
+                  return a<b
+                end)
+                for _,i in ipairs(order) do
+                  local car=ac.getCar(i)
+                  if car and car.isActive and car.isAIControlled then
+                    local rescued=updateRescueWatchdog(i,car,dt)
+                    if not rescued then
+                      local okCar,errCar=pcall(Driver.update,i,car,dt)
+                      if not okCar then
+                        writeLog("DRIVER_ERROR id=%d route=%d err=%s",i,ri,tostring(errCar))
+                        releaseCar(i)
+                      end
+                    end
+                  end
+                end
+              end
+            end)
+            for idx,saved in pairs(savedOther) do
+              local person=state.p[idx]
+              if person then
+                person.routeProgress=saved.routeProgress
+                person.routeLocked=saved.routeLocked
+                person.segIdx=saved.segIdx
+              end
+            end
+            if not okGroup then writeLog("DRIVER_ROUTE_BATCH_ERROR route=%d err=%s",ri,tostring(errGroup)) end
           end
         end
+      else
+        if Driver.prepareTraffic then
+          local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,driveOrder,dt)
+          if not okTraffic then writeLog("TRAFFIC_COORDINATOR_ERROR err=%s",tostring(errTraffic)) end
+        end
+        local okLoop,errLoop=pcall(function()
+          table.sort(driveOrder,function(a,b)
+            local pa,pb=state.p[a],state.p[b]
+            local priorityA=safeNumber(pa and pa.trafficPriority)
+            local priorityB=safeNumber(pb and pb.trafficPriority)
+            if priorityA~=priorityB then return priorityA>priorityB end
+            local progressA=pa and pa.routeProgress
+            local progressB=pb and pb.routeProgress
+            if progressA~=nil and progressB~=nil and progressA~=progressB then
+              return progressA<progressB
+            end
+            if progressA~=nil and progressB==nil then return true end
+            if progressA==nil and progressB~=nil then return false end
+            return a<b
+          end)
+          for _,i in ipairs(driveOrder) do
+            local car=ac.getCar(i)
+            if car and car.isActive and car.isAIControlled then
+              local rescued=updateRescueWatchdog(i,car,dt)
+              if not rescued then
+                local okCar,errCar=pcall(Driver.update,i,car,dt)
+                if not okCar then
+                  writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(errCar))
+                  releaseCar(i)
+                end
+              end
+            end
+          end
+        end)
+        if not okLoop then writeLog("DRIVER_BATCH_ERROR err=%s",tostring(errLoop)) end
       end
-      end)
-      if not okLoop then writeLog("DRIVER_BATCH_ERROR err=%s",tostring(errLoop)) end
     else
       for idx in pairs(state.p) do releaseCar(idx) end
     end
