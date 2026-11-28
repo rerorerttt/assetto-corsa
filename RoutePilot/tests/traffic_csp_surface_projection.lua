@@ -38,6 +38,17 @@ assert(validImport.lanes[1].speedLimit == 80 and validImport.lanes[1].speedLimit
 assert(validImport.graph and validImport.roads,
   "valid import should build both graph and road geometry")
 
+-- Finalized CSP exports already contain the combined priority and effective
+-- speed limit. Do not add priorityOffset a second time or replace speedLimit
+-- with the unfinalized role default.
+raw = '{"rules":{"laneRoles":[{"priority":-8,"speedLimit":40},{"priority":-4,"speedLimit":60},{"priority":0,"speedLimit":80},{"priority":4,"speedLimit":90}]},"lanes":[{"id":2,"role":3,"loop":false,"priority":12,"priorityOffset":7.5,"speedLimit":55,"points":[[-10,0,0],[0,0,0],[10,0,0]]}],"intersections":[]}'
+local finalizedImport=Importer.new()
+assert(finalizedImport:load(),"finalized CSP export did not load")
+assert(finalizedImport.lanes[1].priority==12,
+  "finalized CSP priority was double-counted with priorityOffset")
+assert(finalizedImport.lanes[1].speedLimit==55,
+  "finalized CSP speed limit was replaced by the lane-role default")
+
 syntheticHitDistance = 0.25
 local wrongDeckImport = Importer.new()
 assert(wrongDeckImport:load(), "wrong-deck sample should not abort the import")
