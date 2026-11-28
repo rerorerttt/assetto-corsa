@@ -253,6 +253,25 @@ function Graph.build(lanes, intersectionDefs, log)
     end
   end
 
+  -- A lane crossing an intersection remains continuous along its own
+  -- directed spline. This is not a lane-change movement and must never be lost.
+  for i = 1, #graph.intersections do
+    local inter = graph.intersections[i]
+    for j = 1, #inter.links do
+      local link = inter.links[j]
+      if link.inEdge and link.outEdge then
+        link.inEdge.nextEdges[#link.inEdge.nextEdges + 1] = link.outEdge
+        local continuation = {
+          intersection = inter, from = link, to = link,
+          fromEdge = link.inEdge, toEdge = link.outEdge,
+          continuation = true, priority = 0
+        }
+        inter.movements[#inter.movements + 1] = continuation
+        graph.movements[#graph.movements + 1] = continuation
+      end
+    end
+  end
+
   -- Honor explicit forbidden movements. Each accepted movement is an edge-to-
   -- edge transition; no transition is inferred from proximity alone.
   for i = 1, #graph.intersections do
