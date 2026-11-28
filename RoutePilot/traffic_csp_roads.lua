@@ -379,7 +379,8 @@ local function mergeBoundaryCrossings(lines)
             local aminZ, amaxZ = math.min(sa.a.z,sa.b.z), math.max(sa.a.z,sa.b.z)
             for bi = 1, #nearB do
               local sb = nearB[bi]
-              if math.max(aminX,math.min(sb.a.x,sb.b.x)) <= math.min(amaxX,math.max(sb.a.x,sb.b.x)) and
+              if math.abs((sa.a.y+sa.b.y-sb.a.y-sb.b.y)*0.5)<=1.5 and
+                  math.max(aminX,math.min(sb.a.x,sb.b.x)) <= math.min(amaxX,math.max(sb.a.x,sb.b.x)) and
                   math.max(aminZ,math.min(sb.a.z,sb.b.z)) <= math.min(amaxZ,math.max(sb.a.z,sb.b.z)) then
                 local ta, tb, point = segmentIntersection(sa.a,sa.b,sb.a,sb.b)
                 if ta then
