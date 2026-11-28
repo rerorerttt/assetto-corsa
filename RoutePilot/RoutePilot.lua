@@ -49,7 +49,7 @@ local state = {
   followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  spawnHints={}, spawnedCars={}, spawnTeleportNextTryAt=0,
+  spawnHints={}, spawnedCars={}, spawnTeleportAccum=0,
   nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
   trafficNetwork=nil, loadedFromCSP=false, cspImportPending=false,
@@ -196,9 +196,9 @@ local function loadLine(retryOnly)
   state.routeGeometry=nil
   local loaded=nil
 
-  -- CSP traffic.json is the primary route source. The converter builds the
-  -- racing line midway between same-direction parallel traffic lines and
-  -- exposes the complete source network for rendering. The legacy driver,
+  -- CSP traffic.json is the primary route source. The converter follows an
+  -- authored directed Traffic Tool line and exposes the complete source
+  -- network for yellow-line rendering. The legacy driver,
   -- its traffic coordinator and all control algorithms remain unchanged.
   if CSPConverter then
     local ok, nodes, loop, boundsL, boundsR, infoOrError =
@@ -580,10 +580,9 @@ local function trySpawnTeleport(sim,dt)
     end
     return
   end
-  local simNow=ac.getSim()
-  local gameNow=simNow and safeNumber(simNow.gameTime) or 0
-  if gameNow<safeNumber(state.spawnTeleportNextTryAt) then return end
-  state.spawnTeleportNextTryAt=gameNow+0.25
+  state.spawnTeleportAccum=safeNumber(state.spawnTeleportAccum)+dt
+  if state.spawnTeleportAccum<0.25 then return end
+  state.spawnTeleportAccum=0
   state.spawnedCars=state.spawnedCars or {}
   state.spawnWait=state.spawnWait+dt
   local aiCars={}
@@ -763,15 +762,15 @@ local function teleportHome(carIndex,car)
           if spotIsClear(safePos,carIndex) then
             local ok,result=pcall(physics.setAICarPosition,carIndex,
               safePos,vec3(-snapped.direction.x,0,-snapped.direction.z))
-          if ok and result~=false then
-            state.p[carIndex]=nil
-            state.rescueWatch=state.rescueWatch or {}
-            state.rescueWatch[carIndex]={cooldown=3.0}
-            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=RECORDED_LINE_FORWARD sign=%d pos=(%.2f,%.2f,%.2f)",
-              carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
-            flushLog()
-            return true
-          end
+            if ok and result~=false then
+              state.p[carIndex]=nil
+              state.rescueWatch=state.rescueWatch or {}
+              state.rescueWatch[carIndex]={cooldown=3.0}
+              writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=RECORDED_LINE_FORWARD sign=%d pos=(%.2f,%.2f,%.2f)",
+                carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
+              flushLog()
+              return true
+            end
             writeLog("RESCUE_FORWARD_FAILED id=%d distance=%.1f error=%s",
               carIndex,distance,tostring(result))
           end
