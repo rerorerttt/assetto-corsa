@@ -8,13 +8,15 @@ local function distance(a, b)
   return math.sqrt(dx*dx+dy*dy+dz*dz)
 end
 
-local function appendPoint(route, p, left, right)
+local function appendPoint(route, p, left, right, speedLimit)
   if not p then return end
   local last = route.nodes[#route.nodes]
   if last and distance(last, p) < 0.20 then
     local i = #route.nodes
     route.boundsL[i] = math.max(route.boundsL[i], right)
     route.boundsR[i] = math.min(route.boundsR[i], left)
+    route.speedLimits[i] = math.min(route.speedLimits[i] or speedLimit or 200,
+      speedLimit or 200)
     return
   end
   route.nodes[#route.nodes+1] = vec3(p.x, p.y, p.z)
@@ -22,6 +24,7 @@ local function appendPoint(route, p, left, right)
   -- left is positive. Keep this convention for the driver's safe corridor.
   route.boundsL[#route.nodes] = right
   route.boundsR[#route.nodes] = left
+  route.speedLimits[#route.nodes] = speedLimit or 200
 end
 
 local function nearestBoundaryPoint(position, points, loop)
@@ -90,7 +93,9 @@ local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
     local p = Graph.sampleLane(edge.lane, d)
     local direction = Graph.directionAt(edge.lane, d)
     local left, right = laneBoundsAt(roads, edge.lane, p, direction)
-    appendPoint(route, p, left, right)
+    local speedLimit=edge.lane.speedLimitExplicit and
+      math.max(40,math.min(200,edge.lane.speedLimit or 200)) or 200
+    appendPoint(route, p, left, right, speedLimit)
   end
 end
 
@@ -113,6 +118,11 @@ local function appendBezier(route, roads, movement)
   local leftA,rightA=laneBoundsAt(roads,movement.from.lane,p0,movement.fromDir)
   local leftB,rightB=laneBoundsAt(roads,movement.to.lane,p3,movement.toDir)
   local halfWidth=math.max(0.05,math.min(3.5,leftA,-rightA,leftB,-rightB))
+  local speedA=movement.from.lane.speedLimitExplicit and
+    math.max(40,math.min(200,movement.from.lane.speedLimit or 200)) or 200
+  local speedB=movement.to.lane.speedLimitExplicit and
+    math.max(40,math.min(200,movement.to.lane.speedLimit or 200)) or 200
+  local speedLimit=math.min(speedA,speedB)
   local steps = math.max(3, math.min(80, math.ceil(chord/1.2)))
   for i = 1, steps do
     local t = i/steps
@@ -121,7 +131,7 @@ local function appendBezier(route, roads, movement)
       u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
       u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y,
       u*u*u*p0.z + 3*u*u*t*p1.z + 3*u*t*t*p2.z + t*t*t*p3.z)
-    appendPoint(route, p, halfWidth, -halfWidth)
+    appendPoint(route, p, halfWidth, -halfWidth, speedLimit)
   end
   return true
 end
@@ -162,7 +172,7 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
     if not path then return nil, pathCost end
     loopRoute = false
   end
-  local route = { nodes = {}, boundsL = {}, boundsR = {}, edges = path, loop = loopRoute }
+  local route = { nodes = {}, boundsL = {}, boundsR = {}, speedLimits = {}, edges = path, loop = loopRoute }
   for i = 1, #path do
     local edge = path[i]
     local from = i == 1 and math.max(edge.from, startDistance or edge.from) or edge.from
