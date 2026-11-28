@@ -35,6 +35,19 @@ local function project(l,pos,hint,window)
  end
  return best
 end
+local function projectNear(l,pos,hint,window)
+ local q=project(l,pos,hint,window)
+ if l.loop and hint~=nil then
+  local altHint=nil
+  if hint<window then altHint=l.length
+  elseif hint>l.length-window then altHint=0 end
+  if altHint~=nil then
+   local alt=project(l,pos,altHint,window)
+   if alt and(not q or alt.distance<q.distance)then q=alt end
+  end
+ end
+ return q
+end
 local function nearest(g,car)
  local hx,hz=norm(car.look.x,car.look.z);local best,score
  for _,id in ipairs(g.laneOrder)do local l=g.lanes[id];local q=project(l,car.position)
@@ -46,7 +59,7 @@ local function occupancy(g,laneId,s,index,sim,range)
  local l=g.lanes[laneId];local ahead,behind
  if not sim then return nil,nil end
  for i=0,sim.carsCount-1 do if i~=index then local c=ac.getCar(i);if c and c.isActive then
-  local q=project(l,c.position,s,range+20)
+  local q=projectNear(l,c.position,s,range+20)
   local otherState=S.p[i]
   local sameLane=otherState and otherState.networkLaneId==laneId
   local occupancyRadius=sameLane and 4.8 or 2.0
@@ -68,7 +81,7 @@ local function laneChange(g,l,p,index,sim,speed)
  local best,score
  for _,e in ipairs(l.adjacent or{})do if p.s>=e.fromStart+2 and p.s<=e.fromEnd-2 then
   local target=g.lanes[e.to]
-  if target then local src=point(l,p.s);local q=project(target,src,(e.toStart+e.toEnd)*.5,(e.toEnd-e.toStart)*.5+10)
+  if target then local src=point(l,p.s);local q=projectNear(target,src,(e.toStart+e.toEnd)*.5,(e.toEnd-e.toStart)*.5+10)
    if q and q.distance>=2 and q.distance<=8 then
     local a,b=occupancy(g,target.id,q.s,index,sim,max(35,speed*2.5))
     if(not a or a.gap>max(18,speed*1.2))and(not b or b.gap>max(12,speed*.8))then
@@ -100,7 +113,7 @@ function M.prepareTraffic(sim,order,dt)
  local g=S.trafficNetwork;if not g then return end
  for _,i in ipairs(order or{})do local c=ac.getCar(i);if c and c.isActive then local p=S.p[i]or{};S.p[i]=p
   if not p.networkLaneId then local q=nearest(g,c);if q then p.networkLaneId=q.id;p.networkS=q.s;H.log("NETWORK_ATTACH id=%d lane=%d s=%.1f",i,q.id,q.s)end end
-  local l=g.lanes[p.networkLaneId];if l then local q=project(l,c.position,p.networkS,max(35,n(c.speedMs)*1.8+15));if q and q.distance<18 then p.networkS=q.s;p.networkDistance=q.distance;p.networkProjectionLost=false else p.networkProjectionLost=true end end
+  local l=g.lanes[p.networkLaneId];if l then local q=projectNear(l,c.position,p.networkS,max(35,n(c.speedMs)*1.8+15));if q and q.distance<18 then p.networkS=q.s;p.networkDistance=q.distance;p.networkProjectionLost=false else p.networkProjectionLost=true end end
  end end
 end
 function M.update(i,c,dt)
@@ -110,14 +123,14 @@ function M.update(i,c,dt)
  if not p.networkLaneId then local q=nearest(g,c);if q then p.networkLaneId=q.id;p.networkS=q.s end end
  local l=g.lanes[p.networkLaneId]
  if not l or p.networkS==nil then controls(i,0,0,1);p.trafficAction="NETWORK_NO_LANE";return end
- local q=project(l,c.position,p.networkS,max(35,speed*1.8+15))
+ local q=projectNear(l,c.position,p.networkS,max(35,speed*1.8+15))
  if not q or q.distance>18 then controls(i,0,0,1);p.projectionLost=true;p.trafficAction="NETWORK_PROJECTION_LOST";return end
  p.networkS=q.s;p.networkDistance=q.distance
  local sim=ac.getSim();local nextJ=junction(g,l,{s=p.networkS},c,i,sim)
  if nextJ then
   local old,oldS=l.id,p.networkS
   l=g.lanes[nextJ.id];p.networkLaneId=l.id;p.networkS=nextJ.s
-  local targetProjection=project(l,c.position,p.networkS,35)
+  local targetProjection=projectNear(l,c.position,p.networkS,35)
   if not targetProjection or targetProjection.distance>28 then
    p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
    controls(i,0,0,0.65);p.projectionLost=true;p.trafficAction="NETWORK_JUNCTION_REACQUIRE";return
