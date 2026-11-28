@@ -538,20 +538,28 @@ local function trySpawnTeleport(sim,dt)
   end
   local metrics=buildSpawnRouteMetrics()
   if not metrics then state.spawnDone=true; return end
-  local count=#aiCars
-  local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
-  if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
-  local startDistance=0
-  if metrics.loop then
-    local player=ac.getCar(0)
-    if player then
-      local routeDistance,routeError=findRouteDistanceAtPosition(
-        player.position,metrics,player.look)
-      startDistance=routeDistance+gap
-      writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f)",
-        routeDistance,routeError,player.look.x,player.look.z)
-    else startDistance=gap end
+  local player=ac.getCar(0)
+  if not player or not player.position then return end
+  local routeDistance,routeError=findRouteDistanceAtPosition(
+    player.position,metrics,player.look)
+  if routeError>25.0 then
+    writeLog("SPAWN_SKIPPED reason=player_off_route error=%.1f",routeError)
+    state.spawnDone=true
+    return
   end
+  local count=#aiCars
+  local available=metrics.loop and metrics.length or
+    math.max(0,metrics.length-routeDistance)
+  local gap=math.min(CFG.SPAWN_GAP,available/(count+1))
+  if gap<CFG.SPAWN_MIN_GAP then
+    writeLog("SPAWN_SKIPPED reason=insufficient_forward_route available=%.1f cars=%d",
+      available,count)
+    state.spawnDone=true
+    return
+  end
+  local startDistance=routeDistance+gap
+  writeLog("SPAWN_REFERENCE route=%.1f error=%.2f gap=%.1f loop=%s",
+    routeDistance,routeError,gap,tostring(metrics.loop))
   local moved,failed=0,0
   for order=1,count do
     local carIndex=aiCars[order]
@@ -827,6 +835,20 @@ function script.update(dt)
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
+    if state.cspImportPending and not state.loaded then
+      state.autoImportAccum=state.autoImportAccum+dt
+      if state.autoImportAccum>=1.0 then
+        state.autoImportAccum=0
+        state.autoImportAttempts=state.autoImportAttempts+1
+        if state.autoImportAttempts<=8 then
+          writeLog("CSP_IMPORT_RETRY attempt=%d",state.autoImportAttempts)
+          loadLine(true)
+        else
+          state.cspImportPending=false
+          writeLog("CSP_IMPORT_RETRY_STOP attempts=%d",state.autoImportAttempts)
+        end
+      end
+    end
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 then
@@ -944,6 +966,47 @@ render.on('main.track.transparent', function()
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
+    if state.trafficNetwork then
+      local laneIds=state.trafficNetwork.laneOrder or {}
+      local nearby={}
+      for _,laneId in ipairs(laneIds) do
+        local lane=state.trafficNetwork.lanes[laneId]
+        local box=lane and lane.aabb
+        if lane and #lane.points>=2 then
+          local near=true
+          if box then
+            local dx=math.max(box.minX-player.position.x,0,player.position.x-box.maxX)
+            local dz=math.max(box.minZ-player.position.z,0,player.position.z-box.maxZ)
+            near=dx*dx+dz*dz<=650.0*650.0
+          end
+          if near then nearby[#nearby+1]=lane end
+        end
+      end
+      local perLaneBudget=math.max(8,math.floor(1600/math.max(1,#nearby)))
+      for _,lane in ipairs(nearby) do
+        local pts=lane.points
+        local stride=math.max(1,math.ceil((#pts-1)/perLaneBudget))
+        local previous
+        for k=1,#pts,stride do
+          local current=pts[k]
+          if previous then
+            local mx=(previous.x+current.x)*0.5-player.position.x
+            local mz=(previous.z+current.z)*0.5-player.position.z
+            if mx*mx+mz*mz<=650.0*650.0 then
+              render.debugLine(vec3(previous.x,previous.y+0.05,previous.z),
+                vec3(current.x,current.y+0.05,current.z),YELLOW)
+            end
+          end
+          previous=current
+        end
+        local last=pts[#pts]
+        if previous~=last then
+          render.debugLine(vec3(previous.x,previous.y+0.05,previous.z),
+            vec3(last.x,last.y+0.05,last.z),YELLOW)
+        end
+      end
+      return
+    end
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
     if isRec then
@@ -1004,16 +1067,25 @@ local function computeMapBounds()
     local nd=state.nodes[i]
     local l,r=boundsAt(i)
     local b=segEnd(i)
-    local lx,lz=normalize2(b.x-nd.x,b.z-nd.z)
-    local pts={
-      {x=nd.x-lz*l,z=nd.z+lx*l},
-      {x=nd.x-lz*r,z=nd.z+lx*r},
-    }
-    for _,q in ipairs(pts) do
-      if q.x<minX then minX=q.x end
-      if q.x>maxX then maxX=q.x end
-      if q.z<minZ then minZ=q.z end
-      if q.z>maxZ then maxZ=q.z end
+    if not b and i>1 then b=state.nodes[i-1] end
+    if b then
+      local dx,dz=b.x-nd.x,b.z-nd.z
+      if i==#state.nodes and not state.loopRoute then dx,dz=-dx,-dz end
+      local lx,lz=normalize2(dx,dz)
+      local pts={{x=nd.x-lz*l,z=nd.z+lx*l},{x=nd.x-lz*r,z=nd.z+lx*r}}
+      for _,q in ipairs(pts) do
+        minX=math.min(minX,q.x); maxX=math.max(maxX,q.x)
+        minZ=math.min(minZ,q.z); maxZ=math.max(maxZ,q.z)
+      end
+    end
+  end
+  if state.trafficNetwork then
+    for _,laneId in ipairs(state.trafficNetwork.laneOrder or {}) do
+      local lane=state.trafficNetwork.lanes[laneId]
+      for _,pt in ipairs(lane and lane.points or {}) do
+        minX=math.min(minX,pt.x-2); maxX=math.max(maxX,pt.x+2)
+        minZ=math.min(minZ,pt.z-2); maxZ=math.max(maxZ,pt.z+2)
+      end
     end
   end
   if minX==math.huge then return nil end
@@ -1037,6 +1109,32 @@ local function drawMapInRect(q0,q1)
   end
   local n=#state.nodes
   local minOff=CFG.MAP_MIN_OFFSET
+  if state.trafficNetwork then
+    local laneIds=state.trafficNetwork.laneOrder or {}
+    local perLaneBudget=math.max(2,math.floor(1800/math.max(1,#laneIds)))
+    for _,laneId in ipairs(laneIds) do
+      local lane=state.trafficNetwork.lanes[laneId]
+      local points=lane and lane.points or {}
+      local count=#points
+      local step=math.max(1,math.ceil(count/perLaneBudget))
+      local prev
+      for k=1,count,step do
+        local node=points[k]
+        local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+        if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+          ui.drawLine(prev,point,rgbm(1.0,0.78,0.12,0.90),2)
+        end
+        prev=point
+      end
+      if count>1 then
+        local node=points[count]
+        local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+        if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+          ui.drawLine(prev,point,rgbm(1.0,0.78,0.12,0.90),2)
+        end
+      end
+    end
+  else
   -- bounds: dark red, thick, min offset from the line
   for pass=1,2 do
     local prev
@@ -1058,7 +1156,8 @@ local function drawMapInRect(q0,q1)
       prev=vec2(sx,sy)
     end
   end
-  -- AI line: yellow, thick
+  -- AI line: yellow, thick (manual-route fallback only).
+  if not state.trafficNetwork then
   do
     local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
     for i=2,n do
@@ -1075,6 +1174,7 @@ local function drawMapInRect(q0,q1)
         ui.drawLine(prev,first,rgbm(1.0,0.85,0.0,0.95),3)
       end
     end
+  end
   end
   -- cars: player = cyan, AI = white/green when overtaking
   local sim=ac.getSim()
