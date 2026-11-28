@@ -127,22 +127,53 @@ local function occupancy(g,laneId,s,index,sim,range)
  end end end
  return ahead,behind
 end
+local function clearLaneCrossing(src,dst,srcS,dstS)
+ -- A geometric neighbour is not necessarily physically reachable: a fence
+ -- can sit between two parallel CSP lines. Test the crossing against the
+ -- track's physical mesh at several points before allowing a lane change.
+ if not physics or type(physics.raycastTrack)~="function" or type(vec3)~="function" then return false end
+ local offsets={0,5,10}
+ for _,offset in ipairs(offsets)do
+  local ss=src.loop and((srcS+offset)%src.length)or min(src.length,srcS+offset)
+  local ts=dst.loop and((dstS+offset)%dst.length)or min(dst.length,dstS+offset)
+  local a=point(src,ss);local b=point(dst,ts)
+  local dx,dy,dz=b.x-a.x,b.y-a.y,b.z-a.z
+  local length=sqrt(dx*dx+dy*dy+dz*dz)
+  if length<1.8 or length>6.5 or abs(dy)>0.8 then return false end
+  local heights={0.45,0.95}
+  for _,height in ipairs(heights)do
+   local origin=vec3(a.x,a.y+height,a.z)
+   local direction=vec3(dx/length,dy/length,dz/length)
+   local ok,hit=pcall(physics.raycastTrack,origin,direction,length)
+   if not ok or type(hit)~="number" then return false end
+   if hit>=0 and hit<length-0.35 then return false end
+  end
+ end
+ return true
+end
 local function laneChange(g,l,p,index,sim,speed)
- local best,score
+ local best,bestDistance
  for _,e in ipairs(l.adjacent or{})do
   local transitionDistance=clamp(speed*0.35,8,20)
   if p.s>=e.fromStart+2 and p.s<=e.fromEnd-transitionDistance then
-  local target=g.lanes[e.to]
-  if target then local src=point(l,p.s);local q=projectNear(target,src,(e.toStart+e.toEnd)*.5,(e.toEnd-e.toStart)*.5+10)
-   if q and q.distance>=2 and q.distance<=8 then
-    local a,b=occupancy(g,target.id,q.s,index,sim,max(35,speed*2.5))
-    if(not a or a.gap>max(18,speed*1.2))and(not b or b.gap>max(12,speed*.8))then
-     local v=(a and a.gap or 1000)+(b and b.gap or 1000)*.4
-     if not score or v>score then best={id=target.id,s=q.s};score=v end
+   local target=g.lanes[e.to]
+   if target then
+    local src=point(l,p.s)
+    local q=projectNear(target,src,(e.toStart+e.toEnd)*.5,(e.toEnd-e.toStart)*.5+10)
+    if q and q.distance>=2.2 and q.distance<=5.5 and abs(q.heightError or 0)<=0.8 and
+        dot(q.tx,q.tz,(select(1,tangent(l,p.s))),(select(2,tangent(l,p.s))))>=0.98 then
+     local ahead,behind=occupancy(g,target.id,q.s,index,sim,max(45,speed*2.8))
+     local safeAhead=not ahead or ahead.gap>max(24,speed*1.5)
+     local safeBehind=not behind or behind.gap>max(16,speed*1.0)
+     if safeAhead and safeBehind and clearLaneCrossing(l,target,p.s,q.s) then
+      if not bestDistance or q.distance<bestDistance then
+       best={id=target.id,s=q.s};bestDistance=q.distance
+      end
+     end
     end
    end
   end
- end end
+ end
  return best
 end
 local function junction(g,l,p,car,index,sim,blockedTarget)
@@ -241,10 +272,28 @@ function M.update(i,c,dt)
   H.log("NETWORK_JUNCTION id=%d from=%d to=%d distance=%.2f",i,old,l.id,q.distance)
  end
  local lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
- -- Lane changes are deliberately disabled. CSP adjacent polylines may be
- -- separated by physical barriers; geometric proximity is not proof that a
- -- car can cross. Traffic stays on its authored directed lane.
- -- A blocked leader is handled by following/braking on that same lane.
+ p.networkLaneChangeCooldown=max(0,n(p.networkLaneChangeCooldown)-max(0,dt))
+ -- Change lanes only to the closest same-direction CSP neighbour, and only
+ -- when a leader blocks the current lane. Physical raycasts reject fences
+ -- and other track meshes between the two yellow lane lines.
+ if lead and lead.gap<max(28,speed*1.5) and p.networkLaneChangeCooldown<=0 then
+  local change=laneChange(g,l,{s=p.networkS},i,sim,speed)
+  if change then
+   local old=l.id
+   l=g.lanes[change.id]
+   p.networkLaneId=l.id;p.networkS=change.s
+   q=projectNear(l,c.position,p.networkS,35)
+   if q and q.distance<=5.5 then
+    p.networkLaneChangeCooldown=4.0
+    p.networkTransitionCooldown=max(p.networkTransitionCooldown or 0,1.0)
+    lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
+    H.log("NETWORK_LANE_CHANGE id=%d from=%d to=%d distance=%.2f",i,old,l.id,q.distance)
+   else
+    p.networkLaneId=old;l=g.lanes[old]
+    p.networkS=projectNear(l,c.position,p.networkS,35) and projectNear(l,c.position,p.networkS,35).s or p.networkS
+   end
+  end
+ end
  if p.networkS>=l.length-1.5 and not l.loop then
   local nextLane=p.networkTransitionCooldown<=0 and junction(g,l,{s=p.networkS},c,i,sim,blockedTarget) or nil
   if nextLane then
@@ -259,7 +308,7 @@ function M.update(i,c,dt)
    p.networkReverseLockFrom=old;p.networkReverseLockTimer=3.0
   else controls(i,0,0,1);p.trafficAction="NETWORK_END_OF_LANE";return end
  end
- local look=clamp(9+speed*.55,9,55);local aimS=l.loop and((p.networkS+look)%l.length)or min(l.length,p.networkS+look)
+ local look=clamp(6+speed*.32,7,20);local aimS=l.loop and((p.networkS+look)%l.length)or min(l.length,p.networkS+look)
  local aim=point(l,aimS);local dx,dz=aim.x-c.position.x,aim.z-c.position.z
  local hx,hz=norm(c.look.x,c.look.z);local tx,tz=norm(dx,dz)
  local angle=atan2(hx*tz-hz*tx,clamp(dot(hx,hz,tx,tz),-1,1))
