@@ -232,7 +232,7 @@ local function selectTransition(graph, currentLane, link, laneLinks, visited)
           local ax,az=norm(p0.x-before.x,p0.z-before.z)
           local bx,bz=norm(after.x-p1.x,after.z-p1.z)
           local dot=ax*bx+az*bz
-          if gap<65 and dot>-0.65 then
+          if gap<65 and dot>-0.5 then
             local sameLaneBias=id==currentLane.id and -12.0 or 0
             local score=gap*0.45+(1-dot)*10+sameLaneBias
             candidates[#candidates+1]={lane=target,link=targetLink,score=score}
