@@ -40,6 +40,12 @@ function M.encode(nodes, loop)
   if type(nodes)~="table" or #nodes<3 then
     return nil,"route_needs_at_least_3_points"
   end
+  -- AC v7 AI splines are intrinsically cyclic: the file format has no
+  -- open/closed flag. Assigning an open RoutePilot fragment makes native AI
+  -- wrap from its last point to its first through unrelated world space.
+  if loop~=true then
+    return nil,"AC_AI_SPLINE_REQUIRES_CLOSED_LOOP"
+  end
 
   local points={}
   for i=1,#nodes do
