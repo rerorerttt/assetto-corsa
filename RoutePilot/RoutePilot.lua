@@ -937,6 +937,18 @@ render.on('main.track.transparent', function()
       local roads=trafficCSP.roads
       local green=rgbm(0.1,0.9,0.35,0.95)
       local cyan=rgbm(0.1,0.65,1.0,0.95)
+      local preview=trafficCSP.previewRoute
+      if preview and preview.nodes then
+        local routeColor=rgbm(1.0,0.55,0.08,0.95)
+        for ri=1,#preview.nodes-1 do
+          local a,b=preview.nodes[ri],preview.nodes[ri+1]
+          local dx,dz=a.x-player.position.x,a.z-player.position.z
+          local ex,ez=b.x-player.position.x,b.z-player.position.z
+          if dx*dx+dz*dz<360000 or ex*ex+ez*ez<360000 then
+            render.debugLine(a,b,routeColor)
+          end
+        end
+      end
       for gi=1,#roads.groups do
         local group=roads.groups[gi]
         local left,right=group.boundaries.left,group.boundaries.right
@@ -1195,6 +1207,13 @@ function windowMain(dt)
             ui.text("CSP Graph: ошибка — " .. tostring(trafficCSP.graphError))
           else
             ui.text("CSP Graph: не построен")
+          end
+          if trafficCSP.previewRoute then
+            ui.text(string.format("CSP Route: %.0f м | точек %d | рёбер %d",
+              trafficCSP.previewRoute.length or 0, #trafficCSP.previewRoute.nodes,
+              #trafficCSP.previewRoute.edges))
+          elseif trafficCSP.previewRouteError then
+            ui.text("CSP Route: " .. tostring(trafficCSP.previewRouteError))
           end
           if trafficCSP.roads and trafficCSP.roads.stats then
             local r = trafficCSP.roads.stats
