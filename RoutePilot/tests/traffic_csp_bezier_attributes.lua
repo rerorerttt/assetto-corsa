@@ -58,7 +58,7 @@ local function roadGroupFor(lane)
     leftOffset=0,rightOffset=0,leftBoundaryOffset=3,rightBoundaryOffset=3}
 end
 local roads={laneGroups={[a]=roadGroupFor(a),[b]=roadGroupFor(b)}}
-local intersection={points={{5,0,-5},{15,0,-5},{15,0,15},{5,0,15}}}
+local intersection={points={{-50,0,-50},{50,0,-50},{50,0,50},{-50,0,50}}}
 local movement = {
   from={lane=a}, to={lane=b},
   fromEdge=edgeA,toEdge=edgeB,
