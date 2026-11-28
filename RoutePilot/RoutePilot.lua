@@ -986,20 +986,28 @@ end)
 -- bounds with a minimum offset so they never merge with the AI line.
 local function computeMapBounds()
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
-  for i=1,#state.nodes do
+  local n=#state.nodes
+  for i=1,n do
     local nd=state.nodes[i]
     local l,r=boundsAt(i)
     local b=segEnd(i)
-    local lx,lz=normalize2(b.x-nd.x,b.z-nd.z)
-    local pts={
-      {x=nd.x-lz*l,z=nd.z+lx*l},
-      {x=nd.x-lz*r,z=nd.z+lx*r},
-    }
-    for _,q in ipairs(pts) do
-      if q.x<minX then minX=q.x end
-      if q.x>maxX then maxX=q.x end
-      if q.z<minZ then minZ=q.z end
-      if q.z>maxZ then maxZ=q.z end
+    -- Open routes have no segment after the final node. Use the incoming
+    -- tangent there; indexing a missing endpoint used to throw every UI frame.
+    if not b then b=state.nodes[i-1] end
+    if b then
+      local dx,dz=b.x-nd.x,b.z-nd.z
+      if i==n and not state.loopRoute then dx,dz=-dx,-dz end
+      local lx,lz=normalize2(dx,dz)
+      local pts={
+        {x=nd.x-lz*l,z=nd.z+lx*l},
+        {x=nd.x-lz*r,z=nd.z+lx*r},
+      }
+      for _,q in ipairs(pts) do
+        if q.x<minX then minX=q.x end
+        if q.x>maxX then maxX=q.x end
+        if q.z<minZ then minZ=q.z end
+        if q.z>maxZ then maxZ=q.z end
+      end
     end
   end
   if minX==math.huge then return nil end
@@ -1024,11 +1032,17 @@ local function drawMapInRect(q0,q1)
   local n=#state.nodes
   local minOff=CFG.MAP_MIN_OFFSET
   -- bounds: dark red, thick, min offset from the line
+  -- Cap map drawing work: the source can contain thousands of 3 m samples.
+  -- A screen map does not benefit from drawing every sample on every UI frame.
+  local stride=math.max(1,math.ceil(n/500))
+  local lastIndex=state.loopRoute and n or math.max(1,n-1)
   for pass=1,2 do
     local prev
-    for i=1,n do
+    for i=1,lastIndex,stride do
       local node=state.nodes[i]
-      local nxt=state.nodes[(i%n)+1]
+      local nextIndex=math.min(i+stride,lastIndex)
+      local nxt=state.nodes[nextIndex]
+      if nextIndex==i then nxt=node end
       local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
       local l,r=boundsAt(i)
       local off=(pass==1) and l or r
@@ -1044,21 +1058,28 @@ local function drawMapInRect(q0,q1)
       prev=vec2(sx,sy)
     end
   end
-  -- AI line: yellow, thick
+  -- AI line: yellow, thick, decimated to the map's actual pixel resolution.
   do
     local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
-    for i=2,n do
-      local sx=mx+(state.nodes[i].x-cx)*scale
-      local sy=my+(state.nodes[i].z-cz)*scale
-      if segVisible(prev.x,prev.y,sx,sy) then
-        ui.drawLine(prev,vec2(sx,sy),rgbm(1.0,0.85,0.0,0.95),3)
+    for i=1+stride,lastIndex,stride do
+      local node=state.nodes[i]
+      local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+      if segVisible(prev.x,prev.y,point.x,point.y) then
+        ui.drawLine(prev,point,rgbm(1.0,0.85,0.0,0.95),3)
       end
-      prev=vec2(sx,sy)
+      prev=point
+    end
+    local finalIndex=lastIndex
+    local finalNode=state.nodes[finalIndex]
+    local finalPoint=vec2(mx+(finalNode.x-cx)*scale,my+(finalNode.z-cz)*scale)
+    if finalIndex>1 and (prev.x~=finalPoint.x or prev.y~=finalPoint.y) and
+        segVisible(prev.x,prev.y,finalPoint.x,finalPoint.y) then
+      ui.drawLine(prev,finalPoint,rgbm(1.0,0.85,0.0,0.95),3)
     end
     if state.loopRoute then
       local first=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
-      if segVisible(prev.x,prev.y,first.x,first.y) then
-        ui.drawLine(prev,first,rgbm(1.0,0.85,0.0,0.95),3)
+      if segVisible(finalPoint.x,finalPoint.y,first.x,first.y) then
+        ui.drawLine(finalPoint,first,rgbm(1.0,0.85,0.0,0.95),3)
       end
     end
   end
