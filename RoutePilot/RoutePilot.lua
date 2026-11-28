@@ -652,9 +652,6 @@ local function walkLineSigned(startSeg,startT,distance,sign)
   end
   return nil
 end
-  state.appTeleportGuard=state.appTeleportGuard or {}
-  state.appTeleportGuard[carIndex]=0.75
-end
 local function teleportHome(carIndex,car)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
     writeLog("RESCUE_FAILED id=%d reason=no_teleport_api",carIndex)
