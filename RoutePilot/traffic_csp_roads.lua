@@ -121,7 +121,7 @@ local function oppositeTopology(a, b)
 end
 
 local function oppositeMatch(a, b)
-  if not oppositeTopology(a,b) then return false end
+  if a.loop ~= b.loop then return false end
   local function coverage(src,dst)
     local n,good,sum=#src.points,0,0
     local step=math.max(1,math.floor(n/32))
