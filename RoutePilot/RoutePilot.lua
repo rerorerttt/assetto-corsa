@@ -49,7 +49,7 @@ local state = {
   followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  spawnHints={}, spawnedCars={}, spawnTeleportAccum=0, spawnDiagnostics=false, spawnDiagLastReason="",
+  spawnHints={}, spawnedCars={}, spawnTeleportAccum=0, spawnDiagnostics=false, spawnDiagLastReason="", spawnDiagAttempts=0,
   nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
   trafficNetwork=nil, loadedFromCSP=false, cspImportPending=false,
@@ -70,7 +70,7 @@ local function flushLog()
   if logger and logger.flush then pcall(logger.flush, logger) end
 end
 local function spawnDiag(fmt,...)
-  if state.spawnDiagnostics then writeLog("SPAWN_DEV "..fmt,...) end
+  if state.spawnDiagnostics and (state.spawnDiagAttempts or 0)<=3 then writeLog("SPAWN_DEV attempt=%d "..fmt,state.spawnDiagAttempts or 0,...) end
 end
 local function spawnGate(reason,fmt,...)
   if state.spawnDiagnostics and state.spawnDiagLastReason~=reason then
@@ -592,7 +592,6 @@ local function trySpawnTeleport(sim,dt)
   if not state.loaded then spawnGate("not_loaded","GATE reason=not_loaded nodes=%d",#state.nodes) return end
   if state.recLine then spawnGate("recording_line","GATE reason=recording_line") return end
   if #state.nodes<2 then spawnGate("route_too_short","GATE reason=route_too_short nodes=%d",#state.nodes) return end
-  state.spawnDiagLastReason=""
   -- No imported yellow CSP source lines: no teleport destination exists.
   if not state.loadedFromCSP or not state.trafficNetwork or
       #(state.trafficNetwork.laneOrder or {})==0 then
@@ -639,6 +638,7 @@ local function trySpawnTeleport(sim,dt)
     spawnDiag("ABORT reason=teleport_api_unavailable physics=%s function=%s",type(physics),type(physics)=="table" and type(physics.setAICarPosition) or "n/a")
     state.spawnDone=true; flushLog(); return
   end
+  state.spawnDiagAttempts=(state.spawnDiagAttempts or 0)+1
   local metrics=buildSpawnRouteMetrics()
   if not metrics then spawnDiag("ABORT reason=route_metrics_unavailable nodes=%d segments=%d",#state.nodes,segmentCount()); state.spawnDone=true; flushLog(); return end
   local player=ac.getCar(0)
@@ -672,7 +672,7 @@ local function trySpawnTeleport(sim,dt)
     if state.spawnedCars[carIndex] then
       already=already+1
     else
-      local position,direction,routeSegment,routeParameter
+      local position,direction,routeSegment,routeParameter,sourceLane
       -- A route sample is only a search hint. It is never passed to the
       -- teleport API until projected onto a yellow Traffic Tool source line.
       for advance=0,30,2 do
@@ -683,7 +683,7 @@ local function trySpawnTeleport(sim,dt)
         spawnDiag("CANDIDATE id=%d order=%d advance=%.1f route_seg=%s route_t=%.4f pos=(%.3f,%.3f,%.3f) snap=%s nearest_planar=%.3f nearest_dy=%.3f alignment=%.4f nearest_lane=%s nearest_segment=%s tested=%d planar_ok=%d height_ok=%d direction_ok=%d",carIndex,order,advance,tostring(candidateSegment),candidateT,candidate.x,candidate.y,candidate.z,tostring(snapped~=nil),snapInfo and snapInfo.nearestPlanar or -1,snapInfo and snapInfo.nearestDy or -1,snapInfo and snapInfo.nearestAlignment or -1,tostring(snapInfo and snapInfo.nearestLane),tostring(snapInfo and snapInfo.nearestSegment),snapInfo and snapInfo.segments or 0,snapInfo and snapInfo.withinPlanar or 0,snapInfo and snapInfo.withinHeight or 0,snapInfo and snapInfo.withinDirection or 0)
         if snapped then
           position,direction=snapped.position,snapped.direction
-          routeSegment,routeParameter=candidateSegment,candidateT
+          routeSegment,routeParameter,sourceLane=candidateSegment,candidateT,snapped.lane
           writeLog("SPAWN_LANE_LOCK id=%d lane=%s segment=%d t=%.3f planar_error=%.3f",
             carIndex,tostring(snapped.lane),snapped.segment,snapped.t,snapped.error)
           break
@@ -691,7 +691,7 @@ local function trySpawnTeleport(sim,dt)
       end
       if position and direction then
         local spawnDir=vec3(-direction.x,-direction.y,-direction.z)
-        spawnDiag("TELEPORT_CALL id=%d target=(%.3f,%.3f,%.3f) direction=(%.4f,%.4f,%.4f) source_route_seg=%s",carIndex,position.x,position.y,position.z,spawnDir.x,spawnDir.y,spawnDir.z,tostring(routeSegment))
+        spawnDiag("TELEPORT_CALL id=%d target=(%.3f,%.3f,%.3f) direction=(%.4f,%.4f,%.4f) source_lane=%s source_route_seg=%s",carIndex,position.x,position.y,position.z,spawnDir.x,spawnDir.y,spawnDir.z,tostring(sourceLane),tostring(routeSegment))
         local ok,result=pcall(physics.setAICarPosition,carIndex,position,spawnDir)
         spawnDiag("TELEPORT_RETURN id=%d pcall_ok=%s result=%s",carIndex,tostring(ok),tostring(result))
         if ok and result~=false then
@@ -1516,7 +1516,7 @@ function windowMain(dt)
           writeLog("SPAWN_DIAGNOSTICS %s",state.spawnDiagnostics and "ON" or "OFF")
           if state.spawnDiagnostics then
             state.spawnDone=false; state.spawnWait=0; state.spawnStable=0
-            state.spawnTeleportAccum=0; state.spawnLastRoster=""
+            state.spawnTeleportAccum=0; state.spawnLastRoster=""; state.spawnDiagAttempts=0
             writeLog("SPAWN_DEV_SESSION_START track=%s loaded=%s csp=%s lanes=%d nodes=%d",getTrackTag(),tostring(state.loaded),tostring(state.loadedFromCSP),state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0,#state.nodes)
           end
           flushLog()
