@@ -382,6 +382,7 @@ local function buildCorridor(graph, raw)
   end
   samples[#samples+1] = raw[#raw]
 
+  local records = {}
   for i = 1, #samples do
     local p = samples[i]
     local prev = samples[math.max(1,i-1)]
@@ -409,12 +410,43 @@ local function buildCorridor(graph, raw)
     end
     local laneCount=math.max(1,math.floor((hi-lo)/3.0+0.25)+1)
     local width=laneCount==1 and 6.0 or laneCount*3.0
-    local centerShift=(lo+hi)*0.5
-    local center={x=p.x+nx*centerShift,y=p.y,z=p.z+nz*centerShift}
+    records[i]={point=p,shift=(lo+hi)*0.5,half=width*0.5,nx=nx,nz=nz}
+  end
+
+  -- A lane can disappear from the nearest-projection result for one sample
+  -- at a junction or where two CSP polylines overlap. Do not feed that
+  -- one-frame geometric discontinuity into the saved corridor. Smooth the
+  -- lateral centre, and use the narrowest nearby half-width so smoothing can
+  -- never invent extra road width at a merge or split.
+  local filteredShift, filteredHalf = {}, {}
+  for i=1,#records do
+    local weighted,weightSum,conservativeHalf=0,0,math.huge
+    for k=-2,2 do
+      local j=math.max(1,math.min(#records,i+k))
+      local w=(k==0 and 3) or (math.abs(k)==1 and 2) or 1
+      weighted=weighted+records[j].shift*w
+      weightSum=weightSum+w
+      conservativeHalf=math.min(conservativeHalf,records[j].half)
+    end
+    filteredShift[i]=weighted/weightSum
+    filteredHalf[i]=conservativeHalf
+  end
+
+  -- Limit centre movement between adjacent 3 m samples. This removes
+  -- projection-induced teeth without introducing a sharp offset correction.
+  for i=2,#records do
+    local delta=filteredShift[i]-filteredShift[i-1]
+    filteredShift[i]=filteredShift[i-1]+math.max(-0.75,math.min(0.75,delta))
+  end
+
+  for i=1,#records do
+    local rec=records[i]
+    local center={x=rec.point.x+rec.nx*filteredShift[i],
+      y=rec.point.y,z=rec.point.z+rec.nz*filteredShift[i]}
     if #nodes==0 or dist2(nodes[#nodes],center)>0.01 then
       nodes[#nodes+1]=vec3(center.x,center.y,center.z)
-      left[#left+1]=-(width*0.5)
-      right[#right+1]=width*0.5
+      left[#left+1]=-filteredHalf[i]
+      right[#right+1]=filteredHalf[i]
     end
   end
   if #nodes < 2 then return nil,nil,nil end
