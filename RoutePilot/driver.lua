@@ -1936,10 +1936,23 @@ function Driver.update(carIndex, car, dt)
   -- refreshed continuously: an AI that is stopped or held by our brake
   -- command can otherwise be retired by AC and sent back to its grid/pits.
   if physics and physics.preventAIFromRetiring then
-    local okRetire,errRetire=pcall(physics.preventAIFromRetiring,carIndex)
+    local okRetire,retireResult=pcall(physics.preventAIFromRetiring,carIndex)
+    if state.teleportDiagnostics then
+      p.retireDiagAccum=safeNumber(p.retireDiagAccum)+math.max(0,dt or 0)
+      if p.retireDiagAccum>=1.0 then
+        p.retireDiagAccum=p.retireDiagAccum-1.0
+        H.log("TELEPORT_DIAG_RETIRE_GUARD id=%d call_ok=%s result=%s retired=%s ai=%s active=%s pit=%s pitlane=%s going_pits=%s ai_laps=%d speed=%.2f",
+          carIndex,tostring(okRetire),tostring(retireResult),tostring(car.isRetired),
+          tostring(car.isAIControlled),tostring(car.isActive),tostring(car.isInPit),
+          tostring(car.isInPitlane),tostring(car.isAIGoingToPits),
+          safeNumber(car.aiLapsLeft,-1),safeNumber(car.speedMs))
+      end
+    else
+      p.retireDiagAccum=0
+    end
     if not okRetire and not p.retireApiErrorLogged then
       p.retireApiErrorLogged=true
-      H.log("AI_RETIRE_GUARD_ERROR id=%d err=%s",carIndex,tostring(errRetire))
+      H.log("AI_RETIRE_GUARD_ERROR id=%d err=%s",carIndex,tostring(retireResult))
     end
   elseif not p.retireApiMissingLogged then
     p.retireApiMissingLogged=true
