@@ -310,3 +310,12 @@ Release blockers:
 - No Assetto Corsa/CSP runtime session has been run by the assistant. Physical wall-ray behavior, surface projection on real tracks, route connectivity, multi-direction traffic, overtaking, recycling visibility, and recovery must be verified in-game.
 - Intersection arbitration between independent route groups is still reactive through vehicle detection and recovery; it is not yet a formal global reservation system.
 - Do not merge this branch into `main` or call it release-ready until those runtime checks pass.
+
+
+## 2026-11-28 CSP route selection and player-route consistency
+
+- Fixed a route-ordering defect in `RoutePilot.lua`: routes were sorted only by length after candidate selection, while native Ctrl+8 adoption always assigned car 0 to route 1. A longer opposite-direction route could therefore become route 1, causing the player AI to be driven against the player's actual direction.
+- Each built route now records its heading alignment against the player's heading. Spawn planning sorts player-aligned routes before other directions, stores the matching `playerRouteIndex`, and uses that index consistently when assigning car 0 and isolating per-route driver state.
+- Route discovery now retains additional same-direction candidates as fallbacks. Previously it tried only the single nearest same-direction edge; if that edge produced an invalid loop, other valid lanes in the same direction were never considered.
+- Static verification: fetched the committed file back and confirmed alignment tagging, aligned-first ordering, player-route-index use in both route assignment sites, and same-direction fallback discovery. No Lua compiler or Assetto Corsa/CSP runtime is available here; in-game Ctrl+8 route tracking still requires telemetry validation.
+- Commits: `26a71e334c448e7a78bace470c6b717a39c50823`, `1bf3387e945b283c3594dac2dbc2abfe4681727e`.
