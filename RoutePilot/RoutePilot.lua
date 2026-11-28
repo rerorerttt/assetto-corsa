@@ -927,17 +927,17 @@ local function updateRescueWatchdog(carIndex,car,dt)
   -- local controller still reports valid progress. This check is independent
   -- of the AI's own coordinates relative to the authored route.
   w.distanceCheckT=safeNumber(w.distanceCheckT)+dt
-  if not reason and w.distanceCheckT>=0.5 then
+  if not reason and w.distanceCheckT>=CFG.RESPAWN_DISTANCE_CHECK then
     w.distanceCheckT=0
     local player=ac.getCar(0)
     if player and player.isActive and player.position then
       local dx=car.position.x-player.position.x
       local dz=car.position.z-player.position.z
       local playerDistance=math.sqrt(dx*dx+dz*dz)
-      if playerDistance>=300.0 then
+      if playerDistance>=CFG.RESPAWN_PLAYER_DISTANCE then
         reason="player_distance_300m"
-        writeLog("RESPAWN_DISTANCE_TRIGGER id=%d distance=%.1f threshold=300.0",
-          carIndex,playerDistance)
+        writeLog("RESPAWN_DISTANCE_TRIGGER id=%d distance=%.1f threshold=%.1f",
+          carIndex,playerDistance,CFG.RESPAWN_PLAYER_DISTANCE)
       end
     end
   end
@@ -1147,7 +1147,10 @@ function script.update(dt)
             local okc,erc=pcall(Driver.update,i,car,dt)
             if not okc then
               writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
-              releaseCar(i)
+              local okRecovery,recovered=pcall(teleportHome,i,car)
+              writeLog("DRIVER_ERROR_RECOVERY id=%d call_ok=%s success=%s",
+                i,tostring(okRecovery),tostring(okRecovery and recovered))
+              if not (okRecovery and recovered) then releaseCar(i) end
             end
           end
         end
