@@ -334,10 +334,16 @@ local function collectRoute(graph, player)
       if visited[targetKey] then
         if target.id==start.id then
           bezierConnector(raw,lane,nextLink.enter,target,targetLink.exit)
-          if targetLink.exit<startProgress-0.5 then
-            appendLaneRange(raw,target,targetLink.exit,startProgress)
+          if targetLink.exit<=startProgress+0.5 then
+            if targetLink.exit<startProgress-0.5 then
+              appendLaneRange(raw,target,targetLink.exit,startProgress)
+            end
+            loop=true
+          elseif target.loop then
+            appendLaneRange(raw,target,targetLink.exit,laneLength(target))
+            appendLaneRange(raw,target,0,startProgress)
+            loop=true
           end
-          loop=true
         end
         break
       end
