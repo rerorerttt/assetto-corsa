@@ -60,6 +60,11 @@ function Driver.setup(cfg, st, helpers)
 end
 
 local function refreshRouteMetrics()
+  if state.graphRouteSwitch and state.routeGeometry then
+    state.routeMetricCount = #state.nodes
+    state.routeMetricLoop = state.loopRoute
+    return
+  end
   if state.routeGeometry and state.routeMetricCount == #state.nodes and
      state.routeMetricLoop == state.loopRoute then return end
   state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
