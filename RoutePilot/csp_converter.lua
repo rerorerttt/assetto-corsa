@@ -251,6 +251,7 @@ local function collectRoute(graph, player)
   end
   local a,b=lane.points[startProjection.segment],lane.points[startProjection.segment+1]
   progress=progress+math.sqrt(dist2(a,b))*startProjection.t
+  local startProgress=progress
   local loop=false
   local routeLaneIDs={}
   local maxSteps=math.max(8,#graph.laneOrder*4)
@@ -281,7 +282,7 @@ local function collectRoute(graph, player)
     bezierConnector(raw,lane,nextLink.enter,target,targetLink.exit)
     lane=target
     progress=targetLink.exit
-    if lane.id==start.id and progress<=startProjection.segment then
+    if lane.id==start.id and progress<=startProgress+1.0 then
       loop=true
       break
     end
