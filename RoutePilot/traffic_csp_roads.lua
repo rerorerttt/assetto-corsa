@@ -71,8 +71,8 @@ local function pairMatches(a, b)
     local step = math.max(1, math.floor(n / 60))
     for i = 1, n, step do
       local p = src.points[i]
-      local d, _, dir = nearestOnLane(p, dst)
-      if d and d >= 1.5 and d <= 12 and math.abs(p.y - (select(2, nearestOnLane(p, dst)) or p).y) <= 1.5 then
+      local d, q, dir = nearestOnLane(p, dst)
+      if d and q and d >= 1.5 and d <= 12 and math.abs(p.y - q.y) <= 1.5 then
         local sx, sy, sz = tangentAt(src.points, i, src.loop)
         local dot = sx*dir[1] + sy*dir[2] + sz*dir[3]
         if dot >= 0.92 then good, sum = good + 1, sum + d end
@@ -113,13 +113,22 @@ end
 local function makeBoundary(lane, side, offset)
   local out, pts = {}, lane.points
   for i = 1, #pts do
-    local tx, _, tz = tangentAt(pts, i, lane.loop)
+    local tx, ty, tz = tangentAt(pts, i, lane.loop)
     local normal = lane.normals and lane.normals[i]
     local nx, ny, nz = 0, 1, 0
     if normal then nx, ny, nz = normal.x, normal.y, normal.z end
     -- Tangent × surface normal gives the lane's left vector.
-    local lx, ly, lz = ty and 0 or 0, 0, 0
-    lx, ly, lz = ty -- placeholder
+    local lx = ty*nz - tz*ny
+    local ly = tz*nx - tx*nz
+    local lz = tx*ny - ty*nx
+    lx, ly, lz = norm(lx, ly, lz)
+    if lx == 0 and ly == 0 and lz == 0 then
+      lx, ly, lz = -tz, 0, tx
+    end
+    out[#out+1] = vec3(
+      pts[i].x + lx*offset*side,
+      pts[i].y + ly*offset*side,
+      pts[i].z + lz*offset*side)
   end
   return out
 end
@@ -169,6 +178,10 @@ function Roads.build(lanes, log)
     group.leftLane, group.rightLane = leftLane, rightLane
     group.boundaryOffset = #group.lanes == 1 and 3.0 or 2.5
     group.leftOffset, group.rightOffset = leftOffset, rightOffset
+    group.boundaries = {
+      left = makeBoundary(leftLane, 1, group.boundaryOffset),
+      right = makeBoundary(rightLane, -1, group.boundaryOffset)
+    }
   end
   if log then
     local multi = 0
