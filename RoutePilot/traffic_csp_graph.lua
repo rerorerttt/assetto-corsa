@@ -475,7 +475,7 @@ function Graph.build(lanes, intersectionDefs, log)
             local uturnAllowed = directionDot >= -0.5 or
               (incoming.lane.params and incoming.lane.params.allowUTurns == true)
             local sameLevel = incoming.toOrigPos and outgoing.fromOrigPos and
-              math.abs(incoming.toOrigPos.y-outgoing.fromOrigPos.y) <= 2.5
+              math.abs(incoming.toOrigPos.y-outgoing.fromOrigPos.y) <= 1.5
             if incoming.lane ~= outgoing.lane and rulesAllow and uturnAllowed and sameLevel and
                 not disallowed(inter.definition, fromID, toID) then
               local movement = {
