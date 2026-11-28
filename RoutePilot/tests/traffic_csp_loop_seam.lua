@@ -49,6 +49,29 @@ local intersection = {
   }
 }
 
+local function roadGroupFor(lane)
+  local left,right={},{}
+  local n=#lane.points
+  for i=1,n do
+    local prev=lane.points[i>1 and i-1 or n]
+    local next=lane.points[i<n and i+1 or 1]
+    local dx,dz=next.x-prev.x,next.z-prev.z
+    local length=math.sqrt(dx*dx+dz*dz)
+    local lx,lz=-dz/length,dx/length
+    left[i]=vec3(lane.points[i].x+lx*3,lane.points[i].y,lane.points[i].z+lz*3)
+    right[i]=vec3(lane.points[i].x-lx*3,lane.points[i].y,lane.points[i].z-lz*3)
+  end
+  return {
+    boundariesVerified=true,
+    boundaries={left=left,right=right},
+    boundaryLoops={left=true,right=true},
+    laneOffsets={[lane]=0},
+    leftOffset=0,rightOffset=0,leftBoundaryOffset=3,rightBoundaryOffset=3
+  }
+end
+local roads={laneGroups={}}
+roads.laneGroups[lane]=roadGroupFor(lane)
+
 local graph = Graph.build({ lane }, { intersection })
 assert(#lane.graphLinks >= 2, "expected intersection spans at both sides of the loop seam")
 local first, last = lane.graphLinks[1], lane.graphLinks[#lane.graphLinks]
@@ -69,7 +92,7 @@ assert(path and #path == 1 and path[1] == edge,
   "loop search must accept the seam self-cycle")
 assert(pathCost and pathCost > 0, "loop path must have a positive cost")
 
-local route, routeError = Routes.build(graph, nil, edge, edge.from, {
+local route, routeError = Routes.build(graph, roads, edge, edge.from, {
   loop = true, requireLoop = true, minLength = 1
 })
 assert(route, "route construction failed: " .. tostring(routeError))
