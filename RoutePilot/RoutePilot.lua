@@ -1033,8 +1033,12 @@ render.on('main.track.transparent', function()
             local dx,dz=current.x-previous.x,current.z-previous.z
             accumulated=accumulated+math.sqrt(dx*dx+dz*dz)
             if accumulated>=6.0 or k==#pts then
-              render.debugLine(vec3(anchor.x,anchor.y+0.05,anchor.z),
-                vec3(current.x,current.y+0.05,current.z),YELLOW)
+              local mx=(anchor.x+current.x)*0.5-player.position.x
+              local mz=(anchor.z+current.z)*0.5-player.position.z
+              if mx*mx+mz*mz<=650.0*650.0 then
+                render.debugLine(vec3(anchor.x,anchor.y+0.05,anchor.z),
+                  vec3(current.x,current.y+0.05,current.z),YELLOW)
+              end
               anchor=current
               accumulated=0
             end
