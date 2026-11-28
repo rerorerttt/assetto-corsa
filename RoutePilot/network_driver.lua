@@ -94,12 +94,20 @@ local function laneChange(g,l,p,index,sim,speed)
  return best
 end
 local function junction(g,l,p,car,index,sim)
- local hx,hz=norm(car.look.x,car.look.z);local best,score
+ local hx,hz=norm(car.look.x,car.look.z);local sx,sz=tangent(l,p.s)
+ local headingAlignment=dot(hx,hz,sx,sz);local best,score
  for _,e in ipairs(l.outgoing or{})do if p.s>=e.fromS-6 and p.s<=e.fromS+10 then
   local t=g.lanes[e.to]
-  if t then local q=point(t,e.toS);local tx,tz=tangent(t,e.toS);local a=dot(hx,hz,tx,tz)
-   if a>0.05 and dist(car.position,q)<32 then local block=occupancy(g,t.id,e.toS,index,sim,25)
-    if not block or block.gap>8 then local v=a*10-dist(car.position,q)*.03;if not score or v>score then best={id=t.id,s=e.toS};score=v end end
+  if t then
+   local q=point(t,e.toS)
+   local routeAlignment=n(e.alignment,1)
+   local gap=dist(car.position,q)
+   if headingAlignment>-0.25 and routeAlignment>-0.25 and gap<32 then
+    local block=occupancy(g,t.id,e.toS,index,sim,25)
+    if not block or block.gap>8 then
+     local v=routeAlignment*10+headingAlignment*2-gap*.03
+     if not score or v>score then best={id=t.id,s=e.toS};score=v end
+    end
    end
   end
  end end
