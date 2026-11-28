@@ -905,12 +905,45 @@ function Converter.load(log)
     local sourceEnd=pointAt(currentLane,segmentEnd)
     local targetStart=pointAt(targetLane,nextEdge.toS)
     if targetLane.id==startLane.id then
-      local firstPoint=pointAt(startLane,startS)
-      local sourceJoin=dist(sourceEnd,firstPoint)
-      local targetJoin=dist(targetStart,firstPoint)
-      if math.abs(nextEdge.toS-startS)<=20.0 and
-        sourceJoin<=12.0 and targetJoin<=8.0 then
-        routeLoop=true
+      -- A valid directed return to the starting lane may connect to its
+      -- opposite endpoint (e.g. lane 10 -> connector lane 9 -> lane 10).
+      -- In that case the missing prefix of the starting lane is the main
+      -- body of the circuit. Omitting it leaves only the short connector,
+      -- so every AI reaches the artificial route end and loses projection.
+      local joinGap=dist(sourceEnd,targetStart)
+      local sourceTangent=tangentAt(currentLane,segmentEnd)
+      local targetTangent=tangentAt(startLane,nextEdge.toS)
+      local joinAlignment=sourceTangent.x*targetTangent.x+
+        sourceTangent.z*targetTangent.z
+      local samePoint=math.abs(nextEdge.toS-startS)<=20.0
+      local wrapsToPrefix=nextEdge.toS<startS-20.0
+      if joinGap<=18.0 and joinAlignment>=0.50 then
+        if joinGap>0.15 then
+          local steps=math.max(1,math.ceil(joinGap/3.0))
+          for step=1,steps-1 do
+            local t=step/steps
+            appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
+              y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
+              z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-1.25,1.25)
+          end
+        end
+        if wrapsToPrefix then
+          appendLaneSegment(startLane,nextEdge.toS,
+            math.max(nextEdge.toS,startS-0.25))
+          routeLoop=true
+          trace("CSP_ROUTE_CLOSED via_lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
+            startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
+        elseif samePoint then
+          routeLoop=true
+          trace("CSP_ROUTE_CLOSED via_lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
+            startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
+        else
+          trace("CSP_ROUTE_RETURN_NOT_CLOSED lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
+            startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
+        end
+      else
+        trace("CSP_ROUTE_RETURN_REJECTED lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
+          startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
       end
       break
     end
