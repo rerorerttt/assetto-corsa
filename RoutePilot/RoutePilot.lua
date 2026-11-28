@@ -36,7 +36,7 @@ local CFG = {
   SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
   TC_SLIP_START=0.10, TC_SLIP_FULL=0.28, TC_MAX_CUT=0.88,
   TC_RECOVERY_RATE=1.25, TC_CORNER_CUT=0.22,
-  SPAWN_GAP=40.0, SPAWN_MIN_GAP=24.0, SPAWN_STABLE_TIME=0.12, SPAWN_WAIT_TIMEOUT=8.0,
+  SPAWN_GAP=40.0, SPAWN_MIN_GAP=24.0, SPAWN_STABLE_TIME=0.05, SPAWN_WAIT_TIMEOUT=8.0,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
@@ -49,7 +49,7 @@ local state = {
   followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  spawnHints={}, appTeleportGuard={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  spawnHints={}, spawnedCars={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
   trafficNetwork=nil, loadedFromCSP=false, cspImportPending=false,
   autoImportAccum=0, autoImportAttempts=0,
@@ -210,7 +210,7 @@ local function loadLine(retryOnly)
       state.loopRoute=loop==true
       state.boundsL=type(boundsL)=="table" and boundsL or {}
       state.boundsR=type(boundsR)=="table" and boundsR or {}
-      state.p={}; state.spawnHints={}; state.routeGeometry=nil
+      state.p={}; state.spawnHints={}; state.spawnedCars={}; state.routeGeometry=nil
       state.loaded=true; state.loadedFromCSP=true
       state.cspImportPending=false; state.autoImportAttempts=0
       state.status=string.format("CSP: %d точек | %d линий",
@@ -259,7 +259,7 @@ local function loadLine(retryOnly)
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
-    state.nodes=loaded; state.p={}; state.spawnHints={}
+    state.nodes=loaded; state.p={}; state.spawnHints={}; state.spawnedCars={}
     state.routeGeometry=nil; state.loaded=true
     state.loadedFromCSP=false
     if ac.storage then
@@ -478,7 +478,11 @@ local function findRouteDistanceAtPosition(position,metrics,heading)
       local t=clamp(((position.x-a.x)*vx+(position.z-a.z)*vz)/lenSq,0,1)
       local px,pz=a.x+vx*t,a.z+vz*t
       local dx,dz=position.x-px,position.z-pz
-      local dSq=dx*dx+dz*dz
+      local dy=position.y-(a.y+(b.y-a.y)*t)
+      if math.abs(dy)>4.0 then
+        -- Ignore a route segment on a different road deck.
+      else
+      local dSq=dx*dx+dz*dz+dy*dy*4.0
       local score=dSq
       if hx then
         local inv=1/math.sqrt(lenSq)
@@ -487,6 +491,7 @@ local function findRouteDistanceAtPosition(position,metrics,heading)
       end
       if score<bestScore then
         bestScore=score; bestDistSq=dSq; bestRoute=seg.start+seg.length*t
+      end
       end
     end
   end
@@ -537,6 +542,7 @@ local function trySpawnTeleport(sim,dt)
     if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
   end
   local roster=table.concat(aiCars,",")
+  state.spawnedCars=state.spawnedCars or {}
   if #aiCars==0 then
     if state.spawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
       state.spawnDone=true
@@ -561,8 +567,7 @@ local function trySpawnTeleport(sim,dt)
   local routeDistance,routeError=findRouteDistanceAtPosition(
     player.position,metrics,player.look)
   if routeError>25.0 then
-    writeLog("SPAWN_SKIPPED reason=player_off_route error=%.1f",routeError)
-    state.spawnDone=true
+    writeLog("SPAWN_WAIT reason=player_off_route error=%.1f",routeError)
     return
   end
   local count=#aiCars
@@ -570,17 +575,18 @@ local function trySpawnTeleport(sim,dt)
     math.max(0,metrics.length-routeDistance)
   local gap=math.min(CFG.SPAWN_GAP,available/(count+1))
   if gap<CFG.SPAWN_MIN_GAP then
-    writeLog("SPAWN_SKIPPED reason=insufficient_forward_route available=%.1f cars=%d",
+    writeLog("SPAWN_WAIT reason=insufficient_forward_route available=%.1f cars=%d",
       available,count)
-    state.spawnDone=true
     return
   end
   local startDistance=routeDistance+gap
   writeLog("SPAWN_REFERENCE route=%.1f error=%.2f gap=%.1f loop=%s",
     routeDistance,routeError,gap,tostring(metrics.loop))
-  local moved,failed=0,0
+  local moved,failed,already=0,0,0
+  state.spawnedCars=state.spawnedCars or {}
   for order=1,count do
     local carIndex=aiCars[order]
+    if state.spawnedCars[carIndex] then already=already+1 else
     local position,direction,routeSegment,routeParameter=
       sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
     if position and direction then
@@ -591,6 +597,7 @@ local function trySpawnTeleport(sim,dt)
         position,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
         moved=moved+1
+        state.spawnedCars[carIndex]=true
         state.p[carIndex]=nil
         state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter,boost=true}
         writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
@@ -598,9 +605,12 @@ local function trySpawnTeleport(sim,dt)
           routeSegment,routeParameter)
       else failed=failed+1 end
     else failed=failed+1 end
+    end
   end
-  state.spawnDone=true
-  writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
+  local totalSpawned=already+moved
+  state.spawnDone=totalSpawned>=count
+  writeLog("SPAWN_FINISH moved=%d already=%d failed=%d total=%d/%d gap=%.2f",
+    moved,already,failed,totalSpawned,count,gap)
   flushLog()
 end
 local function walkLineSigned(startSeg,startT,distance,sign)
@@ -701,7 +711,6 @@ local function teleportHome(carIndex,car)
         local dx,dz=normalize2(nextPos.x-pos.x,nextPos.z-pos.z)
         local safePos=vec3(pos.x,pos.y+0.15,pos.z)
         if spotIsClear(safePos,carIndex) then
-          markAppTeleport(carIndex)
           local ok,result=pcall(physics.setAICarPosition,carIndex,
             safePos,vec3(-dx,0,-dz))
           if ok and result~=false then
@@ -725,28 +734,6 @@ local function teleportHome(carIndex,car)
     carIndex,routeError)
   flushLog()
   return false
-end
-
--- Reinsert an AI immediately when AC/CSP resets it to the session/grid spawn.
-if type(ac.onCarJumped)=="function" then
-  ac.onCarJumped(-1,function(carIndex)
-    if not carIndex or carIndex<=0 then return end
-    local car=ac.getCar(carIndex)
-    if not car or not car.isActive or not car.isAIControlled then return end
-    local guard=state.appTeleportGuard and state.appTeleportGuard[carIndex] or 0
-    if guard>0 then
-      state.appTeleportGuard[carIndex]=nil
-      writeLog("AC_CAR_JUMP_OWN_TELEPORT id=%d",carIndex)
-      return
-    end
-    writeLog("AC_CAR_JUMP_EXTERNAL id=%d pos=(%.2f,%.2f,%.2f) speed=%.2f; immediate route reinsertion",
-      carIndex,car.position.x,car.position.y,car.position.z,safeNumber(car.speedMs))
-    local rescued=teleportHome(carIndex,car)
-    writeLog("AC_CAR_JUMP_REINSERT id=%d success=%s",carIndex,tostring(rescued))
-    flushLog()
-  end)
-else
-  writeLog("AC_CAR_JUMP_HOOK_UNAVAILABLE")
 end
 
 local function updateRescueWatchdog(carIndex,car,dt)
@@ -904,12 +891,6 @@ end
 function script.update(dt)
   if not dt or dt<=0 then return end
   dt=math.min(dt,0.05)
-  state.appTeleportGuard=state.appTeleportGuard or {}
-  for index,remaining in pairs(state.appTeleportGuard) do
-    remaining=remaining-dt
-    if remaining<=0 then state.appTeleportGuard[index]=nil
-    else state.appTeleportGuard[index]=remaining end
-  end
   local ok,err=pcall(function()
     local sim=ac.getSim()
     if not sim then return end
@@ -963,7 +944,7 @@ function script.update(dt)
             routeGeometry=state.routeGeometry,routeLength=state.routeLength,
             routeMetricCount=state.routeMetricCount,routeMetricLoop=state.routeMetricLoop,
             p=state.p,spawnHints=state.spawnHints,status=state.status,
-            spawnDone=state.spawnDone,spawnWait=state.spawnWait,
+            spawnDone=state.spawnDone,spawnedCars=state.spawnedCars,spawnWait=state.spawnWait,
             spawnStable=state.spawnStable,spawnLastRoster=state.spawnLastRoster,
           }
           local rebuilt=loadLine(true)
@@ -973,6 +954,7 @@ function script.update(dt)
             state.spawnStable=0
             state.spawnLastRoster=""
             state.spawnDone=false
+            state.spawnedCars={}
             state.spawnPerformed=false
             writeLog("PLAYER_TELEPORT_ROUTE_REBUILT points=%d",#state.nodes)
           else
@@ -1059,6 +1041,7 @@ function script.update(dt)
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
         local shouldDrive=car and car.isActive and car.isAIControlled
+        if state.loadedFromCSP and not state.spawnDone then shouldDrive=false end
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
           driveOrder[#driveOrder+1]=i
