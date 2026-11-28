@@ -529,6 +529,9 @@ local function snapSpawnToAuthoredLane(position,direction)
         local dz=math.max(box.minZ-position.z,0,position.z-box.maxZ)
         near=dx*dx+dz*dz<=3.0*3.0
       end
+      -- DEV diagnostics deliberately bypass the AABB prefilter so the trace
+      -- measures the true nearest segment across the complete yellow network.
+      if state.spawnDiagnostics then near=true end
       if near then
         for i=1,#lane.points-1 do
           local p0,p1=lane.points[i],lane.points[i+1]
