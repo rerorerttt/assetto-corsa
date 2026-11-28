@@ -857,7 +857,7 @@ function Converter.load(log)
     if nextEdge then
       trace("CSP_ROUTE_STEP from=%d s=%.1f to=%d toS=%.1f kind=%s gap=%.1f",
         currentLane.id,currentS,nextEdge.to,nextEdge.toS,
-        tostring(nextEdge.kind or "junction"),safeNumber and safeNumber(nextEdge.gap) or (nextEdge.gap or 0))
+        tostring(nextEdge.kind or "junction"),nextEdge.gap or 0)
     else
       trace("CSP_ROUTE_TERMINUS lane=%d s=%.1f length=%.1f loop=%s junctions=%d adjacent=%d",
         currentLane.id,currentS,currentLane.length,tostring(currentLane.loop),
