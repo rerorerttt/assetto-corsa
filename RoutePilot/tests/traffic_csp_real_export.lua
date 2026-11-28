@@ -1,6 +1,6 @@
 -- Import a real CSP Traffic Tool export committed with the RoutePilot branch.
--- Surface raycasts are stubbed at each source point's height; the actual
--- directed graph is built, while road-boundary raycasts remain disabled.
+-- Surface raycasts are stubbed at each source point's height. The actual
+-- graph is built, then synthetic measured widths exercise road grouping.
 package.path = "RoutePilot/?.lua;" .. package.path
 
 local vectorMethods = {}
@@ -16,6 +16,7 @@ _G.vec3 = function(x,y,z)
 end
 
 package.preload["shared/sim/surfaces"] = function() return false end
+package.preload["traffic_csp_roads"] = function() return false end
 
 local file=assert(io.open("RoutePilot/tests/fixtures/traffic_20.json","rb"))
 local raw=file:read("*a")
@@ -44,7 +45,21 @@ assert(importer.graph.stats.intersectionLinks>0,
   "real CSP export produced no lane/intersection links")
 assert(importer.graph.stats.movements>0,
   "real CSP export produced no directed intersection movements")
-assert(importer.roads,"real CSP export did not produce road corridors: "..tostring(importer.roadsError))
+-- The committed export has no physical surface-edge samples. Supply an
+-- explicit synthetic 3 m boundary on each side so this test can exercise
+-- graph/road grouping without pretending those widths came from the track.
+package.loaded["traffic_csp_roads"]=nil
+package.preload["traffic_csp_roads"]=nil
+local Roads=require("traffic_csp_roads")
+for i=1,#importer.lanes do
+  local lane=importer.lanes[i]
+  local left,right={},{}
+  for j=1,#lane.points do left[j],right[j]=3.0,3.0 end
+  lane.surfaceBounds={left=left,right=right,leftValid=true,rightValid=true}
+  lane.surfaceBoundsValid=true
+end
+importer.roads=Roads.build(importer.lanes)
+assert(importer.roads,"road corridor builder did not return a result")
 assert(importer.roads.stats.validLanes==25 and importer.roads.stats.groups>0,
   "road corridor builder did not retain the imported lanes")
 for i=1,#importer.lanes do
