@@ -409,7 +409,16 @@ function Graph.build(lanes, intersectionDefs, log)
           local d = dx*dx + dz*dz
           if d < bestDistance then best, bestDistance = candidate, d end
         end
-        if best and best ~= incoming then return false, false end
+        local bestHasAllowedExit = false
+        if best then
+          for j = 1, #exitSide.exits do
+            if not disallowed(inter.definition, tonumber(best.lane.id), tonumber(exitSide.exits[j].lane.id)) then
+              bestHasAllowedExit = true
+              break
+            end
+          end
+        end
+        if bestHasAllowedExit and best ~= incoming then return false, false end
       end
     end
     local weakLaneChange = false
