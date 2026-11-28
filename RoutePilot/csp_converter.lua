@@ -31,24 +31,16 @@ local function pointAt(lane,s)
   return {x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t,z=a.z+(b.z-a.z)*t}
 end
 local function tangentAt(lane,s)
-  local p=pointAt(lane,s)
-  local best,bestD
-  for i=1,#lane.points-1 do
-    local a,b=lane.points[i],lane.points[i+1]
-    local vx,vz=b.x-a.x,b.z-a.z
-    local l2=vx*vx+vz*vz
-    if l2>1e-8 then
-      local t=clamp(((p.x-a.x)*vx+(p.z-a.z)*vz)/l2,0,1)
-      local qx,qz=a.x+vx*t,a.z+vz*t
-      local dx,dz=p.x-qx,p.z-qz
-      local dd=dx*dx+dz*dz
-      if not bestD or dd<bestD then
-        local tx,tz=norm(vx,vz)
-        best={x=tx,z=tz}; bestD=dd
-      end
-    end
+  s=clamp(s,0,lane.length)
+  local c=lane.cumulative
+  local lo,hi=1,#c-1
+  while lo<hi do
+    local mid=math.floor((lo+hi)/2)
+    if c[mid+1]<s then lo=mid+1 else hi=mid end
   end
-  return best or {x=0,z=1}
+  local a,b=lane.points[lo],lane.points[lo+1]
+  local tx,tz=norm(b.x-a.x,b.z-a.z)
+  return {x=tx,z=tz}
 end
 local function makeLane(source)
   if type(source)~="table" or not finite(source.id) or type(source.points)~="table" then return nil end
