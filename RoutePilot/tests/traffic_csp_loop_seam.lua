@@ -36,9 +36,8 @@ local lane = {
   speedLimit = 90,
   speedLimitExplicit = true,
   points = {
-    point(0, 0), point(0, 30), point(30, 30), point(30, 0),
-    point(30, -30), point(0, -30), point(-30, -30),
-    point(-30, 0), point(-30, 30), point(-4, 30), point(-4, 0)
+    point(-4, 0), point(40, 0), point(40, 40),
+    point(-40, 40), point(-40, 0)
   }
 }
 
