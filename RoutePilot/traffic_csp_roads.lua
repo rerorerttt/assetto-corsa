@@ -133,7 +133,7 @@ local function wallDistance(position, direction, maxDistance)
 end
 
 local function makeBoundary(lane, side, offset)
-  local out, pts = {}, lane.points
+  local out, pts, directions, distances = {}, lane.points, {}, {}
   local adjusted, conflicts = 0, 0
   for i = 1, #pts do
     local tx, ty, tz = tangentAt(pts, i, lane.loop)
@@ -145,9 +145,7 @@ local function makeBoundary(lane, side, offset)
     local ly = tz*nx - tx*nz
     local lz = tx*ny - ty*nx
     lx, ly, lz = norm(lx, ly, lz)
-    if lx == 0 and ly == 0 and lz == 0 then
-      lx, ly, lz = -tz, 0, tx
-    end
+    if lx == 0 and ly == 0 and lz == 0 then lx, ly, lz = -tz, 0, tx end
     local dir = vec3(lx*side, ly*side, lz*side)
     local wall = wallDistance(pts[i], dir, offset + 1.0)
     local distance = offset
@@ -156,7 +154,17 @@ local function makeBoundary(lane, side, offset)
       adjusted = adjusted + 1
       if wall <= 0.60 then conflicts = conflicts + 1 end
     end
-    out[#out+1] = vec3(
+    directions[i], distances[i] = dir, distance
+  end
+  -- Smooth only inward: a neighboring wall constraint can pull the corridor
+  -- inward, but smoothing can never push a boundary through a detected wall.
+  for i = 1, #pts do
+    local prevIndex = i > 1 and i - 1 or (lane.loop and #pts or i)
+    local nextIndex = i < #pts and i + 1 or (lane.loop and 1 or i)
+    local average = (distances[prevIndex] + 2*distances[i] + distances[nextIndex]) * 0.25
+    local distance = math.min(distances[i], average)
+    local dir = directions[i]
+    out[i] = vec3(
       pts[i].x + dir.x*distance,
       pts[i].y + dir.y*distance,
       pts[i].z + dir.z*distance)
