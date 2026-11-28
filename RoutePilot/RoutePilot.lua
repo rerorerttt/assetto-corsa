@@ -546,59 +546,108 @@ local function trySpawnTeleport(sim,dt)
   -- spawning the entire field on the legacy single preview line.
   if state.trafficNetwork then
     local graph=state.trafficNetwork
-    local lanes={}
+    local player=ac.getCar(0)
+    if not player or not player.position or not player.look then
+      state.spawnDone=true
+      writeLog("SPAWN_CSP_FINISH moved=0 failed=%d reason=no_player",#aiCars)
+      return
+    end
+    local hx,hz=normalize2(player.look.x,player.look.z)
+    local candidates={}
+    -- Build spawn slots only from authored lanes physically ahead of the player.
+    -- This prevents the previous behaviour of placing traffic on arbitrary,
+    -- unrelated lane IDs around the entire circuit.
     for _,laneId in ipairs(graph.laneOrder or {}) do
       local lane=graph.lanes[laneId]
-      if lane and lane.length>CFG.SPAWN_MIN_GAP+20 then lanes[#lanes+1]=lane end
-    end
-    table.sort(lanes,function(a,b) return a.id<b.id end)
-    local useCount={}
-    local spawnGap=math.max(CFG.SPAWN_GAP,CFG.SAFE_RESPAWN_CLEAR*1.5,CFG.SPAWN_MIN_GAP)
-    local moved,failed=0,0
-    local function sampleLane(lane,distance)
-      distance=clamp(distance,0,lane.length)
-      local c=lane.cumulative
-      local lo,hi=1,#c-1
-      while lo<hi do local mid=math.floor((lo+hi)*0.5);if c[mid+1]<distance then lo=mid+1 else hi=mid end end
-      local a,b=lane.points[lo],lane.points[lo+1]
-      local span=c[lo+1]-c[lo]
-      local t=span>1e-8 and (distance-c[lo])/span or 0
-      local direction=vec3(b.x-a.x,b.y-a.y,b.z-a.z)
-      if direction:length()<0.0001 then return nil,nil end
-      direction:normalize()
-      return vec3(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,a.z+(b.z-a.z)*t),direction
-    end
-    for order=1,#aiCars do
-      local carIndex=aiCars[order]
-      local placed=false
-      if #lanes>0 then
-        for attempt=0,#lanes*3-1 do
-          local laneIndex=((order+attempt-2)%#lanes)+1
-          local lane=lanes[laneIndex]
-          local slot=useCount[lane.id] or 0
-          local distance=12+(slot*#lanes+(laneIndex-1))*spawnGap
-          if distance>4 and distance<lane.length-3 then
-            local position,direction=sampleLane(lane,distance)
-            if position and direction and spotIsClear(position,carIndex) then
-              -- CSP lane points are stored in travel order; use that
-              -- forward tangent as the AI car heading, not its inverse.
-              local ok,result=pcall(physics.setAICarPosition,carIndex,
-                position,direction)
-              if ok and result~=false then
-                moved=moved+1;placed=true;useCount[lane.id]=slot+1
-                state.p[carIndex]=nil;state.spawnHints[carIndex]=nil
-                writeLog("SPAWN_CSP_LANE id=%d lane=%d s=%.1f pos=(%.2f,%.2f,%.2f)",
-                  carIndex,lane.id,distance,position.x,position.y,position.z)
-                break
-              end
-            end
+      if lane and lane.length>20 then
+        local c=lane.cumulative
+        for distance=8,lane.length-4,5 do
+          local lo,hi=1,#c-1
+          while lo<hi do
+            local mid=math.floor((lo+hi)*0.5)
+            if c[mid+1]<distance then lo=mid+1 else hi=mid end
+          end
+          local pa,pb=lane.points[lo],lane.points[lo+1]
+          local span=c[lo+1]-c[lo]
+          local t=span>1e-8 and (distance-c[lo])/span or 0
+          local px=pa.x+(pb.x-pa.x)*t
+          local py=pa.y+(pb.y-pa.y)*t
+          local pz=pa.z+(pb.z-pa.z)*t
+          local tx,tz=normalize2(pb.x-pa.x,pb.z-pa.z)
+          local dx,dz=px-player.position.x,pz-player.position.z
+          local forward=dx*hx+dz*hz
+          local lateral=math.abs(dx*hz-dz*hx)
+          local alignment=tx*hx+tz*hz
+          local height=math.abs(py-player.position.y)
+          if forward>=32 and forward<=190 and lateral<=48 and height<=8 and alignment>=0.58 then
+            candidates[#candidates+1]={lane=lane,s=distance,forward=forward,
+              position=vec3(px,py,pz),direction=vec3(tx,0,tz),alignment=alignment}
           end
         end
       end
-      if not placed then failed=failed+1 end
+    end
+    table.sort(candidates,function(x,y)
+      if math.abs(x.forward-y.forward)<0.01 then
+        if x.lane.id==y.lane.id then return x.s<y.s end
+        return x.lane.id<y.lane.id
+      end
+      return x.forward<y.forward
+    end)
+    local chosen,used={},{}
+    local desiredGap=math.max(22,math.min(34,CFG.SPAWN_GAP))
+    for order=1,#aiCars do
+      local wanted=32+(order-1)*desiredGap
+      local best,bestScore=nil,math.huge
+      for ci=1,#candidates do
+        local candidate=candidates[ci]
+        if not used[ci] then
+          local clear=true
+          for j=1,#chosen do
+            local other=chosen[j]
+            local dx=candidate.position.x-other.position.x
+            local dz=candidate.position.z-other.position.z
+            if dx*dx+dz*dz<18*18 then clear=false;break end
+          end
+          if clear then
+            local score=math.abs(candidate.forward-wanted)+(1-candidate.alignment)*12
+            if score<bestScore then best,bestScore,used[ci]=candidate,score,ci end
+          end
+        end
+      end
+      if best then chosen[#chosen+1]=best end
+    end
+    local moved,failed=0,0
+    for order=1,#aiCars do
+      local carIndex=aiCars[order]
+      local slot=chosen[order]
+      if slot and spotIsClear(slot.position,carIndex) then
+        local ok,result=pcall(physics.setAICarPosition,carIndex,slot.position,slot.direction)
+        if ok and result~=false then
+          local section=slot.lane.length-slot.s
+          for _,edge in ipairs(slot.lane.outgoing or {}) do
+            local d=edge.fromS-slot.s
+            if d>1 and d<section then section=d end
+          end
+          if slot.lane.loop then section=math.max(section,slot.lane.length-slot.s) end
+          local baseKmh=40+160*clamp(section/300,0,1)
+          local variation=0.90+0.20*(math.abs(math.sin(carIndex*12.9898+slot.lane.id*78.233))%1)
+          local boostKmh=clamp(baseKmh*variation,40,200)
+          state.p[carIndex]={
+            networkLaneId=slot.lane.id,networkS=slot.s,
+            networkSpawnBoostTarget=boostKmh/3.6,
+            networkSpawnBoostTimer=4.0
+          }
+          state.spawnHints[carIndex]=nil
+          moved=moved+1
+          writeLog("SPAWN_CSP_AHEAD id=%d lane=%d s=%.1f ahead=%.1f section=%.1f boost=%.1fkmh pos=(%.2f,%.2f,%.2f)",
+            carIndex,slot.lane.id,slot.s,slot.forward,section,boostKmh,
+            slot.position.x,slot.position.y,slot.position.z)
+        else failed=failed+1 end
+      else failed=failed+1 end
     end
     state.spawnDone=true
-    writeLog("SPAWN_CSP_FINISH moved=%d failed=%d lanes=%d",moved,failed,#lanes)
+    writeLog("SPAWN_CSP_FINISH moved=%d failed=%d lanes=%d candidates=%d",
+      moved,failed,#(graph.laneOrder or {}),#candidates)
     flushLog()
     return
   end
