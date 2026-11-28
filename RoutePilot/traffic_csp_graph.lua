@@ -176,21 +176,109 @@ function Graph.build(lanes, intersectionDefs, log)
     end
   end
 
-  -- A directed movement exists only from a lane entering the polygon to a
-  -- different lane leaving it. User-authored forbidden movements are honored.
+  local nextNodeID, nextEdgeID = 0, 0
+  local function addNode(kind, position, owner)
+    nextNodeID = nextNodeID + 1
+    local node = { id = nextNodeID, kind = kind, position = position, owner = owner, outgoing = {} }
+    graph.nodes[#graph.nodes + 1] = node
+    return node
+  end
+  local function addEdge(lane, fromDistance, toDistance, fromNode, toNode, enterLink, exitLink, wrap)
+    if not fromNode or not toNode or toDistance < fromDistance then return nil end
+    nextEdgeID = nextEdgeID + 1
+    local edge = {
+      id = nextEdgeID, lane = lane, from = fromDistance, to = toDistance,
+      length = toDistance - fromDistance, fromNode = fromNode, toNode = toNode,
+      enterLink = enterLink, exitLink = exitLink, wrap = wrap == true,
+      nextEdges = {}
+    }
+    graph.edges[#graph.edges + 1] = edge
+    fromNode.outgoing[#fromNode.outgoing + 1] = edge
+    return edge
+  end
+
+  for i = 1, #graph.intersections do
+    local inter = graph.intersections[i]
+    local x, z = 0, 0
+    for j = 1, #inter.points do x, z = x + inter.points[j][1], z + inter.points[j][3] end
+    inter.node = addNode('intersection', vec3(x / #inter.points, inter.centerY, z / #inter.points), inter)
+  end
+
+  -- Split each directed lane at its ordered intersection spans. A movement
+  -- connects the incoming segment to an outgoing segment at the same node.
+  for i = 1, #lanes do
+    local lane = lanes[i]
+    if lane.valid then
+      table.sort(lane.graphLinks, function(a, b) return a.from < b.from end)
+      local length = lane.totalLength
+      local links = lane.graphLinks
+      if #links == 0 then
+        local startNode = addNode('lane_start', lane.points[1], lane)
+        local endNode = lane.loop and startNode or addNode('lane_end', lane.points[#lane.points], lane)
+        addEdge(lane, 0, length, startNode, endNode, nil, nil, lane.loop)
+      else
+        local first, last = links[1], links[#links]
+        local startNode = first.from > 0.5 and addNode('lane_start', lane.points[1], lane) or first.intersection.node
+        local endNode = last.to < length - 0.5 and addNode('lane_end', lane.points[#lane.points], lane) or last.intersection.node
+        local cursor, currentNode, previousLink = 0, startNode, nil
+        for j = 1, #links do
+          local link = links[j]
+          if link.from >= cursor - 0.1 then
+            local edge = addEdge(lane, cursor, link.from, currentNode, link.intersection.node, previousLink, link, false)
+            link.inEdge = edge
+            if previousLink then previousLink.outEdge = edge end
+            cursor = math.max(cursor, link.to)
+            currentNode, previousLink = link.intersection.node, link
+          else
+            link.topologyError = 'overlapping_intersection_spans'
+            graph.stats.rejectedIntersections = graph.stats.rejectedIntersections + 1
+          end
+        end
+        if lane.loop then
+          local edge = addEdge(lane, cursor, length, currentNode, startNode, previousLink, first, true)
+          if previousLink then previousLink.outEdge = edge end
+          first.inEdge = first.inEdge or edge
+        else
+          local edge = addEdge(lane, cursor, length, currentNode, endNode, previousLink, nil, false)
+          if previousLink then previousLink.outEdge = edge end
+        end
+      end
+      if #lane.graphLinks == 0 then graph.stats.disconnectedLanes = graph.stats.disconnectedLanes + 1 end
+    end
+  end
+
+  -- Honor explicit forbidden movements. Each accepted movement is an edge-to-
+  -- edge transition; no transition is inferred from proximity alone.
   for i = 1, #graph.intersections do
     local inter = graph.intersections[i]
     for a = 1, #inter.links do
       local incoming = inter.links[a]
-      if incoming.from > 0.5 then
+      if incoming.inEdge and incoming.from > 0.5 then
         for b = 1, #inter.links do
           local outgoing = inter.links[b]
-          if incoming.lane ~= outgoing.lane and outgoing.to < outgoing.lane.totalLength - 0.5 then
+          if outgoing.outEdge and outgoing.to < outgoing.lane.totalLength - 0.5 then
             local fromID, toID = tonumber(incoming.lane.id), tonumber(outgoing.lane.id)
-            if not disallowed(inter.definition, fromID, toID) then
-              local movement = { intersection = inter, from = incoming, to = outgoing }
+            if incoming.lane ~= outgoing.lane and not disallowed(inter.definition, fromID, toID) then
+              local movement = {
+                intersection = inter, from = incoming, to = outgoing,
+                fromEdge = incoming.inEdge, toEdge = outgoing.outEdge,
+                priority = 0,
+                attributes = nil
+              }
+              local attributes = inter.definition.trajectoryAttributes
+              if type(attributes) == 'table' then
+                for k = 1, #attributes do
+                  local item = attributes[k]
+                  if type(item) == 'table' and tonumber(item[1]) == fromID and tonumber(item[2]) == toID then
+                    movement.attributes = item[3]
+                    movement.priority = tonumber(item[3] and item[3].po) or 0
+                    break
+                  end
+                end
+              end
               inter.movements[#inter.movements + 1] = movement
               graph.movements[#graph.movements + 1] = movement
+              incoming.inEdge.nextEdges[#incoming.inEdge.nextEdges + 1] = outgoing.outEdge
             end
           end
         end
@@ -198,36 +286,6 @@ function Graph.build(lanes, intersectionDefs, log)
     end
   end
   graph.stats.movements = #graph.movements
-
-  -- Build directed lane segments between consecutive intersection spans.
-  -- These edges preserve lane direction; junction movements are separate.
-  for i = 1, #lanes do
-    local lane = lanes[i]
-    if lane.valid then
-      table.sort(lane.graphLinks, function(a, b) return a.from < b.from end)
-      local cursor, length = 0, lane.totalLength
-      local previous = nil
-      for j = 1, #lane.graphLinks do
-        local link = lane.graphLinks[j]
-        if link.from >= cursor - 0.1 then
-          graph.edges[#graph.edges + 1] = { lane = lane, from = cursor, to = link.from, enter = previous, exit = link }
-          cursor = math.max(cursor, link.to)
-          previous = link
-        end
-      end
-      if cursor < length - 0.5 then
-        graph.edges[#graph.edges + 1] = { lane = lane, from = cursor, to = length, enter = previous, exit = nil }
-      end
-      if lane.loop and #lane.graphLinks > 0 then
-        local first, last = lane.graphLinks[1], lane.graphLinks[#lane.graphLinks]
-        graph.edges[#graph.edges + 1] = {
-          lane = lane, from = last.to, to = first.from,
-          enter = last, exit = first, wrap = true
-        }
-      end
-      if #lane.graphLinks == 0 then graph.stats.disconnectedLanes = graph.stats.disconnectedLanes + 1 end
-    end
-  end
 
   if log then
     log('CSP_GRAPH_BUILT lanes=%d valid=%d invalid=%d intersections=%d links=%d movements=%d edges=%d disconnected=%d rejected_intersections=%d',
