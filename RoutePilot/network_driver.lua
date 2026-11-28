@@ -190,6 +190,22 @@ function M.update(i,c,dt)
    target=min(target,safeSpeed)
   end
  end
+ -- Account for the next directed junction turn and for terminal lane ends.
+ local nextEdge,nextDistance=nil,math.huge
+ for _,edge in ipairs(l.outgoing or {}) do
+  local d=edge.fromS-p.networkS
+  if d>=-6 and d<nextDistance then nextEdge=edge;nextDistance=max(0,d) end
+ end
+ if nextEdge then
+  local alignment=clamp(n(nextEdge.alignment,1),-1,1)
+  local turnAngle=math.acos(alignment)
+  local turnSpeed=clamp(52-22*turnAngle,12,52)
+  local safeTurnSpeed=sqrt(turnSpeed*turnSpeed+14*max(0,nextDistance-5))
+  target=min(target,safeTurnSpeed)
+ elseif not l.loop then
+  local terminalDistance=max(0,l.length-p.networkS-3)
+  target=min(target,sqrt(14*terminalDistance))
+ end
  if l.speedLimit then target=min(target,l.speedLimit/3.6)end
  if lead then
   local available=max(0,lead.gap-7)
