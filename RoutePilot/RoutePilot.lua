@@ -906,33 +906,64 @@ function script.update(dt)
       trafficCSPRouteRetry=trafficCSPRouteRetry+dt
       if trafficCSPRouteRetry>=1.0 then
         trafficCSPRouteRetry=0
-        local candidates=CSPGraph.nearestEdges(
-          trafficCSP.graph,player.position,player.look,120,12)
+        local sameCandidates=CSPGraph.nearestEdges(
+          trafficCSP.graph,player.position,player.look,120,24)
+        local allCandidates=CSPGraph.nearestEdges(
+          trafficCSP.graph,player.position,nil,120,48)
+        local candidates,seenEdges={},{}
+        local function addCandidate(candidate)
+          if candidate and not seenEdges[candidate.edge.id] then
+            seenEdges[candidate.edge.id]=true
+            candidates[#candidates+1]=candidate
+          end
+        end
+        addCandidate(sameCandidates[1])
+        local oppositeCandidates,otherCandidates={},{}
+        local hx,hz=normalize2(player.look.x,player.look.z)
+        for ci=1,#allCandidates do
+          local candidate=allCandidates[ci]
+          local dir=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
+          local dot=hx*dir.x+hz*dir.z
+          if dot < -0.5 then oppositeCandidates[#oppositeCandidates+1]=candidate
+          else otherCandidates[#otherCandidates+1]=candidate end
+        end
+        for ci=1,#oppositeCandidates do addCandidate(oppositeCandidates[ci]) end
+        for ci=1,#otherCandidates do addCandidate(otherCandidates[ci]) end
+        local selectedRoutes,selectedGroups={},{}
         local lastError='no_lane_near_player'
-        local selected=nil
         local attemptedCandidates=0
         trafficCSP.failedRouteEdges=trafficCSP.failedRouteEdges or {}
         for ci=1,#candidates do
+          if #selectedRoutes>=4 then break end
           local candidate=candidates[ci]
-          if not trafficCSP.failedRouteEdges[candidate.edge.id] then
+          local group=trafficCSP.roads.laneGroups[candidate.edge.lane] or candidate.edge.lane
+          if not selectedGroups[group] and not trafficCSP.failedRouteEdges[candidate.edge.id] then
             attemptedCandidates=attemptedCandidates+1
             local route,routeError=CSPRoutes.build(
               trafficCSP.graph,trafficCSP.roads,candidate.edge,candidate.along,
               {minLength=250,loop=true,requireLoop=true})
             if route then
-              selected={route=route,candidate=candidate}
-              break
+              route.group=group
+              route.startCandidate=candidate
+              selectedRoutes[#selectedRoutes+1]=route
+              selectedGroups[group]=true
+            else
+              trafficCSP.failedRouteEdges[candidate.edge.id]=true
+              lastError=tostring(routeError)
             end
-            trafficCSP.failedRouteEdges[candidate.edge.id]=true
-            lastError=tostring(routeError)
           end
         end
-        if selected then
+        if #selectedRoutes>0 then
           trafficCSPRouteAttempted=true
-          trafficCSP.previewRoute=selected.route
-          writeLog("CSP_ROUTE_PREVIEW_OK edge=%d distance=%.2f length=%.1f points=%d path_edges=%d loop=true candidates=%d",
-            selected.candidate.edge.id,selected.candidate.distance or -1,
-            selected.route.length or 0,#selected.route.nodes,#selected.route.edges,#candidates)
+          trafficCSP.previewRoutes=selectedRoutes
+          trafficCSP.previewRoute=selectedRoutes[1]
+          for ri=1,#selectedRoutes do
+            local route=selectedRoutes[ri]
+            writeLog("CSP_ROUTE_READY index=%d length=%.1f points=%d edges=%d group_lanes=%d",
+              ri,route.length or 0,#route.nodes,#route.edges,#(route.group and route.group.lanes or {}))
+          end
+          writeLog("CSP_ROUTES_SELECTED count=%d candidates=%d",
+            #selectedRoutes,#candidates)
         else
           if #candidates>0 and attemptedCandidates==0 then lastError='all_nearby_edges_rejected' end
           trafficCSP.previewRouteError=lastError
