@@ -704,7 +704,6 @@ function Graph.loopPath(graph, startEdge, maxVisited, maxCost)
   heapPush(heap, { edge = startEdge, cost = 0 })
   local candidates, visited = {}, 0
   maxVisited = maxVisited or 20000
-  maxCost = maxCost or 20000
   while #heap > 0 and visited < maxVisited do
     local item = heapPop(heap)
     local edge, cost = item.edge, item.cost
@@ -717,7 +716,7 @@ function Graph.loopPath(graph, startEdge, maxVisited, maxCost)
           if canReturn[nextEdge.id] then
             local penalty = edge.transitionPenalty and edge.transitionPenalty[nextEdge.id] or 0
             local nextCost = cost + math.max(0.1, nextEdge.length) + penalty
-            if nextCost < (distances[nextEdge.id] or math.huge) then
+            if nextCost <= maxCost and nextCost < (distances[nextEdge.id] or math.huge) then
               distances[nextEdge.id] = nextCost
               previous[nextEdge.id] = edge
               heapPush(heap, { edge = nextEdge, cost = nextCost })
