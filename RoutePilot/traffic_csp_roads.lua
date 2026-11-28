@@ -567,19 +567,29 @@ function Roads.build(lanes, log)
             if side=='left' then
               local lineA,adjA,confA=makeBoundary(a.leftLane,1,clipped)
               local lineB,adjB,confB=makeBoundary(b.leftLane,1,clipped)
-              a.boundaries.left=lineA
-              b.boundaries.left=lineB
-              a.leftBoundaryOffset,b.leftBoundaryOffset=clipped,clipped
               wallAdjusted=wallAdjusted+adjA+adjB
               wallConflicts=wallConflicts+confA+confB
+              if lineA and lineB then
+                a.boundaries.left=lineA
+                b.boundaries.left=lineB
+                a.leftBoundaryOffset,b.leftBoundaryOffset=clipped,clipped
+              else
+                a.boundariesVerified,b.boundariesVerified=false,false
+                a.boundaries,b.boundaries=nil,nil
+              end
             else
               local lineA,adjA,confA=makeBoundary(a.rightLane,-1,clipped)
               local lineB,adjB,confB=makeBoundary(b.rightLane,-1,clipped)
-              a.boundaries.right=lineA
-              b.boundaries.right=lineB
-              a.rightBoundaryOffset,b.rightBoundaryOffset=clipped,clipped
               wallAdjusted=wallAdjusted+adjA+adjB
               wallConflicts=wallConflicts+confA+confB
+              if lineA and lineB then
+                a.boundaries.right=lineA
+                b.boundaries.right=lineB
+                a.rightBoundaryOffset,b.rightBoundaryOffset=clipped,clipped
+              else
+                a.boundariesVerified,b.boundariesVerified=false,false
+                a.boundaries,b.boundaries=nil,nil
+              end
             end
             opposingAdjusted=opposingAdjusted+2
           end
@@ -610,19 +620,29 @@ function Roads.build(lanes, log)
             if side=='left' then
               local lineA,adjA,confA=makeBoundary(a.leftLane,1,clipped)
               local lineB,adjB,confB=makeBoundary(b.rightLane,-1,clipped)
-              a.boundaries.left=lineA
-              b.boundaries.right=lineB
-              a.leftBoundaryOffset,b.rightBoundaryOffset=clipped,clipped
               wallAdjusted=wallAdjusted+adjA+adjB
               wallConflicts=wallConflicts+confA+confB
+              if lineA and lineB then
+                a.boundaries.left=lineA
+                b.boundaries.right=lineB
+                a.leftBoundaryOffset,b.rightBoundaryOffset=clipped,clipped
+              else
+                a.boundariesVerified,b.boundariesVerified=false,false
+                a.boundaries,b.boundaries=nil,nil
+              end
             else
               local lineA,adjA,confA=makeBoundary(a.rightLane,-1,clipped)
               local lineB,adjB,confB=makeBoundary(b.leftLane,1,clipped)
-              a.boundaries.right=lineA
-              b.boundaries.left=lineB
-              a.rightBoundaryOffset,b.leftBoundaryOffset=clipped,clipped
               wallAdjusted=wallAdjusted+adjA+adjB
               wallConflicts=wallConflicts+confA+confB
+              if lineA and lineB then
+                a.boundaries.right=lineA
+                b.boundaries.left=lineB
+                a.rightBoundaryOffset,b.leftBoundaryOffset=clipped,clipped
+              else
+                a.boundariesVerified,b.boundariesVerified=false,false
+                a.boundaries,b.boundaries=nil,nil
+              end
             end
             parallelAdjusted=parallelAdjusted+2
           end
