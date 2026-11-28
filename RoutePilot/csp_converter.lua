@@ -7,6 +7,8 @@ local okJSON, JSON = pcall(require, "routepilot_json")
 if not okJSON or type(JSON) ~= "table" then JSON = nil end
 
 local CACHE_VERSION = 1
+local runtimeGraph = nil
+local discoveryAttempted = false
 
 local function trackCachePath()
   if not ac or not ac.getFolder or not ac.FolderID then return nil end
@@ -577,8 +579,11 @@ function Converter.build(data,log)
 end
 
 function Converter.loadNetwork(log)
+  if runtimeGraph then return runtimeGraph end
+  if discoveryAttempted then return nil,"CSP_DISCOVERY_ALREADY_ATTEMPTED" end
+  discoveryAttempted=true
   local cached=loadNetworkCache(log)
-  if cached then return cached end
+  if cached then runtimeGraph=cached;return runtimeGraph end
   local ok,Network=pcall(require,"traffic_network")
   if not ok or type(Network)~="table" or type(Network.loadTrackTraffic)~="function" then
     return nil,"TRAFFIC_NETWORK_MODULE_UNAVAILABLE: "..tostring(Network)
@@ -615,7 +620,8 @@ function Converter.loadNetwork(log)
     graph.stats.sourceIntersections=source.stats.sourceIntersections or graph.stats.sourceIntersections
   end
   saveNetworkCache(graph,log)
-  return graph
+  runtimeGraph=graph
+  return runtimeGraph
 end
 
 -- Compatibility entry point for older RoutePilot builds. It returns only the
