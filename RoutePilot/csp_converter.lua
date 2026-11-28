@@ -650,10 +650,16 @@ function Converter.load(log)
           local t=clamp(((player.position.x-a.x)*vx+(player.position.z-a.z)*vz)/l2,0,1)
           local q={x=a.x+vx*t,y=a.y+(b.y-a.y)*t,z=a.z+vz*t}
           local dx,dz=player.position.x-q.x,player.position.z-q.z
+          local dy=player.position.y-q.y
           local tx,tz=norm(vx,vz)
           local alignment=hx*tx+hz*tz
-          local score=dx*dx+dz*dz+(1-alignment)*(1-alignment)*25
-          if alignment>0.15 and math.sqrt(dx*dx+dz*dz)<80 and
+          -- Never acquire a visually nearby lane on another deck. Planar
+          -- proximity alone picked elevated ramps/overpasses and spawned the
+          -- whole traffic stream above the road.
+          local score=dx*dx+dz*dz+dy*dy*16+
+            (1-alignment)*(1-alignment)*25
+          if math.abs(dy)<=4.0 and alignment>0.50 and
+            math.sqrt(dx*dx+dz*dz)<80 and
             (not bestScore or score<bestScore) then
             bestScore=score
             best={lane=lane,segment=i,t=t}
