@@ -1182,6 +1182,7 @@ function script.update(dt)
             state.routeLength=route.length
             state.routeMetricCount=#route.nodes
             state.routeMetricLoop=true
+            tryRecycleGraphTraffic(route,order,player)
 
             local savedOther={}
             for idx,person in pairs(state.p) do
