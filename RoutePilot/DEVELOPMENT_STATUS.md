@@ -421,3 +421,8 @@ Additional local check: the environment's `texlua` executable was found and used
 - The racing-line planner now stops adding stations at an open route's actual terminal instead of repeatedly sampling the clamped endpoint through the rest of its planning horizon. When fewer than three valid stations remain, the existing deterministic route-spline fallback is used.
 - Added RoutePilot/tests/traffic_csp_open_route_racing_line.lua to verify the planner uses only valid stations on a short open route. GitHub Actions passed for commit 0d3238539719db68afb0ba608a9ef102c84a1f57: Lua 5.1 syntax validation and all six regression tests succeeded, including the representative CSP export and road-corridor build.
 - Actual braking distances, terminal stopping behavior and offscreen recycling still require in-game validation with real vehicle dynamics.
+
+## 2026-11-28 finalized lane metadata regression
+
+- The importer regression now covers both raw editor exports (role defaults plus priorityOffset) and finalized exports (explicit total priority and speedLimit). It verifies that priorityOffset is not added twice and finalized speed limits are not replaced by role defaults.
+- GitHub Actions passed for commit db5fe1d8e9d68b77b5d0ba003a276ce985710970: Lua 5.1 syntax validation and all six regression suites succeeded.
