@@ -60,7 +60,7 @@ local state = {
   playerRouteInvalid=false,
   teleportDiagnostics=false, teleportDiagAccum=0,
   teleportDiagSnapshots={}, teleportDiagApiAt={},
-  nativeSplinePath=nil, nativeSplineSignature=nil, nativeSplineApplied={}, nativeSplineRetryAt={},
+  nativeSplinePath=nil, nativeSplineSignature=nil, nativeSplineApplied={}, nativeSplineAppliedAt={}, nativeSplineRetryAt={},
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -137,6 +137,7 @@ local function ensureNativeSplineFile()
   state.nativeSplinePath=path
   state.nativeSplineSignature=signature
   state.nativeSplineApplied={}
+  state.nativeSplineAppliedAt={}
   state.nativeSplineRetryAt={}
   writeLog("NATIVE_SPLINE_FILE_READY path=%s version=%d points=%d length=%.1f bytes=%d",
     path,safeNumber(meta and meta.version,7),safeNumber(meta and meta.count),
@@ -174,6 +175,7 @@ local function claimNativeSpline(carIndex)
   local ok,result=pcall(physics.setAISpline,carIndex,path,nil)
   if ok and result==true then
     state.nativeSplineApplied[carIndex]=true
+    state.nativeSplineAppliedAt[carIndex]=now
     writeLog("NATIVE_SPLINE_ASSIGNED id=%d path=%s stock_fastline_replaced=true",carIndex,path)
     return true
   end
@@ -181,6 +183,15 @@ local function claimNativeSpline(carIndex)
     carIndex,path,tostring(ok),tostring(result))
   return false
 end
+
+local function nativeSplineSettled(carIndex)
+  local assignedAt=state.nativeSplineAppliedAt[carIndex]
+  if assignedAt==nil then return false end
+  local sim=ac.getSim()
+  local now=sim and safeNumber(sim.gameTime) or assignedAt
+  return now-assignedAt>=0.5
+end
+
 local function serializeNodes(nodes)
   local out={}
   for i=1,#nodes do
@@ -286,7 +297,7 @@ local function loadLine(retryOnly)
     if ok and type(nodes)=="table" and #nodes>=2 then
       state.nodes=nodes
       state.nativeSplinePath=nil; state.nativeSplineSignature=nil
-      state.nativeSplineApplied={}; state.nativeSplineRetryAt={}
+      state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}; state.nativeSplineRetryAt={}
       state.trafficNetwork=type(infoOrError)=="table" and infoOrError.network or nil
       state.loopRoute=loop==true
       state.boundsL=type(boundsL)=="table" and boundsL or {}
@@ -676,7 +687,7 @@ local function trySpawnTeleport(sim,dt)
     if state.spawnedCars[carIndex] then already=already+1 else
     local position,direction,routeSegment,routeParameter=
       sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
-    if position and direction and claimNativeSpline(carIndex) then
+    if position and direction and claimNativeSpline(carIndex) and nativeSplineSettled(carIndex) then
       -- Keep the previously user-verified orientation. The SDK documents
       -- an explicit direction vector but does not define its sign convention.
       local spawnDir=vec3(-direction.x,-direction.y,-direction.z)
