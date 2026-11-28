@@ -696,7 +696,7 @@ function Graph.loopPath(graph, startEdge, maxVisited, maxCost)
 
   local distances, previous, heap = { [startEdge.id] = 0 }, {}, {}
   heapPush(heap, { edge = startEdge, cost = 0 })
-  local farthestEdge, farthestCost, visited = nil, -1, 0
+  local candidates, visited = {}, 0
   maxVisited = maxVisited or 20000
   maxCost = maxCost or 20000
   while #heap > 0 and visited < maxVisited do
@@ -704,44 +704,46 @@ function Graph.loopPath(graph, startEdge, maxVisited, maxCost)
     local edge, cost = item.edge, item.cost
     if cost <= (distances[edge.id] or math.huge) + 1e-7 then
       visited = visited + 1
-      if cost <= maxCost and edge ~= startEdge and cost > farthestCost then
-        farthestEdge, farthestCost = edge, cost
-      end
       if cost <= maxCost then
-      for i = 1, #edge.nextEdges do
-        local nextEdge = edge.nextEdges[i]
-        if canReturn[nextEdge.id] then
-          local penalty = edge.transitionPenalty and edge.transitionPenalty[nextEdge.id] or 0
-          local nextCost = cost + math.max(0.1, nextEdge.length) + penalty
-          if nextCost < (distances[nextEdge.id] or math.huge) then
-            distances[nextEdge.id] = nextCost
-            previous[nextEdge.id] = edge
-            heapPush(heap, { edge = nextEdge, cost = nextCost })
+        if edge ~= startEdge then candidates[#candidates+1] = { edge=edge, cost=cost } end
+        for i = 1, #edge.nextEdges do
+          local nextEdge = edge.nextEdges[i]
+          if canReturn[nextEdge.id] then
+            local penalty = edge.transitionPenalty and edge.transitionPenalty[nextEdge.id] or 0
+            local nextCost = cost + math.max(0.1, nextEdge.length) + penalty
+            if nextCost < (distances[nextEdge.id] or math.huge) then
+              distances[nextEdge.id] = nextCost
+              previous[nextEdge.id] = edge
+              heapPush(heap, { edge = nextEdge, cost = nextCost })
+            end
           end
         end
       end
+    end
+  end
+  table.sort(candidates, function(a,b) return a.cost > b.cost end)
+  local tries = math.min(#candidates, 64)
+  for i = 1, tries do
+    local candidate = candidates[i]
+    local backPath, backCost = Graph.shortestPath(graph, candidate.edge, startEdge, maxVisited)
+    if backPath and #backPath >= 2 and candidate.cost + (backCost or 0) <= maxCost then
+      local outPath, cursor = {}, candidate.edge
+      while cursor do
+        table.insert(outPath, 1, cursor)
+        if cursor == startEdge then break end
+        cursor = previous[cursor.id]
+      end
+      if outPath[1] == startEdge then
+        local combined = {}
+        for j = 1, #outPath do combined[#combined+1] = outPath[j] end
+        for j = 2, #backPath-1 do combined[#combined+1] = backPath[j] end
+        if #combined > 1 then
+          return combined, candidate.cost + (backCost or 0)
+        end
       end
     end
   end
-  if not farthestEdge then
-    return nil, visited >= maxVisited and 'loop_search_limit' or 'no_directed_cycle'
-  end
-
-  local outPath, cursor = {}, farthestEdge
-  while cursor do
-    table.insert(outPath, 1, cursor)
-    if cursor == startEdge then break end
-    cursor = previous[cursor.id]
-  end
-  if outPath[1] ~= startEdge then return nil, 'broken_cycle_path' end
-  local backPath, backCost = Graph.shortestPath(graph, farthestEdge, startEdge, maxVisited)
-  if not backPath or #backPath < 2 then return nil, backCost or 'no_directed_return_path' end
-
-  local combined = {}
-  for i = 1, #outPath do combined[#combined+1] = outPath[i] end
-  for i = 2, #backPath-1 do combined[#combined+1] = backPath[i] end
-  if #combined < 2 then return nil, 'cycle_too_short' end
-  return combined, farthestCost + (backCost or 0)
+  return nil, visited >= maxVisited and 'loop_search_limit' or 'no_directed_cycle'
 end
 
 Graph.sampleLane = lanePositionAt
