@@ -76,7 +76,7 @@ local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
   end
 end
 
-local function appendBezier(route, movement)
+local function appendBezier(route, roads, movement)
   local p0, p3 = movement.fromPos, movement.toPos
   if not p0 or not p3 then return false end
   local chord = distance(p0, p3)
@@ -89,6 +89,9 @@ local function appendBezier(route, movement)
     p3.x - movement.toDir.x*handle,
     p3.y - movement.toDir.y*handle,
     p3.z - movement.toDir.z*handle)
+  local leftA,rightA=laneBoundsAt(roads,movement.from.lane,p0,movement.fromDir)
+  local leftB,rightB=laneBoundsAt(roads,movement.to.lane,p3,movement.toDir)
+  local halfWidth=math.max(0.20,math.min(3.5,leftA,-rightA,leftB,-rightB))
   local steps = math.max(3, math.min(80, math.ceil(chord/1.2)))
   for i = 1, steps do
     local t = i/steps
@@ -97,7 +100,7 @@ local function appendBezier(route, movement)
       u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
       u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y,
       u*u*u*p0.z + 3*u*u*t*p1.z + 3*u*t*t*p2.z + t*t*t*p3.z)
-    appendPoint(route, p, 3.5, -3.5)
+    appendPoint(route, p, halfWidth, -halfWidth)
   end
   return true
 end
@@ -110,7 +113,7 @@ local function appendMovement(route, roads, movement)
     appendLaneRange(route, roads, edge, link.from, link.to)
     return true
   end
-  return appendBezier(route, movement)
+  return appendBezier(route, roads, movement)
 end
 
 function Routes.sample(route, distanceAlong)
