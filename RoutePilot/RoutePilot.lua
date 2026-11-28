@@ -49,7 +49,8 @@ local state = {
   followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  spawnHints={}, spawnedCars={}, spawnTeleportNextTryAt=0,
+  nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
   trafficNetwork=nil, loadedFromCSP=false, cspImportPending=false,
   autoImportAccum=0, autoImportAttempts=0,
@@ -208,8 +209,9 @@ local function loadLine(retryOnly)
       state.loopRoute=loop==true
       state.boundsL=type(boundsL)=="table" and boundsL or {}
       state.boundsR=type(boundsR)=="table" and boundsR or {}
-      state.p={}; state.spawnHints={}; state.routeGeometry=nil
+      state.p={}; state.spawnHints={}; state.spawnedCars={}; state.routeGeometry=nil
       state.loaded=true; state.loadedFromCSP=true
+      state.showWorldLines=true
       state.cspImportPending=false; state.autoImportAttempts=0
       state.status=string.format("CSP: %d точек | %d линий",
         #nodes,state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0)
@@ -501,6 +503,52 @@ local function sampleSpawnRoute(metrics,distance)
   end
   return nil,nil,nil,nil
 end
+local function snapSpawnToAuthoredLane(position,direction)
+  local graph=state.trafficNetwork
+  if not state.loadedFromCSP or not graph or #(graph.laneOrder or {})==0 then return nil end
+  local hx,hz=normalize2(direction.x,direction.z)
+  local best,bestScore=nil,math.huge
+  for _,laneId in ipairs(graph.laneOrder or {}) do
+    local lane=graph.lanes[laneId]
+    local box=lane and lane.aabb
+    if lane and #lane.points>=2 then
+      local near=true
+      if box then
+        local dx=math.max(box.minX-position.x,0,position.x-box.maxX)
+        local dz=math.max(box.minZ-position.z,0,position.z-box.maxZ)
+        near=dx*dx+dz*dz<=3.0*3.0
+      end
+      if near then
+        for i=1,#lane.points-1 do
+          local p0,p1=lane.points[i],lane.points[i+1]
+          local vx,vz=p1.x-p0.x,p1.z-p0.z
+          local lenSq=vx*vx+vz*vz
+          if lenSq>1e-8 then
+            local t=clamp(((position.x-p0.x)*vx+(position.z-p0.z)*vz)/lenSq,0,1)
+            local qx,qy,qz=p0.x+vx*t,p0.y+(p1.y-p0.y)*t,p0.z+vz*t
+            local dx,dz=position.x-qx,position.z-qz
+            local dy=position.y-qy
+            local planar=math.sqrt(dx*dx+dz*dz)
+            local tx,tz=normalize2(vx,vz)
+            local alignment=hx*tx+hz*tz
+            -- A destination is valid only when it lies directly on a yellow
+            -- source polyline, on the same deck and in the same direction.
+            if planar<=0.35 and math.abs(dy)<=0.75 and alignment>=0.85 then
+              local score=dx*dx+dz*dz+dy*dy*4+(1-alignment)*2
+              if score<bestScore then
+                bestScore=score
+                best={position=vec3(qx,qy,qz),direction=vec3(tx,0,tz),
+                  lane=laneId,segment=i,t=t,error=planar}
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return best
+end
+
 local function spotIsClear(pos, exceptIndex)
   local sim=ac.getSim()
   if not sim then return true end
@@ -522,6 +570,21 @@ end
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone then return end
   if not state.loaded or state.recLine or #state.nodes<2 then return end
+  -- No imported yellow CSP source lines: no teleport destination exists.
+  if not state.loadedFromCSP or not state.trafficNetwork or
+      #(state.trafficNetwork.laneOrder or {})==0 then
+    state.spawnDone=true
+    if not state.spawnGateLogged then
+      state.spawnGateLogged=true
+      writeLog("SPAWN_BLOCKED reason=no_yellow_csp_source_lines")
+    end
+    return
+  end
+  local simNow=ac.getSim()
+  local gameNow=simNow and safeNumber(simNow.gameTime) or 0
+  if gameNow<safeNumber(state.spawnTeleportNextTryAt) then return end
+  state.spawnTeleportNextTryAt=gameNow+0.25
+  state.spawnedCars=state.spawnedCars or {}
   state.spawnWait=state.spawnWait+dt
   local aiCars={}
   for i=1,sim.carsCount-1 do
@@ -570,28 +633,52 @@ local function trySpawnTeleport(sim,dt)
   local startDistance=routeDistance+gap
   writeLog("SPAWN_REFERENCE route=%.1f error=%.2f gap=%.1f loop=%s",
     routeDistance,routeError,gap,tostring(metrics.loop))
-  local moved,failed=0,0
+  local moved,failed,already=0,0,0
   for order=1,count do
     local carIndex=aiCars[order]
-    local position,direction,routeSegment,routeParameter=
-      sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
-    if position and direction then
-      -- Keep the previously user-verified orientation. The SDK documents
-      -- an explicit direction vector but does not define its sign convention.
-      local ok,result=pcall(physics.setAICarPosition,carIndex,
-        position,vec3(-direction.x,-direction.y,-direction.z))
-      if ok and result~=false then
-        moved=moved+1
-        state.p[carIndex]=nil
-        state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter,boost=true}
-        writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
-          carIndex,position.x,position.y,position.z,direction.x,direction.z,
-          routeSegment,routeParameter)
-      else failed=failed+1 end
-    else failed=failed+1 end
+    if state.spawnedCars[carIndex] then
+      already=already+1
+    else
+      local position,direction,routeSegment,routeParameter
+      -- A route sample is only a search hint. It is never passed to the
+      -- teleport API until projected onto a yellow Traffic Tool source line.
+      for advance=0,30,2 do
+        local candidate,candidateDirection,candidateSegment,candidateT=
+          sampleSpawnRoute(metrics,startDistance+(order-1)*gap+advance)
+        if not candidate then break end
+        local snapped=snapSpawnToAuthoredLane(candidate,candidateDirection)
+        if snapped then
+          position,direction=snapped.position,snapped.direction
+          routeSegment,routeParameter=candidateSegment,candidateT
+          writeLog("SPAWN_LANE_LOCK id=%d lane=%s segment=%d t=%.3f planar_error=%.3f",
+            carIndex,tostring(snapped.lane),snapped.segment,snapped.t,snapped.error)
+          break
+        end
+      end
+      if position and direction then
+        local spawnDir=vec3(-direction.x,-direction.y,-direction.z)
+        local ok,result=pcall(physics.setAICarPosition,carIndex,position,spawnDir)
+        if ok and result~=false then
+          moved=moved+1
+          state.spawnedCars[carIndex]=true
+          state.p[carIndex]=nil
+          state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter,boost=true}
+          writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
+            carIndex,position.x,position.y,position.z,direction.x,direction.z,
+            routeSegment,routeParameter)
+        else
+          failed=failed+1
+          writeLog("SPAWN_FAILED id=%d reason=teleport_api error=%s",carIndex,tostring(result))
+        end
+      else
+        failed=failed+1
+        writeLog("SPAWN_FAILED id=%d reason=no_yellow_line_within_tolerance",carIndex)
+      end
+    end
   end
-  state.spawnDone=true
-  writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
+  state.spawnDone=(already+moved)>=count
+  writeLog("SPAWN_FINISH moved=%d already=%d failed=%d total=%d/%d gap=%.2f",
+    moved,already,failed,already+moved,count,gap)
   flushLog()
 end
 local function walkLineSigned(startSeg,startT,distance,sign)
@@ -640,6 +727,11 @@ local function teleportHome(carIndex,car)
     return false
   end
   if #state.nodes<2 or not car or not car.position then return false end
+  if not state.loadedFromCSP or not state.trafficNetwork or
+      #(state.trafficNetwork.laneOrder or {})==0 then
+    writeLog("RESCUE_FAILED id=%d reason=no_yellow_csp_source_lines",carIndex)
+    return false
+  end
 
   -- Recovery direction is fixed by the recorded line order, never by
   -- the vehicle's current heading or velocity after a spin/collision.
@@ -665,10 +757,12 @@ local function teleportHome(carIndex,car)
       local nextPos=walkLineSigned(sampleSeg,sampleT,3.0,sign)
       if nextPos then
         local dx,dz=normalize2(nextPos.x-pos.x,nextPos.z-pos.z)
-        local safePos=vec3(pos.x,pos.y+0.15,pos.z)
-        if spotIsClear(safePos,carIndex) then
-          local ok,result=pcall(physics.setAICarPosition,carIndex,
-            safePos,vec3(-dx,0,-dz))
+        local snapped=snapSpawnToAuthoredLane(pos,vec3(dx,0,dz))
+        if snapped then
+          local safePos=vec3(snapped.position.x,snapped.position.y+0.15,snapped.position.z)
+          if spotIsClear(safePos,carIndex) then
+            local ok,result=pcall(physics.setAICarPosition,carIndex,
+              safePos,vec3(-snapped.direction.x,0,-snapped.direction.z))
           if ok and result~=false then
             state.p[carIndex]=nil
             state.rescueWatch=state.rescueWatch or {}
@@ -678,8 +772,9 @@ local function teleportHome(carIndex,car)
             flushLog()
             return true
           end
-          writeLog("RESCUE_FORWARD_FAILED id=%d distance=%.1f error=%s",
-            carIndex,distance,tostring(result))
+            writeLog("RESCUE_FORWARD_FAILED id=%d distance=%.1f error=%s",
+              carIndex,distance,tostring(result))
+          end
         end
       end
     end
