@@ -50,11 +50,15 @@ local function occupancy(g,laneId,s,index,sim,range)
   local sameLane=otherState and otherState.networkLaneId==laneId
   local occupancyRadius=sameLane and 4.8 or 2.0
   if q and q.distance<occupancyRadius then local hx,hz=norm(c.look.x,c.look.z)
-   if dot(hx,hz,q.tx,q.tz)>0.15 then local gap=q.s-s
-    if l.loop then if gap>l.length*.5 then gap=gap-l.length elseif gap< -l.length*.5 then gap=gap+l.length end end
-    if gap>=0 and gap<range and(not ahead or gap<ahead.gap)then ahead={gap=gap,speed=max(0,n(c.speedMs)),index=i}
-    elseif gap<0 and -gap<18 and(not behind or -gap<behind.gap)then behind={gap=-gap,speed=max(0,n(c.speedMs)),index=i}end
-   end
+   local alignment=dot(hx,hz,q.tx,q.tz)
+  local gap=q.s-s
+  if l.loop then if gap>l.length*.5 then gap=gap-l.length elseif gap< -l.length*.5 then gap=gap+l.length end end
+  if alignment>0.15 then
+   if gap>=0 and gap<range and(not ahead or gap<ahead.gap)then ahead={gap=gap,speed=max(0,n(c.speedMs)),index=i}
+   elseif gap<0 and -gap<18 and(not behind or -gap<behind.gap)then behind={gap=-gap,speed=max(0,n(c.speedMs)),index=i}end
+  elseif sameLane and abs(gap)<range and(not ahead or abs(gap)<ahead.gap)then
+   ahead={gap=abs(gap),speed=-max(0,n(c.speedMs)),index=i}
+  end
   end
  end end end
  return ahead,behind
@@ -173,7 +177,16 @@ function M.update(i,c,dt)
   end
  end
  if l.speedLimit then target=min(target,l.speedLimit/3.6)end
- if lead then target=min(target,sqrt(max(0,lead.speed^2+14*max(0,lead.gap-7))))end
+ if lead then
+  local available=max(0,lead.gap-7)
+  if lead.speed<0 then
+   local opposing=-lead.speed;local reaction=7.0*.45
+   local safe=max(0,sqrt(max(0,14*available+2*opposing*reaction+reaction*reaction))-opposing-reaction)
+   target=min(target,safe)
+  else
+   target=min(target,sqrt(max(0,lead.speed^2+14*available)))
+  end
+ end
  local err=target-speed;local gas=clamp(err*.35,0,1);local brake=clamp(-err*.55,0,1)
  if speed<5 then gas=min(gas,.65)end;if err>=0 then brake=0 end
  p.networkLaneId=l.id;p.networkS=p.networkS;p.routeProgress=p.networkS;p.routeLocked=true
