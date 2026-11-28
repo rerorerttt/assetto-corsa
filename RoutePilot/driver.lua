@@ -93,6 +93,13 @@ local function routeProjection(car, hintSeg, allowGlobal, hintProgress, speed, d
   local projectionDt=dt or 0.05
   local result = Geometry.project(state.routeGeometry, car.position,
     hintProgress, car.look, projectionSpeed, projectionDt, locked)
+  -- A locked progress window is only valid while the car remains physically
+  -- close to that part of the route. Otherwise the nearest edge inside the
+  -- stale window can be hundreds of metres away and masquerade as a valid
+  -- projection, preventing global reacquisition after a teleport.
+  if locked and result and safeNumber(result.distance,math.huge)>12.0 then
+    result=nil
+  end
   if not result and locked then
     -- A temporary local-window miss must not turn into a full-brake command.
     -- Reacquire globally only when the candidate is nearby, heading-compatible
@@ -1942,6 +1949,27 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
+  -- CSP/AC teleports can move a car to a different world-space location in
+  -- one physics step. Invalidate its old progress lock before projection;
+  -- otherwise the local window can keep selecting a distant, stale segment.
+  local lastX,lastZ=p.lastWorldX,p.lastWorldZ
+  if lastX~=nil and lastZ~=nil then
+    local jx,jz=car.position.x-lastX,car.position.z-lastZ
+    local jumpSq=jx*jx+jz*jz
+    local jumpLimit=math.max(30.0,speed*math.max(0,dt)*5.0+12.0)
+    if jumpSq>jumpLimit*jumpLimit then
+      p.routeLocked=false
+      p.routeProgress=nil
+      p.segIdx=1
+      p.racingPlan=nil
+      p.racingPlanTimer=0
+      p.racingPlanStartProgress=nil
+      p.spawnSeeded=false
+      p.projectionLost=false
+      H.log("ROUTE_REACQUIRE_TELEPORT id=%d jump=%.1f",carIndex,math.sqrt(jumpSq))
+    end
+  end
+  p.lastWorldX,p.lastWorldZ=car.position.x,car.position.z
   local previousRouteProgress=p.routeProgress
   local recovering=p.offTrackRecovering==true or safeNumber(p.offTrackT)>0
   local projectionHint=p.routeProgress
@@ -2121,6 +2149,19 @@ function Driver.observePlayer(car, dt, steerInput)
   end
 
   local speed,fx,fz=readVehicleDynamics(car,p,dt or 0.016)
+  local lastX,lastZ=p.lastWorldX,p.lastWorldZ
+  if lastX~=nil and lastZ~=nil then
+    local jx,jz=car.position.x-lastX,car.position.z-lastZ
+    local jumpSq=jx*jx+jz*jz
+    local jumpLimit=math.max(30.0,speed*math.max(0,dt or 0.016)*5.0+12.0)
+    if jumpSq>jumpLimit*jumpLimit then
+      p.routeLocked=false
+      p.routeProgress=nil
+      p.segIdx=1
+      H.log("PLAYER_ROUTE_REACQUIRE_TELEPORT jump=%.1f",math.sqrt(jumpSq))
+    end
+  end
+  p.lastWorldX,p.lastWorldZ=car.position.x,car.position.z
   readWheelSlip(car,p)
   local progress,lateral,seg,_,distance=routeProjection(
     car,p.segIdx,not p.routeLocked,p.routeProgress,speed,dt or 0.016)
