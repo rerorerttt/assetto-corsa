@@ -342,10 +342,12 @@ local function loadLine(retryOnly)
       state.boundsL=type(boundsL)=="table" and boundsL or {}
       state.boundsR=type(boundsR)=="table" and boundsR or {}
       state.p={}; state.spawnHints={}; state.spawnedCars={}; state.routeGeometry=nil
-      state.loaded=false; state.loadedFromCSP=true
-      state.playerRouteInvalid=true
-      state.cspImportPending=true; state.autoImportAttempts=0
-      state.status="CSP: предпросмотр, маршрут не замкнут/короткий"
+      -- Open/short authored CSP routes are valid for RoutePilot's own
+      -- controller; they do not need to be native AC AI splines.
+      state.loaded=true; state.loadedFromCSP=true
+      state.playerRouteInvalid=false
+      state.cspImportPending=false; state.autoImportAttempts=0
+      state.status="CSP: собственный AI, исходные линии Traffic Tool"
       writeLog("CSP_IMPORT_PREVIEW_ONLY points=%d length=%.1f loop=%s reason=%s lanes=%d",
         #nodes,safeNumber(infoOrError.routeLength),tostring(loop==true),
         tostring(infoOrError.rejectReason),
@@ -688,12 +690,12 @@ local function spotIsClear(pos, exceptIndex)
 end
 -- Spawn teleport runs when the roster is stable; it NEVER blocks driving.
 local function trySpawnTeleport(sim,dt)
-  if state.spawnDone or state.playerRouteInvalid then return end
+  if state.spawnDone then return end
   if not state.loaded or state.recLine or #state.nodes<2 then return end
   local simNow=ac.getSim()
   local gameNow=simNow and safeNumber(simNow.gameTime) or 0
-  if gameNow<safeNumber(state.nativeSplineSpawnNextTryAt) then return end
-  state.nativeSplineSpawnNextTryAt=gameNow+0.25
+  if gameNow<safeNumber(state.spawnTeleportNextTryAt) then return end
+  state.spawnTeleportNextTryAt=gameNow+0.25
   state.spawnWait=state.spawnWait+dt
   local aiCars={}
   for i=1,sim.carsCount-1 do
@@ -738,7 +740,7 @@ local function trySpawnTeleport(sim,dt)
   -- CSP imports deliberately seed traffic 500 m ahead of the player in the
   -- recorded lane direction. A short open fragment must never be stretched
   -- into a fake circuit or used to place cars at its endpoint.
-  local leadDistance=state.loadedFromCSP and 500.0 or CFG.SPAWN_GAP
+  local leadDistance=state.loadedFromCSP and 20.0 or CFG.SPAWN_GAP
   local usable=math.max(0,available-leadDistance-40.0)
   local gap=count>1 and math.min(CFG.SPAWN_GAP,usable/(count-1)) or
     math.min(CFG.SPAWN_GAP,usable)
@@ -757,9 +759,9 @@ local function trySpawnTeleport(sim,dt)
     if state.spawnedCars[carIndex] then already=already+1 else
     local position,direction,routeSegment,routeParameter=
       sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
-    if position and direction and claimNativeSpline(carIndex) and nativeSplineSettled(carIndex) then
-      -- Keep the previously user-verified orientation. The SDK documents
-      -- an explicit direction vector but does not define its sign convention.
+    if position and direction then
+      -- RoutePilot controls the car itself. Teleport directly to the imported
+      -- directed Traffic Tool line; no native AI spline is assigned.
       local spawnDir=vec3(-direction.x,-direction.y,-direction.z)
       local simNow=ac.getSim()
       local spawnGameTime=simNow and safeNumber(simNow.gameTime) or 0
@@ -1225,28 +1227,18 @@ function script.update(dt)
     end
     state.playerAutopilotLast = playerRoutePilotActive == true
 
-    -- Do not let the stock track fast_lane drive these cars. The CSP SDK
-    -- exposes no per-car "disable AI behaviour" switch: setAINoInput() parks
-    -- the car. A valid RoutePilot spline must be accepted before controls run.
-    if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
+    -- RoutePilot Original control model: no physics.setAISpline(), no
+    -- setAINoInput() parking. Every active AI car is controlled by Driver.update()
+    -- through ac.overrideCarControls() directly on the RoutePilot route.
+    if state.enabled and state.loaded and #state.nodes>=2 and Driver and ensureDriver() then
       local driveOrder={}
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
         local shouldDrive=car and car.isActive and car.isAIControlled
-        if shouldDrive then shouldDrive=claimNativeSpline(i) end
-        if state.loadedFromCSP and not state.spawnDone then shouldDrive=false end
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
-          -- A verified RoutePilot spline is installed before the native AI is
-          -- released from its parked fail-safe state.
-          setNativeAIParked(i,false,"routepilot_control_ready")
           driveOrder[#driveOrder+1]=i
         else
-          if car and car.isActive and car.isAIControlled then
-            setNativeAIParked(i,true,
-              state.loadedFromCSP and not state.spawnDone and "csp_spawn_pending" or
-              "route_or_spline_not_verified")
-          end
           if state.p[i] then releaseCar(i) end
         end
       end
