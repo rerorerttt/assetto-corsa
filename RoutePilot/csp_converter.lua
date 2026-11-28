@@ -110,6 +110,7 @@ local function buildIntersectionLinks(graph)
       for _,id in ipairs(graph.laneOrder) do
         local lane=graph.lanes[id]
         local box=lane.aabb
+        if lane.trackValid==false then box=nil end
         if box and box.maxX>=minX and box.minX<=maxX and
             box.maxZ>=minZ and box.minZ<=maxZ then
         local cumulative=0
@@ -271,12 +272,64 @@ local function selectTransition(graph, currentLane, link, laneLinks, visited)
   return candidates[1]
 end
 
+local function validateTrackSurface(graph, trace)
+  if graph.surfaceValidated then return end
+  graph.surfaceValidated=true
+  if not physics or type(physics.raycastTrack)~='function' or not vec3 then
+    trace('CSP_SURFACE_CHECK available=false reason=RAYCAST_API_UNAVAILABLE')
+    return
+  end
+  local down=vec3(0,-1,0)
+  local checked,accepted,rejected=0,0,0
+  for _,id in ipairs(graph.laneOrder) do
+    local lane=graph.lanes[id]
+    local distanceSince=math.huge
+    local laneChecks,laneHits=0,0
+    for i=1,#lane.points do
+      local p=lane.points[i]
+      if distanceSince>=18.0 or i==1 or i==#lane.points then
+        distanceSince=0
+        laneChecks=laneChecks+1
+        local origin=vec3(p.x,p.y+2.0,p.z)
+        local ok,offset=pcall(physics.raycastTrack,origin,down,4.0)
+        if ok and finite(offset) and offset>=0 and offset<=4.0 and
+            math.abs((p.y+2.0-offset)-p.y)<=1.25 then
+          laneHits=laneHits+1
+        end
+      end
+      if i<#lane.points then
+        local a,b=lane.points[i],lane.points[i+1]
+        distanceSince=distanceSince+math.sqrt(dist2(a,b))
+      end
+    end
+    if laneChecks>=3 then
+      lane.trackValidRatio=laneHits/laneChecks
+      if lane.trackValidRatio<0.5 then
+        lane.trackValid=false
+        rejected=rejected+1
+      else
+        accepted=accepted+1
+      end
+      checked=checked+1
+    end
+  end
+  -- If the physics mesh cannot be queried reliably, do not discard the CSP
+  -- network. Otherwise exclude lanes whose authored samples mostly miss track.
+  if checked==0 then
+    for _,id in ipairs(graph.laneOrder) do graph.lanes[id].trackValid=nil end
+    trace('CSP_SURFACE_CHECK available=false reason=NO_VALID_RAYCASTS')
+  else
+    trace('CSP_SURFACE_CHECK available=true checked=%d accepted=%d rejected=%d',
+      checked,accepted,rejected)
+  end
+end
+
 local function collectRoute(graph, player)
   local hx,hz=norm(player.look.x,player.look.z)
   local start,startProjection,startScore
   for _,id in ipairs(graph.laneOrder) do
     local lane=graph.lanes[id]
-    local p=project(lane.points,player.position,hx,hz)
+    local p=lane.trackValid~=false and project(lane.points,player.position,hx,hz) or nil
     if p and p.distance<80 and (not startScore or p.score<startScore) then
       start,startProjection,startScore=lane,p,p.score
     end
@@ -290,7 +343,7 @@ local function collectRoute(graph, player)
   local seedLength=laneLength(start)
   for _,id in ipairs(graph.laneOrder) do
     local candidate=graph.lanes[id]
-    if candidate.id~=start.id then
+    if candidate.trackValid~=false and candidate.id~=start.id then
       local p=project(candidate.points,player.position,hx,hz)
       if p and p.distance<=math.max(6.0,nearestDistance+1.5) then
         local alignment=p.tx*startProjection.tx+p.tz*startProjection.tz
@@ -568,6 +621,7 @@ function Converter.load(log)
     cachedGraph=graph
   end
   local graph=cachedGraph
+  validateTrackSurface(graph,trace)
   local player = ac.getCar(0)
   if not player or not player.position or not player.look then
     return nil,nil,nil,nil,'player car unavailable'
