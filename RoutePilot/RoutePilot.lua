@@ -774,8 +774,12 @@ function script.update(dt)
     if not trafficCSPAttempted then
       trafficCSPAttempted = true
       if trafficCSP then
-        local okImport, importError = pcall(trafficCSP.load, trafficCSP)
-        if not okImport then writeLog("CSP_IMPORT_ERROR err=%s", tostring(importError)) end
+        local okImport, imported = pcall(trafficCSP.load, trafficCSP)
+        if not okImport then
+          writeLog("CSP_IMPORT_ERROR err=%s", tostring(imported))
+        elseif not imported then
+          writeLog("CSP_IMPORT_UNAVAILABLE reason=%s", tostring(trafficCSP.error))
+        end
       else
         writeLog("CSP_IMPORT_MODULE_UNAVAILABLE")
       end
