@@ -354,3 +354,6 @@ Release blockers:
 
 
 Tangent fallback follow-up: for an open lane whose final segment is degenerate, the fallback now searches backward from the end instead of wrapping to the first segment. Closed lanes retain circular search. This prevents a malformed endpoint from assigning a distant, unrelated heading. Commit: `7c610b36c08fbc487d627f29ec7fb81d3d08ace0`.
+
+
+CSP nearest-edge lookup optimization: `Graph.nearestEdges()` now uses the lane's cumulative-distance binary search to inspect only the point segments covered by each graph edge, rather than rescanning the entire parent lane for every split edge. A randomized interval-coverage check confirmed that every segment intersecting each edge's arc-length range remains included. Commit: `533f07e99a482799107d7c9287fc787aab562892`.
