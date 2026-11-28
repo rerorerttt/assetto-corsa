@@ -205,6 +205,7 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
     route.nodes[#route.nodes] = nil
     route.boundsL[#route.boundsL] = nil
     route.boundsR[#route.boundsR] = nil
+    route.speedLimits[#route.speedLimits] = nil
   end
   if #route.nodes < 2 then return nil, 'route_too_short' end
   route.geometry = Geometry.build(route.nodes, loopRoute, 8)
