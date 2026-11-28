@@ -44,7 +44,7 @@ local function saveNetworkCache(graph, log)
     if type(log)=="function" then pcall(log,"CSP_CACHE_KEEP path=%s",path) end
     return true
   end
-  if type(io.createDirectory) == "function" then pcall(io.createDirectory, folder) end
+  if type(io.createDir) == "function" then pcall(io.createDir, folder) end
   local payload = {version=CACHE_VERSION, lanes={}, stats=graph.stats}
   for _, id in ipairs(graph.laneOrder) do
     local lane = graph.lanes[id]
@@ -71,7 +71,7 @@ local function saveNetworkCache(graph, log)
     existsNow=ok and type(existing)=="string" and existing~=""
   end
   if existsNow then return true end
-  local okSave = pcall(io.save, path, raw)
+  local okSave = pcall(io.save, path, raw, true)
   if okSave and type(log)=="function" then
     pcall(log,"CSP_CACHE_SAVED path=%s lanes=%d bytes=%d",path,#payload.lanes,#raw)
   end
