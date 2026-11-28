@@ -1458,26 +1458,38 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
             elseif leader.managed then
               evasive,blocker=leader,follower
             end
-            if evasive and evasive.p.emergencyEscape then
-              moved=true
-            elseif evasive and evasive.managed then
+            local function tryHeadOnEscape(candidate,obstacle)
+              if not candidate or not candidate.managed then return false end
+              if candidate.p.emergencyEscape then return true end
               local candidates={}
-              local current=evasive.p.coordinatedLane or 1
-              for targetLane=1,evasive.lanes.count do
-                if math.abs(targetLane-current)==1 then
+              local current=candidate.p.coordinatedLane or 1
+              for targetLane=1,candidate.lanes.count do
+                if targetLane~=current then
                   candidates[#candidates+1]={
                     lane=targetLane,
-                    cost=math.abs(evasive.lanes.centers[targetLane]-
-                      safeNumber(evasive.p.latOff,evasive.lanes.centers[current]))
+                    cost=math.abs(candidate.lanes.centers[targetLane]-
+                      safeNumber(candidate.p.latOff,candidate.lanes.centers[current]))
                   }
                 end
               end
               table.sort(candidates,function(x,y) return x.cost<y.cost end)
-              for _,candidate in ipairs(candidates) do
-                if coordinatorEmergencyMove(evasive,candidate.lane,records,blocker and blocker.index) then
-                  moved=true
-                  break
+              for _,option in ipairs(candidates) do
+                if coordinatorEmergencyMove(candidate,option.lane,records,
+                    obstacle and obstacle.index) then
+                  return true
                 end
+              end
+              return false
+            end
+            moved=tryHeadOnEscape(evasive,blocker)
+            -- The deterministic first choice may have no usable escape lane
+            -- even when the opposing managed car does. Try the other car
+            -- before ordering both to stop; exactly one vehicle still moves.
+            if not moved and blocker and blocker.managed and
+                not blocker.p.emergencyEscape then
+              if tryHeadOnEscape(blocker,evasive) then
+                evasive,blocker=blocker,evasive
+                moved=true
               end
             end
             if moved then
