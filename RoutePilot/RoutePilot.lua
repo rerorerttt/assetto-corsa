@@ -967,6 +967,24 @@ function script.update(dt)
           releaseCar(i)
         end
       end
+      local routeSnapshot=nil
+      if useCSPRoute then
+        routeSnapshot={
+          nodes=state.nodes,boundsL=state.boundsL,boundsR=state.boundsR,
+          loopRoute=state.loopRoute,routeGeometry=state.routeGeometry,
+          routeLength=state.routeLength,routeMetricCount=state.routeMetricCount,
+          routeMetricLoop=state.routeMetricLoop
+        }
+        state.nodes=graphRoute.nodes
+        state.boundsL=graphRoute.boundsL
+        state.boundsR=graphRoute.boundsR
+        state.loopRoute=true
+        state.routeGeometry=graphRoute.geometry
+        state.routeLength=graphRoute.length
+        state.routeMetricCount=#graphRoute.nodes
+        state.routeMetricLoop=true
+        if playerAI then state.p[0]=nil end
+      end
       -- Resolve every car's lane and near-future traffic conflicts as one batch.
       -- The coordinator runs before controls are written, so requests cannot
       -- race against per-car update order.
@@ -1005,6 +1023,16 @@ function script.update(dt)
       end
     else
       for idx in pairs(state.p) do releaseCar(idx) end
+    end
+    if routeSnapshot then
+      state.nodes=routeSnapshot.nodes
+      state.boundsL=routeSnapshot.boundsL
+      state.boundsR=routeSnapshot.boundsR
+      state.loopRoute=routeSnapshot.loopRoute
+      state.routeGeometry=routeSnapshot.routeGeometry
+      state.routeLength=routeSnapshot.routeLength
+      state.routeMetricCount=routeSnapshot.routeMetricCount
+      state.routeMetricLoop=routeSnapshot.routeMetricLoop
     end
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
