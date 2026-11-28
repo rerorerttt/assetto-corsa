@@ -168,8 +168,13 @@ local function newPersonality(carIndex)
       p.routeLocked=true
       p.spawnSeeded=true
       p.segIdx=spawnHint.segment
-      H.log("ROUTE_SEED id=%d seg=%d t=%.3f progress=%.2f",
-        carIndex,spawnHint.segment,spawnHint.parameter,seededProgress)
+      if spawnHint.boost then
+        p.spawnBoostT=1.35
+        p.spawnBoostTarget=26.0
+      end
+      H.log("ROUTE_SEED id=%d seg=%d t=%.3f progress=%.2f boost=%s",
+        carIndex,spawnHint.segment,spawnHint.parameter,seededProgress,
+        tostring(spawnHint.boost==true))
     else
       H.log("ROUTE_SEED_FAILED id=%d seg=%d t=%.3f",
         carIndex,spawnHint.segment,spawnHint.parameter)
@@ -1754,7 +1759,20 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
   gas=gas*p.tractionScale*cornerScale
 
-  if speed<5 then gas=math.min(gas,0.6) end
+  -- Respawn launch pulse: a short acceleration assist to bring the car back
+  -- into the traffic stream. Traction and cornering cuts remain authoritative.
+  if safeNumber(p.spawnBoostT)>0 then
+    p.spawnBoostT=math.max(0,p.spawnBoostT-math.max(0,dt or 0))
+    if targetSpeed>speed+1.5 and
+        speed<safeNumber(p.spawnBoostTarget,26.0)-0.8 then
+      gas=math.max(gas,0.92*p.tractionScale*cornerScale)
+      brake=0
+    elseif speed>=safeNumber(p.spawnBoostTarget,26.0)-0.8 then
+      p.spawnBoostT=0
+    end
+  end
+
+  if speed<5 and safeNumber(p.spawnBoostT)<=0 then gas=math.min(gas,0.6) end
   if error>=0 then brake=0 end
   p.gas=clamp(gas,0,CFG.MAX_GAS)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)

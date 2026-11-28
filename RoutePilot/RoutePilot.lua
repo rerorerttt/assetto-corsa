@@ -20,6 +20,9 @@
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
+local okConverter, CSPConverter = pcall(require, "csp_converter")
+if not okConverter or type(CSPConverter) ~= "table" or
+    type(CSPConverter.load) ~= "function" then CSPConverter = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
@@ -48,6 +51,8 @@ local state = {
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
+  trafficNetwork=nil, loadedFromCSP=false, cspImportPending=false,
+  autoImportAccum=0, autoImportAttempts=0,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -171,7 +176,10 @@ local function saveLine()
     local ok,f=pcall(io.open,getLineFilePath(),"w")
     if ok and f then wroteFile=pcall(function() f:write(data) f:close() end) end
   end
-  if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
+  if ac.storage then
+    pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data)
+    pcall(ac.storage,"RP_CSP_LINE_DATA_"..getTrackTag(),state.loadedFromCSP==true)
+  end
   saveBounds()
   if wroteFile then
     state.status=string.format("Сохранено: %d точек",#state.nodes)
@@ -179,8 +187,62 @@ local function saveLine()
     flushLog()
   else state.status="Ошибка сохранения" end
 end
-local function loadLine()
+local function loadLine(retryOnly)
+  state.trafficNetwork=nil
+  state.loadedFromCSP=false
+  state.loaded=false
+  state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+  state.routeGeometry=nil
   local loaded=nil
+
+  -- CSP traffic.json is the primary route source. The converter builds the
+  -- racing line midway between same-direction parallel traffic lines and
+  -- exposes the complete source network for rendering. The legacy driver,
+  -- its traffic coordinator and all control algorithms remain unchanged.
+  if CSPConverter then
+    local ok, nodes, loop, boundsL, boundsR, infoOrError =
+      pcall(CSPConverter.load, writeLog)
+    if ok and type(nodes)=="table" and #nodes>=2 then
+      state.nodes=nodes
+      state.trafficNetwork=type(infoOrError)=="table" and infoOrError.network or nil
+      state.loopRoute=loop==true
+      state.boundsL=type(boundsL)=="table" and boundsL or {}
+      state.boundsR=type(boundsR)=="table" and boundsR or {}
+      state.p={}; state.spawnHints={}; state.routeGeometry=nil
+      state.loaded=true; state.loadedFromCSP=true
+      state.cspImportPending=false; state.autoImportAttempts=0
+      state.status=string.format("CSP: %d точек | %d линий",
+        #nodes,state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0)
+      state.spawnPerformed=false
+      state.spawnDone=false; state.spawnWait=0; state.spawnStable=0
+      state.spawnLastRoster=""
+      local ns=state.trafficNetwork and state.trafficNetwork.stats or {}
+      writeLog("CSP_IMPORT_SUCCESS points=%d length=%.1f loop=%s lanes=%d junctions=%d lane_changes=%d",
+        #nodes,safeNumber(infoOrError and infoOrError.routeLength),
+        tostring(state.loopRoute),safeNumber(ns.validLanes),
+        safeNumber(ns.junctionTransitions),safeNumber(ns.laneChanges))
+      if infoOrError and infoOrError.passingEnabled then
+        writeLog("CSP_OVERTAKE_CORRIDOR enabled=true paired_lane=%s",
+          tostring(infoOrError.pairedLane))
+      else
+        writeLog("CSP_OVERTAKE_CORRIDOR enabled=false reason=single_lane_or_no_parallel_lane")
+      end
+      flushLog()
+      return true
+    end
+    local reason=tostring(ok and infoOrError or nodes)
+    state.cspImportPending=
+      reason:find("PLAYER_CAR_UNAVAILABLE",1,true)~=nil or
+      reason:find("NO_CSP_LANE_NEAR_PLAYER",1,true)~=nil
+    writeLog("CSP_IMPORT_FAILED ok=%s reason=%s pending=%s",
+      tostring(ok),reason,tostring(state.cspImportPending))
+    if state.cspImportPending then
+      state.status="Ожидание ближайшей CSP-линии"
+      return false
+    end
+  end
+
+  if retryOnly then return false end
   if io and io.open then
     local ok,f=pcall(io.open,getLineFilePath(),"r")
     if ok and f then
@@ -195,11 +257,16 @@ local function loadLine()
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
-    state.nodes=loaded; state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
-    if not state.spawnPerformed then
-      state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
+    state.nodes=loaded; state.p={}; state.spawnHints={}
+    state.routeGeometry=nil; state.loaded=true
+    state.loadedFromCSP=false
+    if ac.storage then
+      local okCSP,flag=pcall(ac.storage,"RP_CSP_LINE_DATA_"..getTrackTag())
+      state.loadedFromCSP=okCSP and flag==true
     end
     state.status=string.format("Загружено: %d точек",#loaded)
+    state.spawnDone=false; state.spawnWait=0; state.spawnStable=0
+    state.spawnLastRoster=""
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
     loadBounds(); flushLog()
     return true
@@ -481,20 +548,28 @@ local function trySpawnTeleport(sim,dt)
   end
   local metrics=buildSpawnRouteMetrics()
   if not metrics then state.spawnDone=true; return end
-  local count=#aiCars
-  local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
-  if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
-  local startDistance=0
-  if metrics.loop then
-    local player=ac.getCar(0)
-    if player then
-      local routeDistance,routeError=findRouteDistanceAtPosition(
-        player.position,metrics,player.look)
-      startDistance=routeDistance+gap
-      writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f)",
-        routeDistance,routeError,player.look.x,player.look.z)
-    else startDistance=gap end
+  local player=ac.getCar(0)
+  if not player or not player.position then return end
+  local routeDistance,routeError=findRouteDistanceAtPosition(
+    player.position,metrics,player.look)
+  if routeError>25.0 then
+    writeLog("SPAWN_SKIPPED reason=player_off_route error=%.1f",routeError)
+    state.spawnDone=true
+    return
   end
+  local count=#aiCars
+  local available=metrics.loop and metrics.length or
+    math.max(0,metrics.length-routeDistance)
+  local gap=math.min(CFG.SPAWN_GAP,available/(count+1))
+  if gap<CFG.SPAWN_MIN_GAP then
+    writeLog("SPAWN_SKIPPED reason=insufficient_forward_route available=%.1f cars=%d",
+      available,count)
+    state.spawnDone=true
+    return
+  end
+  local startDistance=routeDistance+gap
+  writeLog("SPAWN_REFERENCE route=%.1f error=%.2f gap=%.1f loop=%s",
+    routeDistance,routeError,gap,tostring(metrics.loop))
   local moved,failed=0,0
   for order=1,count do
     local carIndex=aiCars[order]
@@ -508,7 +583,7 @@ local function trySpawnTeleport(sim,dt)
       if ok and result~=false then
         moved=moved+1
         state.p[carIndex]=nil
-        state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
+        state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter,boost=true}
         writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
           carIndex,position.x,position.y,position.z,direction.x,direction.z,
           routeSegment,routeParameter)
@@ -732,6 +807,10 @@ local function updateBoundsRecording(player)
   end
 end
 local function applyWidthPreset(preset)
+  if state.loadedFromCSP then
+    state.status="Ширина определяется CSP-линиями"
+    return
+  end
   state.widthPreset=preset
   local n=#state.nodes
   if n<2 then return end
@@ -770,6 +849,20 @@ function script.update(dt)
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
+    if state.cspImportPending and not state.loaded then
+      state.autoImportAccum=state.autoImportAccum+dt
+      if state.autoImportAccum>=1.0 then
+        state.autoImportAccum=0
+        state.autoImportAttempts=state.autoImportAttempts+1
+        if state.autoImportAttempts<=8 then
+          writeLog("CSP_IMPORT_RETRY attempt=%d",state.autoImportAttempts)
+          loadLine(true)
+        else
+          state.cspImportPending=false
+          writeLog("CSP_IMPORT_RETRY_STOP attempts=%d",state.autoImportAttempts)
+        end
+      end
+    end
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 then
@@ -887,6 +980,69 @@ render.on('main.track.transparent', function()
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
+    if state.trafficNetwork then
+      local laneIds=state.trafficNetwork.laneOrder or {}
+      local nearby={}
+      for _,laneId in ipairs(laneIds) do
+        local lane=state.trafficNetwork.lanes[laneId]
+        local box=lane and lane.aabb
+        if lane and #lane.points>=2 then
+          local near=true
+          if box then
+            local dx=math.max(box.minX-player.position.x,0,player.position.x-box.maxX)
+            local dz=math.max(box.minZ-player.position.z,0,player.position.z-box.maxZ)
+            near=dx*dx+dz*dz<=650.0*650.0
+          end
+          if near then nearby[#nearby+1]=lane end
+        end
+      end
+      local perLaneBudget=math.max(8,math.floor(1600/math.max(1,#nearby)))
+      for _,lane in ipairs(nearby) do
+        local pts=lane.points
+        local stride=math.max(1,math.ceil((#pts-1)/perLaneBudget))
+        local previous
+        for k=1,#pts,stride do
+          local current=pts[k]
+          if previous then
+            local mx=(previous.x+current.x)*0.5-player.position.x
+            local mz=(previous.z+current.z)*0.5-player.position.z
+            if mx*mx+mz*mz<=650.0*650.0 then
+              render.debugLine(vec3(previous.x,previous.y+0.05,previous.z),
+                vec3(current.x,current.y+0.05,current.z),YELLOW)
+            end
+          end
+          previous=current
+        end
+        local last=pts[#pts]
+        if previous~=last then
+          render.debugLine(vec3(previous.x,previous.y+0.05,previous.z),
+            vec3(last.x,last.y+0.05,last.z),YELLOW)
+        end
+      end
+      -- The actual RoutePilot racing line is the midpoint between paired
+      -- traffic lines; draw it distinctly from the source lane centrelines.
+      local routeStride=math.max(1,math.ceil((#state.nodes-1)/900))
+      local previous
+      for i=1,#state.nodes,routeStride do
+        local current=state.nodes[i]
+        if previous then
+          render.debugLine(vec3(previous.x,previous.y+0.12,previous.z),
+            vec3(current.x,current.y+0.12,current.z),rgbm(0.0,0.9,1.0,1.0))
+        end
+        previous=current
+      end
+      local last=state.nodes[#state.nodes]
+      if previous and previous~=last then
+        render.debugLine(vec3(previous.x,previous.y+0.12,previous.z),
+          vec3(last.x,last.y+0.12,last.z),rgbm(0.0,0.9,1.0,1.0))
+      end
+      if state.loopRoute then
+        local first=state.nodes[1]
+        render.debugLine(vec3(last.x,last.y+0.12,last.z),
+          vec3(first.x,first.y+0.12,first.z),rgbm(0.0,0.9,1.0,1.0))
+      end
+      return
+    end
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
     if isRec then
@@ -941,26 +1097,80 @@ end)
 
 -- MAP: window-local coords (comfy_map pattern). Bigger scale, thick lines,
 -- bounds with a minimum offset so they never merge with the AI line.
+local mapBoundsCache=nil
+local mapBoundsCacheNodes=nil
+local mapBoundsCacheLeft=nil
+local mapBoundsCacheRight=nil
+local mapBoundsCacheCount=-1
+local mapBoundsCacheLoop=nil
+local mapBoundsCacheLastX=nil
+local mapBoundsCacheLastZ=nil
+local mapBoundsCacheNetwork=nil
 local function computeMapBounds()
+  local n=#state.nodes
+  local last=n>0 and state.nodes[n] or nil
+  local lastX=last and last.x or nil
+  local lastZ=last and last.z or nil
+  -- The route is static between imports/recorded samples. Re-scanning every
+  -- point on every UI frame was needless O(N) work and caused FPS loss on
+  -- CSP networks containing thousands of samples.
+  if mapBoundsCache and mapBoundsCacheNodes==state.nodes and
+      mapBoundsCacheLeft==state.boundsL and mapBoundsCacheRight==state.boundsR and
+      mapBoundsCacheCount==n and mapBoundsCacheLoop==state.loopRoute and
+      mapBoundsCacheLastX==lastX and mapBoundsCacheLastZ==lastZ and
+       mapBoundsCacheNetwork==state.trafficNetwork then
+    return mapBoundsCache
+  end
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
-  for i=1,#state.nodes do
+  for i=1,n do
     local nd=state.nodes[i]
-    local l,r=boundsAt(i)
-    local b=segEnd(i)
-    local lx,lz=normalize2(b.x-nd.x,b.z-nd.z)
-    local pts={
-      {x=nd.x-lz*l,z=nd.z+lx*l},
-      {x=nd.x-lz*r,z=nd.z+lx*r},
-    }
-    for _,q in ipairs(pts) do
-      if q.x<minX then minX=q.x end
-      if q.x>maxX then maxX=q.x end
-      if q.z<minZ then minZ=q.z end
-      if q.z>maxZ then maxZ=q.z end
+    if nd then
+      local l,r=boundsAt(i)
+      local b=segEnd(i)
+      -- Open routes have no outgoing segment at the final vertex. Use the
+      -- incoming tangent; if even that is unavailable, skip this vertex.
+      if not b and i>1 then b=state.nodes[i-1] end
+      if b then
+        local dx,dz=b.x-nd.x,b.z-nd.z
+        if i==n and not state.loopRoute then dx,dz=-dx,-dz end
+        local lx,lz=normalize2(dx,dz)
+        local pts={
+          {x=nd.x-lz*l,z=nd.z+lx*l},
+          {x=nd.x-lz*r,z=nd.z+lx*r},
+        }
+        for _,q in ipairs(pts) do
+          if q.x<minX then minX=q.x end
+          if q.x>maxX then maxX=q.x end
+          if q.z<minZ then minZ=q.z end
+          if q.z>maxZ then maxZ=q.z end
+        end
+      end
     end
   end
-  if minX==math.huge then return nil end
-  return {minX=minX,maxX=maxX,minZ=minZ,maxZ=maxZ}
+  -- Include every authored CSP lane in the map extent; no synthetic boundaries.
+  if state.trafficNetwork then
+    for _,laneId in ipairs(state.trafficNetwork.laneOrder or {}) do
+      local lane=state.trafficNetwork.lanes[laneId]
+      for _,pt in ipairs(lane and lane.points or {}) do
+        minX=math.min(minX,pt.x-2.0); maxX=math.max(maxX,pt.x+2.0)
+        minZ=math.min(minZ,pt.z-2.0); maxZ=math.max(maxZ,pt.z+2.0)
+      end
+    end
+  end
+  if minX==math.huge then
+    mapBoundsCache=nil
+  else
+    mapBoundsCache={minX=minX,maxX=maxX,minZ=minZ,maxZ=maxZ}
+  end
+  mapBoundsCacheNodes=state.nodes
+  mapBoundsCacheLeft=state.boundsL
+  mapBoundsCacheRight=state.boundsR
+  mapBoundsCacheCount=n
+  mapBoundsCacheLoop=state.loopRoute
+  mapBoundsCacheLastX=lastX
+  mapBoundsCacheLastZ=lastZ
+  mapBoundsCacheNetwork=state.trafficNetwork
+  return mapBoundsCache
 end
 local function drawMapInRect(q0,q1)
   local b=computeMapBounds()
@@ -980,6 +1190,56 @@ local function drawMapInRect(q0,q1)
   end
   local n=#state.nodes
   local minOff=CFG.MAP_MIN_OFFSET
+  if state.trafficNetwork then
+    local laneIds=state.trafficNetwork.laneOrder or {}
+    local perLaneBudget=math.max(2,math.floor(1800/math.max(1,#laneIds)))
+    for _,laneId in ipairs(laneIds) do
+      local lane=state.trafficNetwork.lanes[laneId]
+      local points=lane and lane.points or {}
+      local count=#points
+      local step=math.max(1,math.ceil(count/perLaneBudget))
+      local prev
+      for k=1,count,step do
+        local node=points[k]
+        local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+        if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+          ui.drawLine(prev,point,rgbm(1.0,0.78,0.12,0.90),2)
+        end
+        prev=point
+      end
+      if count>1 then
+        local node=points[count]
+        local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+        if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+          ui.drawLine(prev,point,rgbm(1.0,0.78,0.12,0.90),2)
+        end
+      end
+    end
+    local routeStride=math.max(1,math.ceil((n-1)/1400))
+    local prev
+    for i=1,n,routeStride do
+      local node=state.nodes[i]
+      local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+      if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+        ui.drawLine(prev,point,rgbm(0.0,0.9,1.0,1.0),3)
+      end
+      prev=point
+    end
+    if n>1 then
+      local node=state.nodes[n]
+      local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+      if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+        ui.drawLine(prev,point,rgbm(0.0,0.9,1.0,1.0),3)
+      end
+      if state.loopRoute then
+        local first=state.nodes[1]
+        local firstPoint=vec2(mx+(first.x-cx)*scale,my+(first.z-cz)*scale)
+        if segVisible(point.x,point.y,firstPoint.x,firstPoint.y) then
+          ui.drawLine(point,firstPoint,rgbm(0.0,0.9,1.0,1.0),3)
+        end
+      end
+    end
+  else
   -- bounds: dark red, thick, min offset from the line
   for pass=1,2 do
     local prev
@@ -1001,7 +1261,7 @@ local function drawMapInRect(q0,q1)
       prev=vec2(sx,sy)
     end
   end
-  -- AI line: yellow, thick
+  -- AI line: yellow, thick (manual-route fallback only).
   do
     local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
     for i=2,n do
@@ -1018,6 +1278,7 @@ local function drawMapInRect(q0,q1)
         ui.drawLine(prev,first,rgbm(1.0,0.85,0.0,0.95),3)
       end
     end
+  end
   end
   -- cars: player = cyan, AI = white/green when overtaking
   local sim=ac.getSim()
@@ -1046,7 +1307,14 @@ function windowMain(dt)
   local okDraw,errDraw=pcall(function()
     ui.tabBar("RoutePilotTabs", function()
       ui.tabItem("Маршрут", function()
-    ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
+    if state.trafficNetwork then
+      local ns=state.trafficNetwork.stats or {}
+      ui.text(string.format("CSP: %d линий | %d переходов | %d перестроений | %s",
+        safeNumber(ns.validLanes),safeNumber(ns.junctionTransitions),
+        safeNumber(ns.laneChanges),state.status))
+    else
+      ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
+    end
     for idx=1,4 do
       local label=string.format("%d %s",idx,idx==1 and "машина" or "машины")
       if idx>1 then ui.sameLine(0,4) end
@@ -1057,7 +1325,7 @@ function windowMain(dt)
     if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
-        state.nodes={}; state.p={}; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
+        state.nodes={}; state.p={}; state.trafficNetwork=nil; state.loadedFromCSP=false; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
         state.loaded=false; state.recBounds=false
         state.status="Запись линии и границ..."
       else
@@ -1090,7 +1358,7 @@ function windowMain(dt)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
-      state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+      state.nodes={}; state.p={}; state.trafficNetwork=nil; state.loadedFromCSP=false; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
     end
     ui.separator()
@@ -1142,6 +1410,8 @@ if ac.onRelease then
   end)
 end
 loadLine()
-loadBounds()
-writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+if not state.loadedFromCSP then loadBounds() end
+writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d csp=%s lanes=%d",
+  getTrackTag(),#state.nodes,tostring(state.loadedFromCSP),
+  state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0)
 flushLog()
