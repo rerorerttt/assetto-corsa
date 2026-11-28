@@ -37,7 +37,7 @@ local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
   local left, right = laneBounds(roads, edge.lane)
   for i = 0, steps do
     local d = fromDistance + length*i/steps
-    local p = Graph.sampleEdge(edge, d)
+    local p = Graph.sampleLane(edge.lane, d)
     appendPoint(route, p, left, right)
   end
 end
