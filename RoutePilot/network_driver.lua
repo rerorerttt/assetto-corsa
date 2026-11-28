@@ -147,19 +147,22 @@ function M.update(i,c,dt)
  if not l or p.networkS==nil then controls(i,0,0,1);p.trafficAction="NETWORK_NO_LANE";return end
  local q=projectNear(l,c.position,p.networkS,max(35,speed*1.8+15))
  if not q or q.distance>18 then controls(i,0,0,1);p.projectionLost=true;p.trafficAction="NETWORK_PROJECTION_LOST";return end
- p.networkS=q.s;p.networkDistance=q.distance
+ p.networkS=q.s;p.networkDistance=q.distance;p.networkHeightError=q.heightError
  local sim=ac.getSim()
  p.networkTransitionCooldown=max(0,n(p.networkTransitionCooldown)-max(0,dt))
- local nextJ=p.networkTransitionCooldown<=0 and junction(g,l,{s=p.networkS},c,i,sim) or nil
+ p.networkReverseLockTimer=max(0,n(p.networkReverseLockTimer)-max(0,dt))
+ local blockedTarget=p.networkReverseLockTimer>0 and p.networkReverseLockFrom or nil
+ local nextJ=p.networkTransitionCooldown<=0 and junction(g,l,{s=p.networkS},c,i,sim,blockedTarget) or nil
  if nextJ then
   local old,oldS=l.id,p.networkS
   l=g.lanes[nextJ.id];p.networkLaneId=l.id;p.networkS=nextJ.s
   local targetProjection=projectNear(l,c.position,p.networkS,35)
-  if not targetProjection or targetProjection.distance>28 then
+  if not targetProjection or targetProjection.distance>7.5 then
    p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
    controls(i,0,0,0.65);p.projectionLost=true;p.trafficAction="NETWORK_JUNCTION_REACQUIRE";return
   end
   q=targetProjection;p.networkS=q.s;p.networkTransitionCooldown=1.0
+  p.networkReverseLockFrom=old;p.networkReverseLockTimer=3.0
   H.log("NETWORK_JUNCTION id=%d from=%d to=%d distance=%.2f",i,old,l.id,q.distance)
  end
  local lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
@@ -183,11 +186,12 @@ function M.update(i,c,dt)
    local old,oldS=l.id,p.networkS
    l=g.lanes[nextLane.id];p.networkLaneId=l.id;p.networkS=nextLane.s
    local targetProjection=projectNear(l,c.position,p.networkS,35)
-   if not targetProjection or targetProjection.distance>28 then
+   if not targetProjection or targetProjection.distance>7.5 then
     p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
     controls(i,0,0,0.65);p.projectionLost=true;return
    end
    q=targetProjection;p.networkS=q.s;p.networkTransitionCooldown=1.0
+   p.networkReverseLockFrom=old;p.networkReverseLockTimer=3.0
   else controls(i,0,0,1);p.trafficAction="NETWORK_END_OF_LANE";return end
  end
  local look=clamp(9+speed*.55,9,55);local aimS=l.loop and((p.networkS+look)%l.length)or min(l.length,p.networkS+look)
