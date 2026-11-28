@@ -72,6 +72,8 @@ end
 local trafficCSP = TrafficCSP and TrafficCSP.new(writeLog) or nil
 local trafficCSPAttempted = false
 local trafficCSPRouteAttempted = false
+local trafficCSPRouteRetry = 0
+local trafficCSPRouteFailures = 0
 local function clamp(v,lo,hi) return math.max(lo,math.min(hi,v)) end
 local function lerp(a,b,t) return a+(b-a)*t end
 local function flatDist(a,b)
@@ -887,26 +889,31 @@ function script.update(dt)
     local player=ac.getCar(0)
     if not trafficCSPRouteAttempted and trafficCSP and trafficCSP.loaded and
         trafficCSP.graph and trafficCSP.roads and CSPGraph and CSPRoutes and player then
-      trafficCSPRouteAttempted = true
-      local edge, along, distance = CSPGraph.nearestEdge(
-        trafficCSP.graph, player.position, player.look, 120)
-      if edge then
-        local route, routeError = CSPRoutes.build(
-          trafficCSP.graph, trafficCSP.roads, edge, along, { minLength = 250, loop = true })
-        if route then
-          trafficCSP.previewRoute = route
-          writeLog("CSP_ROUTE_PREVIEW_OK edge=%d distance=%.2f length=%.1f points=%d path_edges=%d",
-            edge.id, distance or -1, route.length or 0, #route.nodes, #route.edges)
+      trafficCSPRouteRetry=trafficCSPRouteRetry+dt
+      if trafficCSPRouteRetry>=1.0 then
+        trafficCSPRouteRetry=0
+        local edge, along, distance = CSPGraph.nearestEdge(
+          trafficCSP.graph, player.position, player.look, 120)
+        if edge then
+          local route, routeError = CSPRoutes.build(
+            trafficCSP.graph, trafficCSP.roads, edge, along, { minLength = 250, loop = true })
+          if route then
+            trafficCSPRouteAttempted = true
+            trafficCSP.previewRoute = route
+            writeLog("CSP_ROUTE_PREVIEW_OK edge=%d distance=%.2f length=%.1f points=%d path_edges=%d",
+              edge.id, distance or -1, route.length or 0, #route.nodes, #route.edges)
+          else
+            trafficCSP.previewRouteError = tostring(routeError)
+            trafficCSPRouteFailures=trafficCSPRouteFailures+1
+            writeLog("CSP_ROUTE_PREVIEW_FAILED edge=%d distance=%.2f reason=%s attempt=%d",
+              edge.id, distance or -1, tostring(routeError), trafficCSPRouteFailures)
+            if trafficCSPRouteFailures>=5 then trafficCSPRouteAttempted=true end
+          end
         else
-          trafficCSP.previewRouteError = tostring(routeError)
-          writeLog("CSP_ROUTE_PREVIEW_FAILED edge=%d distance=%.2f reason=%s",
-            edge.id, distance or -1, tostring(routeError))
+          trafficCSP.previewRouteError = 'no_lane_near_player'
         end
-      else
-        trafficCSP.previewRouteError = 'no_lane_near_player'
-        writeLog("CSP_ROUTE_PREVIEW_FAILED reason=no_lane_near_player")
+        flushLog()
       end
-      flushLog()
     end
     local graphRoute=trafficCSP and trafficCSP.previewRoute or nil
     if state.enabled and not state.recLine and not state.recBounds and graphRoute and graphRoute.loop then
