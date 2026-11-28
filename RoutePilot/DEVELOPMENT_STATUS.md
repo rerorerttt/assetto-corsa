@@ -297,7 +297,7 @@ Implemented in this branch:
 - Place boundaries using physical-surface normals and horizontal physics-ray checks for nearby walls. Merge boundary junction vertices only at shared, same-level intersections.
 - Build closed route loops from the graph, project intersection curves onto verified road surfaces, and preserve explicit lane speed limits in a 40–200 km/h profile.
 - Spawn real Assetto Corsa AI cars across up to four nearby parallel route groups, including opposing directions. The existing RoutePilot driver controls those real cars; CSP virtual-car physics are not used.
-- Recycle cars only when they are far behind the player and outside render range, placing them into a physically clear position ahead. Existing stuck/traffic-wait recovery remains active.
+- Add newly activated AI cars to the live route groups in bounded batches, and recycle cars only when they are far behind the player and outside render range, placing them into a physically clear position ahead. Existing stuck/traffic-wait recovery remains active.
 - Keep the recorded-route controller as a fallback and clear per-car route progress when switching between recorded-route and graph-route modes.
 
 Static validation performed:
