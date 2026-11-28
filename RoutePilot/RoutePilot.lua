@@ -217,8 +217,9 @@ local function loadLine(retryOnly)
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0
       state.spawnLastRoster=""
       local ns=state.trafficNetwork and state.trafficNetwork.stats or {}
-      writeLog("CSP_IMPORT_SUCCESS points=%d loop=%s lanes=%d junctions=%d lane_changes=%d",
-        #nodes,tostring(state.loopRoute),safeNumber(ns.validLanes),
+      writeLog("CSP_IMPORT_SUCCESS points=%d length=%.1f loop=%s lanes=%d junctions=%d lane_changes=%d",
+        #nodes,safeNumber(infoOrError and infoOrError.routeLength),
+        tostring(state.loopRoute),safeNumber(ns.validLanes),
         safeNumber(ns.junctionTransitions),safeNumber(ns.laneChanges))
       if infoOrError and infoOrError.passingEnabled then
         writeLog("CSP_OVERTAKE_CORRIDOR enabled=true paired_lane=%s",
