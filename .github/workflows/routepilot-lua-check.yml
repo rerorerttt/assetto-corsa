@@ -43,6 +43,8 @@ jobs:
         run: lua5.1 RoutePilot/tests/traffic_csp_loop_search.lua
       - name: Run importer surface-projection regressions
         run: lua5.1 RoutePilot/tests/traffic_csp_surface_projection.lua
+      - name: Run physical road-edge boundary regressions
+        run: lua5.1 RoutePilot/tests/traffic_csp_surface_bounds.lua
       - name: Run CSP Bezier trajectory regressions
         run: lua5.1 RoutePilot/tests/traffic_csp_bezier_attributes.lua
       - name: Run open-route racing-line terminal regression
