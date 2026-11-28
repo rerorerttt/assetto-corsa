@@ -11,8 +11,16 @@ Copy the `RoutePilot` folder into:
 The folder must contain:
 - `manifest.ini`
 - `RoutePilot.lua`
+- `driver.lua`
+- `traffic_network.lua`
+- `csp_converter.lua`
+- the other Lua modules shipped in this folder
 
 Enable RoutePilot in Content Manager's Lua Apps list and open it in a session.
+
+## Automatic CSP Traffic Tool conversion
+
+If no saved RoutePilot line exists for the current track/layout, RoutePilot automatically reads the track's original CSP `traffic.json` and converts its directed lane network into one RoutePilot route. The converter detects lane passages through CSP intersection polygons, follows the intersection trajectory links, joins the selected directed path with smooth junction connectors, and derives one outer driving corridor from nearby parallel lanes. Internal boundaries between adjacent lanes are discarded. A single-lane corridor is 6 m wide; a multi-lane corridor is 3 m per detected lane. RoutePilot's existing lane-offset and overtaking controller then generates and reserves passing lines inside that corridor. The source `traffic.json` is read-only and is never rewritten. A manually saved RoutePilot line takes precedence over automatic conversion.
 
 ## First use
 
