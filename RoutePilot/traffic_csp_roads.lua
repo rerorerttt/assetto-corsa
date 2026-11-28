@@ -26,27 +26,64 @@ local function tangentAt(points, i, loop)
 end
 
 local function nearestOnLane(p, lane)
-  local pts, bestD, bestP, bestDir = lane.points, math.huge, nil, nil
+  local pts = lane.points
   local n = #pts
   local count = lane.loop and n or n - 1
+  if count < 1 then return nil end
+
+  -- Coarse spans keep long CSP lanes inexpensive to compare. Their chords
+  -- can cut across bends, however, so retain several candidates and refine
+  -- against the original adjacent-point segments before returning a distance.
   local step = math.max(1, math.floor(n / 400))
-  for i = 1, count, step do
-    local nextIndex = i + step
-    if lane.loop then nextIndex = (nextIndex - 1) % n + 1
-    else nextIndex = math.min(n, nextIndex) end
-    local a, b = pts[i], pts[nextIndex]
+  local candidates = {}
+  local function project(a, b)
     local vx, vy, vz = b.x-a.x, b.y-a.y, b.z-a.z
     local den = vx*vx+vy*vy+vz*vz
-    if den > 1e-8 then
-      local t = ((p.x-a.x)*vx+(p.y-a.y)*vy+(p.z-a.z)*vz)/den
-      t = math.max(0, math.min(1, t))
-      local q = vec3(a.x+vx*t, a.y+vy*t, a.z+vz*t)
-      local d = dist2(p, q)
-      if d < bestD then
-        bestD, bestP = d, q
-        bestDir = { norm(vx, vy, vz) }
+    if den <= 1e-8 then return nil end
+    local t = ((p.x-a.x)*vx+(p.y-a.y)*vy+(p.z-a.z)*vz)/den
+    t = math.max(0, math.min(1, t))
+    local q = vec3(a.x+vx*t, a.y+vy*t, a.z+vz*t)
+    return dist2(p, q), q, { norm(vx, vy, vz) }
+  end
+
+  for i = 1, count, step do
+    local nextIndex
+    if lane.loop then nextIndex = (i + step - 1) % n + 1
+    else nextIndex = math.min(n, i + step) end
+    local d, q, dir = project(pts[i], pts[nextIndex])
+    if d then
+      local item = { index = i, distance = d, point = q, direction = dir }
+      local insertAt = #candidates + 1
+      for j = 1, #candidates do
+        if d < candidates[j].distance then insertAt = j break end
       end
+      table.insert(candidates, insertAt, item)
+      if #candidates > 4 then candidates[5] = nil end
     end
+  end
+
+  if step == 1 then
+    local best = candidates[1]
+    return best and math.sqrt(best.distance) or nil,
+      best and best.point or nil, best and best.direction or nil
+  end
+
+  local bestD, bestP, bestDir = math.huge, nil, nil
+  local tested = {}
+  local function testSegment(index)
+    if lane.loop then index = (index - 1) % count + 1
+    elseif index < 1 or index > count then return end
+    if tested[index] then return end
+    tested[index] = true
+    local nextIndex = index % n + 1
+    local d, q, dir = project(pts[index], pts[nextIndex])
+    if d and d < bestD then bestD, bestP, bestDir = d, q, dir end
+  end
+
+  for i = 1, #candidates do
+    local first = candidates[i].index - 1
+    local last = candidates[i].index + step
+    for segment = first, last do testSegment(segment) end
   end
   return bestD < math.huge and math.sqrt(bestD) or nil, bestP, bestDir
 end
