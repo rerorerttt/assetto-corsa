@@ -357,3 +357,6 @@ Tangent fallback follow-up: for an open lane whose final segment is degenerate, 
 
 
 CSP nearest-edge lookup optimization: `Graph.nearestEdges()` now uses the lane's cumulative-distance binary search to inspect only the point segments covered by each graph edge, rather than rescanning the entire parent lane for every split edge. A randomized interval-coverage check confirmed that every segment intersecting each edge's arc-length range remains included. Commit: `533f07e99a482799107d7c9287fc787aab562892`.
+
+
+Additional local check: the environment's `texlua` executable was found and used to run an isolated Lua test of the new lane sampling helpers. Open-lane and loop-lane endpoint sampling, duplicate-segment tangent fallback, and loop wrap direction passed. This test exercised a standalone copy of the helper logic; it did not compile the complete RoutePilot modules or execute CSP APIs.
