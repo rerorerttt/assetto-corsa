@@ -261,6 +261,17 @@ local function planTargetSpeed(p,speed)
   local target=p.cruiseSpeed
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local currentSpeed=math.max(0,safeNumber(speed))
+  -- An open CSP route is not a loop. Geometry.sample() clamps previews at
+  -- its final point, which otherwise makes the last segment look like a
+  -- straight continuation and lets AI drive beyond the authored network.
+  -- Apply a physical stopping-speed envelope before evaluating corner limits.
+  if not route.loop then
+    local remaining=math.max(0,route.total-p.routeProgress)
+    local endpointRoom=math.max(0,remaining-3.0)
+    local endpointSpeed=math.sqrt(2.0*brakeAccel*endpointRoom)
+    target=math.min(target,endpointSpeed)
+    if remaining<=3.0 then target=0 end
+  end
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
   if p.racingPlanBlockedDistance then
