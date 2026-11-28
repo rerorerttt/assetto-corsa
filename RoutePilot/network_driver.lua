@@ -181,9 +181,11 @@ function M.update(i,c,dt)
  for aheadDistance=8,100,8 do
   local cs=p.networkS+aheadDistance
   if l.loop then cs=cs%l.length else cs=min(l.length,cs) end
-  local s0=max(0,cs-3);local s1=min(l.length,cs+3)
+  local s0,s1
+  if l.loop then s0=(cs-3)%l.length;s1=(cs+3)%l.length
+  else s0=max(0,cs-3);s1=min(l.length,cs+3) end
   local ax,az=tangent(l,s0);local bx,bz=tangent(l,s1)
-  local curvature=abs(atan2(ax*bz-az*bx,clamp(dot(ax,az,bx,bz),-1,1)))/max(1,s1-s0)
+  local curvature=abs(atan2(ax*bz-az*bx,clamp(dot(ax,az,bx,bz),-1,1)))/6.0
   if curvature>0.0001 then
    local curveSpeed=sqrt(8.0/curvature)
    local safeSpeed=sqrt(curveSpeed*curveSpeed+14.0*max(0,aheadDistance-5))
