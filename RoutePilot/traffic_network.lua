@@ -169,7 +169,7 @@ function Network.loadTrackTraffic()
   -- RoutePilot is a separate CSP app package: the CSP Traffic Tool's
   -- private "lib/json" module is not on its package path. Use the decoder
   -- bundled beside this app instead.
-  local okJson, json = pcall(require, "json")
+  local okJson, json = pcall(require, "routepilot_json")
   if not okJson or type(json) ~= "table" or type(json.decode) ~= "function" then
     return nil, "JSON_LIBRARY_UNAVAILABLE: " .. tostring(json)
   end
