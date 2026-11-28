@@ -280,7 +280,8 @@ local function validateTrackSurface(graph, trace)
     return
   end
   local down=vec3(0,-1,0)
-  local checked,accepted,rejected=0,0,0
+  local raycastCalls,totalHits,checked=0,0,0
+  local results={}
   for _,id in ipairs(graph.laneOrder) do
     local lane=graph.lanes[id]
     local distanceSince=math.huge
@@ -292,9 +293,13 @@ local function validateTrackSurface(graph, trace)
         laneChecks=laneChecks+1
         local origin=vec3(p.x,p.y+2.0,p.z)
         local ok,offset=pcall(physics.raycastTrack,origin,down,4.0)
-        if ok and finite(offset) and offset>=0 and offset<=4.0 and
-            math.abs((p.y+2.0-offset)-p.y)<=1.25 then
-          laneHits=laneHits+1
+        if ok and finite(offset) then
+          raycastCalls=raycastCalls+1
+          if offset>=0 and offset<=4.0 and
+              math.abs((p.y+2.0-offset)-p.y)<=1.25 then
+            laneHits=laneHits+1
+            totalHits=totalHits+1
+          end
         end
       end
       if i<#lane.points then
@@ -303,25 +308,30 @@ local function validateTrackSurface(graph, trace)
       end
     end
     if laneChecks>=3 then
-      lane.trackValidRatio=laneHits/laneChecks
-      if lane.trackValidRatio<0.5 then
-        lane.trackValid=false
-        rejected=rejected+1
-      else
-        accepted=accepted+1
-      end
+      results[#results+1]={lane=lane,checks=laneChecks,hits=laneHits}
       checked=checked+1
     end
   end
-  -- If the physics mesh cannot be queried reliably, do not discard the CSP
-  -- network. Otherwise exclude lanes whose authored samples mostly miss track.
-  if checked==0 then
-    for _,id in ipairs(graph.laneOrder) do graph.lanes[id].trackValid=nil end
-    trace('CSP_SURFACE_CHECK available=false reason=NO_VALID_RAYCASTS')
-  else
-    trace('CSP_SURFACE_CHECK available=true checked=%d accepted=%d rejected=%d',
-      checked,accepted,rejected)
+  -- Some track layouts do not expose a usable physics mesh to apps. Do not
+  -- reject the whole network when raycasts consistently miss everywhere.
+  if raycastCalls==0 or totalHits/raycastCalls<0.05 then
+    trace('CSP_SURFACE_CHECK available=false reason=NO_RELIABLE_SURFACE_HITS calls=%d hits=%d',
+      raycastCalls,totalHits)
+    return
   end
+  local accepted,rejected=0,0
+  for i=1,#results do
+    local item=results[i]
+    item.lane.trackValidRatio=item.hits/item.checks
+    if item.lane.trackValidRatio<0.5 then
+      item.lane.trackValid=false
+      rejected=rejected+1
+    else
+      accepted=accepted+1
+    end
+  end
+  trace('CSP_SURFACE_CHECK available=true checked=%d accepted=%d rejected=%d',
+    checked,accepted,rejected)
 end
 
 local function collectRoute(graph, player)
@@ -470,6 +480,7 @@ local function buildCorridor(graph, raw)
   end
   for _,id in ipairs(graph.laneOrder) do
     local lane=graph.lanes[id]
+    if lane.trackValid~=false then
     for si=1,#lane.points-1 do
       local a,b=lane.points[si],lane.points[si+1]
       local dx,dz=b.x-a.x,b.z-a.z
@@ -486,6 +497,7 @@ local function buildCorridor(graph, raw)
           for cz=minCZ,maxCZ do addSegmentCell(cx,cz,segment) end
         end
       end
+    end
     end
   end
   for i = 1, #raw - 1 do
