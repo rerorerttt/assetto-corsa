@@ -255,16 +255,22 @@ local function makeBoundary(lane, side, offset)
       wall = wallDistance(pts[i], dir, baseOffset + 1.0)
     end
     local distance = baseOffset
-    if wall and wall < offset then
-      distance = math.max(0.20, wall - 0.40)
+    if wall and wall < baseOffset + 0.5 then
+      local safeWallDistance = wall - 0.45
+      if safeWallDistance < 0.35 then
+        return nil, adjusted, conflicts + 1
+      end
+      distance = math.min(baseOffset, safeWallDistance)
       adjusted = adjusted + 1
-      if wall <= 0.60 then conflicts = conflicts + 1 end
+      if wall <= 0.80 then conflicts = conflicts + 1 end
     end
     directions[i], distances[i] = dir, distance
   end
-  -- Fill skipped ray samples conservatively from their neighbors.
+  -- Fill skipped ray samples conservatively from their neighbors, never
+  -- expanding beyond the measured surface edge at that sample.
   for i = 2, #pts-1, 2 do
-    distances[i] = math.min(offset, (distances[i-1] + distances[i+1]) * 0.5)
+    local baseOffset = type(offset) == 'table' and offset[i] or offset
+    distances[i] = math.min(baseOffset, (distances[i-1] + distances[i+1]) * 0.5)
   end
   -- Smooth only inward: a neighboring wall constraint can pull the corridor
   -- inward, but smoothing can never push a boundary through a detected wall.
