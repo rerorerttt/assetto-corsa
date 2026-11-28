@@ -172,6 +172,105 @@ local function makeBoundary(lane, side, offset)
   return out, adjusted, conflicts
 end
 
+local function segmentIntersection(a, b, c, d)
+  local rx, rz = b.x-a.x, b.z-a.z
+  local sx, sz = d.x-c.x, d.z-c.z
+  local den = rx*sz-rz*sx
+  if math.abs(den) < 1e-7 then return nil end
+  local qx, qz = c.x-a.x, c.z-a.z
+  local t = (qx*sz-qz*sx)/den
+  local u = (qx*rz-qz*rx)/den
+  if t < -1e-5 or t > 1+1e-5 or u < -1e-5 or u > 1+1e-5 then return nil end
+  t, u = math.max(0, math.min(1, t)), math.max(0, math.min(1, u))
+  local yA, yB = a.y+(b.y-a.y)*t, c.y+(d.y-c.y)*u
+  if math.abs(yA-yB) > 1.25 then return nil end
+  return t, u, vec3(
+    (a.x+rx*t+c.x+sx*u)*0.5,
+    (yA+yB)*0.5,
+    (a.z+rz*t+c.z+sz*u)*0.5)
+end
+
+local function lineBounds(points)
+  local b = { minX=math.huge, maxX=-math.huge, minZ=math.huge, maxZ=-math.huge }
+  for i = 1, #points do
+    local p = points[i]
+    b.minX, b.maxX = math.min(b.minX,p.x), math.max(b.maxX,p.x)
+    b.minZ, b.maxZ = math.min(b.minZ,p.z), math.max(b.maxZ,p.z)
+  end
+  return b
+end
+
+local function boundsOverlap(a, b)
+  return a.maxX >= b.minX and b.maxX >= a.minX and
+    a.maxZ >= b.minZ and b.maxZ >= a.minZ
+end
+
+local function mergeBoundaryCrossings(lines)
+  local events, junctions = {}, 0
+  for i = 1, #lines do events[lines[i].points] = {} end
+  for i = 1, #lines do
+    local a = lines[i]
+    local boundsA = lineBounds(a.points)
+    local countA = a.loop and #a.points or #a.points-1
+    for j = i+1, #lines do
+      local b = lines[j]
+      if a.group ~= b.group then
+        local boundsB = lineBounds(b.points)
+        if boundsOverlap(boundsA, boundsB) then
+          local countB = b.loop and #b.points or #b.points-1
+          for ai = 1, countA do
+            local a1, a2 = a.points[ai], a.points[ai % #a.points + 1]
+            local aminX, amaxX = math.min(a1.x,a2.x), math.max(a1.x,a2.x)
+            local aminZ, amaxZ = math.min(a1.z,a2.z), math.max(a1.z,a2.z)
+            for bi = 1, countB do
+              local b1, b2 = b.points[bi], b.points[bi % #b.points + 1]
+              if math.max(aminX,math.min(b1.x,b2.x)) <= math.min(amaxX,math.max(b1.x,b2.x)) and
+                  math.max(aminZ,math.min(b1.z,b2.z)) <= math.min(amaxZ,math.max(b1.z,b2.z)) then
+                local ta, tb, point = segmentIntersection(a1,a2,b1,b2)
+                if ta then
+                  local function addEvent(list, index, t, p)
+                    for k = 1, #list do
+                      if list[k].index == index and math.abs(list[k].t-t) < 0.02 then return end
+                    end
+                    list[#list+1] = { index=index, t=t, point=p }
+                  end
+                  addEvent(events[a.points], ai, ta, point)
+                  addEvent(events[b.points], bi, tb, point)
+                  junctions = junctions + 1
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  for i = 1, #lines do
+    local line, list = lines[i], events[lines[i].points]
+    if #list > 0 then
+      local bySegment = {}
+      for j = 1, #list do
+        local e = list[j]
+        bySegment[e.index] = bySegment[e.index] or {}
+        bySegment[e.index][#bySegment[e.index]+1] = e
+      end
+      local rebuilt = {}
+      local count = line.loop and #line.points or #line.points-1
+      for j = 1, count do
+        rebuilt[#rebuilt+1] = line.points[j]
+        local additions = bySegment[j]
+        if additions then
+          table.sort(additions, function(a,b) return a.t < b.t end)
+          for k = 1, #additions do rebuilt[#rebuilt+1] = additions[k].point end
+        end
+      end
+      if not line.loop then rebuilt[#rebuilt+1] = line.points[#line.points] end
+      line.group.boundaries[line.side] = rebuilt
+    end
+  end
+  return junctions
+end
+
 function Roads.build(lanes, log)
   local valid = {}
   for i = 1, #lanes do if lanes[i].valid then valid[#valid+1] = lanes[i] end end
@@ -221,20 +320,35 @@ function Roads.build(lanes, log)
     local leftBoundary, leftAdjusted, leftConflicts = makeBoundary(leftLane, 1, group.boundaryOffset)
     local rightBoundary, rightAdjusted, rightConflicts = makeBoundary(rightLane, -1, group.boundaryOffset)
     group.boundaries = { left = leftBoundary, right = rightBoundary }
+    group.boundaryLoops = { left = leftLane.loop, right = rightLane.loop }
     group.wallAdjusted = leftAdjusted + rightAdjusted
     group.wallConflicts = leftConflicts + rightConflicts
     wallAdjusted = wallAdjusted + group.wallAdjusted
     wallConflicts = wallConflicts + group.wallConflicts
   end
+  local boundaryLines = {}
+  for i = 1, #groups do
+    local group = groups[i]
+    boundaryLines[#boundaryLines+1] = {
+      group = group, side = 'left', points = group.boundaries.left,
+      loop = group.boundaryLoops.left
+    }
+    boundaryLines[#boundaryLines+1] = {
+      group = group, side = 'right', points = group.boundaries.right,
+      loop = group.boundaryLoops.right
+    }
+  end
+  local junctions = mergeBoundaryCrossings(boundaryLines)
+
   if log then
     local multi = 0
     for i = 1, #groups do if #groups[i].lanes > 1 then multi = multi + 1 end end
-    log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d multi_lane_groups=%d wall_adjusted=%d wall_conflicts=%d',
-      #valid, #groups, multi, wallAdjusted, wallConflicts)
+    log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d multi_lane_groups=%d wall_adjusted=%d wall_conflicts=%d boundary_junctions=%d',
+      #valid, #groups, multi, wallAdjusted, wallConflicts, junctions)
   end
   return { groups = groups, stats = {
     validLanes = #valid, groups = #groups,
-    wallAdjusted = wallAdjusted, wallConflicts = wallConflicts
+    wallAdjusted = wallAdjusted, wallConflicts = wallConflicts, boundaryJunctions = junctions
   } }
 end
 
