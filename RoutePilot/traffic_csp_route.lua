@@ -171,6 +171,11 @@ function Routes.sample(route, distanceAlong)
   return Geometry.sample(route.geometry, distanceAlong)
 end
 
+function Routes.project(route, position, heading)
+  if not route or not route.geometry or not position then return nil end
+  return Geometry.project(route.geometry,position,nil,heading,0,0,false)
+end
+
 function Routes.build(graph, roads, startEdge, startDistance, options)
   options = options or {}
   if not graph or not startEdge then return nil, 'missing_start_edge' end
