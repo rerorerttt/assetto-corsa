@@ -142,6 +142,29 @@ local function oppositeMatch(a, b)
   return ca>=0.65 and cb>=0.65 and math.abs(da-db)<=2.5
 end
 
+local function parallelMatch(a, b)
+  if a.loop ~= b.loop then return false end
+  local function coverage(src,dst)
+    local n,good,sum=#src.points,0,0
+    local step=math.max(1,math.floor(n/32))
+    for i=1,n,step do
+      local p=src.points[i]
+      local d,q,dir=nearestOnLane(p,dst)
+      if d and q and d>=1.5 and d<=12 and math.abs(p.y-q.y)<=1.5 then
+        local tx,ty,tz=tangentAt(src.points,i,src.loop)
+        local dot=tx*dir[1]+ty*dir[2]+tz*dir[3]
+        if dot>=0.92 then good,sum=good+1,sum+d end
+      end
+    end
+    local total=math.ceil(n/step)
+    return total>0 and good/total or 0,good>0 and sum/good or math.huge
+  end
+  local ca,da=coverage(a,b)
+  local cb,db=coverage(b,a)
+  local required=a.loop and 0.85 or 0.65
+  return ca>=required and cb>=required and math.abs(da-db)<=2.5
+end
+
 local function median(values)
   table.sort(values)
   local n = #values
@@ -484,6 +507,49 @@ function Roads.build(lanes, log)
     end
   end
 
+  local parallelAdjusted, parallelConflicts = 0, 0
+  for i = 1, #groups do
+    local a = groups[i]
+    for j = i+1, #groups do
+      local b = groups[j]
+      if parallelMatch(a.reference,b.reference) then
+        local centerOffset=lateralOffset(a.reference,b.reference)
+        local side=nil
+        if centerOffset > a.leftOffset and centerOffset > 0 then side='left'
+        elseif centerOffset < a.rightOffset and centerOffset < 0 then side='right' end
+        if side then
+          local laneA=side=='left' and a.leftLane or a.rightLane
+          local laneB=side=='left' and b.rightLane or b.leftLane
+          local laneGap=math.abs(lateralOffset(laneA,laneB))
+          local normalGap=(side=='left' and a.leftBoundaryOffset+b.rightBoundaryOffset or
+            a.rightBoundaryOffset+b.leftBoundaryOffset)
+          if laneGap < normalGap + 0.5 then
+            local clipped=math.max(0.05,(laneGap-0.5)*0.5)
+            if laneGap <= 0.9 then parallelConflicts=parallelConflicts+1 end
+            if side=='left' then
+              local lineA,adjA,confA=makeBoundary(a.leftLane,1,clipped)
+              local lineB,adjB,confB=makeBoundary(b.rightLane,-1,clipped)
+              a.boundaries.left=lineA
+              b.boundaries.right=lineB
+              a.leftBoundaryOffset,b.rightBoundaryOffset=clipped,clipped
+              wallAdjusted=wallAdjusted+adjA+adjB
+              wallConflicts=wallConflicts+confA+confB
+            else
+              local lineA,adjA,confA=makeBoundary(a.rightLane,-1,clipped)
+              local lineB,adjB,confB=makeBoundary(b.leftLane,1,clipped)
+              a.boundaries.right=lineA
+              b.boundaries.left=lineB
+              a.rightBoundaryOffset,b.leftBoundaryOffset=clipped,clipped
+              wallAdjusted=wallAdjusted+adjA+adjB
+              wallConflicts=wallConflicts+confA+confB
+            end
+            parallelAdjusted=parallelAdjusted+2
+          end
+        end
+      end
+    end
+  end
+
   local boundaryLines = {}
   for i = 1, #groups do
     local group = groups[i]
@@ -501,13 +567,15 @@ function Roads.build(lanes, log)
   if log then
     local multi = 0
     for i = 1, #groups do if #groups[i].lanes > 1 then multi = multi + 1 end end
-    log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d multi_lane_groups=%d wall_adjusted=%d wall_conflicts=%d opposing_adjusted=%d opposing_conflicts=%d boundary_junctions=%d',
-      #valid, #groups, multi, wallAdjusted, wallConflicts, opposingAdjusted, opposingConflicts, junctions)
+    log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d multi_lane_groups=%d wall_adjusted=%d wall_conflicts=%d opposing_adjusted=%d opposing_conflicts=%d parallel_adjusted=%d parallel_conflicts=%d boundary_junctions=%d',
+      #valid, #groups, multi, wallAdjusted, wallConflicts, opposingAdjusted, opposingConflicts,
+      parallelAdjusted, parallelConflicts, junctions)
   end
   return { groups = groups, laneGroups = laneGroups, stats = {
     validLanes = #valid, groups = #groups,
     wallAdjusted = wallAdjusted, wallConflicts = wallConflicts,
     opposingAdjusted = opposingAdjusted, opposingConflicts = opposingConflicts,
+    parallelAdjusted = parallelAdjusted, parallelConflicts = parallelConflicts,
     wallRaycastAvailable = wallRaycastAvailable, boundaryJunctions = junctions
   } }
 end
