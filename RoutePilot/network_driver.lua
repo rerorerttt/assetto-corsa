@@ -100,14 +100,14 @@ local function laneChange(g,l,p,index,sim,speed)
  end end
  return best
 end
-local function junction(g,l,p,car,index,sim)
+local function junction(g,l,p,car,index,sim,blockedTarget)
  local hx,hz=norm(car.look.x,car.look.z)
  local best,score
  -- Do not jump to a connected lane while the car is still approaching the
  -- intersection. Require physical proximity to the outgoing source polyline
  -- and a heading compatible with that lane's authored direction.
  for _,e in ipairs(l.outgoing or{})do
-  if p.s>=e.fromS-1.5 and p.s<=e.fromS+5.0 then
+  if e.to~=blockedTarget and p.s>=e.fromS-1.5 and p.s<=e.fromS+5.0 then
    local target=g.lanes[e.to]
    if target then
     local q=projectNear(target,car.position,e.toS,24)
@@ -178,7 +178,7 @@ function M.update(i,c,dt)
   end
  end
  if p.networkS>=l.length-1.5 and not l.loop then
-  local nextLane=p.networkTransitionCooldown<=0 and junction(g,l,{s=p.networkS},c,i,sim) or nil
+  local nextLane=p.networkTransitionCooldown<=0 and junction(g,l,{s=p.networkS},c,i,sim,blockedTarget) or nil
   if nextLane then
    local old,oldS=l.id,p.networkS
    l=g.lanes[nextLane.id];p.networkLaneId=l.id;p.networkS=nextLane.s
