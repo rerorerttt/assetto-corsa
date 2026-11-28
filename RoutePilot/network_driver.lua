@@ -44,6 +44,7 @@ local function nearest(g,car)
 end
 local function occupancy(g,laneId,s,index,sim,range)
  local l=g.lanes[laneId];local ahead,behind
+ if not sim then return nil,nil end
  for i=0,sim.carsCount-1 do if i~=index then local c=ac.getCar(i);if c and c.isActive then
   local q=project(l,c.position,s,range+20)
   local otherState=S.p[i]
@@ -56,7 +57,7 @@ local function occupancy(g,laneId,s,index,sim,range)
   if alignment>0.15 then
    if gap>=0 and gap<range and(not ahead or gap<ahead.gap)then ahead={gap=gap,speed=max(0,n(c.speedMs)),index=i}
    elseif gap<0 and -gap<18 and(not behind or -gap<behind.gap)then behind={gap=-gap,speed=max(0,n(c.speedMs)),index=i}end
-  elseif sameLane and abs(gap)<range and(not ahead or abs(gap)<ahead.gap)then
+  elseif (sameLane or not otherState) and abs(gap)<range and(not ahead or abs(gap)<ahead.gap)then
    ahead={gap=abs(gap),speed=-max(0,n(c.speedMs)),index=i}
   end
   end
