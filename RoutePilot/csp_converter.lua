@@ -259,7 +259,15 @@ local function collectRoute(graph, player)
     routeLaneIDs[#routeLaneIDs+1]=lane.id
     local nextLink
     for _,candidate in ipairs(laneLinks[lane.id] or {}) do
-      if candidate.enter>=progress-1.0 then nextLink=candidate break end
+      if candidate.enter>progress+0.5 then
+        nextLink=candidate
+        break
+      elseif candidate.exit>progress+0.5 then
+        -- The player may start inside a junction. Continue through the
+        -- authored lane to its exit instead of attempting a backwards turn.
+        appendLaneRange(raw,lane,progress,candidate.exit)
+        progress=candidate.exit
+      end
     end
     if not nextLink then
       local total=laneLength(lane)
