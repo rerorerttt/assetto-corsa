@@ -58,7 +58,7 @@ assert(route, "route build failed: "..tostring(err))
 -- Reproduce CSP's 30-point arc-length normalization for the authored
 -- cubic. The route's first transition sample must lie at equal traveled
 -- distance, not at an equal raw Bezier parameter.
-local control1, control2 = vec3(10,0,1), vec3(19,0,10)
+local control1, control2 = vec3(10,0,1), vec3(1,0,10)
 local samples, lengths, total = {vec3(10,0,0)}, {0}, 0
 local previous = samples[1]
 for i = 1, 30 do
