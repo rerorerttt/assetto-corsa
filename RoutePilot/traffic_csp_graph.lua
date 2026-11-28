@@ -184,7 +184,7 @@ function Graph.build(lanes, intersectionDefs, log)
     return node
   end
   local function addEdge(lane, fromDistance, toDistance, fromNode, toNode, enterLink, exitLink, wrap)
-    if not fromNode or not toNode or toDistance < fromDistance then return nil end
+    if not fromNode or not toNode or toDistance - fromDistance <= 0.1 then return nil end
     nextEdgeID = nextEdgeID + 1
     local edge = {
       id = nextEdgeID, lane = lane, from = fromDistance, to = toDistance,
@@ -221,11 +221,13 @@ function Graph.build(lanes, intersectionDefs, log)
         local startNode = first.from > 0.5 and addNode('lane_start', lane.points[1], lane) or first.intersection.node
         local endNode = last.to < length - 0.5 and addNode('lane_end', lane.points[#lane.points], lane) or last.intersection.node
         local cursor, currentNode, previousLink = 0, startNode, nil
+        local firstSegmentEdge = nil
         for j = 1, #links do
           local link = links[j]
           if link.from >= cursor - 0.1 then
             local edge = addEdge(lane, cursor, link.from, currentNode, link.intersection.node, previousLink, link, false)
             link.inEdge = edge
+            if j == 1 then firstSegmentEdge = edge end
             if previousLink then previousLink.outEdge = edge end
             cursor = math.max(cursor, link.to)
             currentNode, previousLink = link.intersection.node, link
@@ -237,7 +239,11 @@ function Graph.build(lanes, intersectionDefs, log)
         if lane.loop then
           local edge = addEdge(lane, cursor, length, currentNode, startNode, previousLink, first, true)
           if previousLink then previousLink.outEdge = edge end
-          first.inEdge = first.inEdge or edge
+          if first.from <= 0.5 then
+            first.inEdge = first.inEdge or edge
+          elseif edge and firstSegmentEdge then
+            edge.nextEdges[#edge.nextEdges + 1] = firstSegmentEdge
+          end
         else
           local edge = addEdge(lane, cursor, length, currentNode, endNode, previousLink, nil, false)
           if previousLink then previousLink.outEdge = edge end
