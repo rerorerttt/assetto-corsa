@@ -176,8 +176,8 @@ local function newPersonality(carIndex)
       p.spawnSeeded=true
       p.segIdx=spawnHint.segment
       if spawnHint.boost then
-        p.spawnBoostT=1.35
-        p.spawnBoostTarget=26.0
+        p.spawnBoostT=2.25
+        p.spawnBoostTarget=30.0
       end
       H.log("ROUTE_SEED id=%d seg=%d t=%.3f progress=%.2f boost=%s",
         carIndex,spawnHint.segment,spawnHint.parameter,seededProgress,
@@ -1782,7 +1782,7 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   if safeNumber(p.spawnBoostT)>0 then
     p.spawnBoostT=math.max(0,p.spawnBoostT-math.max(0,dt or 0))
     if targetSpeed>speed+1.5 and
-        speed<safeNumber(p.spawnBoostTarget,26.0)-0.8 then
+        speed<safeNumber(p.spawnBoostTarget,30.0)-0.8 then
       gas=math.max(gas,0.92*p.tractionScale*cornerScale)
       brake=0
     elseif speed>=safeNumber(p.spawnBoostTarget,26.0)-0.8 then
