@@ -653,7 +653,8 @@ function Converter.load(log)
     return nil,nil,nil,nil,"PLAYER_CAR_UNAVAILABLE"
   end
   local best,bestScore=nil,nil
-  local candidateLanes,scannedSegments=0,0
+  local bestLoop,bestLoopScore=nil,nil
+  local candidateLanes,scannedSegments,loopCandidates=0,0,0
   if player and player.position and player.look then
     local hx,hz=norm(player.look.x,player.look.z)
     local playerX,playerY,playerZ=player.position.x,player.position.y,player.position.z
@@ -686,25 +687,45 @@ function Converter.load(log)
           local score=dx*dx+dz*dz+dy*dy*16+
             (1-alignment)*(1-alignment)*25
           if math.abs(dy)<=4.0 and alignment>0.50 and
-            math.sqrt(dx*dx+dz*dz)<80 and
-            (not bestScore or score<bestScore) then
-            bestScore=score
-            best={lane=lane,segment=i,t=t,planar=math.sqrt(dx*dx+dz*dz),
+            math.sqrt(dx*dx+dz*dz)<80 then
+            local candidate={lane=lane,segment=i,t=t,planar=math.sqrt(dx*dx+dz*dz),
               vertical=math.abs(dy),alignment=alignment}
+            if not bestScore or score<bestScore then
+              bestScore=score
+              best=candidate
+            end
+            if lane.loop then
+              loopCandidates=loopCandidates+1
+              -- A native AC spline is cyclic. Prefer a genuinely authored
+              -- closed lane when it is still within the strict on-road
+              -- acquisition radius, rather than a closer open stub.
+              local loopScore=score-100.0
+              if not bestLoopScore or loopScore<bestLoopScore then
+                bestLoopScore=loopScore
+                bestLoop=candidate
+              end
+            end
           end
         end
       end
       end
     end
-    trace("CSP_ACQUIRE_SCAN candidate_lanes=%d scanned_segments=%d total_lanes=%d",
-      candidateLanes,scannedSegments,#graph.laneOrder)
+    trace("CSP_ACQUIRE_SCAN candidate_lanes=%d scanned_segments=%d loop_candidates=%d total_lanes=%d",
+      candidateLanes,scannedSegments,loopCandidates,#graph.laneOrder)
   end
   if not best then
     trace("CSP_ACQUIRE_FAILED reason=no_same_deck_forward_lane")
     return nil,nil,nil,nil,"NO_CSP_LANE_NEAR_PLAYER"
   end
-  trace("CSP_ACQUIRE_SELECTED lane=%d segment=%d t=%.3f planar=%.2f vertical=%.2f alignment=%.3f score=%.2f",
-    best.lane.id,best.segment,best.t,best.planar,best.vertical,best.alignment,bestScore)
+  if bestLoop and bestLoop.planar<=4.5 and bestLoop.vertical<=2.5 then
+    best=bestLoop
+    bestScore=bestLoopScore
+    trace("CSP_ACQUIRE_LOOP_PREFERRED lane=%d planar=%.2f alignment=%.3f",
+      best.lane.id,best.planar,best.alignment)
+  end
+  trace("CSP_ACQUIRE_SELECTED lane=%d segment=%d t=%.3f planar=%.2f vertical=%.2f alignment=%.3f loop=%s score=%.2f",
+    best.lane.id,best.segment,best.t,best.planar,best.vertical,best.alignment,
+    tostring(best.lane.loop),bestScore)
   -- A lane centreline should be close to the player's actual road position.
   -- An 80 m discovery radius is only a broad spatial-index prefilter; it is
   -- never a valid acquisition tolerance. A distant parallel road, ramp or
