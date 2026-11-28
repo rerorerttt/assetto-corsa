@@ -375,7 +375,7 @@ local function buildCorridor(graph, raw)
       if offsets[j] < 0 and offsets[j] >= lo-5.5 then lo=offsets[j] end
       if offsets[j] > 0 and offsets[j] <= hi+5.5 then hi=offsets[j] end
     end
-    local laneCount=math.max(1,math.floor((hi-lo)/3.0+1.5))
+    local laneCount=math.max(1,math.floor((hi-lo)/3.0+0.25)+1)
     local width=laneCount==1 and 6.0 or laneCount*3.0
     local centerShift=(lo+hi)*0.5
     local center={x=p.x+nx*centerShift,y=p.y,z=p.z+nz*centerShift}
