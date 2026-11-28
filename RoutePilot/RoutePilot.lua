@@ -533,9 +533,12 @@ local function trySpawnTeleport(sim,dt)
   writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
   flushLog()
 end
-local function tryAddGraphTrafficCars(sim)
+local function tryAddGraphTrafficCars(sim,dt)
   if not trafficCSP or not trafficCSP.graphSpawnDone or
       not physics or type(physics.setAICarPosition)~="function" then return 0 end
+  trafficCSP.graphAddRetryWait=(trafficCSP.graphAddRetryWait or 0)+(dt or 0)
+  if trafficCSP.graphAddRetryWait<0.5 then return 0 end
+  trafficCSP.graphAddRetryWait=0
   local routes=trafficCSP.previewRoutes or {}
   if #routes==0 then return 0 end
   local player=ac.getCar(0)
@@ -618,7 +621,7 @@ end
 local function trySpawnCSPTraffic(sim,dt,route)
   if not trafficCSP then return end
   if trafficCSP.graphSpawnDone then
-    tryAddGraphTrafficCars(sim)
+    tryAddGraphTrafficCars(sim,dt)
     return
   end
   local routes=trafficCSP.allPreviewRoutes or trafficCSP.previewRoutes or (route and {route}) or {}
