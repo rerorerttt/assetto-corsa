@@ -198,6 +198,7 @@ local function loadLine()
   end
   if loaded then
     state.nodes=loaded; state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
+    state.loadedFromCSP=false
     if not state.spawnPerformed then
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
     end
@@ -1091,7 +1092,7 @@ function windowMain(dt)
       state.recLine=not state.recLine
       if state.recLine then
         state.nodes={}; state.p={}; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
-        state.loaded=false; state.recBounds=false
+        state.loaded=false; state.loadedFromCSP=false; state.recBounds=false
         state.status="Запись линии и границ..."
       else
         state.status="Записано точек: "..#state.nodes
@@ -1124,7 +1125,7 @@ function windowMain(dt)
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
-      state.status="Очищено"; state.loaded=false
+      state.status="Очищено"; state.loaded=false; state.loadedFromCSP=false
     end
     ui.separator()
     if #state.nodes>=2 then
