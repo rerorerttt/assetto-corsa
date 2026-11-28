@@ -55,10 +55,39 @@ local function projectNear(l,pos,hint,window)
 end
 local function nearest(g,car)
  local hx,hz=norm(car.look.x,car.look.z);local best,score
- for _,id in ipairs(g.laneOrder)do local l=g.lanes[id];local q=project(l,car.position)
-  if q then local a=dot(hx,hz,q.tx,q.tz);if a>0.25 and q.distance<35 then local v=q.distance*q.distance+(1-a)*30;if not score or v<score then best={id=id,s=q.s};score=v end end end
+ local pos=car.position
+ for _,id in ipairs(g.laneOrder)do
+  local l=g.lanes[id];local box=l and l.aabb
+  local possible=true
+  if box then
+   local dx=max(box.minX-pos.x,0,pos.x-box.maxX)
+   local dz=max(box.minZ-pos.z,0,pos.z-box.maxZ)
+   possible=dx*dx+dz*dz<35*35 and pos.y>=box.minY-8 and pos.y<=box.maxY+8
+  end
+  if possible then
+   local q=project(l,pos)
+   if q then
+    local a=dot(hx,hz,q.tx,q.tz)
+    if a>0.25 and q.distance<35 then
+     local v=q.distance*q.distance+(1-a)*30
+     if not score or v<score then best={id=id,s=q.s};score=v end
+    end
+   end
+  end
  end
  return best
+end
+local function attachIfDue(g,c,p,dt)
+ if p.networkLaneId then return end
+ p.networkAttachTimer=max(0,n(p.networkAttachTimer)-max(0,dt))
+ if p.networkAttachTimer>0 then return end
+ local q=nearest(g,c)
+ if q then
+  p.networkLaneId=q.id;p.networkS=q.s;p.networkAttachTimer=0.5
+  H.log("NETWORK_ATTACH id=%d lane=%d s=%.1f",c.index or -1,q.id,q.s)
+ else
+  p.networkAttachTimer=1.0
+ end
 end
 local function occupancy(g,laneId,s,index,sim,range)
  local l=g.lanes[laneId];local ahead,behind
@@ -133,16 +162,25 @@ end
 function M.setup(cfg,state,helpers)CFG,S,H=cfg,state,helpers end
 function M.prepareTraffic(sim,order,dt)
  local g=S.trafficNetwork;if not g then return end
- for _,i in ipairs(order or{})do local c=ac.getCar(i);if c and c.isActive then local p=S.p[i]or{};S.p[i]=p
-  if not p.networkLaneId then local q=nearest(g,c);if q then p.networkLaneId=q.id;p.networkS=q.s;H.log("NETWORK_ATTACH id=%d lane=%d s=%.1f",i,q.id,q.s)end end
-  local l=g.lanes[p.networkLaneId];if l then local q=projectNear(l,c.position,p.networkS,max(35,n(c.speedMs)*1.8+15));if q and q.distance<18 then p.networkS=q.s;p.networkDistance=q.distance;p.networkHeightError=q.heightError;p.networkProjectionLost=false else p.networkProjectionLost=true end end
- end end
+ for _,i in ipairs(order or{})do
+  local c=ac.getCar(i)
+  if c and c.isActive then
+   local p=S.p[i]or{};S.p[i]=p
+   attachIfDue(g,c,p,dt)
+   local l=g.lanes[p.networkLaneId]
+   if l then
+    local q=projectNear(l,c.position,p.networkS,max(35,n(c.speedMs)*1.8+15))
+    if q and q.distance<18 then
+     p.networkS=q.s;p.networkDistance=q.distance;p.networkHeightError=q.heightError;p.networkProjectionLost=false
+    else p.networkProjectionLost=true end
+   end
+  end
+ end
 end
 function M.update(i,c,dt)
  local g=S.trafficNetwork;local p=S.p[i]or{};S.p[i]=p;local speed=max(0,n(c.speedMs))
  p.retireT=n(p.retireT)+max(0,dt)
  if p.retireT>=2 then p.retireT=0;if physics and physics.preventAIFromRetiring then pcall(physics.preventAIFromRetiring,i)end end
- if not p.networkLaneId then local q=nearest(g,c);if q then p.networkLaneId=q.id;p.networkS=q.s end end
  local l=g.lanes[p.networkLaneId]
  if not l or p.networkS==nil then controls(i,0,0,1);p.trafficAction="NETWORK_NO_LANE";return end
  local q=projectNear(l,c.position,p.networkS,max(35,speed*1.8+15))
