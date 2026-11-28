@@ -726,8 +726,50 @@ local function trySpawnCSPTraffic(sim,dt,route)
 end
 
 local function tryRecycleGraphTraffic(route,order,player)
-  if not route or not route.loop or not player or not ac.closerToRenderThan or
+  if not route or not ac.closerToRenderThan or
       not physics or type(physics.setAICarPosition)~="function" then return 0 end
+  if not route.loop then
+    -- Open one-way networks have no directed cycle to wrap around. Recycle a
+    -- car only after it has reached the terminal portion and is outside render
+    -- range, placing it into a clear, spaced slot near the route entrance.
+    -- This keeps every visible vehicle on the authored direction of travel.
+    local total=route.length or 0
+    if total<300 then return 0 end
+    local terminalThreshold=math.min(500,math.max(150,total*0.08))
+    local recycled=0
+    for _,index in ipairs(order or {}) do
+      local car=ac.getCar(index)
+      local person=state.p[index]
+      if car and person and person.routeProgress and
+          person.routeProgress>=total-terminalThreshold and
+          not ac.closerToRenderThan(car.position,1000) then
+        local slots=math.max(1,math.floor((total-60)/CFG.SPAWN_GAP))
+        for slot=0,math.min(slots-1,31) do
+          local startDistance=40+slot*CFG.SPAWN_GAP
+          local sample=CSPRoutes.sample(route,startDistance)
+          if sample then
+            local position=vec3(sample.x,sample.y,sample.z)
+            if spotIsClear(position,index) then
+              local direction=vec3(-sample.tx,0,-sample.tz)
+              local ok,result=pcall(physics.setAICarPosition,index,position,direction)
+              if ok and result~=false then
+                state.p[index]=nil
+                state.spawnHints[index]={segment=sample.seg,parameter=sample.t}
+                state.rescueWatch=state.rescueWatch or {}
+                state.rescueWatch[index]={cooldown=3.0}
+                recycled=recycled+1
+                writeLog("CSP_TRAFFIC_RECYCLE_OPEN id=%d progress=%.1f slot=%d start=%.1f",
+                  index,person.routeProgress,slot,startDistance)
+                break
+              end
+            end
+          end
+        end
+      end
+    end
+    return recycled
+  end
+  if not player then return 0 end
   local projection=CSPRoutes.project(route,player.position,player.look)
   if not projection or not projection.distance or not projection.s or projection.distance>60 then return 0 end
   local total=route.length or 0
