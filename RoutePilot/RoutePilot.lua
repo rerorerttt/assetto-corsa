@@ -591,6 +591,8 @@ local function trySpawnCSPTraffic(sim,dt,route)
         moved[#moved+1]=index
         state.p[index]=nil
         state.spawnHints[index]={segment=sample.seg,parameter=sample.t}
+        state.rescueWatch=state.rescueWatch or {}
+        state.rescueWatch[index]={cooldown=3.0}
       else
         failed=failed+1
         writeLog("CSP_SPAWN_CAR_FAILED id=%d err=%s",index,tostring(result))
