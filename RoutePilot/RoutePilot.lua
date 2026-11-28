@@ -327,7 +327,7 @@ local function getVertexCurvature(index)
   if angle<0.02 then return 0 end
   return angle/math.max(0.1,(l1+l2)*0.5)
 end
-local function findNearestSeg(pos,hintSeg,allowGlobal,heading,directedHeading)
+local function findNearestSeg(pos,hintSeg,allowGlobal,heading,directedHeading,use3D)
   local nodes=state.nodes; local segs=segmentCount()
   if segs<1 then return 1,0,0 end
   local px,pz=pos.x,pos.z
@@ -346,7 +346,12 @@ local function findNearestSeg(pos,hintSeg,allowGlobal,heading,directedHeading)
     local t=clamp(((px-a.x)*vx+(pz-a.z)*vz)/lenSq,0,1)
     local cx,cz=a.x+vx*t,a.z+vz*t
     local dx,dz=px-cx,pz-cz
-    local dSq=dx*dx+dz*dz
+    local dy=use3D and (safeNumber(pos.y)-lerp(a.y,b.y,t)) or 0
+    -- Rescue must not mistake an overpass/underpass directly above the car
+    -- for its road. Normal route projection remains planar; only recovery
+    -- acquisition uses elevation-aware distance and rejects other decks.
+    if use3D and math.abs(dy)>6.0 then return end
+    local dSq=dx*dx+dz*dz+dy*dy*4.0
     local score=dSq
     if hx then
       local tx,tz=normalize2(vx,vz)
@@ -655,7 +660,7 @@ local function teleportHome(carIndex,car)
   -- Prefer the authored travel direction, then reject distant projections:
   -- a failed rescue is safer than teleporting a car onto unrelated terrain.
   local seg,t,routeError=findNearestSeg(
-    car.position,hintSeg,true,car.look,true)
+    car.position,hintSeg,true,car.look,true,true)
   local sign=1
   writeLog("RESCUE_ACQUIRE id=%d seg=%d t=%.3f error=%.1f heading_directed=true",
     carIndex,seg or -1,t or 0,routeError or math.huge)
