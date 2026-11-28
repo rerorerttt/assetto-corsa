@@ -27,9 +27,13 @@ end
 local function nearestOnLane(p, lane)
   local pts, bestD, bestP, bestDir = lane.points, math.huge, nil, nil
   local n = #pts
+  local count = lane.loop and n or n - 1
   local step = math.max(1, math.floor(n / 500))
-  for i = 1, n-1, step do
-    local a, b = pts[i], pts[math.min(n, i+step)]
+  for i = 1, count, step do
+    local nextIndex = i + step
+    if lane.loop then nextIndex = (nextIndex - 1) % n + 1
+    else nextIndex = math.min(n, nextIndex) end
+    local a, b = pts[i], pts[nextIndex]
     local vx, vy, vz = b.x-a.x, b.y-a.y, b.z-a.z
     local den = vx*vx+vy*vy+vz*vz
     if den > 1e-8 then
