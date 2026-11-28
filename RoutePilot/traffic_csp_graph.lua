@@ -74,43 +74,59 @@ local function laneLength(lane)
   return length
 end
 
+local function laneSegmentAt(lane, distance)
+  local count = lane.loop and #lane.points or #lane.points-1
+  if count < 1 then return nil end
+  if not lane.loop and distance >= lane.totalLength then return #lane.points end
+  local cumulative = lane.cumulative
+  local lo, hi = 1, count
+  -- Find the first segment whose end distance is not before the query.
+  while lo < hi do
+    local mid = math.floor((lo+hi)*0.5)
+    if (cumulative[mid+1] or lane.totalLength) < distance then
+      lo = mid+1
+    else
+      hi = mid
+    end
+  end
+  return lo
+end
+
 local function lanePositionAt(lane, distance)
   local points, cumulative = lane.points, lane.cumulative
   local n = #points
   distance = math.max(0, math.min(lane.totalLength, distance))
-  for i = 1, n do
-    local d0, d1 = cumulative[i] or 0, cumulative[i + 1] or lane.totalLength
-    if i == n and not lane.loop then return points[n] end
-    if distance <= d1 or i == n then
-      local a = points[i]
-      local b = points[i % n + 1]
-      local span = d1 - d0
-      local t = span > 1e-6 and math.max(0, math.min(1, (distance - d0) / span)) or 0
-      return vec3(a.x + (b.x-a.x)*t, a.y + (b.y-a.y)*t, a.z + (b.z-a.z)*t)
-    end
-  end
-  return points[n]
+  local i = laneSegmentAt(lane, distance)
+  if not i or (i == n and not lane.loop) then return points[n] end
+  local d0, d1 = cumulative[i] or 0, cumulative[i+1] or lane.totalLength
+  local a, b = points[i], points[i % n + 1]
+  local span = d1-d0
+  local t = span > 1e-6 and math.max(0, math.min(1, (distance-d0)/span)) or 0
+  return vec3(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,a.z+(b.z-a.z)*t)
 end
 
 local function laneDirectionAt(lane, distance)
   local points, cumulative = lane.points, lane.cumulative
   local n = #points
-  for i = 1, n do
-    local d0, d1 = cumulative[i] or 0, cumulative[i + 1] or lane.totalLength
-    if i == n and not lane.loop then
-      local a, b = points[n-1], points[n]
-      local dx, dy, dz = b.x-a.x, b.y-a.y, b.z-a.z
-      local length = math.sqrt(dx*dx+dy*dy+dz*dz)
-      if length > 1e-6 then return vec3(dx/length, dy/length, dz/length) end
-    end
-    if distance <= d1 or i == n then
-      local a, b = points[i], points[i % n + 1]
-      local dx, dy, dz = b.x-a.x, b.y-a.y, b.z-a.z
-      local length = math.sqrt(dx*dx+dy*dy+dz*dz)
-      if length > 1e-6 then return vec3(dx/length, dy/length, dz/length) end
+  distance = math.max(0, math.min(lane.totalLength, distance))
+  local i = laneSegmentAt(lane, distance)
+  if not i then return vec3(0,0,1) end
+  if i == n and not lane.loop then i=n-1 end
+  local a,b=points[i],points[i % n + 1]
+  local dx,dy,dz=b.x-a.x,b.y-a.y,b.z-a.z
+  local length=math.sqrt(dx*dx+dy*dy+dz*dz)
+  if length>1e-6 then return vec3(dx/length,dy/length,dz/length) end
+  -- Degenerate duplicate samples are skipped without changing the distance map.
+  for offset=1,n-1 do
+    local nextIndex=lane.loop and ((i+offset-1)%n+1) or math.min(n-1,i+offset)
+    local p,q=points[nextIndex],points[nextIndex+1]
+    if p and q then
+      dx,dy,dz=q.x-p.x,q.y-p.y,q.z-p.z
+      length=math.sqrt(dx*dx+dy*dy+dz*dz)
+      if length>1e-6 then return vec3(dx/length,dy/length,dz/length) end
     end
   end
-  return vec3(0, 0, 1)
+  return vec3(0,0,1)
 end
 
 local function laneIntersectionIntervals(lane, inter)
