@@ -14,7 +14,7 @@ _G.vec3 = function(x, y, z)
   return setmetatable({x=x or 0,y=y or 0,z=z or 0},{__index=vectorMethods})
 end
 
-local raw = '{"lanes":[{"id":1,"loop":false,"points":[[-10,0,0],[0,0,0],[10,0,0]]}],"intersections":[]}'
+local raw = '{"lanes":[{"id":1,"loop":false,"priorityOffset":7.5,"points":[[-10,0,0],[0,0,0],[10,0,0]]}],"intersections":[]}'
 _G.ac = { getTrackDataFilename = function() return "synthetic-traffic.json" end }
 io.load = function() return raw end
 _G.__util = { native = function() return 0 end }
@@ -31,6 +31,8 @@ local validImport = Importer.new()
 assert(validImport:load(), "valid synthetic traffic.json did not load")
 assert(validImport.stats.usable == 1 and validImport.lanes[1].valid,
   "road-level projection should preserve a valid open lane")
+assert(validImport.lanes[1].priority == 7.5,
+  "CSP priorityOffset metadata was not imported")
 assert(validImport.graph and validImport.roads,
   "valid import should build both graph and road geometry")
 
