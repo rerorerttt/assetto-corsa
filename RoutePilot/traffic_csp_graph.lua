@@ -80,6 +80,7 @@ local function lanePositionAt(lane, distance)
   distance = math.max(0, math.min(lane.totalLength, distance))
   for i = 1, n do
     local d0, d1 = cumulative[i] or 0, cumulative[i + 1] or lane.totalLength
+    if i == n and not lane.loop then return points[n] end
     if distance <= d1 or i == n then
       local a = points[i]
       local b = points[i % n + 1]
@@ -96,6 +97,12 @@ local function laneDirectionAt(lane, distance)
   local n = #points
   for i = 1, n do
     local d0, d1 = cumulative[i] or 0, cumulative[i + 1] or lane.totalLength
+    if i == n and not lane.loop then
+      local a, b = points[n-1], points[n]
+      local dx, dy, dz = b.x-a.x, b.y-a.y, b.z-a.z
+      local length = math.sqrt(dx*dx+dy*dy+dz*dz)
+      if length > 1e-6 then return vec3(dx/length, dy/length, dz/length) end
+    end
     if distance <= d1 or i == n then
       local a, b = points[i], points[i % n + 1]
       local dx, dy, dz = b.x-a.x, b.y-a.y, b.z-a.z
