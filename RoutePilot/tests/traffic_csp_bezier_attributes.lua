@@ -39,7 +39,7 @@ local function lane(id, a, b)
     loop=false,speedLimitExplicit=false}
 end
 
-local a = lane(1, vec3(0,0,0), vec3(10,0,0))
+local a = lane(1, vec3(10,0,-10), vec3(10,0,0))
 local b = lane(2, vec3(10,0,10), vec3(20,0,10))
 local edgeA = {id=1,lane=a,from=0,to=10,length=10,nextEdges={}}
 local edgeB = {id=2,lane=b,from=0,to=10,length=10,nextEdges={}}
