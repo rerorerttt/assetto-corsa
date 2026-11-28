@@ -392,3 +392,10 @@ Additional local check: the environment's `texlua` executable was found and used
 - Added RoutePilot/tests/traffic_csp_surface_projection.lua with a synthetic valid road-level lane and a second case where the raycast returns a surface 1.75 m above the source lane. The first imports and builds graph/road geometry; the second remains invalid.
 - GitHub Actions run for commit 632a5faa39acdb738c7259e9f45de1f360595073 passed: Lua 5.1 syntax validation and all three synthetic graph/importer regression tests succeeded.
 - The snap tolerance still needs validation against real CSP Traffic Tool exports, especially elevated road sections. No real-track surface projection is claimed as verified.
+
+## 2026-11-28 CSP lane-role and intersection-trajectory fidelity
+
+- The importer now resolves unfinalized CSP Traffic Tool lane exports through rules.laneRoles: role priority and speed limit are applied, then priorityOffset is added. Finalized exports retain their explicit total priority and speed limit. The synthetic importer regression checks role-based speed limit and priority offset; GitHub Actions passed for commit f1bac63e963f2fb14aa63b3ca832d97e4cb2eb72.
+- Intersection turns now honor CSP trajectoryAttributes cb/ce handle fractions rather than substituting a generic turn shape. Sampling follows an arc-length-normalized 30-sample Bezier profile, matching CSP's BezierCurveNormalized approach. U-turns use the CSP two-segment trajectory and optional ul sizing rather than a single cubic reversal.
+- Added RoutePilot/tests/traffic_csp_bezier_attributes.lua to validate authored asymmetric cb/ce handles and arc-length sampling through the route builder. GitHub Actions passed for commit c40aa6c5d2b12f0ac43becd3e5cfba31242983b1; all Lua 5.1 syntax checks and all four synthetic regression tests succeeded.
+- These tests validate synthetic importer/graph/trajectory behavior. They do not prove that the imported route follows every real CSP Traffic Tool intersection correctly or that cars can drive the resulting curves at speed; track-based runtime testing remains mandatory.
