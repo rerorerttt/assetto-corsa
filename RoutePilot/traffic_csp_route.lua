@@ -96,6 +96,65 @@ local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
   return true
 end
 
+local function polygonPoint(point)
+  return point.x or point[1], point.z or point[3]
+end
+
+local function pointInsideIntersection(point, polygon)
+  if type(polygon) ~= 'table' or #polygon < 3 then return false end
+  local x,z=point.x,point.z
+  local inside=false
+  for i=1,#polygon do
+    local j=i%#polygon+1
+    local ax,az=polygonPoint(polygon[i])
+    local bx,bz=polygonPoint(polygon[j])
+    local ex,ez=bx-ax,bz-az
+    local px,pz=x-ax,z-az
+    local cross=ex*pz-ez*px
+    local dot=px*ex+pz*ez
+    local length2=ex*ex+ez*ez
+    if math.abs(cross)<1e-4 and dot>=-1e-4 and dot<=length2+1e-4 then return true end
+    if (az>z) ~= (bz>z) then
+      local crossingX=ax+(z-az)*(bx-ax)/(bz-az)
+      if x<crossingX then inside=not inside end
+    end
+  end
+  return inside
+end
+
+local function rayPolygonDistance(point, dx, dz, polygon)
+  local best=math.huge
+  for i=1,#polygon do
+    local j=i%#polygon+1
+    local ax,az=polygonPoint(polygon[i])
+    local bx,bz=polygonPoint(polygon[j])
+    local ex,ez=bx-ax,bz-az
+    local den=dx*ez-dz*ex
+    if math.abs(den)>1e-8 then
+      local rx,rz=ax-point.x,az-point.z
+      local t=(rx*ez-rz*ex)/den
+      local u=(rx*dz-rz*dx)/den
+      if t>0 and u>=-1e-6 and u<=1+1e-6 and t<best then best=t end
+    end
+  end
+  return best<math.huge and best or nil
+end
+
+local function intersectionBoundsAt(point, direction, intersection)
+  local polygon=intersection and intersection.points
+  if not pointInsideIntersection(point,polygon) then return nil,nil end
+  local length=math.sqrt(direction.x*direction.x+direction.z*direction.z)
+  if length<1e-6 then return nil,nil end
+  local tx,tz=direction.x/length,direction.z/length
+  local leftX,leftZ=-tz,tx
+  local left=rayPolygonDistance(point,leftX,leftZ,polygon)
+  local right=rayPolygonDistance(point,-leftX,-leftZ,polygon)
+  if not left or not right then return nil,nil end
+  left,right=left-0.5,right-0.5
+  if left<1.25 or right<1.25 then return nil,nil end
+  return left,right
+end
+
 local function projectIntersectionPoint(point)
   if not physics or type(physics.raycastTrack)~='function' then return nil end
   local probe=vec3(point.x,point.y+2,point.z)
@@ -110,7 +169,9 @@ local function projectIntersectionPoint(point)
     if okType then surfaceType=value end
   end
   if surfaceType==1 or surfaceType==2 or surfaceType==6 then return nil end
-  return vec3(point.x,probe.y-hit,point.z)
+  local projectedY=probe.y-hit
+  if math.abs(projectedY-point.y)>1.5 then return nil end
+  return vec3(point.x,projectedY,point.z)
 end
 
 local function appendBezier(route, roads, movement)
@@ -194,7 +255,6 @@ local function appendBezier(route, roads, movement)
   if not leftA or not rightA or not leftB or not rightB then
     return false, 'unverified_road_boundaries'
   end
-  local halfWidth=math.max(0.05,math.min(3.5,leftA,-rightA,leftB,-rightB))
   local speedA=movement.from.lane.speedLimitExplicit and
     math.max(40,math.min(200,movement.from.lane.speedLimit or 200)) or 200
   local speedB=movement.to.lane.speedLimitExplicit and
@@ -225,10 +285,27 @@ local function appendBezier(route, roads, movement)
   end
 
   for i = 1, steps do
-    local p = pointAtArcDistance(totalLength*i/steps)
+    local arcDistance=totalLength*i/steps
+    local p=pointAtArcDistance(arcDistance)
     local projected=projectIntersectionPoint(p)
-    if not projected then return false end
-    appendPoint(route, projected, halfWidth, -halfWidth, speedLimit)
+    if not projected then return false, 'intersection_surface_projection_failed' end
+    local before=pointAtArcDistance(math.max(0,arcDistance-0.25))
+    local after=pointAtArcDistance(math.min(totalLength,arcDistance+0.25))
+    local tangent=vec3(after.x-before.x,after.y-before.y,after.z-before.z)
+    local left,right=intersectionBoundsAt(projected,tangent,movement.intersection)
+    if not left or not right then
+      if distance(projected,p0)<=4.0 then
+        left,right=leftA,-rightA
+      elseif distance(projected,p3)<=4.0 then
+        left,right=leftB,-rightB
+      else
+        return false, 'unverified_intersection_boundaries'
+      end
+    end
+    if left<1.25 or right<1.25 then
+      return false, 'insufficient_intersection_clearance'
+    end
+    appendPoint(route, projected, left, -right, speedLimit)
   end
   return true
 end
