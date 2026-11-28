@@ -200,30 +200,12 @@ local function appendLaneRange(out,lane,fromDistance,toDistance)
   append(out,sampleLane(lane,toDistance))
 end
 
+-- CSP lane polylines are authored geometry. Never invent a Bezier curve
+-- between them: append the exact target-lane connection point instead.
+-- The renderer may draw a short straight join between the two source points,
+-- but every route vertex remains an original/interpolated point on a CSP lane.
 local function bezierConnector(out,fromLane,fromDistance,toLane,toDistance)
-  local p0=sampleLane(fromLane,fromDistance)
-  local p3=sampleLane(toLane,toDistance)
-  local function tangent(lane,d)
-    local p=sampleLane(lane,d)
-    local q=sampleLane(lane,math.min(laneLength(lane),d+1.5))
-    return norm(q.x-p.x,q.z-p.z)
-  end
-  local ax,az=tangent(fromLane,fromDistance)
-  local bx,bz=tangent(toLane,toDistance)
-  local gap=math.sqrt(dist2(p0,p3))
-  local handle=math.max(2.0,math.min(14.0,gap*0.42+2.0))
-  local p1={x=p0.x+ax*handle,y=p0.y,z=p0.z+az*handle}
-  local p2={x=p3.x-bx*handle,y=p3.y,z=p3.z-bz*handle}
-  local steps=math.max(5,math.min(24,math.ceil((gap+handle*2)/2.0)))
-  for i=1,steps do
-    local t=i/steps
-    local u=1-t
-    append(out,{
-      x=u*u*u*p0.x+3*u*u*t*p1.x+3*u*t*t*p2.x+t*t*t*p3.x,
-      y=u*u*u*p0.y+3*u*u*t*p1.y+3*u*t*t*p2.y+t*t*t*p3.y,
-      z=u*u*u*p0.z+3*u*u*t*p1.z+3*u*t*t*p2.z+t*t*t*p3.z
-    })
-  end
+  append(out,sampleLane(toLane,toDistance))
 end
 
 local function selectTransition(graph, currentLane, link, laneLinks, visited)
@@ -454,72 +436,67 @@ end
 
 -- Find parallel, same-direction lanes around the chosen route. Their signed
 -- offsets define the outer road envelope; inner lane boundaries disappear.
+-- Keep the imported driving line on the original CSP lane geometry.
+-- Nearby same-direction lane centres are used only to estimate a traffic
+-- corridor for AI lane changes; they never move the route centreline.
+-- traffic.json contains lane centre-lines, not surveyed road-edge curves.
 local function buildCorridor(graph, raw)
-  local nodes, left, right = {}, {}, {}
-  local sampleStep = 3.0
-  local samples = {}
+  local nodes,left,right={}, {}, {}
+  local sampleStep=3.0
+  local samples={}
 
-  -- Spatial index for lane segments. The previous implementation projected
-  -- every route sample onto every point of all 593 source lanes (S×L×P).
-  -- Only segments whose expanded 8 m bounds contain the sample's grid cell
-  -- can contribute to the local corridor.
-  local cellSize, searchRadius = 24.0, 8.0
-  local spatial = {}
+  local cellSize,searchRadius=24.0,7.5
+  local spatial={}
   local function addSegmentCell(cx,cz,segment)
     local column=spatial[cx]
-    if not column then
-      column={}
-      spatial[cx]=column
-    end
+    if not column then column={} spatial[cx]=column end
     local bucket=column[cz]
-    if not bucket then
-      bucket={}
-      column[cz]=bucket
-    end
+    if not bucket then bucket={} column[cz]=bucket end
     bucket[#bucket+1]=segment
   end
+
   for _,id in ipairs(graph.laneOrder) do
     local lane=graph.lanes[id]
     if lane.trackValid~=false then
-    for si=1,#lane.points-1 do
-      local a,b=lane.points[si],lane.points[si+1]
-      local dx,dz=b.x-a.x,b.z-a.z
-      local len2=dx*dx+dz*dz
-      if len2>1e-5 then
-        local inv=1/math.sqrt(len2)
-        local segment={laneId=id,a=a,dx=dx,dy=b.y-a.y,dz=dz,
-          len2=len2,tx=dx*inv,tz=dz*inv}
-        local minCX=math.floor((math.min(a.x,b.x)-searchRadius)/cellSize)
-        local maxCX=math.floor((math.max(a.x,b.x)+searchRadius)/cellSize)
-        local minCZ=math.floor((math.min(a.z,b.z)-searchRadius)/cellSize)
-        local maxCZ=math.floor((math.max(a.z,b.z)+searchRadius)/cellSize)
-        for cx=minCX,maxCX do
-          for cz=minCZ,maxCZ do addSegmentCell(cx,cz,segment) end
+      for si=1,#lane.points-1 do
+        local a,b=lane.points[si],lane.points[si+1]
+        local dx,dz=b.x-a.x,b.z-a.z
+        local len2=dx*dx+dz*dz
+        if len2>1e-5 then
+          local inv=1/math.sqrt(len2)
+          local segment={laneId=id,a=a,dx=dx,dy=b.y-a.y,dz=dz,
+            len2=len2,tx=dx*inv,tz=dz*inv}
+          local minCX=math.floor((math.min(a.x,b.x)-searchRadius)/cellSize)
+          local maxCX=math.floor((math.max(a.x,b.x)+searchRadius)/cellSize)
+          local minCZ=math.floor((math.min(a.z,b.z)-searchRadius)/cellSize)
+          local maxCZ=math.floor((math.max(a.z,b.z)+searchRadius)/cellSize)
+          for cx=minCX,maxCX do
+            for cz=minCZ,maxCZ do addSegmentCell(cx,cz,segment) end
+          end
         end
       end
     end
-    end
   end
-  for i = 1, #raw - 1 do
-    local a, b = raw[i], raw[i+1]
-    local dx, dz = b.x-a.x, b.z-a.z
-    local length = math.sqrt(dx*dx+dz*dz)
-    local count = math.max(1, math.ceil(length/sampleStep))
-    for k = 0, count - 1 do
-      local t = k/count
-      samples[#samples+1] = {x=a.x+dx*t,y=a.y+(b.y-a.y)*t,z=a.z+dz*t}
-    end
-  end
-  samples[#samples+1] = raw[#raw]
 
-  local records = {}
-  for i = 1, #samples do
-    local p = samples[i]
-    local prev = samples[math.max(1,i-1)]
-    local nxt = samples[math.min(#samples,i+1)]
-    local tx,tz = norm(nxt.x-prev.x,nxt.z-prev.z)
-    local nx,nz = -tz,tx
-    local offsets = {0}
+  for i=1,#raw-1 do
+    local a,b=raw[i],raw[i+1]
+    local dx,dz=b.x-a.x,b.z-a.z
+    local length=math.sqrt(dx*dx+dz*dz)
+    local count=math.max(1,math.ceil(length/sampleStep))
+    for k=0,count-1 do
+      local t=k/count
+      samples[#samples+1]={x=a.x+dx*t,y=a.y+(b.y-a.y)*t,z=a.z+dz*t}
+    end
+  end
+  samples[#samples+1]=raw[#raw]
+
+  for i=1,#samples do
+    local p=samples[i]
+    local prev=samples[math.max(1,i-1)]
+    local nxt=samples[math.min(#samples,i+1)]
+    local tx,tz=norm(nxt.x-prev.x,nxt.z-prev.z)
+    local nx,nz=-tz,tx
+    local offsets={0}
     local bestByLane={}
     local column=spatial[math.floor(p.x/cellSize)]
     local candidates=column and column[math.floor(p.z/cellSize)] or nil
@@ -527,7 +504,7 @@ local function buildCorridor(graph, raw)
       for ci=1,#candidates do
         local segment=candidates[ci]
         local alignment=segment.tx*tx+segment.tz*tz
-        if alignment>=0.75 then
+        if alignment>=0.92 then
           local a=segment.a
           local t=math.max(0,math.min(1,
             ((p.x-a.x)*segment.dx+(p.z-a.z)*segment.dz)/segment.len2))
@@ -536,27 +513,28 @@ local function buildCorridor(graph, raw)
           local qz=a.z+segment.dz*t
           local ox,oz=qx-p.x,qz-p.z
           local d2=ox*ox+oz*oz
-          if d2<=searchRadius*searchRadius and math.abs(qy-p.y)<=2.5 then
+          if d2<=searchRadius*searchRadius and math.abs(qy-p.y)<=1.25 then
             local score=d2+(1-alignment)*(1-alignment)*25
-            local previous=bestByLane[segment.laneId]
-            if not previous or score<previous.score then
+            local old=bestByLane[segment.laneId]
+            if not old or score<old.score then
               bestByLane[segment.laneId]={x=qx,z=qz,score=score}
             end
           end
         end
       end
     end
-    for _,pr in pairs(bestByLane) do
-      local ox,oz=pr.x-p.x,pr.z-p.z
-      local lateral=ox*nx+oz*nz
-      if math.abs(lateral)>=1.0 and math.abs(lateral)<=8.0 then
+
+    for _,q in pairs(bestByLane) do
+      local lateral=(q.x-p.x)*nx+(q.z-p.z)*nz
+      if math.abs(lateral)>=1.0 and math.abs(lateral)<=7.5 then
         offsets[#offsets+1]=lateral
       end
     end
     table.sort(offsets)
-    -- Expand independently from the reference lane on each side. The old
-    -- ascending single pass visited the far-left offsets first and discarded
-    -- them, so multi-lane corridors became asymmetrical and shifted sideways.
+
+    -- Only accept a continuous chain of adjacent lane centres from the
+    -- selected lane. Do not shift the source centreline or smooth across
+    -- merges, splits, ramps, or nearby unrelated roads.
     local lo,hi=0,0
     for j=#offsets,1,-1 do
       local value=offsets[j]
@@ -570,52 +548,13 @@ local function buildCorridor(graph, raw)
         if value<=hi+5.5 then hi=value else break end
       end
     end
-    local laneCount=math.max(1,math.floor((hi-lo)/3.0+0.5)+1)
-    -- CSP traffic lanes are lane centre-lines, not road edges. Estimate the
-    -- corridor from the connected same-direction lane group at 3 m per lane.
-    local width=laneCount*3.0
-    records[i]={point=p,shift=(lo+hi)*0.5,half=width*0.5,nx=nx,nz=nz}
+
+    nodes[#nodes+1]=vec3(p.x,p.y,p.z)
+    left[#left+1]=lo-1.5
+    right[#right+1]=hi+1.5
   end
 
-  -- A lane can disappear from the nearest-projection result for one sample
-  -- at a junction or where two CSP polylines overlap. Do not feed that
-  -- one-frame geometric discontinuity into the saved corridor. Smooth the
-  -- lateral centre, and use the narrowest nearby half-width so smoothing can
-  -- never invent extra road width at a merge or split.
-  local filteredShift, filteredHalf = {}, {}
-  for i=1,#records do
-    local weighted,weightSum,conservativeHalf=0,0,math.huge
-    for k=-2,2 do
-      local j=math.max(1,math.min(#records,i+k))
-      local w=(k==0 and 3) or (math.abs(k)==1 and 2) or 1
-      weighted=weighted+records[j].shift*w
-      weightSum=weightSum+w
-      conservativeHalf=math.min(conservativeHalf,records[j].half)
-    end
-    filteredShift[i]=weighted/weightSum
-    filteredHalf[i]=conservativeHalf
-  end
-
-  -- Limit centre movement between adjacent 3 m samples. This removes
-  -- projection-induced teeth without introducing a sharp offset correction.
-  for i=2,#records do
-    local delta=filteredShift[i]-filteredShift[i-1]
-    filteredShift[i]=filteredShift[i-1]+math.max(-0.75,math.min(0.75,delta))
-  end
-
-  for i=1,#records do
-    local rec=records[i]
-    local center={x=rec.point.x+rec.nx*filteredShift[i],
-      y=rec.point.y,z=rec.point.z+rec.nz*filteredShift[i]}
-    if #nodes==0 or dist2(nodes[#nodes],center)>0.01 then
-      nodes[#nodes+1]=vec3(center.x,center.y,center.z)
-      left[#left+1]=-filteredHalf[i]
-      right[#right+1]=filteredHalf[i]
-    end
-  end
-  if #nodes < 2 then return nil,nil,nil end
-  -- Align bounds with deduplicated node list.
-  while #left > #nodes do table.remove(left) table.remove(right) end
+  if #nodes<2 then return nil,nil,nil end
   return nodes,left,right
 end
 
