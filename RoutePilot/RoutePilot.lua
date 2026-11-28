@@ -994,6 +994,7 @@ function script.update(dt)
       end
       -- The coordinator has already resolved all lane decisions. Update cars
       -- in deterministic route order; no per-car yield queue or pass handshake.
+      local okLoop,errLoop=pcall(function()
       table.sort(driveOrder,function(a,b)
         local pa,pb=state.p[a],state.p[b]
         local priorityA=safeNumber(pa and pa.trafficPriority)
@@ -1021,6 +1022,8 @@ function script.update(dt)
           end
         end
       end
+      end)
+      if not okLoop then writeLog("DRIVER_BATCH_ERROR err=%s",tostring(errLoop)) end
     else
       for idx in pairs(state.p) do releaseCar(idx) end
     end
