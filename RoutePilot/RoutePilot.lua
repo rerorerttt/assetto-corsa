@@ -348,7 +348,7 @@ local function loadLine(retryOnly)
       state.playerRouteInvalid=false
       state.cspImportPending=false; state.autoImportAttempts=0
       state.status="CSP: собственный AI, исходные линии Traffic Tool"
-      writeLog("CSP_IMPORT_PREVIEW_ONLY points=%d length=%.1f loop=%s reason=%s lanes=%d",
+      writeLog("CSP_IMPORT_CUSTOM_DRIVER_READY points=%d length=%.1f loop=%s reason=%s lanes=%d",
         #nodes,safeNumber(infoOrError.routeLength),tostring(loop==true),
         tostring(infoOrError.rejectReason),
         #(infoOrError.network and infoOrError.network.laneOrder or {}))
@@ -671,6 +671,50 @@ local function sampleSpawnRoute(metrics,distance)
   end
   return nil,nil,nil,nil
 end
+local function snapSpawnToAuthoredLane(position,direction)
+  local graph=state.trafficNetwork
+  if not graph then return nil end
+  local hx,hz=normalize2(direction.x,direction.z)
+  local best,bestScore=nil,math.huge
+  for _,laneId in ipairs(graph.laneOrder or {}) do
+    local lane=graph.lanes[laneId]
+    local box=lane and lane.aabb
+    if lane and #lane.points>=2 then
+      local near=true
+      if box then
+        local dx=math.max(box.minX-position.x,0,position.x-box.maxX)
+        local dz=math.max(box.minZ-position.z,0,position.z-box.maxZ)
+        near=dx*dx+dz*dz<=3.0*3.0
+      end
+      if near then
+        for i=1,#lane.points-1 do
+          local p0,p1=lane.points[i],lane.points[i+1]
+          local vx,vz=p1.x-p0.x,p1.z-p0.z
+          local lenSq=vx*vx+vz*vz
+          if lenSq>1e-8 then
+            local t=clamp(((position.x-p0.x)*vx+(position.z-p0.z)*vz)/lenSq,0,1)
+            local qx,qy,qz=p0.x+vx*t,p0.y+(p1.y-p0.y)*t,p0.z+vz*t
+            local dx,dz=position.x-qx,position.z-qz
+            local dy=position.y-qy
+            local planar=math.sqrt(dx*dx+dz*dz)
+            local tx,tz=normalize2(vx,vz)
+            local alignment=hx*tx+hz*tz
+            if planar<=1.5 and math.abs(dy)<=1.5 and alignment>=0.85 then
+              local score=dx*dx+dz*dz+dy*dy*4+(1-alignment)*2
+              if score<bestScore then
+                bestScore=score
+                best={position=vec3(qx,qy,qz),direction=vec3(tx,0,tz),
+                  lane=laneId,segment=i,t=t,error=planar}
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return best
+end
+
 local function spotIsClear(pos, exceptIndex)
   local sim=ac.getSim()
   if not sim then return true end
@@ -757,8 +801,27 @@ local function trySpawnTeleport(sim,dt)
   for order=1,count do
     local carIndex=aiCars[order]
     if state.spawnedCars[carIndex] then already=already+1 else
-    local position,direction,routeSegment,routeParameter=
-      sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
+    local position,direction,routeSegment,routeParameter
+    local snapped=nil
+    -- Skip junction connector gaps and sample forward until the target is
+    -- verified against an authored Traffic Tool segment.
+    for advance=0,30,2 do
+      local candidate,candidateDirection,candidateSegment,candidateT=
+        sampleSpawnRoute(metrics,startDistance+(order-1)*gap+advance)
+      if not candidate then break end
+      if state.loadedFromCSP then
+        snapped=snapSpawnToAuthoredLane(candidate,candidateDirection)
+        if snapped then
+          position,direction=snapped.position,snapped.direction
+          routeSegment,routeParameter=candidateSegment,candidateT
+          break
+        end
+      else
+        position,direction=candidate,candidateDirection
+        routeSegment,routeParameter=candidateSegment,candidateT
+        break
+      end
+    end
     if position and direction then
       -- RoutePilot controls the car itself. Teleport directly to the imported
       -- directed Traffic Tool line; no native AI spline is assigned.
