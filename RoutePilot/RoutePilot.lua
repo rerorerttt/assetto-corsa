@@ -537,7 +537,15 @@ local function trySpawnCSPTraffic(sim,dt,route)
   if not trafficCSP or trafficCSP.graphSpawnDone then return end
   local routes=trafficCSP.previewRoutes or (route and {route}) or {}
   if #routes==0 then return end
-  table.sort(routes,function(a,b) return (a.length or 0)>(b.length or 0) end)
+  table.sort(routes,function(a,b)
+    if a.playerAligned~=b.playerAligned then return a.playerAligned==true end
+    return (a.length or 0)>(b.length or 0)
+  end)
+  trafficCSP.playerRouteIndex=nil
+  for ri=1,#routes do
+    if routes[ri].playerAligned then trafficCSP.playerRouteIndex=ri; break end
+  end
+  trafficCSP.playerRouteIndex=trafficCSP.playerRouteIndex or 1
   trafficCSP.previewRoute=routes[1]
   trafficCSP.graphSpawnWait=(trafficCSP.graphSpawnWait or 0)+dt
   local aiCars={}
@@ -1037,6 +1045,9 @@ function script.update(dt)
               trafficCSP.graph,trafficCSP.roads,candidate.edge,candidate.along,
               {minLength=250,loop=true,requireLoop=true})
             if route then
+              local candidateDirection=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
+              route.playerAlignment=hx*candidateDirection.x+hz*candidateDirection.z
+              route.playerAligned=route.playerAlignment>=0.5
               route.group=group
               route.startCandidate=candidate
               selectedRoutes[#selectedRoutes+1]=route
@@ -1167,7 +1178,7 @@ function script.update(dt)
         for ri=1,#routes do routeOrders[ri]={} end
         for _,i in ipairs(driveOrder) do
           local ri=trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[i] or nil
-          if i==0 and playerAI then ri=1 end
+          if i==0 and playerAI then ri=trafficCSP.playerRouteIndex or 1 end
           if ri and routeOrders[ri] then routeOrders[ri][#routeOrders[ri]+1]=i end
         end
 
@@ -1188,7 +1199,7 @@ function script.update(dt)
             local savedOther={}
             for idx,person in pairs(state.p) do
               local assigned=trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[idx] or nil
-              if idx==0 and playerAI then assigned=1 end
+              if idx==0 and playerAI then assigned=trafficCSP.playerRouteIndex or 1 end
               if assigned~=ri then
                 savedOther[idx]={
                   routeProgress=person.routeProgress,
