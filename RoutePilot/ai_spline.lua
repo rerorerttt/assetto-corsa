@@ -20,6 +20,12 @@ local function normalized(x,z)
   return x/l,z/l
 end
 
+local function normalized3(x,y,z)
+  local l=math.sqrt(x*x+y*y+z*z)
+  if l<1e-6 then return 0,0,1 end
+  return x/l,y/l,z/l
+end
+
 local function curveRadius(a,b,c)
   local function flat(a,b)
     local x,z=b.x-a.x,b.z-a.z
@@ -90,7 +96,7 @@ function M.encode(nodes, loop)
   for i=1,count do
     local nextIndex=i==count and (loop and 1 or count) or i+1
     local nextPoint=points[nextIndex]
-    local tx,tz=normalized(nextPoint.x-p.x,nextPoint.z-p.z)
+    local tx,ty,tz=normalized3(nextPoint.x-p.x,nextPoint.y-p.y,nextPoint.z-p.z)
     local radius=100000.0
     if loop or (i>1 and i<count) then
       local a=points[i==1 and count or i-1]
@@ -106,7 +112,7 @@ function M.encode(nodes, loop)
     -- The forward vector carries the actual world-space route direction.
     chunks[#chunks+1]=string.pack("<ffffffffffffffffff",
       60.0, 1.0, 0.0, 0.0, radius, 3.5, 3.5, 0.0, 1.0,
-      0.0, 1.0, 0.0, length, tx, 0.0, tz, 0.0, 0.0)
+      0.0, 1.0, 0.0, length, tx, ty, tz, 0.0, 0.0)
   end
 
   -- Grid is optional in the AC v7 format (AiSpline.HasGrid=false).
