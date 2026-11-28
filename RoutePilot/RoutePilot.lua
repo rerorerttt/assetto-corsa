@@ -592,7 +592,7 @@ local function trySpawnCSPTraffic(sim,dt,route)
       local startDistance=math.min(40.0,currentRoute.length*0.08)
       local available=math.max(0,currentRoute.length-startDistance-10.0)
       local gap=math.min(CFG.SPAWN_GAP,available/math.max(1,#groupCars))
-      if not currentRoute.loop or gap<CFG.SPAWN_MIN_GAP then
+      if gap<CFG.SPAWN_MIN_GAP then
         valid=false
         break
       end
