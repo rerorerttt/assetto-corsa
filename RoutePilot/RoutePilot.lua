@@ -892,25 +892,33 @@ function script.update(dt)
       trafficCSPRouteRetry=trafficCSPRouteRetry+dt
       if trafficCSPRouteRetry>=1.0 then
         trafficCSPRouteRetry=0
-        local edge, along, distance = CSPGraph.nearestEdge(
-          trafficCSP.graph, player.position, player.look, 120)
-        if edge then
-          local route, routeError = CSPRoutes.build(
-            trafficCSP.graph, trafficCSP.roads, edge, along, { minLength = 250, loop = true })
+        local candidates=CSPGraph.nearestEdges(
+          trafficCSP.graph,player.position,player.look,120,12)
+        local lastError='no_lane_near_player'
+        local selected=nil
+        for ci=1,#candidates do
+          local candidate=candidates[ci]
+          local route,routeError=CSPRoutes.build(
+            trafficCSP.graph,trafficCSP.roads,candidate.edge,candidate.along,
+            {minLength=250,loop=true,requireLoop=true})
           if route then
-            trafficCSPRouteAttempted = true
-            trafficCSP.previewRoute = route
-            writeLog("CSP_ROUTE_PREVIEW_OK edge=%d distance=%.2f length=%.1f points=%d path_edges=%d",
-              edge.id, distance or -1, route.length or 0, #route.nodes, #route.edges)
-          else
-            trafficCSP.previewRouteError = tostring(routeError)
-            trafficCSPRouteFailures=trafficCSPRouteFailures+1
-            writeLog("CSP_ROUTE_PREVIEW_FAILED edge=%d distance=%.2f reason=%s attempt=%d",
-              edge.id, distance or -1, tostring(routeError), trafficCSPRouteFailures)
-            if trafficCSPRouteFailures>=5 then trafficCSPRouteAttempted=true end
+            selected={route=route,candidate=candidate}
+            break
           end
+          lastError=tostring(routeError)
+        end
+        if selected then
+          trafficCSPRouteAttempted=true
+          trafficCSP.previewRoute=selected.route
+          writeLog("CSP_ROUTE_PREVIEW_OK edge=%d distance=%.2f length=%.1f points=%d path_edges=%d loop=true candidates=%d",
+            selected.candidate.edge.id,selected.candidate.distance or -1,
+            selected.route.length or 0,#selected.route.nodes,#selected.route.edges,#candidates)
         else
-          trafficCSP.previewRouteError = 'no_lane_near_player'
+          trafficCSP.previewRouteError=lastError
+          trafficCSPRouteFailures=trafficCSPRouteFailures+1
+          writeLog("CSP_ROUTE_PREVIEW_FAILED candidates=%d reason=%s attempt=%d",
+            #candidates,lastError,trafficCSPRouteFailures)
+          if trafficCSPRouteFailures>=10 then trafficCSPRouteAttempted=true end
         end
         flushLog()
       end
