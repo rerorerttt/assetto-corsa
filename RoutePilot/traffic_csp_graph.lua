@@ -37,16 +37,20 @@ end
 local function polygonInfo(def)
   if type(def) ~= 'table' or type(def.points) ~= 'table' or #def.points < 3 then return nil end
   local points, minY, maxY = {}, math.huge, -math.huge
+  local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
   for i = 1, #def.points do
     local p = def.points[i]
     if type(p) ~= 'table' or not finite(tonumber(p[1])) or not finite(tonumber(p[2])) or not finite(tonumber(p[3])) then return nil end
     points[i] = { tonumber(p[1]), tonumber(p[2]), tonumber(p[3]) }
     minY, maxY = math.min(minY, points[i][2]), math.max(maxY, points[i][2])
+    minX, maxX = math.min(minX, points[i][1]), math.max(maxX, points[i][1])
+    minZ, maxZ = math.min(minZ, points[i][3]), math.max(maxZ, points[i][3])
   end
   local centerY = (minY + maxY) * 0.5
   return {
     id = def.id, name = def.name or ('Intersection ' .. tostring(def.id or '?')),
     points = points, centerY = centerY,
+    minX = minX, maxX = maxX, minZ = minZ, maxZ = maxZ,
     yThreshold = 5 + maxY - minY,
     definition = def, links = {}, movements = {}
   }
@@ -126,11 +130,20 @@ function Graph.build(lanes, intersectionDefs, log)
     validLanes = 0, invalidLanes = 0, intersectionLinks = 0, movements = 0,
     disconnectedLanes = 0, rejectedIntersections = 0
   } }
-  local laneByID = {}
   for i = 1, #lanes do
     local lane = lanes[i]
-    if lane.id ~= nil then laneByID[tostring(lane.id)] = lane end
     lane.graphLinks = {}
+    lane.totalLength = lane.valid and laneLength(lane) or 0
+    lane.graphBounds = nil
+    if lane.valid and #lane.points > 0 then
+      local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
+      for j = 1, #lane.points do
+        local p = lane.points[j]
+        minX, maxX = math.min(minX, p.x), math.max(maxX, p.x)
+        minZ, maxZ = math.min(minZ, p.z), math.max(maxZ, p.z)
+      end
+      lane.graphBounds = { minX = minX, maxX = maxX, minZ = minZ, maxZ = maxZ }
+    end
     if lane.valid then graph.stats.validLanes = graph.stats.validLanes + 1
     else graph.stats.invalidLanes = graph.stats.invalidLanes + 1 end
   end
@@ -145,7 +158,10 @@ function Graph.build(lanes, intersectionDefs, log)
     local inter = graph.intersections[i]
     for j = 1, #lanes do
       local lane = lanes[j]
-      if lane.valid then
+      local bounds = lane.graphBounds
+      local overlaps = bounds and bounds.maxX >= inter.minX and bounds.minX <= inter.maxX
+        and bounds.maxZ >= inter.minZ and bounds.minZ <= inter.maxZ
+      if lane.valid and overlaps then
         local intervals = laneIntersectionIntervals(lane, inter)
         for k = 1, #intervals do
           local span = intervals[k]
