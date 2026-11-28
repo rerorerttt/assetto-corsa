@@ -185,6 +185,7 @@ local function saveLine()
   else state.status="Ошибка сохранения" end
 end
 local function loadLine(retryOnly)
+  state.trafficNetwork=nil
   local loaded=nil
   -- Prefer the CSP conversion; a saved RoutePilot line is the fallback.
   if CSPConverter then
@@ -1303,7 +1304,7 @@ function windowMain(dt)
     if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
-        state.nodes={}; state.p={}; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
+        state.nodes={}; state.p={}; state.trafficNetwork=nil; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
         state.loaded=false; state.loadedFromCSP=false; state.recBounds=false
         state.status="Запись линии и границ..."
       else
@@ -1336,7 +1337,7 @@ function windowMain(dt)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
-      state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+      state.nodes={}; state.p={}; state.trafficNetwork=nil; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false; state.loadedFromCSP=false
     end
     ui.separator()
