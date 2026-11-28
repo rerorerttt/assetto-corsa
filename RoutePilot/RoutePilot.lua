@@ -602,21 +602,19 @@ local function trySpawnTeleport(sim,dt)
       local spawnDir=vec3(-direction.x,-direction.y,-direction.z)
       local simNow=ac.getSim()
       local spawnGameTime=simNow and safeNumber(simNow.gameTime) or 0
-      if state.teleportDiagnostics then
-        writeLog("TELEPORT_DIAG_API_CALL api=setAICarPosition id=%d target=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f,%.3f) before=(%.2f,%.2f,%.2f)",
-          carIndex,position.x,position.y,position.z,spawnDir.x,spawnDir.y,spawnDir.z,
-          (ac.getCar(carIndex).position.x),(ac.getCar(carIndex).position.y),(ac.getCar(carIndex).position.z))
-      end
+      local beforeCar=ac.getCar(carIndex)
+      local beforePos=beforeCar and beforeCar.position
+      writeLog("TELEPORT_DIAG_API_CALL api=setAICarPosition id=%d target=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f,%.3f) before=(%.2f,%.2f,%.2f)",
+        carIndex,position.x,position.y,position.z,spawnDir.x,spawnDir.y,spawnDir.z,
+        beforePos and beforePos.x or 0,beforePos and beforePos.y or 0,beforePos and beforePos.z or 0)
       local ok,result=pcall(physics.setAICarPosition,carIndex,position,spawnDir)
       state.teleportDiagApiAt[carIndex]=spawnGameTime
-      if state.teleportDiagnostics then
-        local after=ac.getCar(carIndex)
-        local ap=after and after.position
-        writeLog("TELEPORT_DIAG_API_RETURN api=setAICarPosition id=%d pcall_ok=%s result=%s observed=(%.2f,%.2f,%.2f) target_error=%.2f",
-          carIndex,tostring(ok),tostring(result),
-          ap and ap.x or 0,ap and ap.y or 0,ap and ap.z or 0,
-          ap and flatDist(ap,position) or -1)
-      end
+      local after=ac.getCar(carIndex)
+      local ap=after and after.position
+      writeLog("TELEPORT_DIAG_API_RETURN api=setAICarPosition id=%d pcall_ok=%s result=%s observed=(%.2f,%.2f,%.2f) target_error=%.2f",
+        carIndex,tostring(ok),tostring(result),
+        ap and ap.x or 0,ap and ap.y or 0,ap and ap.z or 0,
+        ap and flatDist(ap,position) or -1)
       if ok and result~=false then
         moved=moved+1
         state.spawnedCars[carIndex]=true
