@@ -1312,7 +1312,7 @@ function windowMain(dt)
     if ui.button(state.recLine and "СТОП запись линии" or "Запись линии",vec2(-0.5,24)) then
       state.recLine=not state.recLine
       if state.recLine then
-        state.nodes={}; state.p={}; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
+        state.nodes={}; state.p={}; state.trafficNetwork=nil; state.loadedFromCSP=false; state.playerTelemetry=nil; state.routeGeometry=nil; state.boundsL={}; state.boundsR={}
         state.loaded=false; state.recBounds=false
         state.status="Запись линии и границ..."
       else
