@@ -22,6 +22,8 @@ local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
+local okTrafficCSP, TrafficCSP = pcall(require, "traffic_csp_import")
+if not okTrafficCSP or type(TrafficCSP) ~= "table" or type(TrafficCSP.new) ~= "function" then TrafficCSP = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -63,6 +65,8 @@ end
 local function flushLog()
   if logger and logger.flush then pcall(logger.flush, logger) end
 end
+local trafficCSP = TrafficCSP and TrafficCSP.new(writeLog) or nil
+local trafficCSPAttempted = false
 local function clamp(v,lo,hi) return math.max(lo,math.min(hi,v)) end
 local function lerp(a,b,t) return a+(b-a)*t end
 local function flatDist(a,b)
@@ -767,6 +771,16 @@ function script.update(dt)
   if not dt or dt<=0 then return end
   dt=math.min(dt,0.05)
   local ok,err=pcall(function()
+    if not trafficCSPAttempted then
+      trafficCSPAttempted = true
+      if trafficCSP then
+        local okImport, importError = pcall(trafficCSP.load, trafficCSP)
+        if not okImport then writeLog("CSP_IMPORT_ERROR err=%s", tostring(importError)) end
+      else
+        writeLog("CSP_IMPORT_MODULE_UNAVAILABLE")
+      end
+      flushLog()
+    end
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
@@ -1112,6 +1126,14 @@ function windowMain(dt)
       ui.tabItem("Dev", function()
         ui.text("Диагностика контроллера RoutePilot")
         ui.text("Подробная телеметрия рулевого управления и динамики автомобиля.")
+        if trafficCSP then
+          local s = trafficCSP.stats
+          ui.text(string.format("CSP Traffic: %s | полосы %d | пригодны %d | без поверхности %d",
+            trafficCSP.loaded and "импортирован" or (trafficCSP.error or "ожидание"),
+            s.lanes or 0, s.usable or 0, s.invalid or 0))
+        else
+          ui.text("CSP Traffic: модуль не загружен")
+        end
         if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
           state.steeringDiagnostics=not state.steeringDiagnostics
           writeLog("STEERING_DIAGNOSTICS %s",state.steeringDiagnostics and "ON" or "OFF")
