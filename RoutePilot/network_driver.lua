@@ -45,7 +45,7 @@ end
 local function occupancy(g,laneId,s,index,sim,range)
  local l=g.lanes[laneId];local ahead,behind
  for i=0,sim.carsCount-1 do if i~=index then local c=ac.getCar(i);if c and c.isActive then
-  local q=project(l,c.position)
+  local q=project(l,c.position,s,range+20)
   if q and q.distance<4.8 then local hx,hz=norm(c.look.x,c.look.z)
    if dot(hx,hz,q.tx,q.tz)>0.15 then local gap=q.s-s
     if l.loop then if gap>l.length*.5 then gap=gap-l.length elseif gap< -l.length*.5 then gap=gap+l.length end end
@@ -74,7 +74,7 @@ local function laneChange(g,l,p,index,sim,speed)
 end
 local function junction(g,l,p,car,index,sim)
  local hx,hz=norm(car.look.x,car.look.z);local best,score
- for _,e in ipairs(l.outgoing or{})do if p.s>=e.fromS-4 and p.s<=e.fromS+3 then
+ for _,e in ipairs(l.outgoing or{})do if p.s>=e.fromS-12 and p.s<=e.fromS+10 then
   local t=g.lanes[e.to]
   if t then local q=point(t,e.toS);local tx,tz=tangent(t,e.toS);local a=dot(hx,hz,tx,tz)
    if a>0.05 and dist(car.position,q)<32 then local block=occupancy(g,t.id,e.toS,index,sim,25)
