@@ -1922,12 +1922,18 @@ function Driver.update(carIndex, car, dt)
     p = state.p[carIndex]
   end
 
-  p.retireT = p.retireT + dt
-  if p.retireT >= 2.0 then
-    p.retireT = 0
-    if physics and physics.preventAIFromRetiring then
-      pcall(physics.preventAIFromRetiring, carIndex)
+  -- CSP documents this as a temporary retirement lock. It must be
+  -- refreshed continuously: an AI that is stopped or held by our brake
+  -- command can otherwise be retired by AC and sent back to its grid/pits.
+  if physics and physics.preventAIFromRetiring then
+    local okRetire,errRetire=pcall(physics.preventAIFromRetiring,carIndex)
+    if not okRetire and not p.retireApiErrorLogged then
+      p.retireApiErrorLogged=true
+      H.log("AI_RETIRE_GUARD_ERROR id=%d err=%s",carIndex,tostring(errRetire))
     end
+  elseif not p.retireApiMissingLogged then
+    p.retireApiMissingLogged=true
+    H.log("AI_RETIRE_GUARD_UNAVAILABLE id=%d",carIndex)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
@@ -2092,7 +2098,7 @@ function Driver.update(carIndex, car, dt)
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
-    controls.combineAxis = false
+    controls.combineAxes = false
     controls.steer = steer
     controls.gas = p.gas
     controls.brake = p.brake
