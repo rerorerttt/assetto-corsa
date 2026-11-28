@@ -53,13 +53,13 @@ local function roadGroupFor(lane)
   local left,right={},{}
   local n=#lane.points
   for i=1,n do
-    local prev=lane.points[i>1 and i-1 or n]
+    local current=lane.points[i]
     local next=lane.points[i<n and i+1 or 1]
-    local dx,dz=next.x-prev.x,next.z-prev.z
+    local dx,dz=next.x-current.x,next.z-current.z
     local length=math.sqrt(dx*dx+dz*dz)
     local lx,lz=-dz/length,dx/length
-    left[i]=vec3(lane.points[i].x+lx*3,lane.points[i].y,lane.points[i].z+lz*3)
-    right[i]=vec3(lane.points[i].x-lx*3,lane.points[i].y,lane.points[i].z-lz*3)
+    left[i]=vec3(current.x+lx*3,current.y,current.z+lz*3)
+    right[i]=vec3(current.x-lx*3,current.y,current.z-lz*3)
   end
   return {
     boundariesVerified=true,
