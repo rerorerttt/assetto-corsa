@@ -377,3 +377,11 @@ Additional local check: the environment's `texlua` executable was found and used
 - Added RoutePilot/tests/traffic_csp_loop_seam.lua, a synthetic closed-lane/intersection regression that builds the graph, checks the self-cycle, runs loop search, and builds a closed route.
 - GitHub Actions run for commit 1f53966658c3a3a8abcef1dfda63fb8a38699c4d passed: all RoutePilot Lua files parsed with Lua 5.1 and the synthetic regression passed.
 - This validates the isolated topology case only. Real traffic.json variants, CSP surface projection, route selection and vehicle behavior still require track/runtime testing.
+
+## 2026-11-28 directed-loop search regression
+
+- Reworked Graph.loopPath() to compute shortest return costs for all reachable edges with one reverse Dijkstra pass. The previous implementation checked only the 64 longest forward candidates; if those candidates exceeded the maximum complete loop cost, a shorter valid cycle after that cutoff was never considered.
+- The revised search preserves the preference for the longest feasible forward route, includes transition penalties in both search directions, and applies the visited-node bound to both passes.
+- Added RoutePilot/tests/traffic_csp_loop_search.lua. Its synthetic graph contains 64 over-limit cycles followed by a valid 20 m cycle; the old candidate cutoff rejected the graph, while the revised search finds the valid cycle.
+- GitHub Actions run for commit b11135f1790e9678e916ed09c28c83365786f46c passed: Lua 5.1 syntax validation and both graph regression tests succeeded.
+- These tests validate directed-graph behavior on synthetic data, not route connectivity or traffic behavior on real tracks.
