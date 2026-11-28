@@ -1029,6 +1029,7 @@ local mapBoundsCacheCount=-1
 local mapBoundsCacheLoop=nil
 local mapBoundsCacheLastX=nil
 local mapBoundsCacheLastZ=nil
+local mapBoundsCacheNetwork=nil
 local function computeMapBounds()
   local n=#state.nodes
   local last=n>0 and state.nodes[n] or nil
@@ -1040,7 +1041,8 @@ local function computeMapBounds()
   if mapBoundsCache and mapBoundsCacheNodes==state.nodes and
       mapBoundsCacheLeft==state.boundsL and mapBoundsCacheRight==state.boundsR and
       mapBoundsCacheCount==n and mapBoundsCacheLoop==state.loopRoute and
-      mapBoundsCacheLastX==lastX and mapBoundsCacheLastZ==lastZ then
+      mapBoundsCacheLastX==lastX and mapBoundsCacheLastZ==lastZ and
+       mapBoundsCacheNetwork==state.trafficNetwork then
     return mapBoundsCache
   end
   local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
@@ -1069,6 +1071,16 @@ local function computeMapBounds()
       end
     end
   end
+  -- Include every authored CSP lane in the map extent; no synthetic boundaries.
+  if state.trafficNetwork then
+    for _,laneId in ipairs(state.trafficNetwork.laneOrder or {}) do
+      local lane=state.trafficNetwork.lanes[laneId]
+      for _,pt in ipairs(lane and lane.points or {}) do
+        minX=math.min(minX,pt.x-2.0); maxX=math.max(maxX,pt.x+2.0)
+        minZ=math.min(minZ,pt.z-2.0); maxZ=math.max(maxZ,pt.z+2.0)
+      end
+    end
+  end
   if minX==math.huge then
     mapBoundsCache=nil
   else
@@ -1081,6 +1093,7 @@ local function computeMapBounds()
   mapBoundsCacheLoop=state.loopRoute
   mapBoundsCacheLastX=lastX
   mapBoundsCacheLastZ=lastZ
+  mapBoundsCacheNetwork=state.trafficNetwork
   return mapBoundsCache
 end
 local function drawMapInRect(q0,q1)
@@ -1147,8 +1160,32 @@ local function drawMapInRect(q0,q1)
     end
   end
   end
-  -- AI line: yellow, thick, decimated to the map's actual pixel resolution.
-  do
+  -- Draw every authored CSP traffic line. No boundaries and no merged centreline.
+  if state.trafficNetwork then
+    for _,laneId in ipairs(state.trafficNetwork.laneOrder or {}) do
+      local lane=state.trafficNetwork.lanes[laneId]
+      local points=lane and lane.points or {}
+      local count=#points
+      local step=math.max(1,math.ceil(count/90))
+      local prev
+      for k=1,count,step do
+        local node=points[k]
+        local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+        if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+          ui.drawLine(prev,point,rgbm(1.0,0.78,0.12,0.90),2)
+        end
+        prev=point
+      end
+      if count>1 then
+        local node=points[count]
+        local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+        if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+          ui.drawLine(prev,point,rgbm(1.0,0.78,0.12,0.90),2)
+        end
+      end
+    end
+  else
+    -- Manual RoutePilot route fallback.
     local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
     for i=1+stride,lastIndex,stride do
       local node=state.nodes[i]
@@ -1158,10 +1195,9 @@ local function drawMapInRect(q0,q1)
       end
       prev=point
     end
-    local finalIndex=lastIndex
-    local finalNode=state.nodes[finalIndex]
+    local finalNode=state.nodes[lastIndex]
     local finalPoint=vec2(mx+(finalNode.x-cx)*scale,my+(finalNode.z-cz)*scale)
-    if finalIndex>1 and (prev.x~=finalPoint.x or prev.y~=finalPoint.y) and
+    if lastIndex>1 and (prev.x~=finalPoint.x or prev.y~=finalPoint.y) and
         segVisible(prev.x,prev.y,finalPoint.x,finalPoint.y) then
       ui.drawLine(prev,finalPoint,rgbm(1.0,0.85,0.0,0.95),3)
     end
