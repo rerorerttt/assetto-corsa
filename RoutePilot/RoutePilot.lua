@@ -48,7 +48,7 @@ local state = {
   followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  spawnHints={}, nodes={}, trafficNetwork=nil, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false, autoImportAccum=0, cspImportPending=false,
 }
 local logger=nil
@@ -191,6 +191,13 @@ local function loadLine(retryOnly)
     local ok, nodes, loop, boundsL, boundsR, infoOrError = pcall(CSPConverter.load, writeLog)
     if ok and type(nodes)=="table" and #nodes>=2 then
       state.nodes=nodes
+      state.trafficNetwork=type(infoOrError)=="table" and infoOrError.network or nil
+      if state.trafficNetwork and state.trafficNetwork.stats then
+        local ns=state.trafficNetwork.stats
+        writeLog("CSP_DIRECTED_NETWORK lanes=%d junction_edges=%d lane_changes=%d",
+          safeNumber(ns.validLanes),safeNumber(ns.junctionTransitions),
+          safeNumber(ns.laneChanges))
+      end
       state.loopRoute=loop==true
       state.boundsL=type(boundsL)=="table" and boundsL or {}
       state.boundsR=type(boundsR)=="table" and boundsR or {}
