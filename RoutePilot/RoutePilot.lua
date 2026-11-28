@@ -22,6 +22,10 @@ local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
+-- CSP traffic-map adapter is deliberately isolated from the legacy controller.
+local okCspConverter, CspConverter = pcall(require, "csp_converter")
+if not okCspConverter or type(CspConverter) ~= "table" or
+    type(CspConverter.load) ~= "function" then CspConverter = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -47,7 +51,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  playerAutopilotLast=false, steeringDiagnostics=false,
+  playerAutopilotLast=false, steeringDiagnostics=false, cspRoute=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -180,6 +184,39 @@ local function saveLine()
   else state.status="Ошибка сохранения" end
 end
 local function loadLine()
+  -- Prefer the authored CSP traffic map. The converter supplies only the
+  -- racing-line points and lateral corridor; all driving/traffic logic below
+  -- remains the original RoutePilot implementation.
+  if CspConverter then
+    local ok, nodes, loopRoute, boundsL, boundsR, meta =
+      pcall(function() return CspConverter.load(writeLog) end)
+    if ok and type(nodes) == "table" and #nodes >= 2 and
+        type(boundsL) == "table" and type(boundsR) == "table" and
+        #boundsL == #nodes and #boundsR == #nodes then
+      state.nodes = nodes
+      state.loopRoute = loopRoute == true
+      state.boundsL, state.boundsR = boundsL, boundsR
+      state.p = {}
+      state.spawnHints = {}
+      state.routeGeometry = nil
+      state.loaded = true
+      state.cspRoute = true
+      state.spawnDone = false
+      state.spawnWait = 0
+      state.spawnStable = 0
+      state.spawnLastRoster = ""
+      state.status = string.format("CSP: %d точек", #nodes)
+      writeLog("LOAD_CSP_RACING_LINE points=%d loop=%s passing=%s lanes=%d",
+        #nodes, tostring(state.loopRoute),
+        tostring(meta and meta.passingEnabled == true),
+        meta and meta.sourceLanes or 0)
+      flushLog()
+      return true
+    end
+    writeLog("CSP_ROUTE_UNAVAILABLE error=%s", tostring(ok and
+      (meta or "invalid_converter_result") or nodes))
+  end
+  state.cspRoute = false
   local loaded=nil
   if io and io.open then
     local ok,f=pcall(io.open,getLineFilePath(),"r")
@@ -1091,7 +1128,7 @@ function windowMain(dt)
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
       state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
-      state.status="Очищено"; state.loaded=false
+      state.status="Очищено"; state.loaded=false; state.cspRoute=false
     end
     ui.separator()
     if #state.nodes>=2 then
@@ -1142,6 +1179,6 @@ if ac.onRelease then
   end)
 end
 loadLine()
-loadBounds()
-writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+if not state.cspRoute then loadBounds() end
+writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d csp=%s",getTrackTag(),#state.nodes,tostring(state.cspRoute))
 flushLog()
