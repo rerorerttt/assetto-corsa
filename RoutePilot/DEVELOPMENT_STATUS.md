@@ -360,3 +360,12 @@ CSP nearest-edge lookup optimization: `Graph.nearestEdges()` now uses the lane's
 
 
 Additional local check: the environment's `texlua` executable was found and used to run an isolated Lua test of the new lane sampling helpers. Open-lane and loop-lane endpoint sampling, duplicate-segment tangent fallback, and loop wrap direction passed. This test exercised a standalone copy of the helper logic; it did not compile the complete RoutePilot modules or execute CSP APIs.
+
+
+## 2026-11-28 Lua compatibility gate
+
+- Added `.github/workflows/routepilot-lua-check.yml` on `Routepilot_CSP_traffic_0.1`. Every RoutePilot Lua source file is parsed with Lua 5.1 (`luac5.1 -p`), matching the language baseline relevant to CSP's LuaJIT runtime.
+- Workflow commit: `324f4c3fa8f427272fe087c4da39772978d529f6`.
+- The workflow has been committed but its GitHub Actions run has not yet been observed; do not report the CI check as passed until a completed run is available.
+- This gate catches syntax errors only. It does not emulate CSP APIs, validate traffic.json against every track, or replace in-game testing.
+- Release blockers remain unchanged: complete app load in CSP, real-track surface projection and lane-boundary validation, route continuity, spawn/recycle visibility, cross-route intersection arbitration, multi-car passing, recovery behavior, and sustained-session stability.
