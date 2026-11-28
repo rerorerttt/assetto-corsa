@@ -5,6 +5,8 @@
 local json = require('lib/json')
 local okGraph, Graph = pcall(require, 'traffic_csp_graph')
 if not okGraph or type(Graph) ~= 'table' or type(Graph.build) ~= 'function' then Graph = nil end
+local okRoads, Roads = pcall(require, 'traffic_csp_roads')
+if not okRoads or type(Roads) ~= 'table' or type(Roads.build) ~= 'function' then Roads = nil end
 local okSurfaces, Surfaces = pcall(require, 'shared/sim/surfaces')
 if not okSurfaces or type(Surfaces) ~= 'table' then Surfaces = nil end
 local Importer = {}
@@ -103,6 +105,8 @@ function Importer.new(log)
     areas = {},
     graph = nil,
     graphError = nil,
+    roads = nil,
+    roadsError = nil,
     stats = { lanes = 0, usable = 0, invalid = 0, samples = 0, hits = 0, misses = 0, trimmed = 0 },
   }, Importer)
 end
@@ -279,11 +283,24 @@ function Importer:load()
     self.log('CSP_GRAPH_UNAVAILABLE')
   end
 
+  if self.graph and Roads then
+    local okRoadBuild, roads = pcall(Roads.build, self.lanes, self.log)
+    if okRoadBuild then
+      self.roads = roads
+    else
+      self.roadsError = tostring(roads)
+      self.log('CSP_ROADS_ERROR err=%s', self.roadsError)
+    end
+  elseif not Roads then
+    self.roadsError = 'traffic_csp_roads_module_unavailable'
+    self.log('CSP_ROADS_UNAVAILABLE')
+  end
+
   self.loaded = true
-  self.log('CSP_IMPORT_LOADED file=%s lanes=%d usable=%d invalid=%d samples=%d hits=%d misses=%d trimmed=%d intersections=%d areas=%d surface_type_api=%s graph=%s',
+  self.log('CSP_IMPORT_LOADED file=%s lanes=%d usable=%d invalid=%d samples=%d hits=%d misses=%d trimmed=%d intersections=%d areas=%d surface_type_api=%s graph=%s roads=%s',
     tostring(self.filename), self.stats.lanes, self.stats.usable, self.stats.invalid,
     self.stats.samples, self.stats.hits, self.stats.misses, self.stats.trimmed,
-    #self.intersections, #self.areas, tostring(Surfaces ~= nil), tostring(self.graph ~= nil))
+    #self.intersections, #self.areas, tostring(Surfaces ~= nil), tostring(self.graph ~= nil), tostring(self.roads ~= nil))
   return true
 end
 
