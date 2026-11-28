@@ -97,13 +97,13 @@ local function pairMatches(a, b)
   end
   if a.loop and b.loop then
     local lengthA, lengthB = a.totalLength or 0, b.totalLength or 0
-    if math.abs(lengthA-lengthB) > math.max(20, math.max(lengthA,lengthB)*0.20) then
+    if math.abs(lengthA-lengthB) > math.max(10, math.max(lengthA,lengthB)*0.05) then
       return false
     end
   end
   local ca, da = coverage(a, b)
   local cb, db = coverage(b, a)
-  local requiredCoverage = a.loop and 0.85 or 0.65
+  local requiredCoverage = a.loop and 0.95 or 0.65
   return ca >= requiredCoverage and cb >= requiredCoverage and math.abs(da-db) <= 2.5
 end
 
