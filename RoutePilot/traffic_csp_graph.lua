@@ -625,4 +625,53 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
   return path, distances[reached.id]
 end
 
+
+function Graph.sampleEdge(edge, laneDistance)
+  if not edge then return nil end
+  local lane = edge.lane
+  local distance = math.max(edge.from, math.min(edge.to, laneDistance or edge.from))
+  return lanePositionAt(lane, distance), laneDirectionAt(lane, distance), distance
+end
+
+-- Finds the closest directed lane segment to a world position. Heading is used
+-- to reject the opposite carriageway at crossings and parallel roads.
+function Graph.nearestEdge(graph, position, heading, maxDistance)
+  if not graph or not position then return nil end
+  local best, bestDistance, bestAlong = nil, maxDistance or math.huge, nil
+  local hx, hz = 0, 0
+  if heading then
+    local h = math.sqrt(heading.x*heading.x + heading.z*heading.z)
+    if h > 1e-6 then hx, hz = heading.x/h, heading.z/h end
+  end
+  for i = 1, #graph.edges do
+    local edge, lane = graph.edges[i], graph.edges[i].lane
+    local points, cumulative = lane.points, lane.cumulative
+    local count = lane.loop and #points or #points-1
+    for j = 1, count do
+      local a, b = points[j], points[j % #points + 1]
+      local d0, d1 = cumulative[j] or 0, cumulative[j+1] or lane.totalLength
+      local lo, hi = math.max(d0, edge.from), math.min(d1, edge.to)
+      if hi >= lo and d1-d0 > 1e-6 then
+        local vx, vy, vz = b.x-a.x, b.y-a.y, b.z-a.z
+        local t0, t1 = (lo-d0)/(d1-d0), (hi-d0)/(d1-d0)
+        local t = ((position.x-a.x)*vx+(position.y-a.y)*vy+(position.z-a.z)*vz) /
+          math.max(1e-8, vx*vx+vy*vy+vz*vz)
+        t = math.max(t0, math.min(t1, t))
+        local qx, qy, qz = a.x+vx*t, a.y+vy*t, a.z+vz*t
+        local dx, dy, dz = position.x-qx, position.y-qy, position.z-qz
+        local distance = math.sqrt(dx*dx+dy*dy+dz*dz)
+        local dirLength = math.sqrt(vx*vx+vz*vz)
+        local alignment = dirLength > 1e-6 and (hx*vx+hz*vz)/dirLength or 1
+        if (not heading or alignment >= -0.15) and distance < bestDistance then
+          bestDistance = distance
+          best = edge
+          bestAlong = d0 + (d1-d0)*t
+        end
+      end
+    end
+  end
+  if not best then return nil end
+  return best, bestAlong, bestDistance
+end
+
 return Graph
