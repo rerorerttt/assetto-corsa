@@ -477,4 +477,72 @@ function Graph.build(lanes, intersectionDefs, log)
   return graph
 end
 
+
+local function heapPush(heap, item)
+  local i = #heap + 1
+  heap[i] = item
+  while i > 1 do
+    local p = math.floor(i / 2)
+    if heap[p].cost <= item.cost then break end
+    heap[i], i = heap[p], p
+  end
+  heap[i] = item
+end
+
+local function heapPop(heap)
+  local first = heap[1]
+  local last = table.remove(heap)
+  if #heap > 0 then
+    local i, n = 1, #heap
+    while true do
+      local left, right = i*2, i*2+1
+      if left > n then break end
+      local child = right <= n and heap[right].cost < heap[left].cost and right or left
+      if heap[child].cost >= last.cost then break end
+      heap[i], i = heap[child], child
+    end
+    heap[i] = last
+  end
+  return first
+end
+
+-- Dijkstra over lane-segment edges. Returns an ordered edge path and total
+-- cost; callers can choose a reachable terminal edge or a known destination.
+function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
+  if not graph or not startEdge then return nil, 'missing_start_edge' end
+  if targetEdge and startEdge == targetEdge then return { startEdge }, 0 end
+  local distances, previous, heap = { [startEdge.id] = 0 }, {}, {}
+  heapPush(heap, { edge = startEdge, cost = 0 })
+  local visited, reached = 0, nil
+  maxVisited = maxVisited or 20000
+  while #heap > 0 and visited < maxVisited do
+    local item = heapPop(heap)
+    local edge, cost = item.edge, item.cost
+    if cost <= (distances[edge.id] or math.huge) + 1e-7 then
+      visited = visited + 1
+      if targetEdge and edge == targetEdge then reached = edge; break end
+      if not targetEdge and #edge.nextEdges == 0 then reached = edge; break end
+      for i = 1, #edge.nextEdges do
+        local nextEdge = edge.nextEdges[i]
+        local transitionPenalty = edge.transitionPenalty and edge.transitionPenalty[nextEdge.id] or 0
+        local nextCost = cost + math.max(0.1, nextEdge.length) + transitionPenalty
+        if nextCost < (distances[nextEdge.id] or math.huge) then
+          distances[nextEdge.id] = nextCost
+          previous[nextEdge.id] = edge
+          heapPush(heap, { edge = nextEdge, cost = nextCost })
+        end
+      end
+    end
+  end
+  if not reached then return nil, visited >= maxVisited and 'search_limit' or 'no_path' end
+  local path, cursor = {}, reached
+  while cursor do
+    table.insert(path, 1, cursor)
+    if cursor == startEdge then break end
+    cursor = previous[cursor.id]
+  end
+  if path[1] ~= startEdge then return nil, 'broken_predecessor_chain' end
+  return path, distances[reached.id]
+end
+
 return Graph
