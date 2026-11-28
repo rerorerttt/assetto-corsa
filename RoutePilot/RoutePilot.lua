@@ -519,19 +519,27 @@ local function trySpawnTeleport(sim,dt)
   local metrics=buildSpawnRouteMetrics()
   if not metrics then state.spawnDone=true; return end
   local count=#aiCars
-  local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
-  if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
-  local startDistance=0
-  if metrics.loop then
-    local player=ac.getCar(0)
-    if player then
-      local routeDistance,routeError=findRouteDistanceAtPosition(
-        player.position,metrics,player.look)
-      startDistance=routeDistance+gap
-      writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f)",
-        routeDistance,routeError,player.look.x,player.look.z)
-    else startDistance=gap end
+  local player=ac.getCar(0)
+  local routeDistance,routeError=0,0
+  if player and player.position then
+    routeDistance,routeError=findRouteDistanceAtPosition(
+      player.position,metrics,player.look)
+    writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f) loop=%s",
+      routeDistance,routeError,player.look.x,player.look.z,tostring(metrics.loop))
   end
+  -- Spawn the whole AI pack ahead of the player on the imported route.
+  -- On an open route, fit the pack into the remaining forward distance;
+  -- never clamp several cars onto the same endpoint.
+  local available=metrics.loop and metrics.length or
+    math.max(0,metrics.length-routeDistance)
+  local gap=math.min(CFG.SPAWN_GAP,available/(count+1))
+  if gap<CFG.SPAWN_MIN_GAP then
+    writeLog("SPAWN_SKIPPED reason=insufficient_forward_route available=%.1f cars=%d",
+      available,count)
+    state.spawnDone=true
+    return
+  end
+  local startDistance=routeDistance+gap
   local moved,failed=0,0
   for order=1,count do
     local carIndex=aiCars[order]
