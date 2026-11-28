@@ -21,9 +21,13 @@ local function normalized(x,z)
 end
 
 local function curveRadius(a,b,c)
-  local ab=distance(a,b)
-  local bc=distance(b,c)
-  local ac=distance(a,c)
+  local function flat(a,b)
+    local x,z=b.x-a.x,b.z-a.z
+    return math.sqrt(x*x+z*z)
+  end
+  local ab=flat(a,b)
+  local bc=flat(b,c)
+  local ac=flat(a,c)
   local cross=math.abs((b.x-a.x)*(c.z-a.z)-(b.z-a.z)*(c.x-a.x))
   if cross<1e-5 then return 100000.0 end
   return math.max(1.0,math.min(100000.0,ab*bc*ac/(2.0*cross)))
