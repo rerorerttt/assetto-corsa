@@ -385,3 +385,10 @@ Additional local check: the environment's `texlua` executable was found and used
 - Added RoutePilot/tests/traffic_csp_loop_search.lua. Its synthetic graph contains 64 over-limit cycles followed by a valid 20 m cycle; the old candidate cutoff rejected the graph, while the revised search finds the valid cycle.
 - GitHub Actions run for commit b11135f1790e9678e916ed09c28c83365786f46c passed: Lua 5.1 syntax validation and both graph regression tests succeeded.
 - These tests validate directed-graph behavior on synthetic data, not route connectivity or traffic behavior on real tracks.
+
+## 2026-11-28 CSP surface-level validation
+
+- Added a 1.5 m vertical snap tolerance to the CSP Traffic importer. A raycast hit is no longer accepted solely because some surface exists below the source point: if the projected height differs from the traffic lane's source height by more than the tolerance, the sample is rejected as surface_height_mismatch. This prevents a nearby lower/upper road deck from silently becoming the lane surface.
+- Added RoutePilot/tests/traffic_csp_surface_projection.lua with a synthetic valid road-level lane and a second case where the raycast returns a surface 1.75 m above the source lane. The first imports and builds graph/road geometry; the second remains invalid.
+- GitHub Actions run for commit 632a5faa39acdb738c7259e9f45de1f360595073 passed: Lua 5.1 syntax validation and all three synthetic graph/importer regression tests succeeded.
+- The snap tolerance still needs validation against real CSP Traffic Tool exports, especially elevated road sections. No real-track surface projection is claimed as verified.
