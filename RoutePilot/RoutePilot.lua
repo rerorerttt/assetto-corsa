@@ -535,13 +535,6 @@ local function trySpawnTeleport(sim,dt)
 end
 local function trySpawnCSPTraffic(sim,dt,route)
   if not trafficCSP or trafficCSP.graphSpawnDone then return end
-  if trafficCSP.graphSpawnFailed then
-    if trafficCSP.graphSpawnFailed~='spawn_transaction_rolled_back' then return end
-    trafficCSP.graphSpawnRetryWait=(trafficCSP.graphSpawnRetryWait or 0)+dt
-    if trafficCSP.graphSpawnRetryWait<5 then return end
-    trafficCSP.graphSpawnFailed=nil
-    trafficCSP.graphSpawnRetryWait=0
-  end
   local routes=trafficCSP.previewRoutes or (route and {route}) or {}
   if #routes==0 then return end
   table.sort(routes,function(a,b)
@@ -575,6 +568,13 @@ local function trySpawnCSPTraffic(sim,dt,route)
     trafficCSP.graphSpawnFailed=nil
     trafficCSP.graphSpawnRetryWait=0
     return
+  end
+  if trafficCSP.graphSpawnFailed then
+    if trafficCSP.graphSpawnFailed~='spawn_transaction_rolled_back' then return end
+    trafficCSP.graphSpawnRetryWait=(trafficCSP.graphSpawnRetryWait or 0)+dt
+    if trafficCSP.graphSpawnRetryWait<5 then return end
+    trafficCSP.graphSpawnFailed=nil
+    trafficCSP.graphSpawnRetryWait=0
   end
   trafficCSP.graphSpawnStable=(trafficCSP.graphSpawnStable or 0)+dt
   if trafficCSP.graphSpawnStable<CFG.SPAWN_STABLE_TIME then return end
