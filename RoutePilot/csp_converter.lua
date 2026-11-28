@@ -408,7 +408,17 @@ function Converter.loadNetwork(log)
   for _,inter in ipairs(source.intersections or {}) do
     if inter.source then data.intersections[#data.intersections+1]=inter.source end
   end
-  return Converter.build(data,log)
+  local graph,buildError=Converter.build(data,log)
+  if not graph then return nil,buildError end
+  -- Preserve source validation counts: the intermediate reader intentionally
+  -- omits malformed records from its runtime lane table.
+  if source.stats then
+    graph.stats.sourceLanes=source.stats.sourceLanes or graph.stats.sourceLanes
+    graph.stats.validLanes=source.stats.validLanes or graph.stats.validLanes
+    graph.stats.invalidLanes=source.stats.invalidLanes or graph.stats.invalidLanes
+    graph.stats.sourceIntersections=source.stats.sourceIntersections or graph.stats.sourceIntersections
+  end
+  return graph
 end
 
 -- Compatibility entry point for older RoutePilot builds. It returns only the
