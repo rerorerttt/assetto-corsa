@@ -327,3 +327,11 @@ Release blockers:
 - Cars being moved are excluded at their old positions so their current grid placement does not falsely block the transaction. A destination conflict rejects the whole plan before any car is moved and retries with fewer route groups; the existing all-or-nothing teleport/rollback remains intact.
 - Static verification: confirmed obstacle checks, pairwise destination checks, transaction rejection, and route-count fallback in the committed source. This does not replace an in-game spawn test; CSP teleport behavior and real vehicle footprints still need runtime confirmation.
 - Commit: `3d73bcb9e09473ec954628842beca79a823b6a4d`.
+
+
+## 2026-11-28 loop-lane intersection entry
+
+- Fixed a directed-graph edge case in `traffic_csp_graph.lua`: an intersection interval beginning at distance zero on a closed lane can still have a valid incoming edge through the lane's wrap segment. The previous `incoming.from > 0.5` gate discarded that connection and could make otherwise reachable loop-lane movements disappear.
+- Movement generation now accepts that zero-offset entry only when the lane is explicitly closed/looped and the graph has already created a valid `incoming.inEdge`; ordinary open-lane start points remain excluded.
+- Static verification: confirmed the new guard in the fetched source. This case still needs a synthetic graph/runtime test against CSP data before it can be considered fully validated.
+- Commit: `6b21738887f3fe75fbe0316269f03b4d264da814`.
