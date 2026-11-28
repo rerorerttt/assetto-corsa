@@ -281,6 +281,12 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
     if not path then return nil, pathCost end
     loopRoute = false
   end
+  if not loopRoute and not options.targetEdge then
+    local terminal = path[#path]
+    if not terminal or not terminal.toNode or terminal.toNode.kind ~= 'lane_end' then
+      return nil, 'open_route_not_at_lane_end'
+    end
+  end
   local route = { nodes = {}, boundsL = {}, boundsR = {}, speedLimits = {}, edges = path, loop = loopRoute }
   for i = 1, #path do
     local edge = path[i]
