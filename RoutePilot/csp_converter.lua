@@ -2,6 +2,115 @@
 -- Converts EVERY authored CSP lane into an immutable directed network.
 -- No road boundaries, synthetic centreline, lane merging or route truncation.
 local Converter = {}
+local okJSON, JSON = pcall(require, "routepilot_json")
+if not okJSON or type(JSON) ~= "table" then JSON = nil end
+
+local CACHE_VERSION = 1
+
+local function trackCachePath()
+  if not ac or not ac.getFolder or not ac.FolderID then return nil end
+  local ok, root = pcall(ac.getFolder, ac.FolderID.ACApps)
+  if not ok or type(root) ~= "string" or root == "" then return nil end
+  local track = (ac.getTrackID and ac.getTrackID()) or "track"
+  local layout = (ac.getTrackLayout and ac.getTrackLayout()) or ""
+  local tag = tostring(track) .. (layout ~= "" and ("_" .. tostring(layout)) or "")
+  tag = string.gsub(tag, "[^%w_%-]", "_")
+  return root .. "/lua/RoutePilot/CspTracks/" .. tag .. ".json",
+    root .. "/lua/RoutePilot/CspTracks"
+end
+
+local function cacheEdge(e)
+  return {from=e.from,to=e.to,intersectionId=e.intersectionId,
+    fromS=e.fromS,toS=e.toS,gap=e.gap,alignment=e.alignment,
+    fromStart=e.fromStart,fromEnd=e.fromEnd,toStart=e.toStart,toEnd=e.toEnd,
+    kind=e.kind}
+end
+
+local function saveNetworkCache(graph, log)
+  if not JSON or not io or type(io.save) ~= "function" then return false end
+  local path, folder = trackCachePath()
+  if not path then return false end
+  if type(io.fileExists) == "function" then
+    local ok, exists = pcall(io.fileExists, path)
+    if ok and exists then
+      if type(log)=="function" then pcall(log,"CSP_CACHE_KEEP path=%s",path) end
+      return true
+    end
+  end
+  if type(io.createDirectory) == "function" then pcall(io.createDirectory, folder) end
+  local payload = {version=CACHE_VERSION, lanes={}, stats=graph.stats}
+  for _, id in ipairs(graph.laneOrder) do
+    local lane = graph.lanes[id]
+    local row = {id=lane.id,name=lane.name,loop=lane.loop,points={},
+      speedLimit=lane.speedLimit,priority=lane.priority,outgoing={},adjacent={}}
+    for i=1,#lane.points do
+      local p=lane.points[i]
+      row.points[#row.points+1]={p.x,p.y,p.z}
+    end
+    for i=1,#lane.outgoing do row.outgoing[#row.outgoing+1]=cacheEdge(lane.outgoing[i]) end
+    for i=1,#lane.adjacent do row.adjacent[#row.adjacent+1]=cacheEdge(lane.adjacent[i]) end
+    payload.lanes[#payload.lanes+1]=row
+  end
+  local okEncode, raw = pcall(JSON.encode, payload)
+  if not okEncode or type(raw)~="string" or raw=="" then return false end
+  -- Never replace an existing track cache, even if it is stale or damaged.
+  if type(io.fileExists) == "function" then
+    local ok, exists = pcall(io.fileExists, path)
+    if ok and exists then return true end
+  end
+  local okSave = pcall(io.save, path, raw)
+  if okSave and type(log)=="function" then
+    pcall(log,"CSP_CACHE_SAVED path=%s lanes=%d bytes=%d",path,#payload.lanes,#raw)
+  end
+  return okSave
+end
+
+local function loadNetworkCache(log)
+  if not JSON or not io or type(io.load) ~= "function" then return nil end
+  local path = trackCachePath()
+  if not path then return nil end
+  local okLoad, raw = pcall(io.load, path, "")
+  if not okLoad or type(raw)~="string" or raw=="" then return nil end
+  local okDecode, payload = pcall(JSON.decode, raw)
+  if not okDecode or type(payload)~="table" or payload.version~=CACHE_VERSION or
+      type(payload.lanes)~="table" or #payload.lanes<1 then
+    if type(log)=="function" then pcall(log,"CSP_CACHE_INVALID path=%s; source cache is preserved",path) end
+    return nil
+  end
+  local graph={lanes={},laneOrder={},intersections={},stats=payload.stats or {}}
+  for i=1,#payload.lanes do
+    local row=payload.lanes[i]
+    local lane=makeLane({id=row.id,name=row.name,loop=row.loop,points=row.points})
+    if not lane or graph.lanes[lane.id] then
+      if type(log)=="function" then pcall(log,"CSP_CACHE_INVALID_LANE path=%s index=%d",path,i) end
+      return nil
+    end
+    lane.speedLimit=row.speedLimit
+    lane.priority=row.priority or 0
+    graph.lanes[lane.id]=lane
+    graph.laneOrder[#graph.laneOrder+1]=lane.id
+  end
+  table.sort(graph.laneOrder)
+  for i=1,#payload.lanes do
+    local row=payload.lanes[i]
+    local lane=graph.lanes[row.id]
+    for j=1,#(row.outgoing or {}) do
+      local e=row.outgoing[j]
+      if graph.lanes[e.to] then
+        lane.outgoing[#lane.outgoing+1]=e
+        graph.lanes[e.to].incoming[#graph.lanes[e.to].incoming+1]=e
+      end
+    end
+    for j=1,#(row.adjacent or {}) do
+      local e=row.adjacent[j]
+      if graph.lanes[e.to] then lane.adjacent[#lane.adjacent+1]=e end
+    end
+  end
+  if type(log)=="function" then
+    pcall(log,"CSP_CACHE_LOADED path=%s lanes=%d bytes=%d",path,#graph.laneOrder,#raw)
+  end
+  return graph
+end
 
 local function finite(v)
   return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
@@ -455,6 +564,8 @@ function Converter.build(data,log)
 end
 
 function Converter.loadNetwork(log)
+  local cached=loadNetworkCache(log)
+  if cached then return cached end
   local ok,Network=pcall(require,"traffic_network")
   if not ok or type(Network)~="table" or type(Network.loadTrackTraffic)~="function" then
     return nil,"TRAFFIC_NETWORK_MODULE_UNAVAILABLE: "..tostring(Network)
@@ -490,6 +601,7 @@ function Converter.loadNetwork(log)
     graph.stats.invalidLanes=source.stats.invalidLanes or graph.stats.invalidLanes
     graph.stats.sourceIntersections=source.stats.sourceIntersections or graph.stats.sourceIntersections
   end
+  saveNetworkCache(graph,log)
   return graph
 end
 
