@@ -43,6 +43,21 @@ local a = lane(1, vec3(0,0,0), vec3(10,0,0))
 local b = lane(2, vec3(10,0,10), vec3(20,0,10))
 local edgeA = {id=1,lane=a,from=0,to=10,length=10,nextEdges={}}
 local edgeB = {id=2,lane=b,from=0,to=10,length=10,nextEdges={}}
+local function roadGroupFor(lane)
+  local left,right={},{}
+  local a,b=lane.points[1],lane.points[2]
+  local dx,dz=b.x-a.x,b.z-a.z
+  local length=math.sqrt(dx*dx+dz*dz)
+  local lx,lz=-dz/length,dx/length
+  for i=1,2 do
+    left[i]=vec3(lane.points[i].x+lx*3,lane.points[i].y,lane.points[i].z+lz*3)
+    right[i]=vec3(lane.points[i].x-lx*3,lane.points[i].y,lane.points[i].z-lz*3)
+  end
+  return {boundariesVerified=true,boundaries={left=left,right=right},
+    boundaryLoops={left=false,right=false},laneOffsets={[lane]=0},
+    leftOffset=0,rightOffset=0,leftBoundaryOffset=3,rightBoundaryOffset=3}
+end
+local roads={laneGroups={[a]=roadGroupFor(a),[b]=roadGroupFor(b)}}
 local movement = {
   from={lane=a}, to={lane=b},
   fromEdge=edgeA,toEdge=edgeB,
@@ -51,7 +66,7 @@ local movement = {
   attributes={cb=0.1,ce=0.9}
 }
 edgeA.nextMovement = {[edgeB.id]=movement}
-local route, err = Routes.build({edges={edgeA,edgeB}}, nil, edgeA, 0,
+local route, err = Routes.build({edges={edgeA,edgeB}}, roads, edgeA, 0,
   {targetEdge=edgeB,minLength=1})
 assert(route, "route build failed: "..tostring(err))
 
@@ -87,7 +102,7 @@ assert(math.abs(firstTransitionPoint.x-expectedX) < 1e-5,
 -- An open route without an explicit target must never stop inside an
 -- intersection merely because the directed graph has no outgoing movement.
 edgeA.toNode={kind="intersection"}
-local unsafeRoute,unsafeError=Routes.build({edges={edgeA}},nil,edgeA,0,{minLength=1})
+local unsafeRoute,unsafeError=Routes.build({edges={edgeA}},roads,edgeA,0,{minLength=1})
 assert(not unsafeRoute and unsafeError=="open_route_not_at_lane_end",
   "open route ending at an intersection was not rejected")
 
@@ -95,6 +110,7 @@ assert(not unsafeRoute and unsafeError=="open_route_not_at_lane_end",
 -- displaced by ul * chord along (fromDir - toDir).
 local reverse = lane(3, vec3(10,0,10), vec3(10,0,0))
 local reverseEdge = {id=3,lane=reverse,from=0,to=10,length=10,nextEdges={}}
+roads.laneGroups[reverse]=roadGroupFor(reverse)
 local uTurn = {
   from={lane=a}, to={lane=reverse},
   fromEdge=edgeA,toEdge=reverseEdge,
@@ -103,7 +119,7 @@ local uTurn = {
   attributes={cb=0.1,ce=0.9,ul=0.3}
 }
 edgeA.nextMovement = {[reverseEdge.id]=uTurn}
-local uTurnRoute, uTurnError = Routes.build({edges={edgeA,reverseEdge}}, nil,
+local uTurnRoute, uTurnError = Routes.build({edges={edgeA,reverseEdge}}, roads,
   edgeA, 0, {targetEdge=reverseEdge,minLength=1})
 assert(uTurnRoute, "CSP U-turn route build failed: "..tostring(uTurnError))
 local maxTurnZ = -math.huge
