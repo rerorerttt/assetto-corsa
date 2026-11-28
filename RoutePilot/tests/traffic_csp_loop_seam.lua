@@ -49,30 +49,9 @@ local intersection = {
   }
 }
 
-local function roadGroupFor(lane)
-  local left,right={},{}
-  local n=#lane.points
-  for i=1,n do
-    local current=lane.points[i]
-    local next=lane.points[i<n and i+1 or 1]
-    local dx,dz=next.x-current.x,next.z-current.z
-    local length=math.sqrt(dx*dx+dz*dz)
-    local lx,lz=-dz/length,dx/length
-    left[i]=vec3(current.x+lx*3,current.y,current.z+lz*3)
-    right[i]=vec3(current.x-lx*3,current.y,current.z-lz*3)
-  end
-  return {
-    boundariesVerified=true,
-    boundaries={left=left,right=right},
-    boundaryLoops={left=true,right=true},
-    laneOffsets={[lane]=0},
-    leftOffset=0,rightOffset=0,leftBoundaryOffset=3,rightBoundaryOffset=3
-  }
-end
-local roads={laneGroups={}}
-roads.laneGroups[lane]=roadGroupFor(lane)
 
 local graph = Graph.build({ lane }, { intersection })
+local roads={laneGroups={[lane]=roadGroupFor(lane)}}
 assert(#lane.graphLinks >= 2, "expected intersection spans at both sides of the loop seam")
 local first, last = lane.graphLinks[1], lane.graphLinks[#lane.graphLinks]
 assert(first.from <= 0.5, "first span must begin at the lane seam")
