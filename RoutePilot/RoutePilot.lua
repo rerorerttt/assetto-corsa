@@ -740,7 +740,7 @@ local function tryRecycleGraphTraffic(route,order,player)
     for _,index in ipairs(order or {}) do
       local car=ac.getCar(index)
       local person=state.p[index]
-      if car and person and person.routeProgress and
+      if index~=0 and car and person and person.routeProgress and
           person.routeProgress>=total-terminalThreshold and
           not ac.closerToRenderThan(car.position,1000) then
         local slots=math.max(1,math.floor((total-60)/CFG.SPAWN_GAP))
