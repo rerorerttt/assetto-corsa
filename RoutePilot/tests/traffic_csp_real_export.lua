@@ -89,7 +89,7 @@ for i=1,#importer.graph.edges do
 end
 local openRoutes,bestOpenLength,endKinds,openGroups,routeErrors=0,0,{},{},{}
 for i=1,#importer.graph.edges do
-  local route=Routes.build(importer.graph,nil,importer.graph.edges[i],
+  local route,routeError=Routes.build(importer.graph,importer.roads,importer.graph.edges[i],
     importer.graph.edges[i].from,{minLength=250})
   if not route then
     routeErrors[tostring(routeError)]=(routeErrors[tostring(routeError)] or 0)+1
