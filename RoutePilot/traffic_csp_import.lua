@@ -80,6 +80,9 @@ local function projectToTrack(p)
   if surfaceType == 'grass' or surfaceType == 'sand' or surfaceType == 'extraturf' then
     return nil, nil, surfaceType, 'non_road_surface'
   end
+  if not finite(normal.y) or normal.y < 0.30 then
+    return nil, nil, surfaceType or 'steep_surface', 'invalid_surface_normal'
+  end
   local projected = p:clone()
   projected.y = origin.y - distance
   return projected, normal, surfaceType or 'unclassified', nil
@@ -179,6 +182,56 @@ function Importer:load()
       lane.valid = laneHits >= MIN_LANE_POINTS and laneMisses == 0
       lane.surfaceHits = laneHits
       lane.surfaceMisses = laneMisses
+
+      -- Open lanes can be shortened at unsupported ends. An interior gap is
+      -- not bridged: doing so would create a false connection across missing road.
+      if not lane.loop then
+        local first, last
+        for j = 1, #lane.surfaceValid do
+          if lane.surfaceValid[j] then
+            first = first or j
+            last = j
+          end
+        end
+        local contiguous = first ~= nil and last ~= nil and (last - first + 1) >= MIN_LANE_POINTS
+        if contiguous then
+          for j = first, last do
+            if not lane.surfaceValid[j] then contiguous = false break end
+            if j > first and math.abs(lane.points[j].y - lane.points[j - 1].y) > 2.5 then
+              contiguous = false
+              break
+            end
+          end
+        end
+        if contiguous then
+          local trimmed = first > 1 or last < #lane.points
+          local points, normals, valid, types = {}, {}, {}, {}
+          for j = first, last do
+            points[#points + 1] = lane.points[j]
+            normals[#normals + 1] = lane.normals[j]
+            valid[#valid + 1] = lane.surfaceValid[j]
+            types[#types + 1] = lane.surfaceTypes[j]
+          end
+          lane.points, lane.normals = points, normals
+          lane.surfaceValid, lane.surfaceTypes = valid, types
+          lane.trimmedStart, lane.trimmedEnd = first - 1, #samples - last
+          lane.valid = true
+          if trimmed then self.stats.trimmed = self.stats.trimmed + 1 end
+        else
+          lane.valid = false
+        end
+      else
+        local continuous = laneMisses == 0
+        if continuous then
+          for j = 2, #lane.points do
+            if math.abs(lane.points[j].y - lane.points[j - 1].y) > 2.5 then
+              continuous = false
+              break
+            end
+          end
+        end
+        lane.valid = continuous and laneHits >= MIN_LANE_POINTS
+      end
     end
     if lane.valid then
       self.stats.usable = self.stats.usable + 1
@@ -189,9 +242,9 @@ function Importer:load()
   end
 
   self.loaded = true
-  self.log('CSP_IMPORT_LOADED file=%s lanes=%d usable=%d invalid=%d samples=%d hits=%d misses=%d intersections=%d areas=%d surface_type_api=%s',
+  self.log('CSP_IMPORT_LOADED file=%s lanes=%d usable=%d invalid=%d samples=%d hits=%d misses=%d trimmed=%d intersections=%d areas=%d surface_type_api=%s',
     tostring(self.filename), self.stats.lanes, self.stats.usable, self.stats.invalid,
-    self.stats.samples, self.stats.hits, self.stats.misses, #self.intersections, #self.areas, tostring(Surfaces ~= nil))
+    self.stats.samples, self.stats.hits, self.stats.misses, self.stats.trimmed, #self.intersections, #self.areas, tostring(Surfaces ~= nil))
   return true
 end
 
