@@ -89,7 +89,7 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
   if options.loop == true then
     local terminal = path[#path]
     local returnPath = Graph.shortestPath(graph, terminal, startEdge, options.maxVisited)
-    if returnPath and #returnPath >= 3 then
+    if returnPath and #returnPath >= 2 then
       local combined = {}
       for i = 1, #path do combined[#combined+1] = path[i] end
       for i = 2, #returnPath-1 do combined[#combined+1] = returnPath[i] end
