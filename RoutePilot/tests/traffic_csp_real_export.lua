@@ -111,6 +111,8 @@ for i=1,#importer.graph.edges do
   end
 end
 assert(cycleStarts==0,"fixture unexpectedly gained a directed cycle; review route selection assumptions")
+for kind,count in pairs(endKinds) do print("OPEN_ROUTE_END",kind,count) end
+for reason,count in pairs(routeErrors) do print("OPEN_ROUTE_REJECT",reason,count) end
 assert(openRoutes>0 and bestOpenLength>=250,
   "fixture has no usable open route for one-way traffic fallback")
 assert(endKinds.lane_end==openRoutes,
@@ -120,8 +122,6 @@ for _ in pairs(openGroups) do openGroupCount=openGroupCount+1 end
 assert(openGroupCount>=4,
   "representative export has too few independent road groups for multi-route traffic")
 
-for kind,count in pairs(endKinds) do print("OPEN_ROUTE_END",kind,count) end
-for reason,count in pairs(routeErrors) do print("OPEN_ROUTE_REJECT",reason,count) end
 print(string.format(
   "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts, %d valid open routes across %d road groups (max %.0f m)",
   importer.stats.usable,importer.stats.lanes,#importer.intersections,
