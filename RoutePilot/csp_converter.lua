@@ -664,6 +664,7 @@ function Converter.load(log)
   local nodes,boundsL,boundsR={},{},{}
   local routeLanes,visited={},{}
   local anyPassing=false
+  local firstPairedLaneId=nil
   local startLane=best.lane
   local startS=startLane.cumulative[best.segment]+
     (startLane.cumulative[best.segment+1]-startLane.cumulative[best.segment])*best.t
@@ -782,7 +783,10 @@ function Converter.load(log)
         appendPoint(sample.p,-1.25,1.25)
       end
     end
-    if pairValid then anyPassing=true end
+    if pairValid then
+      anyPassing=true
+      if not firstPairedLaneId then firstPairedLaneId=pairedLane.id end
+    end
   end
 
   local currentLane,currentS=startLane,startS
@@ -868,13 +872,13 @@ function Converter.load(log)
   if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_ROUTE_TOO_SHORT" end
   if type(log)=="function" then
     pcall(log,"CSP_RACING_CORRIDOR lane=%d neighbour=%d paired=%s points=%d passing=%s",
-      startLane.id,-1,tostring(anyPassing),#nodes,tostring(anyPassing))
+      startLane.id,firstPairedLaneId or -1,tostring(anyPassing),#nodes,tostring(anyPassing))
     pcall(log,"CSP_ROUTE_CHAIN lanes=%d points=%d loop=%s transitions=%d",
       #routeLanes,#nodes,tostring(routeLoop),math.max(0,#routeLanes-1))
   end
   return nodes,routeLoop,boundsL,boundsR,{
     sourceLanes=graph.stats.validLanes,routeLanes=routeLanes,
-    racingCorridor=true,pairedLane=nil,passingEnabled=anyPassing,
+    racingCorridor=true,pairedLane=firstPairedLaneId,passingEnabled=anyPassing,
     sourceTransitions=graph.stats.junctionTransitions,
     laneChanges=graph.stats.laneChanges,network=graph
   }
