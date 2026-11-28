@@ -1086,8 +1086,9 @@ function script.update(dt)
           nodes=state.nodes,boundsL=state.boundsL,boundsR=state.boundsR,
           loopRoute=state.loopRoute,routeGeometry=state.routeGeometry,
           routeLength=state.routeLength,routeMetricCount=state.routeMetricCount,
-          routeMetricLoop=state.routeMetricLoop
+          routeMetricLoop=state.routeMetricLoop,graphRouteSwitch=state.graphRouteSwitch
         }
+        state.graphRouteSwitch=true
         if playerAI then state.p[0]=nil end
         local routes=trafficCSP.previewRoutes or {graphRoute}
         local routeOrders={}
@@ -1229,6 +1230,7 @@ function script.update(dt)
       state.routeLength=routeSnapshot.routeLength
       state.routeMetricCount=routeSnapshot.routeMetricCount
       state.routeMetricLoop=routeSnapshot.routeMetricLoop
+      state.graphRouteSwitch=routeSnapshot.graphRouteSwitch
     end
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
