@@ -1,592 +1,428 @@
 -- RoutePilot CSP Traffic Tool converter.
--- Converts the directed CSP lane network into one RoutePilot centerline and
--- one continuous lateral corridor. The source traffic.json is never modified.
+-- Converts EVERY authored CSP lane into an immutable directed network.
+-- No road boundaries, synthetic centreline, lane merging or route truncation.
 local Converter = {}
-local cachedGraph = nil
 
 local function finite(v)
-  return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge
+  return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
 end
-
-local function norm(x, z)
-  local d = math.sqrt(x * x + z * z)
-  if d < 1e-6 then return 0, 1 end
-  return x / d, z / d
+local function d2(a,b)
+  local x,z=a.x-b.x,a.z-b.z
+  return x*x+z*z
 end
-
-local function dist2(a, b)
-  local x, z = a.x - b.x, a.z - b.z
-  return x * x + z * z
+local function dist(a,b) return math.sqrt(d2(a,b)) end
+local function norm(x,z)
+  local l=math.sqrt(x*x+z*z)
+  if l<1e-7 then return 0,1 end
+  return x/l,z/l
 end
-
-local function project(points, p, hx, hz)
-  local best
-  for i = 1, #points - 1 do
-    local a, b = points[i], points[i + 1]
-    local vx, vz = b.x - a.x, b.z - a.z
-    local l2 = vx * vx + vz * vz
-    if l2 > 1e-5 then
-      local t = math.max(0, math.min(1, ((p.x-a.x)*vx+(p.z-a.z)*vz)/l2))
-      local q = {x=a.x+vx*t,y=a.y+(b.y-a.y)*t,z=a.z+vz*t}
-      local tx, tz = norm(vx, vz)
-      local align = hx * tx + hz * tz
-      local d = dist2(q, p)
-      local score = d + (1 - align) * (1 - align) * 25
-      if align > 0.15 and (not best or score < best.score) then
-        best = {point=q,tx=tx,tz=tz,distance=math.sqrt(d),score=score,segment=i,t=t}
+local function clamp(v,a,b) return math.max(a,math.min(b,v)) end
+local function pointAt(lane,s)
+  s=clamp(s,0,lane.length)
+  local lo,hi=1,#lane.cumulative-1
+  while lo<hi do
+    local mid=math.floor((lo+hi)/2)
+    if lane.cumulative[mid+1]<s then lo=mid+1 else hi=mid end
+  end
+  local i=lo
+  local a,b=lane.points[i],lane.points[i+1]
+  local span=lane.cumulative[i+1]-lane.cumulative[i]
+  local t=span>1e-8 and (s-lane.cumulative[i])/span or 0
+  return {x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t,z=a.z+(b.z-a.z)*t}
+end
+local function tangentAt(lane,s)
+  local p=pointAt(lane,s)
+  local best,bestD
+  for i=1,#lane.points-1 do
+    local a,b=lane.points[i],lane.points[i+1]
+    local vx,vz=b.x-a.x,b.z-a.z
+    local l2=vx*vx+vz*vz
+    if l2>1e-8 then
+      local t=clamp(((p.x-a.x)*vx+(p.z-a.z)*vz)/l2,0,1)
+      local qx,qz=a.x+vx*t,a.z+vz*t
+      local dx,dz=p.x-qx,p.z-qz
+      local dd=dx*dx+dz*dz
+      if not bestD or dd<bestD then
+        local tx,tz=norm(vx,vz)
+        best={x=tx,z=tz}; bestD=dd
       end
     end
   end
-  return best
+  return best or {x=0,z=1}
 end
-
-local function laneLength(lane)
-  local n = 0
-  for i = 1, #lane.points - 1 do
-    n = n + math.sqrt(dist2(lane.points[i], lane.points[i + 1]))
+local function makeLane(source)
+  if type(source)~="table" or not finite(source.id) or type(source.points)~="table" then return nil end
+  local points,cumulative={},{}
+  local length=0
+  for i=1,#source.points do
+    local p=source.points[i]
+    if type(p)~="table" or not finite(p[1]) or not finite(p[2]) or not finite(p[3]) then
+      return nil,"INVALID_POINT"
+    end
+    local q={x=p[1],y=p[2],z=p[3]}
+    if #points==0 or dist(points[#points],q)>0.015 then
+      if #points>0 then length=length+dist(points[#points],q) end
+      points[#points+1]=q
+      cumulative[#points]=length
+    end
   end
-  return n
-end
-
-local function append(out, p)
-  local last = out[#out]
-  if not last or dist2(last, p) > 0.01 then
-    out[#out + 1] = vec3(p.x, p.y, p.z)
+  if #points<2 or length<0.5 then return nil,"LANE_TOO_SHORT" end
+  local loop=source.loop==true
+  if loop and dist(points[1],points[#points])>0.015 then
+    length=length+dist(points[#points],points[1])
+    points[#points+1]={x=points[1].x,y=points[1].y,z=points[1].z}
+    cumulative[#points]=length
   end
+  return {
+    id=source.id,name=tostring(source.name or ("Lane #"..source.id)),
+    loop=loop,points=points,cumulative=cumulative,length=length,
+    role=source.role or source.laneRole,source=source,
+    outgoing={},incoming={},adjacent={},bounds=nil
+  }
 end
 
-local function pointAt(lane, seg, t)
-  local a, b = lane.points[seg], lane.points[seg + 1]
-  return {x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t,z=a.z+(b.z-a.z)*t}
-end
-
-local function pointInside(poly, p)
-  local inside=false
-  local j=#poly
+-- Extract the exact intervals in which a directed lane passes through a CSP
+-- intersection polygon. Distances follow the source point order, so direction
+-- is never inferred from proximity or the player's heading.
+local function inside(poly,p)
+  local hit,j=false,#poly
   for i=1,#poly do
     local a,b=poly[i],poly[j]
-    if ((a.z>p.z) ~= (b.z>p.z)) then
+    if ((a.z>p.z)~=(b.z>p.z)) then
       local x=(b.x-a.x)*(p.z-a.z)/(b.z-a.z)+a.x
-      if p.x<x then inside=not inside end
+      if p.x<x then hit=not hit end
     end
     j=i
   end
-  return inside
+  return hit
 end
-
-local function segmentHit(a,b,c,d)
+local function edgeCut(a,b,c,d)
   local rx,rz=b.x-a.x,b.z-a.z
   local sx,sz=d.x-c.x,d.z-c.z
   local den=rx*sz-rz*sx
-  if math.abs(den)<1e-8 then return nil end
+  if math.abs(den)<1e-9 then return nil end
   local qx,qz=c.x-a.x,c.z-a.z
   local t=(qx*sz-qz*sx)/den
   local u=(qx*rz-qz*rx)/den
-  if t>=-1e-6 and t<=1+1e-6 and u>=-1e-6 and u<=1+1e-6 then
-    return math.max(0,math.min(1,t))
+  if t>=-1e-7 and t<=1+1e-7 and u>=-1e-7 and u<=1+1e-7 then
+    return clamp(t,0,1)
   end
-  return nil
+end
+local function intersectionIntervals(lane,poly)
+  local intervals={}
+  if #poly<3 then return intervals end
+  local minY,maxY=math.huge,-math.huge
+  for i=1,#poly do
+    local y=poly[i].y or 0
+    minY=math.min(minY,y); maxY=math.max(maxY,y)
+  end
+  local centerY=(minY+maxY)*0.5
+  local yGate=5+(maxY-minY)
+  local cumulative=0
+  local activeStart,activeEnd=nil,nil
+  local function flush()
+    if activeStart and activeEnd and activeEnd-activeStart>0.35 then
+      intervals[#intervals+1]={enter=activeStart,exit=activeEnd}
+    end
+    activeStart,activeEnd=nil,nil
+  end
+  for i=1,#lane.points-1 do
+    local a,b=lane.points[i],lane.points[i+1]
+    local len=dist(a,b)
+    if math.abs(a.y-centerY)<=yGate and math.abs(b.y-centerY)<=yGate then
+      local cuts={0,1}
+      for e=1,#poly do
+        local t=edgeCut(a,b,poly[e],poly[e%#poly+1])
+        if t then cuts[#cuts+1]=t end
+      end
+      table.sort(cuts)
+      for k=1,#cuts-1 do
+        local t0,t1=cuts[k],cuts[k+1]
+        if t1-t0>1e-7 then
+          local tm=(t0+t1)*0.5
+          local p={x=a.x+(b.x-a.x)*tm,z=a.z+(b.z-a.z)*tm}
+          local s0,s1=cumulative+len*t0,cumulative+len*t1
+          if inside(poly,p) then
+            if activeStart and s0<=activeEnd+0.2 then activeEnd=s1
+            else flush(); activeStart,activeEnd=s0,s1 end
+          else flush() end
+        end
+      end
+    else flush() end
+    cumulative=cumulative+len
+  end
+  flush()
+  return intervals
+end
+local function forbiddenPair(intersection,fromId,toId)
+  local rows=intersection.disallowedTrajectories
+  if type(rows)~="table" then return false end
+  for i=1,#rows do
+    local r=rows[i]
+    if type(r)=="table" and r[1]==fromId and r[2]==toId then return true end
+  end
+  return false
 end
 
-local function buildIntersectionLinks(graph)
-  local links={}
-  for _,id in ipairs(graph.laneOrder) do links[id]={} end
-  for ii=1,#graph.intersections do
-    local inter=graph.intersections[ii]
-    local poly=inter.points
-    if #poly>=3 then
-      -- Match CSP FlatPolyShape's vertical gate. A 2D-only polygon test
-      -- incorrectly linked roads passing above/below a junction.
-      local minX,maxX,minY,maxY,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge,math.huge,-math.huge
-      for pi=1,#poly do
-        local p=poly[pi]
-        local y=p.y or 0
-        minX=math.min(minX,p.x); maxX=math.max(maxX,p.x)
-        minY=math.min(minY,y); maxY=math.max(maxY,y)
-        minZ=math.min(minZ,p.z); maxZ=math.max(maxZ,p.z)
-      end
-      local centerY=(minY+maxY)*0.5
-      local yThreshold=5.0+(maxY-minY)
-      for _,id in ipairs(graph.laneOrder) do
-        local lane=graph.lanes[id]
-        local box=lane.aabb
-        if lane.trackValid==false then box=nil end
-        if box and box.maxX>=minX and box.minX<=maxX and
-            box.maxZ>=minZ and box.minZ<=maxZ then
-        local cumulative=0
-        local activeStart,activeEnd=nil,nil
-        local function flushInterval()
-          if activeStart and activeEnd and activeEnd-activeStart>0.5 then
-            links[id][#links[id]+1]={
-              intersection=inter,enter=activeStart,exit=activeEnd
-            }
-          end
-          activeStart,activeEnd=nil,nil
-        end
-        for si=1,#lane.points-1 do
-          local p1,p2=lane.points[si],lane.points[si+1]
-          local segLen=math.sqrt(dist2(p1,p2))
-          local segmentOverlaps=math.max(p1.x,p2.x)>=minX and math.min(p1.x,p2.x)<=maxX and
-            math.max(p1.z,p2.z)>=minZ and math.min(p1.z,p2.z)<=maxZ
-          local verticallyValid=segmentOverlaps and
-            math.abs((p1.y or 0)-centerY)<=yThreshold and
-            math.abs((p2.y or 0)-centerY)<=yThreshold
-          if verticallyValid then
-            local cuts={0,1}
-            for e=1,#poly do
-              local t=segmentHit(p1,p2,poly[e],poly[e%#poly+1])
-              if t then cuts[#cuts+1]=t end
-            end
-            table.sort(cuts)
-            for ci=1,#cuts-1 do
-              local t1,t2=cuts[ci],cuts[ci+1]
-              local tm=(t1+t2)*0.5
-              local mid={x=p1.x+(p2.x-p1.x)*tm,z=p1.z+(p2.z-p1.z)*tm}
-              local d1=cumulative+segLen*t1
-              local d2=cumulative+segLen*t2
-              if pointInside(poly,mid) then
-                if activeStart and d1<=activeEnd+0.15 then
-                  activeEnd=d2
-                else
-                  flushInterval()
-                  activeStart,activeEnd=d1,d2
+local function buildJunctionTransitions(graph)
+  local transitions={}
+  for _,id in ipairs(graph.laneOrder) do transitions[id]={} end
+  for _,intersection in ipairs(graph.intersections) do
+    local passages={}
+    for _,id in ipairs(graph.laneOrder) do
+      local lane=graph.lanes[id]
+      local intervals=intersectionIntervals(lane,intersection.points)
+      if #intervals>0 then passages[#passages+1]={lane=lane,intervals=intervals} end
+    end
+    for i=1,#passages do
+      local from=passages[i]
+      for j=1,#passages do
+        if i~=j then
+          local to=passages[j]
+          if not forbiddenPair(intersection.source,from.lane.id,to.lane.id) then
+            for _,a in ipairs(from.intervals) do
+              for _,b in ipairs(to.intervals) do
+                -- Both polylines are already directed. Join the end of the
+                -- incoming traversal to the beginning of the outgoing one.
+                local pa=pointAt(from.lane,a.exit)
+                local pb=pointAt(to.lane,b.enter)
+                local ta=tangentAt(from.lane,a.exit)
+                local tb=tangentAt(to.lane,b.enter)
+                local alignment=ta.x*tb.x+ta.z*tb.z
+                local gap=dist(pa,pb)
+                if gap<=18 and alignment>=0.20 then
+                  local e={from=from.lane.id,to=to.lane.id,
+                    intersectionId=intersection.id,
+                    fromS=a.exit,toS=b.enter,gap=gap,
+                    alignment=alignment,kind="junction"}
+                  transitions[from.lane.id][#transitions[from.lane.id]+1]=e
                 end
-              elseif d2-d1>0.02 then
-                flushInterval()
               end
             end
-          else
-            flushInterval()
-          end
-          cumulative=cumulative+segLen
-        end
-        flushInterval()
-        end
-      end
-    end
-  end
-  for _,id in ipairs(graph.laneOrder) do
-    table.sort(links[id],function(a,b) return a.enter<b.enter end)
-  end
-  return links
-end
-
-local function sampleLane(lane, distance)
-  local remain=math.max(0,distance)
-  for i=1,#lane.points-1 do
-    local a,b=lane.points[i],lane.points[i+1]
-    local length=math.sqrt(dist2(a,b))
-    if remain<=length or i==#lane.points-1 then
-      local t=length>1e-6 and math.max(0,math.min(1,remain/length)) or 0
-      return {x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t,z=a.z+(b.z-a.z)*t}
-    end
-    remain=remain-length
-  end
-  return lane.points[#lane.points]
-end
-
-local function appendLaneRange(out,lane,fromDistance,toDistance)
-  local cumulative=0
-  local first=sampleLane(lane,fromDistance)
-  append(out,first)
-  for i=1,#lane.points-1 do
-    local a,b=lane.points[i],lane.points[i+1]
-    local length=math.sqrt(dist2(a,b))
-    local d=cumulative+length
-    if d>fromDistance+0.05 and d<toDistance-0.05 then append(out,b) end
-    cumulative=d
-    if cumulative>=toDistance then break end
-  end
-  append(out,sampleLane(lane,toDistance))
-end
-
--- CSP lane polylines are authored geometry. Never invent a Bezier curve
--- between them: append the exact target-lane connection point instead.
--- The renderer may draw a short straight join between the two source points,
--- but every route vertex remains an original/interpolated point on a CSP lane.
-local function bezierConnector(out,fromLane,fromDistance,toLane,toDistance)
-  append(out,sampleLane(toLane,toDistance))
-end
-
-local function selectTransition(graph, currentLane, link, laneLinks, visited)
-  -- trajectoryAttributes in traffic.json describe curve/priority attributes;
-  -- they are NOT an allow-list. CSP compatibility is controlled separately
-  -- by disallowedTrajectories and its geometric intersection rules.
-  local disallowed={}
-  local forbidden=link.intersection.disallowedTrajectories
-  if type(forbidden)=='table' then
-    for i=1,#forbidden do
-      local item=forbidden[i]
-      if type(item)=='table' and item[1]==currentLane.id then
-        disallowed[item[2]]=true
-      end
-    end
-  end
-
-  local candidates={}
-  for _,id in ipairs(graph.laneOrder) do
-    if not disallowed[id] and
-        (id==currentLane.id or not visited[tostring(link.intersection.id)..':'..tostring(id)]) then
-      local target=graph.lanes[id]
-      for j=1,#(laneLinks[id] or {}) do
-        local targetLink=laneLinks[id][j]
-        if targetLink.intersection.id==link.intersection.id and
-            targetLink.exit<laneLength(target)-0.5 then
-          local p0=sampleLane(currentLane,link.enter)
-          local p1=sampleLane(target,targetLink.exit)
-          local gap=math.sqrt(dist2(p0,p1))
-          local before=sampleLane(currentLane,math.max(0,link.enter-2))
-          local after=sampleLane(target,math.min(laneLength(target),targetLink.exit+2))
-          local ax,az=norm(p0.x-before.x,p0.z-before.z)
-          local bx,bz=norm(after.x-p1.x,after.z-p1.z)
-          local dot=ax*bx+az*bz
-          if gap<30 and dot>-0.99 then
-            local sameLaneBias=id==currentLane.id and -12.0 or 0
-            local score=gap*0.45+(1-dot)*10+sameLaneBias
-            candidates[#candidates+1]={lane=target,link=targetLink,score=score}
           end
         end
       end
     end
   end
-  table.sort(candidates,function(a,b) return a.score<b.score end)
-  return candidates[1]
+  for _,id in ipairs(graph.laneOrder) do
+    table.sort(transitions[id],function(a,b)
+      if a.fromS==b.fromS then
+        if a.to==b.to then return a.toS<b.toS end
+        return a.to<b.to
+      end
+      return a.fromS<b.fromS
+    end)
+    for _,e in ipairs(transitions[id]) do
+      graph.lanes[id].outgoing[#graph.lanes[id].outgoing+1]=e
+      graph.lanes[e.to].incoming[#graph.lanes[e.to].incoming+1]=e
+    end
+  end
+  return transitions
 end
 
-local function validateTrackSurface(graph, trace)
-  if graph.surfaceValidated then return end
-  graph.surfaceValidated=true
-  if not physics or type(physics.raycastTrack)~='function' or not vec3 then
-    trace('CSP_SURFACE_CHECK available=false reason=RAYCAST_API_UNAVAILABLE')
-    return
-  end
-  local down=vec3(0,-1,0)
-  local raycastCalls,totalHits,checked=0,0,0
-  local results={}
-  for _,id in ipairs(graph.laneOrder) do
-    local lane=graph.lanes[id]
-    local distanceSince=math.huge
-    local laneChecks,laneHits=0,0
-    for i=1,#lane.points do
-      local p=lane.points[i]
-      if distanceSince>=18.0 or i==1 or i==#lane.points then
-        distanceSince=0
-        laneChecks=laneChecks+1
-        local origin=vec3(p.x,p.y+2.0,p.z)
-        local ok,offset=pcall(physics.raycastTrack,origin,down,4.0)
-        if ok and finite(offset) then
-          raycastCalls=raycastCalls+1
-          if offset>=0 and offset<=4.0 and
-              math.abs((p.y+2.0-offset)-p.y)<=1.25 then
-            laneHits=laneHits+1
-            totalHits=totalHits+1
+-- Detect parallel, same-direction neighbouring lanes for legal lane changes.
+-- A connection is emitted only where the two authored polylines overlap for
+-- a meaningful distance and remain side-by-side. Opposing carriageways,
+-- crossing ramps and merely nearby roads are rejected by tangent + distance.
+local function buildLaneChanges(graph)
+  local changes={}
+  local step=8.0
+  for ai=1,#graph.laneOrder do
+    local a=graph.lanes[graph.laneOrder[ai]]
+    for bi=ai+1,#graph.laneOrder do
+      local b=graph.lanes[graph.laneOrder[bi]]
+      local samplesAB,samplesBA={},{}
+      local function scan(src,dst,out)
+        local runStart,runLast,runCount=nil,nil,0
+        local function finish()
+          if runCount>=3 and runLast-runStart>=16 then
+            out[#out+1]={fromS=runStart,toS=runLast}
           end
+          runStart,runLast,runCount=nil,nil,0
         end
-      end
-      if i<#lane.points then
-        local a,b=lane.points[i],lane.points[i+1]
-        distanceSince=distanceSince+math.sqrt(dist2(a,b))
-      end
-    end
-    if laneChecks>=3 then
-      results[#results+1]={lane=lane,checks=laneChecks,hits=laneHits}
-      checked=checked+1
-    end
-  end
-  -- Some track layouts do not expose a usable physics mesh to apps. Do not
-  -- reject the whole network when raycasts consistently miss everywhere.
-  if raycastCalls==0 or totalHits/raycastCalls<0.05 then
-    trace('CSP_SURFACE_CHECK available=false reason=NO_RELIABLE_SURFACE_HITS calls=%d hits=%d',
-      raycastCalls,totalHits)
-    return
-  end
-  local accepted,rejected=0,0
-  for i=1,#results do
-    local item=results[i]
-    item.lane.trackValidRatio=item.hits/item.checks
-    if item.lane.trackValidRatio<0.5 then
-      item.lane.trackValid=false
-      rejected=rejected+1
-    else
-      accepted=accepted+1
-    end
-  end
-  trace('CSP_SURFACE_CHECK available=true checked=%d accepted=%d rejected=%d',
-    checked,accepted,rejected)
-end
-
-local function collectRoute(graph, player)
-  local hx,hz=norm(player.look.x,player.look.z)
-  local start,startProjection,startScore
-  for _,id in ipairs(graph.laneOrder) do
-    local lane=graph.lanes[id]
-    local p=lane.trackValid~=false and project(lane.points,player.position,hx,hz) or nil
-    if p and p.distance<80 and (not startScore or p.score<startScore) then
-      start,startProjection,startScore=lane,p,p.score
-    end
-  end
-  if not start then return nil,nil,nil,'No CSP lane near the player in the driving direction' end
-
-  -- If several same-direction CSP lanes overlap at the player, seed the
-  -- longest usable lane in that parallel group. This avoids selecting a
-  -- short merge stub when a continuous main lane is directly beside it.
-  local nearestDistance=startProjection.distance
-  local seedLength=laneLength(start)
-  for _,id in ipairs(graph.laneOrder) do
-    local candidate=graph.lanes[id]
-    if candidate.trackValid~=false and candidate.id~=start.id then
-      local p=project(candidate.points,player.position,hx,hz)
-      if p and p.distance<=math.max(6.0,nearestDistance+1.5) then
-        local alignment=p.tx*startProjection.tx+p.tz*startProjection.tz
-        local length=laneLength(candidate)
-        if alignment>=0.85 and length>seedLength*1.05 then
-          start,startProjection,seedLength=candidate,p,length
-        end
-      end
-    end
-  end
-
-  local laneLinks=buildIntersectionLinks(graph)
-  local raw,visited={},{}
-  local lane=start
-  local progress=0
-  for i=1,startProjection.segment-1 do
-    local a,b=lane.points[i],lane.points[i+1]
-    progress=progress+math.sqrt(dist2(a,b))
-  end
-  local a,b=lane.points[startProjection.segment],lane.points[startProjection.segment+1]
-  progress=progress+math.sqrt(dist2(a,b))*startProjection.t
-  local startProgress=progress
-  local loop=false
-  local routeLaneIDs={}
-  local maxSteps=math.max(8,#graph.laneOrder*4)
-  for _=1,maxSteps do
-    routeLaneIDs[#routeLaneIDs+1]=lane.id
-    local nextLink
-    for _,candidate in ipairs(laneLinks[lane.id] or {}) do
-      if candidate.enter>progress+0.5 then
-        nextLink=candidate
-        break
-      elseif candidate.exit>progress+0.5 then
-        -- The player may start inside a junction. Continue through the
-        -- authored lane to its exit instead of attempting a backwards turn.
-        appendLaneRange(raw,lane,progress,candidate.exit)
-        progress=candidate.exit
-      end
-    end
-    if not nextLink then
-      local total=laneLength(lane)
-      appendLaneRange(raw,lane,progress,total)
-      if lane.id==start.id and lane.loop then
-        appendLaneRange(raw,lane,0,startProgress)
-        loop=true
-      end
-      break
-    end
-    appendLaneRange(raw,lane,progress,nextLink.enter)
-    local visitKey=tostring(nextLink.intersection.id)..':'..tostring(lane.id)
-    if visited[visitKey] then break end
-    visited[visitKey]=true
-    local transition=selectTransition(graph,lane,nextLink,laneLinks,visited)
-    if not transition then break end
-    local target=transition.lane
-    local targetLink=transition.link
-    local targetKey=tostring(nextLink.intersection.id)..':'..tostring(target.id)
-    if target.id==lane.id then
-      -- Same-lane continuation is valid. A different link on that same lane
-      -- means the lane re-enters this intersection (e.g. a closed circuit).
-      if targetLink~=nextLink then
-        bezierConnector(raw,lane,nextLink.enter,target,targetLink.exit)
-      end
-      progress=targetLink.exit
-    else
-      if visited[targetKey] then
-        if target.id==start.id then
-          bezierConnector(raw,lane,nextLink.enter,target,targetLink.exit)
-          if targetLink.exit<=startProgress+0.5 then
-            if targetLink.exit<startProgress-0.5 then
-              appendLaneRange(raw,target,targetLink.exit,startProgress)
-            end
-            loop=true
-          elseif target.loop then
-            appendLaneRange(raw,target,targetLink.exit,laneLength(target))
-            appendLaneRange(raw,target,0,startProgress)
-            loop=true
-          end
-        end
-        break
-      end
-      visited[targetKey]=true
-      bezierConnector(raw,lane,nextLink.enter,target,targetLink.exit)
-      lane=target
-      progress=targetLink.exit
-    end
-    if lane.id==start.id and progress<=startProgress+1.0 then
-      if progress<startProgress-0.5 then
-        appendLaneRange(raw,lane,progress,startProgress)
-      end
-      loop=true
-      break
-    end
-  end
-  if #raw<2 then return nil,nil,nil,'CSP route contains fewer than two points' end
-  return raw,loop,routeLaneIDs,nil
-end
-
--- Find parallel, same-direction lanes around the chosen route. Their signed
--- offsets define the outer road envelope; inner lane boundaries disappear.
--- Keep the imported driving line on the original CSP lane geometry.
--- Nearby same-direction lane centres are used only to estimate a traffic
--- corridor for AI lane changes; they never move the route centreline.
--- traffic.json contains lane centre-lines, not surveyed road-edge curves.
-local function buildCorridor(graph, raw)
-  local nodes,left,right={}, {}, {}
-  local sampleStep=3.0
-  local samples={}
-
-  local cellSize,searchRadius=24.0,7.5
-  local spatial={}
-  local function addSegmentCell(cx,cz,segment)
-    local column=spatial[cx]
-    if not column then column={} spatial[cx]=column end
-    local bucket=column[cz]
-    if not bucket then bucket={} column[cz]=bucket end
-    bucket[#bucket+1]=segment
-  end
-
-  for _,id in ipairs(graph.laneOrder) do
-    local lane=graph.lanes[id]
-    if lane.trackValid~=false then
-      for si=1,#lane.points-1 do
-        local a,b=lane.points[si],lane.points[si+1]
-        local dx,dz=b.x-a.x,b.z-a.z
-        local len2=dx*dx+dz*dz
-        if len2>1e-5 then
-          local inv=1/math.sqrt(len2)
-          local segment={laneId=id,a=a,dx=dx,dy=b.y-a.y,dz=dz,
-            len2=len2,tx=dx*inv,tz=dz*inv}
-          local minCX=math.floor((math.min(a.x,b.x)-searchRadius)/cellSize)
-          local maxCX=math.floor((math.max(a.x,b.x)+searchRadius)/cellSize)
-          local minCZ=math.floor((math.min(a.z,b.z)-searchRadius)/cellSize)
-          local maxCZ=math.floor((math.max(a.z,b.z)+searchRadius)/cellSize)
-          for cx=minCX,maxCX do
-            for cz=minCZ,maxCZ do addSegmentCell(cx,cz,segment) end
-          end
-        end
-      end
-    end
-  end
-
-  for i=1,#raw-1 do
-    local a,b=raw[i],raw[i+1]
-    local dx,dz=b.x-a.x,b.z-a.z
-    local length=math.sqrt(dx*dx+dz*dz)
-    local count=math.max(1,math.ceil(length/sampleStep))
-    for k=0,count-1 do
-      local t=k/count
-      samples[#samples+1]={x=a.x+dx*t,y=a.y+(b.y-a.y)*t,z=a.z+dz*t}
-    end
-  end
-  samples[#samples+1]=raw[#raw]
-
-  for i=1,#samples do
-    local p=samples[i]
-    local prev=samples[math.max(1,i-1)]
-    local nxt=samples[math.min(#samples,i+1)]
-    local tx,tz=norm(nxt.x-prev.x,nxt.z-prev.z)
-    local nx,nz=-tz,tx
-    local offsets={0}
-    local bestByLane={}
-    local column=spatial[math.floor(p.x/cellSize)]
-    local candidates=column and column[math.floor(p.z/cellSize)] or nil
-    if candidates then
-      for ci=1,#candidates do
-        local segment=candidates[ci]
-        local alignment=segment.tx*tx+segment.tz*tz
-        if alignment>=0.92 then
-          local a=segment.a
-          local t=math.max(0,math.min(1,
-            ((p.x-a.x)*segment.dx+(p.z-a.z)*segment.dz)/segment.len2))
-          local qx=a.x+segment.dx*t
-          local qy=a.y+segment.dy*t
-          local qz=a.z+segment.dz*t
-          local ox,oz=qx-p.x,qz-p.z
-          local d2=ox*ox+oz*oz
-          if d2<=searchRadius*searchRadius and math.abs(qy-p.y)<=1.25 then
-            local score=d2+(1-alignment)*(1-alignment)*25
-            local old=bestByLane[segment.laneId]
-            if not old or score<old.score then
-              bestByLane[segment.laneId]={x=qx,z=qz,score=score}
+        for s=0,src.length,step do
+          local p=pointAt(src,s)
+          local tSrc=tangentAt(src,s)
+          local best,bestScore=nil,nil
+          for ds=0,dst.length,step do
+            local q=pointAt(dst,ds)
+            local dx,dz=q.x-p.x,q.z-p.z
+            local lateral=math.sqrt(dx*dx+dz*dz)
+            if lateral>=2.0 and lateral<=7.5 and math.abs(q.y-p.y)<=1.5 then
+              local tDst=tangentAt(dst,ds)
+              local align=tSrc.x*tDst.x+tSrc.z*tDst.z
+              if align>=0.94 then
+                local score=lateral+(1-align)*8
+                if not bestScore or score<bestScore then
+                  bestScore=score; best={s=s,ds=ds,gap=lateral,alignment=align}
+                end
+              end
             end
           end
+          if best then
+            if runLast and (s-runLast>step*1.6 or math.abs(best.ds-(runLastTarget or best.ds))>step*2.5) then finish() end
+            if not runStart then runStart=s end
+            runLast=s; runLastTarget=best.ds; runCount=runCount+1
+          else finish(); runLastTarget=nil end
+        end
+        finish()
+      end
+      scan(a,b,samplesAB)
+      scan(b,a,samplesBA)
+      for _,r in ipairs(samplesAB) do
+        local mid=(r.fromS+r.toS)*0.5
+        local p=pointAt(a,mid)
+        local best,bestD=nil,nil
+        for ds=0,b.length,step do
+          local q=pointAt(b,ds)
+          local dd=d2(p,q)
+          if not bestD or dd<bestD then bestD=dd; best=ds end
+        end
+        if best then
+          local e={from=a.id,to=b.id,fromStart=r.fromS,fromEnd=r.toS,
+            toStart=math.max(0,best-(r.toS-r.fromS)*0.5),
+            toEnd=math.min(b.length,best+(r.toS-r.fromS)*0.5),kind="lane_change"}
+          a.adjacent[#a.adjacent+1]=e
+          changes[#changes+1]=e
+        end
+      end
+      for _,r in ipairs(samplesBA) do
+        local mid=(r.fromS+r.toS)*0.5
+        local p=pointAt(b,mid)
+        local best,bestD=nil,nil
+        for ds=0,a.length,step do
+          local q=pointAt(a,ds)
+          local dd=d2(p,q)
+          if not bestD or dd<bestD then bestD=dd; best=ds end
+        end
+        if best then
+          local e={from=b.id,to=a.id,fromStart=r.fromS,fromEnd=r.toS,
+            toStart=math.max(0,best-(r.toS-r.fromS)*0.5),
+            toEnd=math.min(a.length,best+(r.toS-r.fromS)*0.5),kind="lane_change"}
+          b.adjacent[#b.adjacent+1]=e
+          changes[#changes+1]=e
         end
       end
     end
-
-    for _,q in pairs(bestByLane) do
-      local lateral=(q.x-p.x)*nx+(q.z-p.z)*nz
-      if math.abs(lateral)>=1.0 and math.abs(lateral)<=7.5 then
-        offsets[#offsets+1]=lateral
-      end
-    end
-    table.sort(offsets)
-
-    -- Only accept a continuous chain of adjacent lane centres from the
-    -- selected lane. Do not shift the source centreline or smooth across
-    -- merges, splits, ramps, or nearby unrelated roads.
-    local lo,hi=0,0
-    for j=#offsets,1,-1 do
-      local value=offsets[j]
-      if value<0 then
-        if value>=lo-5.5 then lo=value else break end
-      end
-    end
-    for j=1,#offsets do
-      local value=offsets[j]
-      if value>0 then
-        if value<=hi+5.5 then hi=value else break end
-      end
-    end
-
-    nodes[#nodes+1]=vec3(p.x,p.y,p.z)
-    left[#left+1]=lo-1.5
-    right[#right+1]=hi+1.5
   end
-
-  if #nodes<2 then return nil,nil,nil end
-  return nodes,left,right
+  return changes
 end
 
+function Converter.build(data,log)
+  local function trace(fmt,...) if type(log)=="function" then pcall(log,fmt,...) end end
+  if type(data)~="table" or type(data.lanes)~="table" then return nil,"TRAFFIC_JSON_MISSING_LANES" end
+  local graph={lanes={},laneOrder={},intersections={},stats={
+    sourceLanes=#data.lanes,validLanes=0,invalidLanes=0,
+    sourceIntersections=0,junctionTransitions=0,laneChanges=0
+  }}
+  for i=1,#data.lanes do
+    local lane,err=makeLane(data.lanes[i])
+    if lane and not graph.lanes[lane.id] then
+      graph.lanes[lane.id]=lane
+      graph.laneOrder[#graph.laneOrder+1]=lane.id
+      graph.stats.validLanes=graph.stats.validLanes+1
+    else
+      graph.stats.invalidLanes=graph.stats.invalidLanes+1
+      trace("CSP_LANE_REJECT source_index=%d reason=%s",i,tostring(err or "DUPLICATE_OR_INVALID_ID"))
+    end
+  end
+  table.sort(graph.laneOrder)
+  local srcIntersections=type(data.intersections)=="table" and data.intersections or {}
+  graph.stats.sourceIntersections=#srcIntersections
+  for i=1,#srcIntersections do
+    local src=srcIntersections[i]
+    if type(src)=="table" and type(src.points)=="table" then
+      local points={}
+      for j=1,#src.points do
+        local p=src.points[j]
+        if type(p)=="table" and finite(p[1]) and finite(p[2]) and finite(p[3]) then
+          points[#points+1]={x=p[1],y=p[2],z=p[3]}
+        end
+      end
+      if #points>=3 then
+        graph.intersections[#graph.intersections+1]={id=src.id,name=src.name,
+          points=points,source=src}
+      end
+    end
+  end
+  buildJunctionTransitions(graph)
+  local laneChanges=buildLaneChanges(graph)
+  local junctionCount=0
+  for _,id in ipairs(graph.laneOrder) do
+    junctionCount=junctionCount+#graph.lanes[id].outgoing
+  end
+  graph.stats.junctionTransitions=junctionCount
+  graph.stats.laneChanges=#laneChanges
+  graph.stats.totalDirectedConnections=junctionCount+#laneChanges
+  trace("CSP_NETWORK_CONVERTED lanes=%d rejected=%d junction_edges=%d lane_changes=%d intersections=%d",
+    graph.stats.validLanes,graph.stats.invalidLanes,junctionCount,#laneChanges,#graph.intersections)
+  return graph
+end
+
+function Converter.loadNetwork(log)
+  local ok,Network=pcall(require,"traffic_network")
+  if not ok or type(Network)~="table" or type(Network.loadTrackTraffic)~="function" then
+    return nil,"TRAFFIC_NETWORK_MODULE_UNAVAILABLE: "..tostring(Network)
+  end
+  local source,err=Network.loadTrackTraffic()
+  if not source then return nil,err end
+  -- Rebuild from the original source records, retaining every lane and
+  -- intersection. Network.loadTrackTraffic() returns the validated source graph.
+  local data={lanes={},intersections={}}
+  for _,id in ipairs(source.laneOrder or {}) do
+    local lane=source.lanes[id]
+    if lane and lane.source then data.lanes[#data.lanes+1]=lane.source end
+  end
+  for _,inter in ipairs(source.intersections or {}) do
+    if inter.source then data.intersections[#data.intersections+1]=inter.source end
+  end
+  return Converter.build(data,log)
+end
+
+-- Compatibility entry point for older RoutePilot builds. It returns only the
+-- nearest authored lane, never a synthetic route/corridor. New graph-based
+-- driving code must consume loadNetwork() and traverse lane connections.
 function Converter.load(log)
-  local function trace(fmt,...)
-    if type(log)=='function' then pcall(log,fmt,...) end
-  end
-  local ok, Network = pcall(require, 'traffic_network')
-  if not ok or type(Network)~='table' or type(Network.loadTrackTraffic)~='function' then
-    return nil,nil,nil,nil,'traffic_network module unavailable: '..tostring(Network)
-  end
-  if not cachedGraph then
-    local graph, err = Network.loadTrackTraffic()
-    if not graph then return nil,nil,nil,nil,err end
-    cachedGraph=graph
-  end
-  local graph=cachedGraph
-  validateTrackSurface(graph,trace)
-  local player = ac.getCar(0)
+  local graph,err=Converter.loadNetwork(log)
+  if not graph then return nil,nil,nil,nil,err end
+  local player=ac.getCar(0)
   if not player or not player.position or not player.look then
-    return nil,nil,nil,nil,'player car unavailable'
+    return nil,nil,nil,nil,"PLAYER_CAR_UNAVAILABLE"
   end
-  local raw, loop, routeIDs, routeError = collectRoute(graph,player)
-  if not raw then return nil,nil,nil,nil,routeError end
-  local nodes,left,right = buildCorridor(graph,raw)
-  if not nodes then return nil,nil,nil,nil,'failed to build RoutePilot corridor' end
-  trace('CSP_CONVERT_OK source_lanes=%d route_lanes=%d points=%d loop=%s',
-    graph.stats.validLanes,#routeIDs,#nodes,tostring(loop))
-  return nodes,loop,left,right,{
-    sourceLanes=graph.stats.validLanes,
-    routeLanes=routeIDs,
-    sourceTransitions=graph.stats.transitions,
-    points=#nodes
+  local hx,hz=norm(player.look.x,player.look.z)
+  local best,bestScore=nil,nil
+  for _,id in ipairs(graph.laneOrder) do
+    local lane=graph.lanes[id]
+    for i=1,#lane.points-1 do
+      local a,b=lane.points[i],lane.points[i+1]
+      local vx,vz=b.x-a.x,b.z-a.z
+      local l2=vx*vx+vz*vz
+      if l2>1e-8 then
+        local t=clamp(((player.position.x-a.x)*vx+(player.position.z-a.z)*vz)/l2,0,1)
+        local q={x=a.x+vx*t,y=a.y+(b.y-a.y)*t,z=a.z+vz*t}
+        local dx,dz=player.position.x-q.x,player.position.z-q.z
+        local tx,tz=norm(vx,vz)
+        local alignment=hx*tx+hz*tz
+        local score=dx*dx+dz*dz+(1-alignment)*(1-alignment)*25
+        if alignment>0.15 and math.sqrt(dx*dx+dz*dz)<80 and
+          (not bestScore or score<bestScore) then
+          bestScore=score; best={lane=lane,segment=i,t=t}
+        end
+      end
+    end
+  end
+  if not best then return nil,nil,nil,nil,"NO_DIRECTED_CSP_LANE_NEAR_PLAYER" end
+  local lane=best.lane
+  local nodes={}
+  for i=best.segment,#lane.points do
+    local p=lane.points[i]
+    nodes[#nodes+1]=vec3(p.x,p.y,p.z)
+  end
+  if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_LANE_TOO_SHORT" end
+  return nodes,false,{}, {},{
+    sourceLanes=graph.stats.validLanes,routeLanes={lane.id},
+    sourceTransitions=graph.stats.junctionTransitions,
+    laneChanges=graph.stats.laneChanges,network=graph
   }
 end
 
