@@ -93,8 +93,16 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
     local nextEdge = path[i+1]
     if nextEdge then
       local movement = edge.nextMovement and edge.nextMovement[nextEdge.id]
-      if not appendMovement(route, roads, movement) then
-        return nil, 'missing_intersection_curve'
+      if movement then
+        if not appendMovement(route, roads, movement) then
+          return nil, 'missing_intersection_curve'
+        end
+      else
+        local exitPoint = Graph.sampleLane(edge.lane, edge.to)
+        local entryPoint = Graph.sampleLane(nextEdge.lane, nextEdge.from)
+        if not exitPoint or not entryPoint or distance(exitPoint, entryPoint) > 1.5 then
+          return nil, 'missing_transition_metadata'
+        end
       end
     end
     if #route.nodes > (options.maxPoints or 50000) then
