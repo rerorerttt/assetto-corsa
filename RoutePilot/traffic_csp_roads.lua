@@ -322,6 +322,7 @@ function Roads.build(lanes, log)
     end
   end
   local groups, byRoot = {}, {}
+  local laneGroups = {}
   for i = 1, #valid do
     local r = root(i)
     if not byRoot[r] then
@@ -329,6 +330,7 @@ function Roads.build(lanes, log)
       groups[#groups+1] = byRoot[r]
     end
     byRoot[r].lanes[#byRoot[r].lanes+1] = valid[i]
+    laneGroups[valid[i]] = byRoot[r]
   end
   local wallAdjusted, wallConflicts = 0, 0
   for i = 1, #groups do
@@ -339,9 +341,11 @@ function Roads.build(lanes, log)
     end
     local leftLane, rightLane = reference, reference
     local leftOffset, rightOffset = 0, 0
+    group.laneOffsets = {}
     for j = 1, #group.lanes do
       local lane = group.lanes[j]
       local offset = lane == reference and 0 or lateralOffset(reference, lane)
+      group.laneOffsets[lane] = offset
       if offset > leftOffset then leftOffset, leftLane = offset, lane end
       if offset < rightOffset then rightOffset, rightLane = offset, lane end
     end
@@ -378,7 +382,7 @@ function Roads.build(lanes, log)
     log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d multi_lane_groups=%d wall_adjusted=%d wall_conflicts=%d boundary_junctions=%d',
       #valid, #groups, multi, wallAdjusted, wallConflicts, junctions)
   end
-  return { groups = groups, stats = {
+  return { groups = groups, laneGroups = laneGroups, stats = {
     validLanes = #valid, groups = #groups,
     wallAdjusted = wallAdjusted, wallConflicts = wallConflicts,
     wallRaycastAvailable = wallRaycastAvailable, boundaryJunctions = junctions
