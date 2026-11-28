@@ -651,6 +651,14 @@ function Roads.build(lanes, log)
     end
   end
 
+  verifiedGroups, unverifiedGroups = 0, 0
+  for i = 1, #groups do
+    if groups[i].boundariesVerified then
+      verifiedGroups = verifiedGroups + 1
+    else
+      unverifiedGroups = unverifiedGroups + 1
+    end
+  end
   local boundaryLines = {}
   for i = 1, #groups do
     local group = groups[i]
