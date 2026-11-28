@@ -1146,7 +1146,19 @@ function script.update(dt)
               if coordinatorOK then
                 for _,i in ipairs(order) do
                   local person=state.p[i]
-                  if person then person.cruiseSpeed=200.0/3.6 end
+                  if person then
+                    local speedLimit=200
+                    if route.speedLimits and #route.speedLimits>0 and person.routeProgress then
+                      local speedSample=CSPRoutes.sample(route,person.routeProgress)
+                      if speedSample then
+                        local seg=clamp(math.floor(speedSample.seg or 1),1,#route.speedLimits)
+                        local nextSeg=seg%#route.speedLimits+1
+                        local t=clamp(speedSample.t or 0,0,1)
+                        speedLimit=route.speedLimits[seg]*(1-t)+route.speedLimits[nextSeg]*t
+                      end
+                    end
+                    person.cruiseSpeed=clamp(speedLimit,40,200)/3.6
+                  end
                 end
                 table.sort(order,function(a,b)
                   local pa,pb=state.p[a],state.p[b]
