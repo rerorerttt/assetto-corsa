@@ -88,9 +88,17 @@ function Network.build(data)
             end
           end
           local role = graph.rules[source.role or source.laneRole or ""]
+          local minX,maxX,minY,maxY,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge,math.huge,-math.huge
+          for pi=1,#points do
+            local p=points[pi]
+            minX=math.min(minX,p.x); maxX=math.max(maxX,p.x)
+            minY=math.min(minY,p.y); maxY=math.max(maxY,p.y)
+            minZ=math.min(minZ,p.z); maxZ=math.max(maxZ,p.z)
+          end
           graph.lanes[id] = {
             id = id, name = tostring(source.name or ("Lane #" .. id)),
             loop = source.loop == true, points = points, length = length,
+            aabb = { minX=minX,maxX=maxX,minY=minY,maxY=maxY,minZ=minZ,maxZ=maxZ },
             role = source.role or source.laneRole,
             speedLimit = role and role.speedLimit or nil,
             priority = role and role.priority or 0,
