@@ -1,6 +1,7 @@
 -- Topology-aware grouping of parallel directed CSP lanes and corridor boundaries.
 -- A pair is grouped only when direction, geometric overlap and road topology agree.
 local Roads = {}
+local wallRaycastAvailable = false
 
 local function dist2(a, b)
   local dx, dy, dz = a.x-b.x, a.y-b.y, a.z-b.z
@@ -131,6 +132,7 @@ local function wallDistance(position, direction, maxDistance)
       local ray = render.createRay(origin, direction, maxDistance)
       return ray:physics(hit, normal, false, false)
     end)
+    if ok and type(distance) == 'number' then wallRaycastAvailable = true end
     if ok and type(distance) == 'number' and distance > 0.15 and distance < maxDistance and
         math.abs(normal.y) <= 0.65 then
       if not best or distance < best then best = distance end
@@ -301,6 +303,7 @@ local function mergeBoundaryCrossings(lines)
 end
 
 function Roads.build(lanes, log)
+  wallRaycastAvailable = false
   local valid = {}
   for i = 1, #lanes do if lanes[i].valid then valid[#valid+1] = lanes[i] end end
   local parent = {}
@@ -377,7 +380,8 @@ function Roads.build(lanes, log)
   end
   return { groups = groups, stats = {
     validLanes = #valid, groups = #groups,
-    wallAdjusted = wallAdjusted, wallConflicts = wallConflicts, boundaryJunctions = junctions
+    wallAdjusted = wallAdjusted, wallConflicts = wallConflicts,
+    wallRaycastAvailable = wallRaycastAvailable, boundaryJunctions = junctions
   } }
 end
 
