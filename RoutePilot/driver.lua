@@ -2098,7 +2098,6 @@ function Driver.update(carIndex, car, dt)
 
   local ok, controls = pcall(ac.overrideCarControls, carIndex)
   if ok and controls then
-    controls.combineAxes = false
     controls.steer = steer
     controls.gas = p.gas
     controls.brake = p.brake
