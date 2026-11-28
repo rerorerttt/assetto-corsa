@@ -1,6 +1,6 @@
 -- Import a real CSP Traffic Tool export committed with the RoutePilot branch.
--- Surface raycasts are stubbed at each source point's height; graph/road
--- builders are disabled here so this test isolates exporter/importer fidelity.
+-- Surface raycasts are stubbed at each source point's height; the actual
+-- directed graph is built, while road-boundary raycasts remain disabled.
 package.path = "RoutePilot/?.lua;" .. package.path
 
 local vectorMethods = {}
@@ -15,7 +15,6 @@ _G.vec3 = function(x,y,z)
   return setmetatable({x=x or 0,y=y or 0,z=z or 0},{__index=vectorMethods})
 end
 
-package.preload["traffic_csp_graph"] = function() return false end
 package.preload["traffic_csp_roads"] = function() return false end
 package.preload["shared/sim/surfaces"] = function() return false end
 
@@ -39,6 +38,11 @@ assert(#importer.intersections==14,"unexpected intersection count in fixture")
 assert(importer.stats.usable>0,"no lane survived source sampling")
 assert(importer.stats.invalid==0,
   "fixture lanes were unexpectedly rejected: "..tostring(importer.stats.invalid))
+assert(importer.graph,"real CSP export did not produce a directed graph: "..tostring(importer.graphError))
+assert(importer.graph.stats.intersectionLinks>0,
+  "real CSP export produced no lane/intersection links")
+assert(importer.graph.stats.movements>0,
+  "real CSP export produced no directed intersection movements")
 
 local main,highway
 for i=1,#importer.lanes do
@@ -52,5 +56,6 @@ assert(highway and highway.speedLimit==90 and highway.priority==4,
   "Highway lane role was not resolved to 90 km/h / priority 4")
 
 print(string.format(
-  "PASS: real CSP export imported %d/%d lanes, %d intersections, role speed limits and priorities",
-  importer.stats.usable,importer.stats.lanes,#importer.intersections))
+  "PASS: real CSP export imported %d/%d lanes, %d intersections, %d links, %d movements and role metadata",
+  importer.stats.usable,importer.stats.lanes,#importer.intersections,
+  importer.graph.stats.intersectionLinks,importer.graph.stats.movements))
