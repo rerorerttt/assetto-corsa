@@ -385,6 +385,40 @@ local function buildCorridor(graph, raw)
   local nodes, left, right = {}, {}, {}
   local sampleStep = 3.0
   local samples = {}
+
+  -- Spatial index for lane segments. The previous implementation projected
+  -- every route sample onto every point of all 593 source lanes (S×L×P).
+  -- Only segments whose expanded 8 m bounds contain the sample's grid cell
+  -- can contribute to the local corridor.
+  local cellSize, searchRadius = 24.0, 8.0
+  local spatial = {}
+  local function addSegmentCell(cx,cz,segment)
+    local column=spatial[cx]
+    if not column then column={} spatial[cx]=column end
+    local bucket=column[cz]
+    if not bucket then bucket={} column[cz]=bucket end
+    bucket[#bucket+1]=segment
+  end
+  for _,id in ipairs(graph.laneOrder) do
+    local lane=graph.lanes[id]
+    for si=1,#lane.points-1 do
+      local a,b=lane.points[si],lane.points[si+1]
+      local dx,dz=b.x-a.x,b.z-a.z
+      local len2=dx*dx+dz*dz
+      if len2>1e-5 then
+        local inv=1/math.sqrt(len2)
+        local segment={laneId=id,a=a,dx=dx,dy=b.y-a.y,dz=dz,
+          len2=len2,tx=dx*inv,tz=dz*inv}
+        local minCX=math.floor((math.min(a.x,b.x)-searchRadius)/cellSize)
+        local maxCX=math.floor((math.max(a.x,b.x)+searchRadius)/cellSize)
+        local minCZ=math.floor((math.min(a.z,b.z)-searchRadius)/cellSize)
+        local maxCZ=math.floor((math.max(a.z,b.z)+searchRadius)/cellSize)
+        for cx=minCX,maxCX do
+          for cz=minCZ,maxCZ do addSegmentCell(cx,cz,segment) end
+        end
+      end
+    end
+  end
   for i = 1, #raw - 1 do
     local a, b = raw[i], raw[i+1]
     local dx, dz = b.x-a.x, b.z-a.z
@@ -405,19 +439,37 @@ local function buildCorridor(graph, raw)
     local tx,tz = norm(nxt.x-prev.x,nxt.z-prev.z)
     local nx,nz = -tz,tx
     local offsets = {0}
-    for _, id in ipairs(graph.laneOrder) do
-      local lane = graph.lanes[id]
-      local pr = project(lane.points,p,tx,tz)
-      if pr and pr.distance <= 8.0 then
-        local alignment=pr.tx*tx+pr.tz*tz
-        local heightDelta=math.abs((pr.point.y or p.y)-(p.y or pr.point.y))
-        if alignment>=0.75 and heightDelta<=2.5 then
-          local ox,oz=pr.point.x-p.x,pr.point.z-p.z
-          local lateral=ox*nx+oz*nz
-          if math.abs(lateral) >= 1.0 and math.abs(lateral) <= 8.0 then
-            offsets[#offsets+1]=lateral
+    local bestByLane={}
+    local column=spatial[math.floor(p.x/cellSize)]
+    local candidates=column and column[math.floor(p.z/cellSize)] or nil
+    if candidates then
+      for ci=1,#candidates do
+        local segment=candidates[ci]
+        local alignment=segment.tx*tx+segment.tz*tz
+        if alignment>=0.75 then
+          local a=segment.a
+          local t=math.max(0,math.min(1,
+            ((p.x-a.x)*segment.dx+(p.z-a.z)*segment.dz)/segment.len2))
+          local qx=a.x+segment.dx*t
+          local qy=a.y+segment.dy*t
+          local qz=a.z+segment.dz*t
+          local ox,oz=qx-p.x,qz-p.z
+          local d2=ox*ox+oz*oz
+          if d2<=searchRadius*searchRadius and math.abs(qy-p.y)<=2.5 then
+            local score=d2+(1-alignment)*(1-alignment)*25
+            local previous=bestByLane[segment.laneId]
+            if not previous or score<previous.score then
+              bestByLane[segment.laneId]={x=qx,z=qz,score=score}
+            end
           end
         end
+      end
+    end
+    for _,pr in pairs(bestByLane) do
+      local ox,oz=pr.x-p.x,pr.z-p.z
+      local lateral=ox*nx+oz*nz
+      if math.abs(lateral)>=1.0 and math.abs(lateral)<=8.0 then
+        offsets[#offsets+1]=lateral
       end
     end
     table.sort(offsets)
