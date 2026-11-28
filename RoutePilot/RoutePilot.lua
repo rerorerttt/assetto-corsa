@@ -992,6 +992,12 @@ function script.update(dt)
         local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,driveOrder,dt)
         if not okTraffic then writeLog("TRAFFIC_COORDINATOR_ERROR err=%s",tostring(errTraffic)) end
       end
+      if useCSPRoute then
+        for _,i in ipairs(driveOrder) do
+          local person=state.p[i]
+          if person then person.cruiseSpeed=200.0/3.6 end
+        end
+      end
       -- The coordinator has already resolved all lane decisions. Update cars
       -- in deterministic route order; no per-car yield queue or pass handshake.
       local okLoop,errLoop=pcall(function()
