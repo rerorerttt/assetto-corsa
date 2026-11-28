@@ -1135,6 +1135,16 @@ function windowMain(dt)
           ui.text(string.format("CSP Traffic: %s | полосы %d | пригодны %d | без поверхности %d",
             trafficCSP.loaded and "импортирован" or (trafficCSP.error or "ожидание"),
             s.lanes or 0, s.usable or 0, s.invalid or 0))
+          if trafficCSP.graph and trafficCSP.graph.stats then
+            local g = trafficCSP.graph.stats
+            ui.text(string.format("CSP Graph: перекрёстки %d | связи %d | переходы %d | сегменты %d | без связей %d",
+              #trafficCSP.graph.intersections, g.intersectionLinks or 0,
+              g.movements or 0, #trafficCSP.graph.edges, g.disconnectedLanes or 0))
+          elseif trafficCSP.graphError then
+            ui.text("CSP Graph: ошибка — " .. tostring(trafficCSP.graphError))
+          else
+            ui.text("CSP Graph: не построен")
+          end
         else
           ui.text("CSP Traffic: модуль не загружен")
         end
