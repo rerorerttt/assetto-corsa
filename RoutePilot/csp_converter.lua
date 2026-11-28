@@ -453,6 +453,15 @@ function Converter.loadNetwork(log)
   end
   local graph,buildError=Converter.build(data,log)
   if not graph then return nil,buildError end
+  -- Carry resolved CSP lane-role limits into the runtime driving graph.
+  for _,id in ipairs(source.laneOrder or {}) do
+    local srcLane=source.lanes[id]
+    local dstLane=graph.lanes[id]
+    if srcLane and dstLane then
+      dstLane.speedLimit=srcLane.speedLimit
+      dstLane.priority=srcLane.priority
+    end
+  end
   -- Preserve source validation counts: the intermediate reader intentionally
   -- omits malformed records from its runtime lane table.
   if source.stats then
