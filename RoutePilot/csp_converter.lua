@@ -252,48 +252,74 @@ local function buildLaneChanges(graph)
     end
     samplesByLane[id]=samples
   end
-  for ai=1,#graph.laneOrder do
-    local aId=graph.laneOrder[ai]
-    local a=graph.lanes[aId]
-    for bi=ai+1,#graph.laneOrder do
-      local bId=graph.laneOrder[bi]
-      local b=graph.lanes[bId]
-      local function scan(src,dst,out)
-        local runStart,runLast,runLastTarget,runStartTarget,runCount=nil,nil,nil,nil,0
-        local function flush()
-          if runCount>=3 and runLast-runStart>=16 then
-            out[#out+1]={fromS=runStart,toS=runLast,
-              targetStart=runStartTarget,targetEnd=runLastTarget}
+  -- Build only lane pairs whose samples occupy neighbouring spatial cells.
+  -- This avoids comparing every lane against every other lane on large maps.
+  local pairSet,pairsFound={},{}
+  for _,id in ipairs(graph.laneOrder) do
+    for _,sample in ipairs(samplesByLane[id]) do
+      local cx,cz=math.floor(sample.p.x/cellSize),math.floor(sample.p.z/cellSize)
+      for ox=-1,1 do
+        local col=spatial[cx+ox]
+        if col then
+          for oz=-1,1 do
+            local bucket=col[cz+oz]
+            if bucket then
+              for k=1,#bucket do
+                local other=bucket[k].laneId
+                if other~=id then
+                  local a,b=id,other
+                  if a>b then a,b=b,a end
+                  local key=tostring(a)..":"..tostring(b)
+                  if not pairSet[key] then
+                    pairSet[key]=true
+                    pairsFound[#pairsFound+1]={a=a,b=b}
+                  end
+                end
+              end
+            end
           end
-          runStart,runLast,runLastTarget,runStartTarget,runCount=nil,nil,nil,nil,0
         end
-        local srcSamples=samplesByLane[src.id]
-        for si=1,#srcSamples do
-          local sample=srcSamples[si]
-          local p=sample.p
-          local best,bestScore=nil,nil
-          local cx,cz=math.floor(p.x/cellSize),math.floor(p.z/cellSize)
-          for ox=-1,1 do
-            local col=spatial[cx+ox]
-            if col then
-              for oz=-1,1 do
-                local bucket=col[cz+oz]
-                if bucket then
-                  for k=1,#bucket do
-                    local candidate=bucket[k]
-                    if candidate.laneId==dst.id then
-                      local dx,dz=candidate.p.x-p.x,candidate.p.z-p.z
-                      local gap=math.sqrt(dx*dx+dz*dz)
-                      if gap>=2.0 and gap<=7.5 and
-                          math.abs(candidate.p.y-p.y)<=1.5 then
-                        local alignment=sample.tx*candidate.tx+sample.tz*candidate.tz
-                        if alignment>=0.94 then
-                          local score=gap+(1-alignment)*8
-                          if not bestScore or score<bestScore then
-                            bestScore=score
-                            best={s=sample.s,ds=candidate.s,gap=gap,alignment=alignment}
-                          end
-                        end
+      end
+    end
+  end
+  table.sort(pairsFound,function(a,b)
+    if a.a==b.a then return a.b<b.b end
+    return a.a<b.a
+  end)
+  local function scan(src,dst,out)
+    local runStart,runLast,runLastTarget,runStartTarget,runCount=nil,nil,nil,nil,0
+    local function flush()
+      if runCount>=3 and runLast-runStart>=16 then
+        out[#out+1]={fromS=runStart,toS=runLast,
+          targetStart=runStartTarget,targetEnd=runLastTarget}
+      end
+      runStart,runLast,runLastTarget,runStartTarget,runCount=nil,nil,nil,nil,0
+    end
+    local srcSamples=samplesByLane[src.id]
+    for si=1,#srcSamples do
+      local sample=srcSamples[si]
+      local p=sample.p
+      local best,bestScore=nil,nil
+      local cx,cz=math.floor(p.x/cellSize),math.floor(p.z/cellSize)
+      for ox=-1,1 do
+        local col=spatial[cx+ox]
+        if col then
+          for oz=-1,1 do
+            local bucket=col[cz+oz]
+            if bucket then
+              for k=1,#bucket do
+                local candidate=bucket[k]
+                if candidate.laneId==dst.id then
+                  local dx,dz=candidate.p.x-p.x,candidate.p.z-p.z
+                  local gap=math.sqrt(dx*dx+dz*dz)
+                  if gap>=2.0 and gap<=7.5 and
+                      math.abs(candidate.p.y-p.y)<=1.5 then
+                    local alignment=sample.tx*candidate.tx+sample.tz*candidate.tz
+                    if alignment>=0.94 then
+                      local score=gap+(1-alignment)*8
+                      if not bestScore or score<bestScore then
+                        bestScore=score
+                        best={s=sample.s,ds=candidate.s,gap=gap,alignment=alignment}
                       end
                     end
                   end
@@ -301,22 +327,27 @@ local function buildLaneChanges(graph)
               end
             end
           end
-          if best then
-            if runLast and (sample.s-runLast>12.1 or
-                math.abs(best.ds-runLastTarget)>20.0) then flush() end
-            if not runStart then
-              runStart=sample.s
-              runStartTarget=best.ds
-            end
-            runLast=sample.s
-            runLastTarget=best.ds
-            runCount=runCount+1
-          else
-            flush()
-          end
         end
+      end
+      if best then
+        if runLast and (sample.s-runLast>12.1 or
+            math.abs(best.ds-runLastTarget)>20.0) then flush() end
+        if not runStart then
+          runStart=sample.s
+          runStartTarget=best.ds
+        end
+        runLast=sample.s
+        runLastTarget=best.ds
+        runCount=runCount+1
+      else
         flush()
       end
+    end
+    flush()
+  end
+  for _,pair in ipairs(pairsFound) do
+    local a,b=graph.lanes[pair.a],graph.lanes[pair.b]
+    if a and b then
       local ab,ba={},{}
       scan(a,b,ab)
       scan(b,a,ba)
