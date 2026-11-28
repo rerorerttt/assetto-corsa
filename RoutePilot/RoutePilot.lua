@@ -1697,11 +1697,8 @@ if ac.isModuleActive and ac.CSPModuleID and ac.CSPModuleID.NewBehaviour then
   local ok,value=pcall(ac.isModuleActive,ac.CSPModuleID.NewBehaviour)
   newBehaviourActive=ok and value==true
 end
-writeLog("CSP_AI_CONTROL_STATE new_behaviour_module_active=%s custom_ai_splines_allowed=%s setAISpline_api=%s setAINoInput_api=%s",
-  tostring(newBehaviourActive),
-  tostring(initSim and initSim.customAISplinesAllowed),
-  tostring(type(physics)=="table" and type(physics.setAISpline)=="function"),
-  tostring(type(physics)=="table" and type(physics.setAINoInput)=="function"))
+writeLog("CSP_AI_CONTROL_STATE mode=routepilot_custom_controller new_behaviour_module_active=%s",
+  tostring(newBehaviourActive))
 writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d csp=%s lanes=%d",
   getTrackTag(),#state.nodes,tostring(state.loadedFromCSP),
   state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0)
