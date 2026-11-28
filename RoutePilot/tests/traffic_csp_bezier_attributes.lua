@@ -52,7 +52,7 @@ local movement = {
 }
 edgeA.nextMovement = {[edgeB.id]=movement}
 local route, err = Routes.build({edges={edgeA,edgeB}}, nil, edgeA, 0,
-  {targetEdge=edgeB})
+  {targetEdge=edgeB,minLength=1})
 assert(route, "route build failed: "..tostring(err))
 
 -- Reproduce CSP's 30-point arc-length normalization for the authored
