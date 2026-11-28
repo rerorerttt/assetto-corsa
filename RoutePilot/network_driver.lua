@@ -106,20 +106,38 @@ function M.update(i,c,dt)
  if not q or q.distance>18 then controls(i,0,0,1);p.projectionLost=true;p.trafficAction="NETWORK_PROJECTION_LOST";return end
  p.networkS=q.s;p.networkDistance=q.distance
  local sim=ac.getSim();local nextJ=junction(g,l,{s=p.networkS},c,i,sim)
- if nextJ then local old=l.id;l=g.lanes[nextJ.id];p.networkLaneId=l.id;p.networkS=nextJ.s
-  q=project(l,c.position,p.networkS,35)or q;p.networkS=q.s
+ if nextJ then
+  local old=l.id
+  l=g.lanes[nextJ.id];p.networkLaneId=l.id;p.networkS=nextJ.s
+  local targetProjection=project(l,c.position,p.networkS,35)
+  if not targetProjection or targetProjection.distance>28 then
+   controls(i,0,0,0.65);p.projectionLost=true;p.trafficAction="NETWORK_JUNCTION_REACQUIRE";return
+  end
+  q=targetProjection;p.networkS=q.s
   H.log("NETWORK_JUNCTION id=%d from=%d to=%d",i,old,l.id)
  end
  local lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
  if lead and lead.gap<max(32,speed*2)then local change=laneChange(g,l,{s=p.networkS},i,sim,speed)
-  if change then local old=l.id;l=g.lanes[change.id];p.networkLaneId=l.id;p.networkS=change.s
-   q=project(l,c.position,p.networkS,35)or q;p.networkS=q.s
-   lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
-   H.log("NETWORK_LANE_CHANGE id=%d from=%d to=%d",i,old,l.id)
+  if change then
+   local old=l.id
+   l=g.lanes[change.id];p.networkLaneId=l.id;p.networkS=change.s
+   local targetProjection=project(l,c.position,p.networkS,35)
+   if not targetProjection or targetProjection.distance>12 then
+    p.networkLaneId=old;l=g.lanes[old]
+   else
+    q=targetProjection;p.networkS=q.s
+    lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
+    H.log("NETWORK_LANE_CHANGE id=%d from=%d to=%d",i,old,l.id)
+   end
   end
  end
- if p.networkS>=l.length-1.5 and not l.loop then local nextLane=junction(g,l,{s=p.networkS},c,i,sim)
-  if nextLane then l=g.lanes[nextLane.id];p.networkLaneId=l.id;p.networkS=nextLane.s
+ if p.networkS>=l.length-1.5 and not l.loop then
+  local nextLane=junction(g,l,{s=p.networkS},c,i,sim)
+  if nextLane then
+   l=g.lanes[nextLane.id];p.networkLaneId=l.id;p.networkS=nextLane.s
+   local targetProjection=project(l,c.position,p.networkS,35)
+   if not targetProjection or targetProjection.distance>28 then controls(i,0,0,0.65);p.projectionLost=true;return end
+   q=targetProjection;p.networkS=q.s
   else controls(i,0,0,1);p.trafficAction="NETWORK_END_OF_LANE";return end
  end
  local look=clamp(9+speed*.55,9,55);local aimS=l.loop and((p.networkS+look)%l.length)or min(l.length,p.networkS+look)
