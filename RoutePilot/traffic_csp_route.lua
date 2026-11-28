@@ -76,7 +76,7 @@ local function laneBoundsAt(roads, lane, position, direction)
   end
   local left=(leftPoint.x-position.x)*leftX+(leftPoint.z-position.z)*leftZ
   local right=(rightPoint.x-position.x)*leftX+(rightPoint.z-position.z)*leftZ
-  if left<=0.05 or right>=-0.05 then return nil, nil end
+  if left<1.5 or right>-1.5 then return nil, nil end
   return left, right
 end
 
