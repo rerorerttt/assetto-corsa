@@ -71,16 +71,10 @@ for i=1,#importer.graph.edges do
     bestOpenLength=math.max(bestOpenLength,route.length or 0)
   end
 end
-for i=1,#importer.graph.edges do
-  local edge=importer.graph.edges[i]
-  local nextIDs={}
-  for j=1,#edge.nextEdges do
-    local nextEdge=edge.nextEdges[j]
-    nextIDs[#nextIDs+1]=tostring(nextEdge.id).."(L"..tostring(nextEdge.lane.id)..")"
-  end
-  print(string.format("GRAPH_EDGE %d lane=%s range=%.1f-%.1f next=%s",
-    edge.id,tostring(edge.lane.id),edge.from,edge.to,table.concat(nextIDs,",")))
-end
+assert(cycleStarts==0,"fixture unexpectedly gained a directed cycle; review route selection assumptions")
+assert(openRoutes>0 and bestOpenLength>=250,
+  "fixture has no usable open route for one-way traffic fallback")
+
 print(string.format(
   "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts, %d valid open routes (max %.0f m)",
   importer.stats.usable,importer.stats.lanes,#importer.intersections,
