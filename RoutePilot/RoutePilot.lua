@@ -558,10 +558,14 @@ local function trySpawnTeleport(sim,dt)
   if state.spawnStable<CFG.SPAWN_STABLE_TIME then return end
   -- teleport (in parallel with driving; adopted cars keep their personality)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
-    state.spawnDone=true; return
+    writeLog("SPAWN_WAIT reason=no_teleport_api")
+    return
   end
   local metrics=buildSpawnRouteMetrics()
-  if not metrics then state.spawnDone=true; return end
+  if not metrics then
+    writeLog("SPAWN_WAIT reason=route_metrics_unavailable")
+    return
+  end
   local player=ac.getCar(0)
   if not player or not player.position then return end
   local routeDistance,routeError=findRouteDistanceAtPosition(
