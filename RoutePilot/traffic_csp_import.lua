@@ -3,6 +3,8 @@
 -- Surface projection follows CSP Traffic Tool's own EditorLaneExporter convention.
 
 local json = require('lib/json')
+local okSurfaces, Surfaces = pcall(require, 'shared/sim/surfaces')
+if not okSurfaces or type(Surfaces) ~= 'table' then Surfaces = nil end
 local Importer = {}
 Importer.__index = Importer
 
@@ -73,10 +75,14 @@ local function projectToTrack(p)
   local normal = vec3()
   local ok, distance = pcall(physics.raycastTrack, origin, DOWN, RAY_LENGTH, nil, normal)
   if not ok then return nil, nil, tostring(distance) end
-  if not finite(distance) or distance == -1 then return nil, nil, 'no_surface' end
+  if not finite(distance) or distance == -1 then return nil, nil, nil, 'no_surface' end
+  local surfaceType = Surfaces and Surfaces.raycastType(origin, DOWN, RAY_LENGTH) or nil
+  if surfaceType == 'grass' or surfaceType == 'sand' or surfaceType == 'extraturf' then
+    return nil, nil, surfaceType, 'non_road_surface'
+  end
   local projected = p:clone()
   projected.y = origin.y - distance
-  return projected, normal, nil
+  return projected, normal, surfaceType or 'unclassified', nil
 end
 
 function Importer.new(log)
@@ -135,6 +141,7 @@ function Importer:load()
       points = {},
       normals = {},
       surfaceValid = {},
+      surfaceTypes = {},
       valid = false,
     }
     local sourcePoints = {}
@@ -148,18 +155,20 @@ function Importer:load()
     if samples then
       local laneHits, laneMisses = 0, 0
       for j = 1, #samples do
-        local projected, normal = projectToTrack(samples[j])
+        local projected, normal, surfaceType = projectToTrack(samples[j])
         self.stats.samples = self.stats.samples + 1
         if projected then
           lane.points[#lane.points + 1] = projected
           lane.normals[#lane.normals + 1] = normal
           lane.surfaceValid[#lane.surfaceValid + 1] = true
+          lane.surfaceTypes[#lane.surfaceTypes + 1] = surfaceType
           laneHits = laneHits + 1
           self.stats.hits = self.stats.hits + 1
         else
           lane.points[#lane.points + 1] = samples[j]
           lane.normals[#lane.normals + 1] = vec3(0, 1, 0)
           lane.surfaceValid[#lane.surfaceValid + 1] = false
+          lane.surfaceTypes[#lane.surfaceTypes + 1] = surfaceType or 'no_surface'
           laneMisses = laneMisses + 1
           self.stats.misses = self.stats.misses + 1
         end
@@ -180,9 +189,9 @@ function Importer:load()
   end
 
   self.loaded = true
-  self.log('CSP_IMPORT_LOADED file=%s lanes=%d usable=%d invalid=%d samples=%d hits=%d misses=%d intersections=%d areas=%d',
+  self.log('CSP_IMPORT_LOADED file=%s lanes=%d usable=%d invalid=%d samples=%d hits=%d misses=%d intersections=%d areas=%d surface_type_api=%s',
     tostring(self.filename), self.stats.lanes, self.stats.usable, self.stats.invalid,
-    self.stats.samples, self.stats.hits, self.stats.misses, #self.intersections, #self.areas)
+    self.stats.samples, self.stats.hits, self.stats.misses, #self.intersections, #self.areas, tostring(Surfaces ~= nil))
   return true
 end
 
