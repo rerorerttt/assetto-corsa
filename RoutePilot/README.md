@@ -50,7 +50,9 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
 - 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
 
-## Traffic behavior (multi-offset passing)
+## Legacy manual-route traffic behavior (multi-offset passing)
+
+The following reservation, racing-line and traction-control notes describe the legacy manual-route controller. CSP graph mode currently uses the separate network controller described above and does not yet inherit every legacy feature.
 
 - No configured 170 km/h cruise ceiling: straight-line speed is not capped by RoutePilot. The planner limits speed from upcoming route curvature and the car's measured braking response; vehicle physics determines attainable top speed.
 - Any car may pass a slower vehicle when its pace advantage and estimated pass distance make the manoeuvre feasible.
