@@ -17,6 +17,9 @@ local SAMPLE_STEP = 1.5
 local RAY_START_OFFSET = 2.0
 local RAY_LENGTH = 4.0
 local MAX_SURFACE_SNAP = 1.5
+local SURFACE_EDGE_STEP = 0.5
+local SURFACE_EDGE_MAX = 8.0
+local SURFACE_EDGE_GAP = 12.0
 local MIN_LANE_POINTS = 2
 
 local function finite(v)
@@ -97,6 +100,104 @@ local function projectToTrack(p)
   return projected, normal, surfaceType or 'unclassified', nil
 end
 
+local function driveableSurface(surfaceType, centerType)
+  if centerType == 'gravel' then
+    return surfaceType == 'gravel' or surfaceType == 'kerb'
+  end
+  return surfaceType == 'default' or surfaceType == 'old' or surfaceType == 'kerb'
+end
+
+local function surfaceAtOffset(point, dx, dz, offset)
+  if not Surfaces or not physics or type(physics.raycastTrack) ~= 'function' then return nil end
+  local origin = vec3(point.x + dx*offset, point.y + RAY_START_OFFSET,
+    point.z + dz*offset)
+  local normal = vec3()
+  local ok, hit = pcall(physics.raycastTrack, origin, DOWN, RAY_LENGTH, nil, normal)
+  if not ok or not finite(hit) or hit == -1 or not finite(normal.y) or normal.y < 0.30 then
+    return nil
+  end
+  if math.abs((origin.y-hit)-point.y) > MAX_SURFACE_SNAP then return nil end
+  return Surfaces.raycastType(origin, DOWN, RAY_LENGTH)
+end
+
+local function measureSideWidth(point, dx, dz, centerType)
+  local lastDriveable = 0
+  local steps = math.floor(SURFACE_EDGE_MAX/SURFACE_EDGE_STEP)
+  for step = 1, steps do
+    local offset = step*SURFACE_EDGE_STEP
+    local surfaceType = surfaceAtOffset(point, dx, dz, offset)
+    if driveableSurface(surfaceType, centerType) then
+      lastDriveable = offset
+    else
+      return lastDriveable >= 1.0 and lastDriveable or nil
+    end
+  end
+  -- No physical surface transition was found within the probe range. Do not
+  -- invent a road edge from a nominal lane width.
+  return nil
+end
+
+local function fillBoundaryGaps(widths, loop)
+  local n = #widths
+  local original = {}
+  for i = 1, n do original[i] = widths[i] end
+  local maxSteps = math.max(1, math.ceil(SURFACE_EDGE_GAP/SAMPLE_STEP))
+  for i = 1, n do
+    if not widths[i] then
+      local conservative = math.huge
+      for radius = 1, maxSteps do
+        local before, after = i-radius, i+radius
+        if loop then
+          before = (before-1)%n+1
+          after = (after-1)%n+1
+        end
+        if before >= 1 and before <= n and original[before] then
+          conservative = math.min(conservative, original[before])
+        end
+        if after >= 1 and after <= n and original[after] then
+          conservative = math.min(conservative, original[after])
+        end
+      end
+      if conservative < math.huge then widths[i] = conservative else return false end
+    end
+  end
+  return true
+end
+
+local function measureLaneSurfaceBounds(lane)
+  if not Surfaces or #lane.points < 2 then return false end
+  local leftWidths, rightWidths = {}, {}
+  local n = #lane.points
+  for i = 1, n do
+    local previousIndex = i > 1 and i-1 or (lane.loop and n or 1)
+    local nextIndex = i < n and i+1 or (lane.loop and 1 or n)
+    local a, b = lane.points[previousIndex], lane.points[nextIndex]
+    local tx, ty, tz = b.x-a.x, b.y-a.y, b.z-a.z
+    local tangentLength = math.sqrt(tx*tx+ty*ty+tz*tz)
+    if tangentLength < 1e-6 then return false end
+    tx, ty, tz = tx/tangentLength, ty/tangentLength, tz/tangentLength
+    local normal = lane.normals[i]
+    local nx, ny, nz = normal.x, normal.y, normal.z
+    local lx = ty*nz - tz*ny
+    local ly = tz*nx - tx*nz
+    local lz = tx*ny - ty*nx
+    local leftLength = math.sqrt(lx*lx+ly*ly+lz*lz)
+    if leftLength < 1e-6 then return false end
+    lx, ly, lz = lx/leftLength, ly/leftLength, lz/leftLength
+    local centerType = lane.surfaceTypes[i]
+    if not driveableSurface(centerType, centerType) then return false end
+    leftWidths[i] = measureSideWidth(lane.points[i], lx, lz, centerType)
+    rightWidths[i] = measureSideWidth(lane.points[i], -lx, -lz, centerType)
+  end
+  if not fillBoundaryGaps(leftWidths, lane.loop) or
+      not fillBoundaryGaps(rightWidths, lane.loop) then
+    return false
+  end
+  lane.surfaceBounds = { left = leftWidths, right = rightWidths }
+  lane.surfaceBoundsValid = true
+  return true
+end
+
 function Importer.new(log)
   return setmetatable({
     log = log or function() end,
@@ -111,7 +212,7 @@ function Importer.new(log)
     graphError = nil,
     roads = nil,
     roadsError = nil,
-    stats = { lanes = 0, usable = 0, invalid = 0, samples = 0, hits = 0, misses = 0, trimmed = 0 },
+    stats = { lanes = 0, usable = 0, invalid = 0, bounded = 0, unbounded = 0, samples = 0, hits = 0, misses = 0, trimmed = 0 },
   }, Importer)
 end
 
@@ -284,6 +385,11 @@ function Importer:load()
     end
     if lane.valid then
       self.stats.usable = self.stats.usable + 1
+      if measureLaneSurfaceBounds(lane) then
+        self.stats.bounded = self.stats.bounded + 1
+      else
+        self.stats.unbounded = self.stats.unbounded + 1
+      end
     else
       self.stats.invalid = self.stats.invalid + 1
     end
