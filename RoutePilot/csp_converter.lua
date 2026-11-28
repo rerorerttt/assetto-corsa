@@ -805,7 +805,11 @@ function Converter.load(log)
           y=sample.p.y,z=sample.p.z+tangent.x*centerOffset}
         appendPoint(center,-half,half)
       else
-        appendPoint(sample.p,-1.25,1.25)
+        -- One authored line is one logical traffic lane, not a
+        -- physically narrow 2.5 m corridor. Keep enough body clearance for
+        -- ordinary cars while the coordinator still resolves exactly one
+        -- lane, so overtaking remains disabled.
+        appendPoint(sample.p,-2.0,2.0)
       end
     end
   end
@@ -924,7 +928,7 @@ function Converter.load(log)
             local t=step/steps
             appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
               y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
-              z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-1.25,1.25)
+              z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
           end
         end
         if wrapsToPrefix then
