@@ -638,6 +638,9 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
 end
 
 
+Graph.sampleLane = lanePositionAt
+Graph.directionAt = laneDirectionAt
+
 function Graph.sampleEdge(edge, laneDistance)
   if not edge then return nil end
   local lane = edge.lane
