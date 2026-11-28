@@ -161,6 +161,7 @@ local function newPersonality(carIndex)
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
+    p.spawnBoostT=1.5
     local seededProgress=Geometry.distanceAt(
       state.routeGeometry,spawnHint.segment,spawnHint.parameter)
     if seededProgress~=nil then
@@ -1732,6 +1733,12 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local error=targetSpeed-speed
   local gas=clamp(error*CFG.GAS_GAIN,0,CFG.MAX_GAS)
   local brake=clamp(-error*CFG.BRAKE_GAIN,0,CFG.MAX_BRAKE)
+  -- Short launch assist after a forward respawn: it only raises throttle
+  -- while the speed planner is already requesting acceleration.
+  if safeNumber(p.spawnBoostT)>0 then
+    p.spawnBoostT=math.max(0,p.spawnBoostT-math.max(0,dt or 0))
+    if error>0.5 and speed<12.0 then gas=math.max(gas,0.85) end
+  end
 
   -- Fast torque cut on wheelspin, slow recovery to avoid repeated grip/spin.
   local slip=math.max(0,safeNumber(p.wheelSlip))
