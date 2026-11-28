@@ -592,7 +592,6 @@ local function trySpawnTeleport(sim,dt)
     if position and direction then
       -- Keep the previously user-verified orientation. The SDK documents
       -- an explicit direction vector but does not define its sign convention.
-      markAppTeleport(carIndex)
       local ok,result=pcall(physics.setAICarPosition,carIndex,
         position,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
@@ -653,7 +652,6 @@ local function walkLineSigned(startSeg,startT,distance,sign)
   end
   return nil
 end
-local function markAppTeleport(carIndex)
   state.appTeleportGuard=state.appTeleportGuard or {}
   state.appTeleportGuard[carIndex]=0.75
 end
