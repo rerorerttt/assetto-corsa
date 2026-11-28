@@ -29,7 +29,7 @@ local function nearestOnLane(p, lane)
   local pts, bestD, bestP, bestDir = lane.points, math.huge, nil, nil
   local n = #pts
   local count = lane.loop and n or n - 1
-  local step = math.max(1, math.floor(n / 1000))
+  local step = math.max(1, math.floor(n / 400))
   for i = 1, count, step do
     local nextIndex = i + step
     if lane.loop then nextIndex = (nextIndex - 1) % n + 1
@@ -82,7 +82,7 @@ local function pairMatches(a, b)
   end
   local function coverage(src, dst)
     local n, good, sum = #src.points, 0, 0
-    local step = math.max(1, math.floor(n / 60))
+    local step = math.max(1, math.floor(n / 32))
     for i = 1, n, step do
       local p = src.points[i]
       local d, q, dir = nearestOnLane(p, dst)
@@ -118,7 +118,7 @@ end
 local function lateralOffset(reference, candidate)
   local offsets = {}
   local pts = reference.points
-  local step = math.max(1, math.floor(#pts / 40))
+  local step = math.max(1, math.floor(#pts / 32))
   for i = 1, #pts, step do
     local p = pts[i]
     local _, q = nearestOnLane(p, candidate)
