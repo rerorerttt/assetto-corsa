@@ -29,8 +29,13 @@ local function project(l,pos,hint,window)
   local a,b=l.points[i],l.points[i+1];local vx,vz=b.x-a.x,b.z-a.z;local ll=vx*vx+vz*vz
   if ll>1e-8 then
    local t=clamp(((pos.x-a.x)*vx+(pos.z-a.z)*vz)/ll,0,1);local x,z=a.x+vx*t,a.z+vz*t
-   local dx,dz=pos.x-x,pos.z-z;local d2=dx*dx+dz*dz
-   if not bd or d2<bd then local len=sqrt(ll);best={s=l.cumulative[i]+len*t,distance=sqrt(d2),x=x,y=a.y+(b.y-a.y)*t,z=z,tx=vx/len,tz=vz/len,segment=i};bd=d2 end
+   local dx,dz=pos.x-x,pos.z-z
+   local y=a.y+(b.y-a.y)*t
+   local dy=pos.y-y
+   -- Use height in lane selection: on stacked highways, two lanes can
+   -- overlap in X/Z while belonging to completely different road decks.
+   local d2=dx*dx+dz*dz+dy*dy*4.0
+   if not bd or d2<bd then local len=sqrt(ll);best={s=l.cumulative[i]+len*t,distance=sqrt(d2),heightError=dy,x=x,y=y,z=z,tx=vx/len,tz=vz/len,segment=i};bd=d2 end
   end
  end
  return best
@@ -130,7 +135,7 @@ function M.prepareTraffic(sim,order,dt)
  local g=S.trafficNetwork;if not g then return end
  for _,i in ipairs(order or{})do local c=ac.getCar(i);if c and c.isActive then local p=S.p[i]or{};S.p[i]=p
   if not p.networkLaneId then local q=nearest(g,c);if q then p.networkLaneId=q.id;p.networkS=q.s;H.log("NETWORK_ATTACH id=%d lane=%d s=%.1f",i,q.id,q.s)end end
-  local l=g.lanes[p.networkLaneId];if l then local q=projectNear(l,c.position,p.networkS,max(35,n(c.speedMs)*1.8+15));if q and q.distance<18 then p.networkS=q.s;p.networkDistance=q.distance;p.networkProjectionLost=false else p.networkProjectionLost=true end end
+  local l=g.lanes[p.networkLaneId];if l then local q=projectNear(l,c.position,p.networkS,max(35,n(c.speedMs)*1.8+15));if q and q.distance<18 then p.networkS=q.s;p.networkDistance=q.distance;p.networkHeightError=q.heightError;p.networkProjectionLost=false else p.networkProjectionLost=true end end
  end end
 end
 function M.update(i,c,dt)
@@ -241,7 +246,7 @@ function M.update(i,c,dt)
  local err=target-speed;local gas=clamp(err*.35,0,1);local brake=clamp(-err*.55,0,1)
  if speed<5 then gas=min(gas,.65)end;if err>=0 then brake=0 end
  p.networkLaneId=l.id;p.networkS=p.networkS;p.routeProgress=p.networkS;p.routeLocked=true
- p.networkDistance=q.distance;p.lineDist=q.distance;p.segIdx=q.segment or 1;p.latOff=0
+ p.networkDistance=q.distance;p.networkHeightError=q.heightError;p.lineDist=q.distance;p.segIdx=q.segment or 1;p.latOff=0
  p.targetSpeed=target;p.steer=steer;p.gas=gas;p.brake=brake
  p.trafficPriority=n(l.priority)
  p.trafficAction=lead and"NETWORK_FOLLOW"or"NETWORK_OPEN";p.trafficLeaderIndex=lead and lead.index or -1;p.trafficGap=lead and lead.gap or -1
