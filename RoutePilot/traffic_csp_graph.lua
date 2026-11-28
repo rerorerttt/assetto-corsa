@@ -436,6 +436,43 @@ function Graph.build(lanes, intersectionDefs, log)
     end
   end
 
+  -- A loop lane may cross the same intersection at its distance seam.
+  -- Its first and last spans are represented by two links, while the road
+  -- segment between them is a self-edge at that intersection. Join the two
+  -- spans explicitly so the self-edge is recognized as a complete directed
+  -- cycle and route sampling includes the seam portion inside the junction.
+  for i = 1, #lanes do
+    local lane = lanes[i]
+    local links = lane.graphLinks
+    if lane.valid and lane.loop and #links >= 2 then
+      local first, last = links[1], links[#links]
+      if first.intersection == last.intersection and first.from <= 0.5 and
+          last.to >= lane.totalLength - 0.5 and last.inEdge and
+          first.outEdge and last.inEdge == first.outEdge then
+        local edge = last.inEdge
+        if edge.fromNode == edge.toNode then
+          edge.wrap = true
+          local hasSelfTransition = false
+          for j = 1, #edge.nextEdges do
+            if edge.nextEdges[j] == edge then hasSelfTransition = true break end
+          end
+          if not hasSelfTransition then edge.nextEdges[#edge.nextEdges + 1] = edge end
+          local movement = {
+            intersection = first.intersection, from = last, to = first,
+            fromEdge = edge, toEdge = edge,
+            fromPos = last.fromOrigPos, toPos = first.toOrigPos,
+            fromDir = last.fromDir, toDir = first.toDir,
+            continuation = true, seamContinuation = true, priority = 0
+          }
+          first.intersection.movements[#first.intersection.movements + 1] = movement
+          graph.movements[#graph.movements + 1] = movement
+          edge.nextMovement = edge.nextMovement or {}
+          edge.nextMovement[edge.id] = movement
+        end
+      end
+    end
+  end
+
   local function movementLaneRules(inter, incoming, outgoing)
     local entrySide = incoming.fromSide and inter.sides[incoming.fromSide] or nil
     local exitSide = outgoing.toSide and inter.sides[outgoing.toSide] or nil
