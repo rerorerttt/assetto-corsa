@@ -116,6 +116,14 @@ physics.raycastTrack=function(origin,direction,length,filter,normal)
   return 2
 end
 
+local wideIntersection=movement.intersection
+movement.intersection={points={{9,0,-1},{11,0,-1},{11,0,11},{9,0,11}}}
+local outsideRoute,outsideError=Routes.build({edges={edgeA,edgeB}},roads,
+  edgeA,0,{targetEdge=edgeB,minLength=1})
+assert(not outsideRoute and outsideError=="unverified_intersection_boundaries",
+  "trajectory leaving the exported intersection polygon was accepted")
+movement.intersection=wideIntersection
+
 -- An open route without an explicit target must never stop inside an
 -- intersection merely because the directed graph has no outgoing movement.
 edgeA.toNode={kind="intersection"}
