@@ -380,6 +380,8 @@ function Graph.build(lanes, intersectionDefs, log)
         local continuation = {
           intersection = inter, from = link, to = link,
           fromEdge = link.inEdge, toEdge = link.outEdge,
+          fromPos = link.fromPos, toPos = link.toPos,
+          fromDir = link.fromDir, toDir = link.toDir,
           continuation = true, priority = 0
         }
         inter.movements[#inter.movements + 1] = continuation
@@ -451,6 +453,8 @@ function Graph.build(lanes, intersectionDefs, log)
               local movement = {
                 intersection = inter, from = incoming, to = outgoing,
                 fromEdge = incoming.inEdge, toEdge = outgoing.outEdge,
+                fromPos = incoming.toPos, toPos = outgoing.fromPos,
+                fromDir = incoming.toDir, toDir = outgoing.fromDir,
                 priority = tonumber(incoming.lane.priority) or 0,
                 weakLaneChange = weakLaneChange,
                 trafficLight = inter.definition.trafficLight,
@@ -492,6 +496,54 @@ function Graph.build(lanes, intersectionDefs, log)
           end
         end
       end
+    end
+  end
+  -- Match CSP's movement ranking: straight trajectories have priority,
+  -- U-turns are strongly deprioritized, and paths crossing a straight movement
+  -- yield. This is a route cost, not a hard stop rule.
+  local straightMovements = {}
+  for i = 1, #graph.movements do
+    local movement = graph.movements[i]
+    if movement.fromDir and movement.toDir then
+      local dot = movement.fromDir.x*movement.toDir.x +
+        movement.fromDir.y*movement.toDir.y + movement.fromDir.z*movement.toDir.z
+      movement.directionDot = dot
+      if dot > 0.5 and movement.fromPos and movement.toPos then
+        straightMovements[#straightMovements+1] = movement
+      end
+    end
+  end
+  for i = 1, #graph.movements do
+    local movement = graph.movements[i]
+    local dot = movement.directionDot
+    if dot and dot < -0.5 then
+      movement.priority = movement.priority - 200
+    elseif dot and dot <= 0.5 and movement.fromPos and movement.toPos then
+      for j = 1, #straightMovements do
+        local straight = straightMovements[j]
+        if straight ~= movement and straight.from ~= movement.from and
+            straight.to ~= movement.to then
+          local t, u = segmentCrossing(
+            movement.fromPos.x, movement.fromPos.z, movement.toPos.x, movement.toPos.z,
+            straight.fromPos.x, straight.fromPos.z, straight.toPos.x, straight.toPos.z)
+          if t and t > 0.02 and t < 0.98 and u > 0.02 and u < 0.98 then
+            local yA = movement.fromPos.y + (movement.toPos.y-movement.fromPos.y)*t
+            local yB = straight.fromPos.y + (straight.toPos.y-straight.fromPos.y)*u
+            if math.abs(yA-yB) <= 1.5 then
+              movement.priority = movement.priority - 100
+              break
+            end
+          end
+        end
+      end
+    end
+    if movement.fromEdge and movement.toEdge then
+      movement.fromEdge.transitionPenalty = movement.fromEdge.transitionPenalty or {}
+      local penalty = math.max(0, -movement.priority) * 0.1
+      if movement.weakLaneChange then penalty = penalty + 8 end
+      if dot and dot < 0.5 then penalty = penalty + 4 end
+      if dot and dot < -0.5 then penalty = penalty + 12 end
+      movement.fromEdge.transitionPenalty[movement.toEdge.id] = penalty
     end
   end
   graph.stats.movements = #graph.movements
