@@ -157,6 +157,13 @@ end
 
 local function appendMovement(route, roads, movement)
   if not movement then return true end
+  if movement.seamContinuation then
+    appendLaneRange(route, roads, movement.fromEdge,
+      movement.from.from, movement.from.to)
+    appendLaneRange(route, roads, movement.toEdge,
+      movement.to.from, movement.to.to)
+    return true
+  end
   if movement.continuation then
     local link = movement.from
     local edge = movement.fromEdge
