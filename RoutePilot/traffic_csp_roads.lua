@@ -28,7 +28,7 @@ local function nearestOnLane(p, lane)
   local pts, bestD, bestP, bestDir = lane.points, math.huge, nil, nil
   local n = #pts
   local count = lane.loop and n or n - 1
-  local step = math.max(1, math.floor(n / 500))
+  local step = math.max(1, math.floor(n / 1000))
   for i = 1, count, step do
     local nextIndex = i + step
     if lane.loop then nextIndex = (nextIndex - 1) % n + 1
@@ -70,6 +70,13 @@ end
 
 local function pairMatches(a, b)
   if not sharedTopology(a, b) then return false end
+  local ba, bb = a.graphBounds, b.graphBounds
+  if ba and bb then
+    if ba.maxX + 12 < bb.minX or bb.maxX + 12 < ba.minX or
+        ba.maxZ + 12 < bb.minZ or bb.maxZ + 12 < ba.minZ then
+      return false
+    end
+  end
   local function coverage(src, dst)
     local n, good, sum = #src.points, 0, 0
     local step = math.max(1, math.floor(n / 60))
