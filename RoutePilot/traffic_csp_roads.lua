@@ -54,11 +54,11 @@ local function sharedTopology(a, b)
   local ids = {}
   for i = 1, #(a.graphLinks or {}) do
     local link = a.graphLinks[i]
-    ids[tostring(link.intersection.id or link.intersection.name)] = true
+    ids[link.intersection] = true
   end
   for i = 1, #(b.graphLinks or {}) do
     local link = b.graphLinks[i]
-    if ids[tostring(link.intersection.id or link.intersection.name)] then return true end
+    if ids[link.intersection] then return true end
   end
   -- Intersection-free stretches can still be the same road if both directed
   -- endpoints align; this deliberately rejects parallel roads side-by-side.
