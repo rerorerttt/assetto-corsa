@@ -334,7 +334,8 @@ local function loadLine(retryOnly)
     local reason=tostring(ok and infoOrError or nodes)
     state.cspImportPending=
       reason:find("PLAYER_CAR_UNAVAILABLE",1,true)~=nil or
-      reason:find("NO_CSP_LANE_NEAR_PLAYER",1,true)~=nil
+      reason:find("NO_CSP_LANE_NEAR_PLAYER",1,true)~=nil or
+      reason:find("CSP_ROUTE_INCOMPLETE",1,true)~=nil
     writeLog("CSP_IMPORT_FAILED ok=%s reason=%s pending=%s",
       tostring(ok),reason,tostring(state.cspImportPending))
     if state.cspImportPending then
@@ -674,22 +675,28 @@ local function trySpawnTeleport(sim,dt)
   if not player or not player.position then return end
   local routeDistance,routeError=findRouteDistanceAtPosition(
     player.position,metrics,player.look)
-  if routeError>25.0 then
-    writeLog("SPAWN_WAIT reason=player_off_route error=%.1f",routeError)
+  if routeError>4.5 then
+    writeLog("SPAWN_WAIT reason=player_off_route error=%.2f max=4.50",routeError)
     return
   end
   local count=#aiCars
   local available=metrics.loop and metrics.length or
     math.max(0,metrics.length-routeDistance)
-  local gap=math.min(CFG.SPAWN_GAP,available/(count+1))
-  if gap<CFG.SPAWN_MIN_GAP then
-    writeLog("SPAWN_WAIT reason=insufficient_forward_route available=%.1f cars=%d",
-      available,count)
+  -- CSP imports deliberately seed traffic 500 m ahead of the player in the
+  -- recorded lane direction. A short open fragment must never be stretched
+  -- into a fake circuit or used to place cars at its endpoint.
+  local leadDistance=state.loadedFromCSP and 500.0 or CFG.SPAWN_GAP
+  local usable=math.max(0,available-leadDistance-40.0)
+  local gap=count>1 and math.min(CFG.SPAWN_GAP,usable/(count-1)) or
+    math.min(CFG.SPAWN_GAP,usable)
+  if available<leadDistance+40.0 or gap<CFG.SPAWN_MIN_GAP then
+    writeLog("SPAWN_WAIT reason=insufficient_forward_route available=%.1f lead=%.1f cars=%d gap=%.1f",
+      available,leadDistance,count,gap)
     return
   end
-  local startDistance=routeDistance+gap
-  writeLog("SPAWN_REFERENCE route=%.1f error=%.2f gap=%.1f loop=%s",
-    routeDistance,routeError,gap,tostring(metrics.loop))
+  local startDistance=routeDistance+leadDistance
+  writeLog("SPAWN_REFERENCE route=%.1f error=%.2f ahead=%.1f gap=%.1f loop=%s",
+    routeDistance,routeError,leadDistance,gap,tostring(metrics.loop))
   local moved,failed,already=0,0,0
   state.spawnedCars=state.spawnedCars or {}
   for order=1,count do
