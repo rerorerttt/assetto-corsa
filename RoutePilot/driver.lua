@@ -650,7 +650,8 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         local otherFx,otherFz=normalize2(other.look.x,other.look.z)
         local otherRouteSample=progress and Geometry.sample(state.routeGeometry,progress)
         local directionDot=otherRouteSample and
-          (otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz) or 1.0
+          (otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz) or
+          (otherFx*ownSample.tx+otherFz*ownSample.tz)
         if progress~=nil and directionDot>=-0.25 then
           gap=routeGap(ownProgress,progress);actualLateral=lateral
         else
