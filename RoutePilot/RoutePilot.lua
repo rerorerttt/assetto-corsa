@@ -1031,6 +1031,20 @@ function script.update(dt)
     end
     local useCSPRoute=state.enabled and not state.recLine and not state.recBounds and
       graphRoute and graphRoute.loop and trafficCSP.graphSpawnDone==true
+    if trafficCSP then
+      if useCSPRoute then
+        if not trafficCSP.graphDriverModeActive then
+          for _,person in pairs(state.p) do
+            person.routeProgress=nil
+            person.routeLocked=false
+            person.segIdx=1
+          end
+        end
+        trafficCSP.graphDriverModeActive=true
+      else
+        trafficCSP.graphDriverModeActive=false
+      end
+    end
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 and
