@@ -431,3 +431,11 @@ Additional local check: the environment's `texlua` executable was found and used
 
 - Open-route recycling now explicitly excludes car 0. Native Ctrl+8 adoption can still drive the player's car along a graph route, but the offscreen traffic recycler will not teleport that car back to the route entrance.
 - GitHub Actions passed for commit 14b8e2e4b839c5597cfbe56dee029daf01019667: Lua 5.1 syntax validation and all six regression suites succeeded.
+
+
+## 2026-11-28 measured road-edge enforcement
+
+- Removed the nominal-width fallback from route construction. A lane/group without two verified boundary lines can remain in the imported graph for diagnostics, but it cannot produce a drivable route. Route construction also rejects boundary samples more than 40 m from the lane sample or with less than 1.25 m clearance on either side.
+- The importer now probes laterally from projected lane samples against CSP track-surface types. It accepts default/old/kerb surfaces for ordinary paved lanes and gravel/kerb for gravel lanes, finds the first non-driveable transition within 8 m, and keeps the last confirmed driveable sample. Probes are sampled along the lane every 3 m; short missing spans are filled only from nearby measurements using the narrower width. If no physical transition is found, the corridor remains unverified rather than receiving a guessed width.
+- Road groups select boundary-source lanes from measured left/right reaches. Wall raycasts can only move those boundaries inward; if a wall leaves less than the minimum safe offset, the corridor is invalidated. Opposing/parallel clipping also invalidates a corridor if a safe boundary cannot be produced.
+- Added RoutePilot/tests/traffic_csp_surface_bounds.lua. It creates a synthetic default-surface road strip bounded by grass, verifies 4 m measured half-widths and a drivable route, then removes the surface transition and verifies the importer refuses to create a route. The test does not claim to validate any real track's surface IDs or edge placement.
