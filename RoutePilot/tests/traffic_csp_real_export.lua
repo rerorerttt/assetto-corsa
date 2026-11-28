@@ -94,6 +94,8 @@ end
 assert(cycleStarts==0,"fixture unexpectedly gained a directed cycle; review route selection assumptions")
 assert(openRoutes>0 and bestOpenLength>=250,
   "fixture has no usable open route for one-way traffic fallback")
+assert(endKinds.lane_end==openRoutes,
+  "open routes must terminate at a real lane end, not at an unserved intersection")
 
 for kind,count in pairs(endKinds) do print("OPEN_ROUTE_END",kind,count) end
 print(string.format(
