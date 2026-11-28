@@ -247,7 +247,8 @@ local function buildLaneChanges(graph)
       local t=tangentAt(lane,distance)
       local sample={laneId=id,s=distance,p=p,tx=t.x,tz=t.z}
       samples[#samples+1]=sample
-      cell(p.x,p.z)[#cell(p.x,p.z)+1]=sample
+      local bucket=cell(p.x,p.z)
+      bucket[#bucket+1]=sample
     end
     samplesByLane[id]=samples
   end
@@ -258,7 +259,7 @@ local function buildLaneChanges(graph)
       local bId=graph.laneOrder[bi]
       local b=graph.lanes[bId]
       local function scan(src,dst,out)
-        local runStart,runLast,runLastTarget,runCount=nil,nil,nil,0
+        local runStart,runLast,runLastTarget,runStartTarget,runCount=nil,nil,nil,nil,0
         local function flush()
           if runCount>=3 and runLast-runStart>=16 then
             out[#out+1]={fromS=runStart,toS=runLast,
