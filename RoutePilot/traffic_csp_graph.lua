@@ -622,7 +622,6 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
   local farthestEdge, farthestCost = nil, -1
   local terminalEdge, terminalCost = nil, -1
   maxVisited = maxVisited or 20000
-  maxCost = maxCost or 20000
   while #heap > 0 and visited < maxVisited do
     local item = heapPop(heap)
     local edge, cost = item.edge, item.cost
@@ -699,6 +698,7 @@ function Graph.loopPath(graph, startEdge, maxVisited, maxCost)
   heapPush(heap, { edge = startEdge, cost = 0 })
   local farthestEdge, farthestCost, visited = nil, -1, 0
   maxVisited = maxVisited or 20000
+  maxCost = maxCost or 20000
   while #heap > 0 and visited < maxVisited do
     local item = heapPop(heap)
     local edge, cost = item.edge, item.cost
