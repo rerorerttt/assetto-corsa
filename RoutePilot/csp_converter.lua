@@ -634,6 +634,9 @@ function Converter.load(log)
   local graph,err=Converter.loadNetwork(log)
   if not graph then return nil,nil,nil,nil,err end
   local player=ac.getCar(0)
+  if not player or not player.position or not player.look then
+    return nil,nil,nil,nil,"PLAYER_CAR_UNAVAILABLE"
+  end
   local best,bestScore=nil,nil
   if player and player.position and player.look then
     local hx,hz=norm(player.look.x,player.look.z)
@@ -659,10 +662,9 @@ function Converter.load(log)
       end
     end
   end
-  if not best and #graph.laneOrder>0 then
-    best={lane=graph.lanes[graph.laneOrder[1]],segment=1,t=0}
+  if not best then
+    return nil,nil,nil,nil,"NO_CSP_LANE_NEAR_PLAYER"
   end
-  if not best then return nil,nil,nil,nil,"NO_VALID_CSP_LANES" end
 
   local nodes,boundsL,boundsR={},{},{}
   local routeLanes,visited={},{}
