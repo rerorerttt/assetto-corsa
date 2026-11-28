@@ -99,6 +99,23 @@ local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
   end
 end
 
+local function projectIntersectionPoint(point)
+  if not physics or type(physics.raycastTrack)~='function' then return nil end
+  local probe=vec3(point.x,point.y+2,point.z)
+  local normal=vec3()
+  local ok,hit=pcall(function()
+    return physics.raycastTrack(probe,vec3(0,-1,0),4,nil,normal)
+  end)
+  if not ok or type(hit)~='number' or hit<0 or normal.y<0.30 then return nil end
+  local surfaceType=nil
+  if __util and type(__util.native)=='function' then
+    local okType,value=pcall(__util.native,'physics.raycastTrackSurface.type',probe,vec3(0,-1,0),4)
+    if okType then surfaceType=value end
+  end
+  if surfaceType==1 or surfaceType==2 or surfaceType==6 then return nil end
+  return vec3(point.x,probe.y-hit,point.z)
+end
+
 local function appendBezier(route, roads, movement)
   local p0, p3 = movement.fromPos, movement.toPos
   if not p0 or not p3 then return false end
@@ -131,7 +148,9 @@ local function appendBezier(route, roads, movement)
       u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
       u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y,
       u*u*u*p0.z + 3*u*u*t*p1.z + 3*u*t*t*p2.z + t*t*t*p3.z)
-    appendPoint(route, p, halfWidth, -halfWidth, speedLimit)
+    local projected=projectIntersectionPoint(p)
+    if not projected then return false end
+    appendPoint(route, projected, halfWidth, -halfWidth, speedLimit)
   end
   return true
 end
