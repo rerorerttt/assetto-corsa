@@ -908,9 +908,16 @@ function script.update(dt)
       end
       flushLog()
     end
+    local graphRoute=trafficCSP and trafficCSP.previewRoute or nil
+    if state.enabled and not state.recLine and not state.recBounds and graphRoute and graphRoute.loop then
+      trySpawnCSPTraffic(sim,dt,graphRoute)
+    end
+    local useCSPRoute=state.enabled and not state.recLine and not state.recBounds and
+      graphRoute and graphRoute.loop and trafficCSP.graphSpawnDone==true
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
-    if state.enabled and state.loaded and #state.nodes>=2 then
+    if state.enabled and state.loaded and #state.nodes>=2 and
+        not (graphRoute and graphRoute.loop and not trafficCSP.graphSpawnFailed) then
       trySpawnTeleport(sim,dt)
     end
     -- Ctrl+8 switches the player car into Assetto Corsa's native AI state.
@@ -937,7 +944,7 @@ function script.update(dt)
       state.playerTelemetry=nil
     end
 
-    local playerRoutePilotActive = state.enabled and #state.nodes>=2 and
+    local playerRoutePilotActive = state.enabled and (#state.nodes>=2 or useCSPRoute) and
       Driver and playerAI or false
     if playerRoutePilotActive and not state.playerAutopilotLast then
       writeLog("PLAYER_AUTOPILOT_ADOPT source=AC_NATIVE_CTRL8")
@@ -948,7 +955,7 @@ function script.update(dt)
 
     -- Drive every active car which Assetto Corsa currently marks as AI,
     -- including car 0 only while the native Ctrl+8 autopilot is active.
-    if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
+    if state.enabled and (#state.nodes>=2 or useCSPRoute) and Driver and ensureDriver() then
       local driveOrder={}
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
