@@ -80,6 +80,7 @@ local function laneBoundsAt(roads, lane, position, direction)
   return left, right
 end
 
+Routes.debugLaneBounds = laneBoundsAt -- temporary CI fixture diagnostic
 local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
   local length = math.max(0, toDistance-fromDistance)
   local steps = math.max(1, math.ceil(length/2.0))
