@@ -39,3 +39,5 @@ jobs:
           done
       - name: Run synthetic traffic graph regressions
         run: lua5.1 RoutePilot/tests/traffic_csp_loop_seam.lua
+      - name: Run directed-loop search regressions
+        run: lua5.1 RoutePilot/tests/traffic_csp_loop_search.lua
