@@ -443,5 +443,5 @@ Additional local check: the environment's `texlua` executable was found and used
 ## 2026-11-28 intersection polygon clearance
 
 - CSP-authored Bezier and U-turn trajectories are now constrained by the exported intersection polygon. Each interior trajectory sample is projected onto the physical track surface, checked against the 1.5 m vertical snap limit, and given left/right clearance from the polygon edges with a 0.5 m inward margin. Near entry/exit points, the already measured lane boundaries are used. A curve outside the polygon or without sufficient clearance is rejected.
-- Added a Bezier regression using an explicit polygon and a wrong-deck raycast case. GitHub Actions passed for commit 90242d51bbd42e7042c93f5fe13ffc8987567dc7: Lua 5.1 syntax validation and all six regression suites, including the representative CSP export, passed.
+- Added Bezier regressions using an explicit polygon, a deliberately undersized polygon, and a wrong-deck raycast case. GitHub Actions passed for commit 20f71d2cf154e3ac681b7338ccfc4f9cbee8e16f: Lua 5.1 syntax validation and all six regression suites, including the representative CSP export, passed.
 - Real intersection polygon quality and CSP trajectory placement still require validation on actual track layouts.
