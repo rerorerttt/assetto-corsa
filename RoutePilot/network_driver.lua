@@ -74,7 +74,7 @@ local function laneChange(g,l,p,index,sim,speed)
 end
 local function junction(g,l,p,car,index,sim)
  local hx,hz=norm(car.look.x,car.look.z);local best,score
- for _,e in ipairs(l.outgoing or{})do if p.s>=e.fromS-12 and p.s<=e.fromS+10 then
+ for _,e in ipairs(l.outgoing or{})do if p.s>=e.fromS-6 and p.s<=e.fromS+10 then
   local t=g.lanes[e.to]
   if t then local q=point(t,e.toS);local tx,tz=tangent(t,e.toS);local a=dot(hx,hz,tx,tz)
    if a>0.05 and dist(car.position,q)<32 then local block=occupancy(g,t.id,e.toS,index,sim,25)
