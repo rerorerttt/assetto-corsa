@@ -87,10 +87,13 @@ for i=1,#importer.graph.edges do
   local path=Graph.loopPath(importer.graph,importer.graph.edges[i],2000,20000)
   if path then cycleStarts=cycleStarts+1 end
 end
-local openRoutes,bestOpenLength,endKinds,openGroups=0,0,{},{}
+local openRoutes,bestOpenLength,endKinds,openGroups,routeErrors=0,0,{},{},{}
 for i=1,#importer.graph.edges do
   local route=Routes.build(importer.graph,nil,importer.graph.edges[i],
     importer.graph.edges[i].from,{minLength=250})
+  if not route then
+    routeErrors[tostring(routeError)]=(routeErrors[tostring(routeError)] or 0)+1
+  end
   if route and not route.loop then
     local startSample=Routes.sample(route,0)
     local endSample=Routes.sample(route,route.length)
@@ -118,6 +121,7 @@ assert(openGroupCount>=4,
   "representative export has too few independent road groups for multi-route traffic")
 
 for kind,count in pairs(endKinds) do print("OPEN_ROUTE_END",kind,count) end
+for reason,count in pairs(routeErrors) do print("OPEN_ROUTE_REJECT",reason,count) end
 print(string.format(
   "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts, %d valid open routes across %d road groups (max %.0f m)",
   importer.stats.usable,importer.stats.lanes,#importer.intersections,
