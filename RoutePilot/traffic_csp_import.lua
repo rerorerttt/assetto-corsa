@@ -3,6 +3,8 @@
 -- Surface projection follows CSP Traffic Tool's own EditorLaneExporter convention.
 
 local json = require('lib/json')
+local okGraph, Graph = pcall(require, 'traffic_csp_graph')
+if not okGraph or type(Graph) ~= 'table' or type(Graph.build) ~= 'function' then Graph = nil end
 local okSurfaces, Surfaces = pcall(require, 'shared/sim/surfaces')
 if not okSurfaces or type(Surfaces) ~= 'table' then Surfaces = nil end
 local Importer = {}
@@ -99,6 +101,8 @@ function Importer.new(log)
     lanes = {},
     intersections = {},
     areas = {},
+    graph = nil,
+    graphError = nil,
     stats = { lanes = 0, usable = 0, invalid = 0, samples = 0, hits = 0, misses = 0, trimmed = 0 },
   }, Importer)
 end
@@ -262,10 +266,24 @@ function Importer:load()
     self.lanes[#self.lanes + 1] = lane
   end
 
+  if Graph then
+    local okBuild, graph = pcall(Graph.build, self.lanes, self.intersections, self.log)
+    if okBuild then
+      self.graph = graph
+    else
+      self.graphError = tostring(graph)
+      self.log('CSP_GRAPH_ERROR err=%s', self.graphError)
+    end
+  else
+    self.graphError = 'traffic_csp_graph_module_unavailable'
+    self.log('CSP_GRAPH_UNAVAILABLE')
+  end
+
   self.loaded = true
-  self.log('CSP_IMPORT_LOADED file=%s lanes=%d usable=%d invalid=%d samples=%d hits=%d misses=%d trimmed=%d intersections=%d areas=%d surface_type_api=%s',
+  self.log('CSP_IMPORT_LOADED file=%s lanes=%d usable=%d invalid=%d samples=%d hits=%d misses=%d trimmed=%d intersections=%d areas=%d surface_type_api=%s graph=%s',
     tostring(self.filename), self.stats.lanes, self.stats.usable, self.stats.invalid,
-    self.stats.samples, self.stats.hits, self.stats.misses, self.stats.trimmed, #self.intersections, #self.areas, tostring(Surfaces ~= nil))
+    self.stats.samples, self.stats.hits, self.stats.misses, self.stats.trimmed,
+    #self.intersections, #self.areas, tostring(Surfaces ~= nil), tostring(self.graph ~= nil))
   return true
 end
 
