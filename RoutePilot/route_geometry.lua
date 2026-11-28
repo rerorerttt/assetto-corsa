@@ -88,7 +88,24 @@ function Geometry.build(nodes, loopRoute, subdivisions)
       end
     end
   end
-  return {samples=samples,total=total,loop=loopRoute==true,nodeCount=count,steps=steps}
+  -- Spatial hash for global/reacquisition projections. A linear scan here
+  -- costs 200k+ segment tests for Shuto and was repeated for the unmanaged
+  -- player car by every traffic follower. Index each short spline edge once;
+  -- normal global projection then visits only the 3x3 cells around the car.
+  local cellSize=16.0
+  local spatial={}
+  for i=1,#samples-1 do
+    local a,b=samples[i],samples[i+1]
+    local mx=(a.x+b.x)*0.5
+    local mz=(a.z+b.z)*0.5
+    local cx,cz=math.floor(mx/cellSize),math.floor(mz/cellSize)
+    local key=cx..":"..cz
+    local bucket=spatial[key]
+    if not bucket then bucket={} spatial[key]=bucket end
+    bucket[#bucket+1]=i
+  end
+  return {samples=samples,total=total,loop=loopRoute==true,nodeCount=count,
+    steps=steps,spatial=spatial,spatialCellSize=cellSize}
 end
 function Geometry.sample(route, distance)
   if not route then return nil end
@@ -216,7 +233,22 @@ function Geometry.project(route, position, hintS, heading, speed, dt, locked)
       scanDistanceRange(math.max(0,hintS-back),math.min(total,hintS+maxForward))
     end
   else
-    for i=1,#samples-1 do scanEdge(i) end
+    local index=route.spatial
+    local cellSize=route.spatialCellSize or 16.0
+    if index then
+      local cx,cz=math.floor(position.x/cellSize),math.floor(position.z/cellSize)
+      for ox=-1,1 do
+        for oz=-1,1 do
+          local bucket=index[(cx+ox)..":"..(cz+oz)]
+          if bucket then
+            for j=1,#bucket do scanEdge(bucket[j]) end
+          end
+        end
+      end
+    else
+      -- Compatibility with geometry objects created by older callers.
+      for i=1,#samples-1 do scanEdge(i) end
+    end
   end
   if not best then return nil end
   if route.loop and hintS~=nil and locked then
