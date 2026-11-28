@@ -1099,24 +1099,41 @@ local function drawMapInRect(q0,q1)
   local lastIndex=state.loopRoute and n or math.max(1,n-1)
   for pass=1,2 do
     local prev
-    for i=1,lastIndex,stride do
+    local lastDrawn=0
+    local function drawBoundaryAt(i)
       local node=state.nodes[i]
-      local nextIndex=math.min(i+stride,lastIndex)
-      local nxt=state.nodes[nextIndex]
-      if nextIndex==i then nxt=node end
-      local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
       local l,r=boundsAt(i)
       local off=(pass==1) and l or r
       if math.abs(off)*scale<minOff then
         off=(off>=0 and 1 or -1)*(minOff/math.max(scale,0.0001))
       end
-      local px,pz=node.x-lz*off,node.z+lx*off
-      local sx=mx+(px-cx)*scale
-      local sy=my+(pz-cz)*scale
-      if prev and segVisible(prev.x,prev.y,sx,sy) then
-        ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),3)
+      local prevIndex=i-1
+      local nextIndex=i+1
+      if state.loopRoute then
+        if prevIndex<1 then prevIndex=n end
+        if nextIndex>n then nextIndex=1 end
+      else
+        if prevIndex<1 then prevIndex=i end
+        if nextIndex>n then nextIndex=i end
       end
-      prev=vec2(sx,sy)
+      local a,b=state.nodes[prevIndex],state.nodes[nextIndex]
+      local lx,lz=normalize2(b.x-a.x,b.z-a.z)
+      local px,pz=node.x-lz*off,node.z+lx*off
+      return vec2(mx+(px-cx)*scale,my+(pz-cz)*scale)
+    end
+    for i=1,lastIndex,stride do
+      local point=drawBoundaryAt(i)
+      if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+        ui.drawLine(prev,point,rgbm(0.55,0.05,0.05,1),3)
+      end
+      prev=point
+      lastDrawn=i
+    end
+    if lastDrawn~=lastIndex then
+      local point=drawBoundaryAt(lastIndex)
+      if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+        ui.drawLine(prev,point,rgbm(0.55,0.05,0.05,1),3)
+      end
     end
   end
   -- AI line: yellow, thick, decimated to the map's actual pixel resolution.
