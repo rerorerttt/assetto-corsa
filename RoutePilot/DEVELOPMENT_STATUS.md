@@ -277,3 +277,45 @@ Implemented:
 Open GDD gaps are recorded in ENGINEERING_AUDIT.md: default/inferred road bounds, the not-yet-time-optimal path/speed planner, distributed traffic arbitration, immediate full braking on projection loss, and unbenchmarked multi-car performance.
 
 Validation is static only. GitHub files were fetched back after the edits; no Lua compiler and no Assetto Corsa/CSP runtime test were available. Do not treat this branch as proven stable until the straight-line and subsequent traffic tests confirm it.
+
+
+## 2026-11-28 long-lane geometry precision pass
+
+- Corrected `nearestOnLane()` in `traffic_csp_roads.lua`: the previous implementation compared long sampled chords only. On densely resampled or long lanes, those chords could cut across bends and return an inaccurate closest point and direction, affecting same-road grouping, opposing/parallel corridor matching, and lateral boundary offsets.
+- The proximity query now keeps the four best coarse spans and refines each against the original adjacent-point segments, returning the exact local segment direction. Short lanes retain the direct exact-segment path. This preserves the coarse search while reducing bend-induced false grouping and boundary-placement errors.
+- Validation: fetched the committed file back from GitHub and confirmed the coarse-candidate/refinement path and exact-segment direction are present. No Lua compiler or Assetto Corsa/CSP runtime is available here; this is a targeted geometry correction, not proof of correct in-game grouping or non-overlapping boundaries.
+- Commit: `873e043e410455f22c9deb07744b11a61688f78a`.
+
+## 2026-11-28 CSP Traffic Tool graph integration (experimental)
+
+Working branch: `Routepilot_CSP_traffic_0.1`, created from `main`. Main is not modified.
+
+Implemented in this branch:
+- Import the active track's `traffic.json`, preserve directed lanes/intersections, resample lane geometry, project it onto the physical track surface, reject invalid surface samples, and trim unsupported open-lane ends.
+- Build a directed lane/intersection graph with intersection movement restrictions, lane-level U-turn permission, and a vertical-level check that prevents transitions between road decks.
+- Group parallel same-direction lanes into shared road corridors. A single line gets a nominal 6 m corridor; multi-line groups use 2.5 m offsets from the outermost lane lines. Distinct parallel/opposing groups are not merged; their facing boundaries are clipped to prevent corridor overlap.
+- Place boundaries using physical-surface normals and horizontal physics-ray checks for nearby walls. Merge boundary junction vertices only at shared, same-level intersections.
+- Build closed route loops from the graph, project intersection curves onto verified road surfaces, and preserve explicit lane speed limits in a 40–200 km/h profile.
+- Spawn real Assetto Corsa AI cars across up to four nearby parallel route groups, including opposing directions. The existing RoutePilot driver controls those real cars; CSP virtual-car physics are not used.
+- Recycle cars only when they are far behind the player and outside render range, placing them into a physically clear position ahead. Existing stuck/traffic-wait recovery remains active.
+- Keep the recorded-route controller as a fallback and clear per-car route progress when switching between recorded-route and graph-route modes.
+
+Static validation performed:
+- Lua syntax checks with `texlua` on the route builder, spawn/recycle functions, route-preview and multi-route driver blocks, and road-grouping helpers.
+- Synthetic directed-graph tests cover a valid closed cycle, rejection of a dead-end branch, and recognition of a standalone loop.
+- Synthetic lane-proximity tests cover curved open lanes and closed loops; nearest-segment refinement returns the expected local segment.
+- Files were fetched back from GitHub after writes. These checks do not replace loading the complete app in CSP or driving it in Assetto Corsa.
+
+Release blockers:
+- No Assetto Corsa/CSP runtime session has been run by the assistant. Physical wall-ray behavior, surface projection on real tracks, route connectivity, multi-direction traffic, overtaking, recycling visibility, and recovery must be verified in-game.
+- Intersection arbitration between independent route groups is still reactive through vehicle detection and recovery; it is not yet a formal global reservation system.
+- Do not merge this branch into `main` or call it release-ready until those runtime checks pass.
+
+
+## 2026-11-28 CSP route selection and player-route consistency
+
+- Fixed a route-ordering defect in `RoutePilot.lua`: routes were sorted only by length after candidate selection, while native Ctrl+8 adoption always assigned car 0 to route 1. A longer opposite-direction route could therefore become route 1, causing the player AI to be driven against the player's actual direction.
+- Each built route now records its heading alignment against the player's heading. Spawn planning sorts player-aligned routes before other directions, stores the matching `playerRouteIndex`, and uses that index consistently when assigning car 0 and isolating per-route driver state.
+- Route discovery now retains additional same-direction candidates as fallbacks. Previously it tried only the single nearest same-direction edge; if that edge produced an invalid loop, other valid lanes in the same direction were never considered.
+- Static verification: fetched the committed file back and confirmed alignment tagging, aligned-first ordering, player-route-index use in both route assignment sites, and same-direction fallback discovery. No Lua compiler or Assetto Corsa/CSP runtime is available here; in-game Ctrl+8 route tracking still requires telemetry validation.
+- Commits: `26a71e334c448e7a78bace470c6b717a39c50823`, `1bf3387e945b283c3594dac2dbc2abfe4681727e`.

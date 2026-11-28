@@ -22,6 +22,15 @@ local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
+local okTrafficCSP, TrafficCSP = pcall(require, "traffic_csp_import")
+if not okTrafficCSP or type(TrafficCSP) ~= "table" or type(TrafficCSP.new) ~= "function" then TrafficCSP = nil end
+local okCSPGraph, CSPGraph = pcall(require, "traffic_csp_graph")
+if not okCSPGraph or type(CSPGraph) ~= "table" or type(CSPGraph.nearestEdge) ~= "function" or
+    type(CSPGraph.nearestEdges) ~= "function" or type(CSPGraph.loopPath) ~= "function" or
+    type(CSPGraph.sampleLane) ~= "function" or type(CSPGraph.directionAt) ~= "function" then CSPGraph = nil end
+local okCSPRoutes, CSPRoutes = pcall(require, "traffic_csp_route")
+if not okCSPRoutes or type(CSPRoutes) ~= "table" or type(CSPRoutes.build) ~= "function" or
+    type(CSPRoutes.sample) ~= "function" or type(CSPRoutes.project) ~= "function" then CSPRoutes = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -47,7 +56,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  playerAutopilotLast=false, steeringDiagnostics=false,
+  playerAutopilotLast=false, steeringDiagnostics=false, showCSPRoads=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -63,6 +72,11 @@ end
 local function flushLog()
   if logger and logger.flush then pcall(logger.flush, logger) end
 end
+local trafficCSP = TrafficCSP and TrafficCSP.new(writeLog) or nil
+local trafficCSPAttempted = false
+local trafficCSPRouteAttempted = false
+local trafficCSPRouteRetry = 0
+local trafficCSPRouteFailures = 0
 local function clamp(v,lo,hi) return math.max(lo,math.min(hi,v)) end
 local function lerp(a,b,t) return a+(b-a)*t end
 local function flatDist(a,b)
@@ -476,7 +490,7 @@ local function trySpawnTeleport(sim,dt)
   state.spawnStable=state.spawnStable+dt
   if state.spawnStable<CFG.SPAWN_STABLE_TIME then return end
   -- teleport (in parallel with driving; adopted cars keep their personality)
-  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
+  if not physics or type(physics.setAICarPosition)~="function" then
     state.spawnDone=true; return
   end
   local metrics=buildSpawnRouteMetrics()
@@ -519,6 +533,200 @@ local function trySpawnTeleport(sim,dt)
   writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
   flushLog()
 end
+local function trySpawnCSPTraffic(sim,dt,route)
+  if not trafficCSP or trafficCSP.graphSpawnDone then return end
+  local routes=trafficCSP.previewRoutes or (route and {route}) or {}
+  if #routes==0 then return end
+  table.sort(routes,function(a,b)
+    if a.playerAligned~=b.playerAligned then return a.playerAligned==true end
+    return (a.length or 0)>(b.length or 0)
+  end)
+  trafficCSP.playerRouteIndex=nil
+  for ri=1,#routes do
+    if routes[ri].playerAligned then trafficCSP.playerRouteIndex=ri; break end
+  end
+  trafficCSP.playerRouteIndex=trafficCSP.playerRouteIndex or 1
+  trafficCSP.previewRoute=routes[1]
+  trafficCSP.graphSpawnWait=(trafficCSP.graphSpawnWait or 0)+dt
+  local aiCars={}
+  for i=1,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
+  end
+  if #aiCars==0 then
+    if trafficCSP.graphSpawnWait>=CFG.SPAWN_WAIT_TIMEOUT and not trafficCSP.graphSpawnNoCarsLogged then
+      trafficCSP.graphSpawnNoCarsLogged=true
+      writeLog("CSP_SPAWN_WAITING reason=no_active_ai_cars")
+      flushLog()
+    end
+    return
+  end
+  local roster=table.concat(aiCars,",")
+  if roster~=trafficCSP.graphSpawnLastRoster then
+    trafficCSP.graphSpawnLastRoster=roster
+    trafficCSP.graphSpawnStable=0
+    return
+  end
+  trafficCSP.graphSpawnStable=(trafficCSP.graphSpawnStable or 0)+dt
+  if trafficCSP.graphSpawnStable<CFG.SPAWN_STABLE_TIME then return end
+  if not physics or type(physics.setAICarPosition)~="function" then
+    trafficCSP.graphSpawnFailed='no_ai_position_api'
+    writeLog("CSP_SPAWN_FAILED reason=no_ai_position_api")
+    return
+  end
+
+  local routeCount=math.min(#routes,#aiCars)
+  local plans=nil
+  while routeCount>0 and not plans do
+    local carsByRoute={}
+    for ri=1,routeCount do carsByRoute[ri]={} end
+    for order=1,#aiCars do
+      local ri=(order-1)%routeCount+1
+      carsByRoute[ri][#carsByRoute[ri]+1]=aiCars[order]
+    end
+    local candidatePlans={}
+    local minGap=math.huge
+    local valid=true
+    for ri=1,routeCount do
+      local currentRoute=routes[ri]
+      local groupCars=carsByRoute[ri]
+      local startDistance=math.min(40.0,currentRoute.length*0.08)
+      local available=math.max(0,currentRoute.length-startDistance-10.0)
+      local gap=math.min(CFG.SPAWN_GAP,available/math.max(1,#groupCars))
+      if not currentRoute.loop or gap<CFG.SPAWN_MIN_GAP then
+        valid=false
+        break
+      end
+      minGap=math.min(minGap,gap)
+      for order=1,#groupCars do
+        local index=groupCars[order]
+        local sample=CSPRoutes.sample(currentRoute,startDistance+(order-1)*gap)
+        if not sample then
+          valid=false
+          break
+        end
+        candidatePlans[#candidatePlans+1]={
+          index=index,routeIndex=ri,sample=sample,route=currentRoute
+        }
+      end
+      if not valid then break end
+    end
+    if valid and #candidatePlans==#aiCars then
+      plans=candidatePlans
+      trafficCSP.graphSpawnGap=minGap
+    else
+      routeCount=routeCount-1
+    end
+  end
+  if not plans then
+    trafficCSP.graphSpawnFailed='insufficient_route_capacity'
+    writeLog("CSP_SPAWN_FAILED reason=insufficient_route_capacity cars=%d routes=%d",
+      #aiCars,#routes)
+    flushLog()
+    return
+  end
+
+  local backups,moved={},{}
+  local failed=0
+  trafficCSP.graphCarRoute={}
+  for pi=1,#plans do
+    local plan=plans[pi]
+    local index,car,sample=plan.index,ac.getCar(plan.index),plan.sample
+    if car then
+      backups[index]={
+        position=vec3(car.position.x,car.position.y,car.position.z),
+        look=vec3(car.look.x,car.look.y,car.look.z)
+      }
+      local position=vec3(sample.x,sample.y,sample.z)
+      local direction=vec3(-sample.tx,0,-sample.tz)
+      local ok,result=pcall(physics.setAICarPosition,index,position,direction)
+      if ok and result~=false then
+        moved[#moved+1]=index
+        state.p[index]=nil
+        state.spawnHints[index]={segment=sample.seg,parameter=sample.t}
+        state.rescueWatch=state.rescueWatch or {}
+        state.rescueWatch[index]={cooldown=3.0}
+        trafficCSP.graphCarRoute[index]=plan.routeIndex
+      else
+        failed=failed+1
+        writeLog("CSP_SPAWN_CAR_FAILED id=%d err=%s",index,tostring(result))
+      end
+    else
+      failed=failed+1
+    end
+  end
+
+  if failed>0 then
+    for i=1,#moved do
+      local index=moved[i]
+      local backup=backups[index]
+      if backup then
+        pcall(physics.setAICarPosition,index,backup.position,
+          vec3(-backup.look.x,-backup.look.y,-backup.look.z))
+      end
+      state.spawnHints[index]=nil
+      state.p[index]=nil
+      if state.rescueWatch then state.rescueWatch[index]=nil end
+      trafficCSP.graphCarRoute[index]=nil
+    end
+    trafficCSP.graphSpawnFailed='spawn_transaction_rolled_back'
+    writeLog("CSP_SPAWN_ROLLBACK moved=%d failed=%d",#moved,failed)
+    flushLog()
+    return
+  end
+
+  trafficCSP.graphSpawnDone=true
+  trafficCSP.graphSpawnCount=#plans
+  trafficCSP.graphSpawnRouteCount=routeCount
+  writeLog("CSP_SPAWN_FINISH moved=%d routes=%d min_gap=%.2f",
+    #plans,routeCount,trafficCSP.graphSpawnGap or 0)
+  flushLog()
+end
+
+local function tryRecycleGraphTraffic(route,order,player)
+  if not route or not route.loop or not player or not ac.closerToRenderThan or
+      not physics or type(physics.setAICarPosition)~="function" then return 0 end
+  local projection=CSPRoutes.project(route,player.position,player.look)
+  if not projection or not projection.distance or not projection.s or projection.distance>60 then return 0 end
+  local total=route.length or 0
+  if total<200 then return 0 end
+  local behindThreshold=math.min(800,total*0.25)
+  local recycled=0
+  for _,index in ipairs(order) do
+    local car=ac.getCar(index)
+    local person=state.p[index]
+    if car and person and person.routeProgress and
+        not ac.closerToRenderThan(car.position,1000) then
+      local aheadDelta=(person.routeProgress-projection.s)%total
+      local behindDistance=aheadDelta>total*0.5 and total-aheadDelta or 0
+      if behindDistance>behindThreshold then
+        local offsets={120,180,240,300,360,420}
+        for oi=1,#offsets do
+          local sample=CSPRoutes.sample(route,projection.s+offsets[oi])
+          if sample then
+            local position=vec3(sample.x,sample.y,sample.z)
+            if spotIsClear(position,index) then
+              local direction=vec3(-sample.tx,0,-sample.tz)
+              local ok,result=pcall(physics.setAICarPosition,index,position,direction)
+              if ok and result~=false then
+                state.p[index]=nil
+                state.spawnHints[index]={segment=sample.seg,parameter=sample.t}
+                state.rescueWatch=state.rescueWatch or {}
+                state.rescueWatch[index]={cooldown=3.0}
+                recycled=recycled+1
+                writeLog("CSP_TRAFFIC_RECYCLE id=%d behind=%.1f ahead=%.1f",
+                  index,behindDistance,offsets[oi])
+                break
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return recycled
+end
+
 local function walkLineSigned(startSeg,startT,distance,sign)
   local segs=segmentCount()
   if segs<1 then return nil end
@@ -623,7 +831,7 @@ local function updateRescueWatchdog(carIndex,car,dt)
   state.rescueWatch=state.rescueWatch or {}
   local w=state.rescueWatch[carIndex]
   if not w then
-    w={rolloverT=0,gasStallT=0,lastPosition=vec3(car.position.x,car.position.y,car.position.z),progressPositionX=car.position.x,progressPositionZ=car.position.z,progressCheckT=0,cooldown=0}
+    w={rolloverT=0,gasStallT=0,trafficWaitT=0,lastPosition=vec3(car.position.x,car.position.y,car.position.z),progressPositionX=car.position.x,progressPositionZ=car.position.z,progressCheckT=0,cooldown=0}
     state.rescueWatch[carIndex]=w
   end
   w.cooldown=math.max(0,(w.cooldown or 0)-dt)
@@ -652,6 +860,12 @@ local function updateRescueWatchdog(carIndex,car,dt)
     else
       w.gasStallT=0
     end
+    if trafficWaiting and speed<0.75 and progress<0.5 and
+        trafficCSP and trafficCSP.graphSpawnDone and state.loopRoute then
+      w.trafficWaitT=safeNumber(w.trafficWaitT)+w.progressCheckT
+    else
+      w.trafficWaitT=0
+    end
     w.progressPositionX=car.position.x
     w.progressPositionZ=car.position.z
     w.progressCheckT=0
@@ -662,6 +876,7 @@ local function updateRescueWatchdog(carIndex,car,dt)
   local reason=nil
   if w.rolloverT>=10.0 then reason="rollover_10s"
   elseif offTrackT>=10.0 then reason="offtrack_10s"
+  elseif w.trafficWaitT>=5.0 then reason="traffic_wait_deadlock_5s"
   elseif w.gasStallT>=10.0 then reason="gas_no_progress_10s" end
   w.retryT=math.max(0,safeNumber(w.retryT)-dt)
   if reason and w.retryT<=0 then
@@ -767,12 +982,147 @@ function script.update(dt)
   if not dt or dt<=0 then return end
   dt=math.min(dt,0.05)
   local ok,err=pcall(function()
+    if not trafficCSPAttempted then
+      trafficCSPAttempted = true
+      if trafficCSP then
+        local okImport, imported = pcall(trafficCSP.load, trafficCSP)
+        if not okImport then
+          writeLog("CSP_IMPORT_ERROR err=%s", tostring(imported))
+        elseif not imported then
+          writeLog("CSP_IMPORT_UNAVAILABLE reason=%s", tostring(trafficCSP.error))
+        end
+      else
+        writeLog("CSP_IMPORT_MODULE_UNAVAILABLE")
+      end
+      flushLog()
+    end
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
+    if not trafficCSPRouteAttempted and trafficCSP and trafficCSP.loaded and
+        trafficCSP.graph and trafficCSP.roads and CSPGraph and CSPRoutes and player then
+      trafficCSPRouteRetry=trafficCSPRouteRetry+dt
+      if trafficCSPRouteRetry>=1.0 then
+        trafficCSPRouteRetry=0
+        local sameCandidates=CSPGraph.nearestEdges(
+          trafficCSP.graph,player.position,player.look,120,24)
+        local allCandidates=CSPGraph.nearestEdges(
+          trafficCSP.graph,player.position,nil,120,48)
+        local candidates,seenEdges={},{}
+        local function addCandidate(candidate)
+          if candidate and not seenEdges[candidate.edge.id] then
+            seenEdges[candidate.edge.id]=true
+            candidates[#candidates+1]=candidate
+          end
+        end
+        local hx,hz=normalize2(player.look.x,player.look.z)
+        local firstSame=sameCandidates[1]
+        if firstSame then
+          local dir=CSPGraph.directionAt(firstSame.edge.lane,firstSame.along)
+          if hx*dir.x+hz*dir.z>=0.5 then addCandidate(firstSame) end
+        end
+        -- Keep additional player-aligned lanes as fallbacks. Previously only
+        -- the single nearest same-direction edge was attempted, so one bad
+        -- route candidate could hide every other valid lane in that direction.
+        for ci=1,#sameCandidates do
+          local candidate=sameCandidates[ci]
+          if candidate~=firstSame then
+            local dir=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
+            if hx*dir.x+hz*dir.z>=0.5 then addCandidate(candidate) end
+          end
+        end
+        local oppositeCandidates,otherCandidates={},{}
+        for ci=1,#allCandidates do
+          local candidate=allCandidates[ci]
+          local dir=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
+          local dot=hx*dir.x+hz*dir.z
+          if dot < -0.5 then oppositeCandidates[#oppositeCandidates+1]=candidate
+          elseif dot > 0.5 then otherCandidates[#otherCandidates+1]=candidate end
+        end
+        for ci=1,#oppositeCandidates do addCandidate(oppositeCandidates[ci]) end
+        for ci=1,#otherCandidates do addCandidate(otherCandidates[ci]) end
+        local selectedRoutes,selectedGroups={},{}
+        local lastError='no_lane_near_player'
+        local attemptedCandidates=0
+        trafficCSP.failedRouteEdges=trafficCSP.failedRouteEdges or {}
+        for ci=1,#candidates do
+          if #selectedRoutes>=4 then break end
+          local candidate=candidates[ci]
+          local group=trafficCSP.roads.laneGroups[candidate.edge.lane] or candidate.edge.lane
+          if not selectedGroups[group] and not trafficCSP.failedRouteEdges[candidate.edge.id] then
+            attemptedCandidates=attemptedCandidates+1
+            local route,routeError=CSPRoutes.build(
+              trafficCSP.graph,trafficCSP.roads,candidate.edge,candidate.along,
+              {minLength=250,loop=true,requireLoop=true})
+            if route then
+              local candidateDirection=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
+              route.playerAlignment=hx*candidateDirection.x+hz*candidateDirection.z
+              route.playerAligned=route.playerAlignment>=0.5
+              route.group=group
+              route.startCandidate=candidate
+              selectedRoutes[#selectedRoutes+1]=route
+              selectedGroups[group]=true
+            else
+              trafficCSP.failedRouteEdges[candidate.edge.id]=true
+              lastError=tostring(routeError)
+            end
+          end
+        end
+        if #selectedRoutes>0 then
+          trafficCSPRouteAttempted=true
+          trafficCSP.previewRoutes=selectedRoutes
+          trafficCSP.previewRoute=selectedRoutes[1]
+          for ri=1,#selectedRoutes do
+            local route=selectedRoutes[ri]
+            writeLog("CSP_ROUTE_READY index=%d length=%.1f points=%d edges=%d group_lanes=%d",
+              ri,route.length or 0,#route.nodes,#route.edges,#(route.group and route.group.lanes or {}))
+          end
+          writeLog("CSP_ROUTES_SELECTED count=%d candidates=%d",
+            #selectedRoutes,#candidates)
+        else
+          if #candidates>0 and attemptedCandidates==0 then lastError='all_nearby_edges_rejected' end
+          trafficCSP.previewRouteError=lastError
+          trafficCSPRouteFailures=trafficCSPRouteFailures+1
+          if trafficCSPRouteFailures==1 or trafficCSPRouteFailures%5==0 then
+            writeLog("CSP_ROUTE_PREVIEW_RETRY candidates=%d reason=%s attempt=%d",
+              #candidates,lastError,trafficCSPRouteFailures)
+          end
+        end
+        flushLog()
+      end
+    end
+    local graphRoute=trafficCSP and trafficCSP.previewRoute or nil
+    if state.enabled and not state.recLine and not state.recBounds and graphRoute and graphRoute.loop then
+      trySpawnCSPTraffic(sim,dt,graphRoute)
+    end
+    local useCSPRoute=state.enabled and not state.recLine and not state.recBounds and
+      graphRoute and graphRoute.loop and trafficCSP.graphSpawnDone==true
+    if trafficCSP then
+      if useCSPRoute then
+        if not trafficCSP.graphDriverModeActive then
+          for _,person in pairs(state.p) do
+            person.routeProgress=nil
+            person.routeLocked=false
+            person.segIdx=1
+          end
+        end
+        trafficCSP.graphDriverModeActive=true
+      else
+        if trafficCSP.graphDriverModeActive then
+          for _,person in pairs(state.p) do
+            person.routeProgress=nil
+            person.routeLocked=false
+            person.segIdx=1
+          end
+        end
+        trafficCSP.graphDriverModeActive=false
+      end
+    end
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
-    if state.enabled and state.loaded and #state.nodes>=2 then
+    if state.enabled and state.loaded and #state.nodes>=2 and
+        not (graphRoute and graphRoute.loop and not trafficCSP.graphSpawnFailed and
+          not state.recLine and not state.recBounds) then
       trySpawnTeleport(sim,dt)
     end
     -- Ctrl+8 switches the player car into Assetto Corsa's native AI state.
@@ -799,7 +1149,7 @@ function script.update(dt)
       state.playerTelemetry=nil
     end
 
-    local playerRoutePilotActive = state.enabled and #state.nodes>=2 and
+    local playerRoutePilotActive = state.enabled and (#state.nodes>=2 or useCSPRoute) and
       Driver and playerAI or false
     if playerRoutePilotActive and not state.playerAutopilotLast then
       writeLog("PLAYER_AUTOPILOT_ADOPT source=AC_NATIVE_CTRL8")
@@ -810,7 +1160,8 @@ function script.update(dt)
 
     -- Drive every active car which Assetto Corsa currently marks as AI,
     -- including car 0 only while the native Ctrl+8 autopilot is active.
-    if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
+    local routeSnapshot=nil
+    if state.enabled and (#state.nodes>=2 or useCSPRoute) and Driver and ensureDriver() then
       local driveOrder={}
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
@@ -822,44 +1173,170 @@ function script.update(dt)
           releaseCar(i)
         end
       end
-      -- Resolve every car's lane and near-future traffic conflicts as one batch.
-      -- The coordinator runs before controls are written, so requests cannot
-      -- race against per-car update order.
-      if Driver.prepareTraffic then
-        local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,driveOrder,dt)
-        if not okTraffic then writeLog("TRAFFIC_COORDINATOR_ERROR err=%s",tostring(errTraffic)) end
-      end
-      -- The coordinator has already resolved all lane decisions. Update cars
-      -- in deterministic route order; no per-car yield queue or pass handshake.
-      table.sort(driveOrder,function(a,b)
-        local pa,pb=state.p[a],state.p[b]
-        local priorityA=safeNumber(pa and pa.trafficPriority)
-        local priorityB=safeNumber(pb and pb.trafficPriority)
-        if priorityA~=priorityB then return priorityA>priorityB end
-        local progressA=pa and pa.routeProgress
-        local progressB=pb and pb.routeProgress
-        if progressA~=nil and progressB~=nil and progressA~=progressB then
-          return progressA<progressB
+
+      if useCSPRoute then
+        routeSnapshot={
+          nodes=state.nodes,boundsL=state.boundsL,boundsR=state.boundsR,
+          loopRoute=state.loopRoute,routeGeometry=state.routeGeometry,
+          routeLength=state.routeLength,routeMetricCount=state.routeMetricCount,
+          routeMetricLoop=state.routeMetricLoop,graphRouteSwitch=state.graphRouteSwitch
+        }
+        state.graphRouteSwitch=true
+        if playerAI then state.p[0]=nil end
+        local routes=trafficCSP.previewRoutes or {graphRoute}
+        local routeOrders={}
+        for ri=1,#routes do routeOrders[ri]={} end
+        for _,i in ipairs(driveOrder) do
+          local ri=trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[i] or nil
+          if i==0 and playerAI then ri=trafficCSP.playerRouteIndex or 1 end
+          if ri and routeOrders[ri] then routeOrders[ri][#routeOrders[ri]+1]=i end
         end
-        if progressA~=nil and progressB==nil then return true end
-        if progressA==nil and progressB~=nil then return false end
-        return a<b
-      end)
-      for _,i in ipairs(driveOrder) do
-        local car=ac.getCar(i)
-        if car and car.isActive and car.isAIControlled then
-          local rescued=updateRescueWatchdog(i,car,dt)
-          if not rescued then
-            local okc,erc=pcall(Driver.update,i,car,dt)
-            if not okc then
-              writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(erc))
-              releaseCar(i)
+
+        for ri=1,#routes do
+          local order=routeOrders[ri]
+          if #order>0 then
+            local route=routes[ri]
+            state.nodes=route.nodes
+            state.boundsL=route.boundsL
+            state.boundsR=route.boundsR
+            state.loopRoute=true
+            state.routeGeometry=route.geometry
+            state.routeLength=route.length
+            state.routeMetricCount=#route.nodes
+            state.routeMetricLoop=true
+            tryRecycleGraphTraffic(route,order,player)
+
+            local savedOther={}
+            for idx,person in pairs(state.p) do
+              local assigned=trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[idx] or nil
+              if idx==0 and playerAI then assigned=trafficCSP.playerRouteIndex or 1 end
+              if assigned~=ri then
+                savedOther[idx]={
+                  routeProgress=person.routeProgress,
+                  routeLocked=person.routeLocked,
+                  segIdx=person.segIdx
+                }
+                person.routeProgress=nil
+                person.routeLocked=false
+                person.segIdx=1
+              end
             end
+
+            local okGroup,errGroup=pcall(function()
+              local coordinatorOK=true
+              if Driver.prepareTraffic then
+                local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,order,dt)
+                if not okTraffic then
+                  coordinatorOK=false
+                  writeLog("TRAFFIC_COORDINATOR_ERROR route=%d err=%s",ri,tostring(errTraffic))
+                end
+              end
+              if coordinatorOK then
+                for _,i in ipairs(order) do
+                  local person=state.p[i]
+                  if person then
+                    local speedLimit=200
+                    if route.speedLimits and #route.speedLimits>0 and person.routeProgress then
+                      local speedSample=CSPRoutes.sample(route,person.routeProgress)
+                      if speedSample then
+                        local seg=clamp(math.floor(speedSample.seg or 1),1,#route.speedLimits)
+                        local nextSeg=seg%#route.speedLimits+1
+                        local t=clamp(speedSample.t or 0,0,1)
+                        speedLimit=route.speedLimits[seg]*(1-t)+route.speedLimits[nextSeg]*t
+                      end
+                    end
+                    person.cruiseSpeed=clamp(speedLimit,40,200)/3.6
+                  end
+                end
+                table.sort(order,function(a,b)
+                  local pa,pb=state.p[a],state.p[b]
+                  local priorityA=safeNumber(pa and pa.trafficPriority)
+                  local priorityB=safeNumber(pb and pb.trafficPriority)
+                  if priorityA~=priorityB then return priorityA>priorityB end
+                  local progressA=pa and pa.routeProgress
+                  local progressB=pb and pb.routeProgress
+                  if progressA~=nil and progressB~=nil and progressA~=progressB then
+                    return progressA<progressB
+                  end
+                  if progressA~=nil and progressB==nil then return true end
+                  if progressA==nil and progressB~=nil then return false end
+                  return a<b
+                end)
+                for _,i in ipairs(order) do
+                  local car=ac.getCar(i)
+                  if car and car.isActive and car.isAIControlled then
+                    local rescued=updateRescueWatchdog(i,car,dt)
+                    if not rescued then
+                      local okCar,errCar=pcall(Driver.update,i,car,dt)
+                      if not okCar then
+                        writeLog("DRIVER_ERROR id=%d route=%d err=%s",i,ri,tostring(errCar))
+                        releaseCar(i)
+                      end
+                    end
+                  end
+                end
+              end
+            end)
+            for idx,saved in pairs(savedOther) do
+              local person=state.p[idx]
+              if person then
+                person.routeProgress=saved.routeProgress
+                person.routeLocked=saved.routeLocked
+                person.segIdx=saved.segIdx
+              end
+            end
+            if not okGroup then writeLog("DRIVER_ROUTE_BATCH_ERROR route=%d err=%s",ri,tostring(errGroup)) end
           end
         end
+      else
+        if Driver.prepareTraffic then
+          local okTraffic,errTraffic=pcall(Driver.prepareTraffic,sim,driveOrder,dt)
+          if not okTraffic then writeLog("TRAFFIC_COORDINATOR_ERROR err=%s",tostring(errTraffic)) end
+        end
+        local okLoop,errLoop=pcall(function()
+          table.sort(driveOrder,function(a,b)
+            local pa,pb=state.p[a],state.p[b]
+            local priorityA=safeNumber(pa and pa.trafficPriority)
+            local priorityB=safeNumber(pb and pb.trafficPriority)
+            if priorityA~=priorityB then return priorityA>priorityB end
+            local progressA=pa and pa.routeProgress
+            local progressB=pb and pb.routeProgress
+            if progressA~=nil and progressB~=nil and progressA~=progressB then
+              return progressA<progressB
+            end
+            if progressA~=nil and progressB==nil then return true end
+            if progressA==nil and progressB~=nil then return false end
+            return a<b
+          end)
+          for _,i in ipairs(driveOrder) do
+            local car=ac.getCar(i)
+            if car and car.isActive and car.isAIControlled then
+              local rescued=updateRescueWatchdog(i,car,dt)
+              if not rescued then
+                local okCar,errCar=pcall(Driver.update,i,car,dt)
+                if not okCar then
+                  writeLog("DRIVER_ERROR id=%d err=%s",i,tostring(errCar))
+                  releaseCar(i)
+                end
+              end
+            end
+          end
+        end)
+        if not okLoop then writeLog("DRIVER_BATCH_ERROR err=%s",tostring(errLoop)) end
       end
     else
       for idx in pairs(state.p) do releaseCar(idx) end
+    end
+    if routeSnapshot then
+      state.nodes=routeSnapshot.nodes
+      state.boundsL=routeSnapshot.boundsL
+      state.boundsR=routeSnapshot.boundsR
+      state.loopRoute=routeSnapshot.loopRoute
+      state.routeGeometry=routeSnapshot.routeGeometry
+      state.routeLength=routeSnapshot.routeLength
+      state.routeMetricCount=routeSnapshot.routeMetricCount
+      state.routeMetricLoop=routeSnapshot.routeMetricLoop
+      state.graphRouteSwitch=routeSnapshot.graphRouteSwitch
     end
     state.logAccum=state.logAccum+dt
     if state.logAccum>=CFG.LOG_INTERVAL then
@@ -878,15 +1355,51 @@ end
 -- Finished track ("Показать линии"): the whole route at long distance.
 render.on('main.track.transparent', function()
   local n=#state.nodes
-  if n<2 then return end
   local isRec=state.recLine or state.recBounds
-  if not (state.showWorldLines or isRec) then return end
+  if n<2 and not state.showCSPRoads then return end
+  if not (state.showWorldLines or isRec or state.showCSPRoads) then return end
   local ok=pcall(function()
     local player=ac.getCar(0)
     if not player then return end
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
+    if state.showCSPRoads and trafficCSP and trafficCSP.roads then
+      local roads=trafficCSP.roads
+      local green=rgbm(0.1,0.9,0.35,0.95)
+      local cyan=rgbm(0.1,0.65,1.0,0.95)
+      local preview=trafficCSP.previewRoute
+      if preview and preview.nodes then
+        local routeColor=rgbm(1.0,0.55,0.08,0.95)
+        for ri=1,#preview.nodes-1 do
+          local a,b=preview.nodes[ri],preview.nodes[ri+1]
+          local dx,dz=a.x-player.position.x,a.z-player.position.z
+          local ex,ez=b.x-player.position.x,b.z-player.position.z
+          if dx*dx+dz*dz<360000 or ex*ex+ez*ez<360000 then
+            render.debugLine(a,b,routeColor)
+          end
+        end
+      end
+      for gi=1,#roads.groups do
+        local group=roads.groups[gi]
+        local left,right=group.boundaries.left,group.boundaries.right
+        for bi=1,2 do
+          local line=bi==1 and left or right
+          local color=bi==1 and green or cyan
+          local count=#line
+          local segments=group.boundaryLoops[bi==1 and "left" or "right"] and count or count-1
+          for si=1,segments do
+            local a,b=line[si],line[si%count+1]
+            local dx,dz=a.x-player.position.x,a.z-player.position.z
+            local ex,ez=b.x-player.position.x,b.z-player.position.z
+            if dx*dx+dz*dz<360000 or ex*ex+ez*ez<360000 then
+              render.debugLine(a,b,color)
+            end
+          end
+        end
+      end
+    end
+    if n<2 then return end
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
     if isRec then
@@ -1112,6 +1625,53 @@ function windowMain(dt)
       ui.tabItem("Dev", function()
         ui.text("Диагностика контроллера RoutePilot")
         ui.text("Подробная телеметрия рулевого управления и динамики автомобиля.")
+        if trafficCSP then
+          local s = trafficCSP.stats
+          ui.text(string.format("CSP Traffic: %s | полосы %d | пригодны %d | без поверхности %d",
+            trafficCSP.loaded and "импортирован" or (trafficCSP.error or "ожидание"),
+            s.lanes or 0, s.usable or 0, s.invalid or 0))
+          if trafficCSP.graph and trafficCSP.graph.stats then
+            local g = trafficCSP.graph.stats
+            ui.text(string.format("CSP Graph: перекрёстки %d | связи %d | переходы %d | сегменты %d | без связей %d",
+              #trafficCSP.graph.intersections, g.intersectionLinks or 0,
+              g.movements or 0, #trafficCSP.graph.edges, g.disconnectedLanes or 0))
+          elseif trafficCSP.graphError then
+            ui.text("CSP Graph: ошибка — " .. tostring(trafficCSP.graphError))
+          else
+            ui.text("CSP Graph: не построен")
+          end
+          if trafficCSP.previewRoute then
+            ui.text(string.format("CSP Routes: %d | основной %.0f м | точки %d | %s",
+              #(trafficCSP.previewRoutes or {trafficCSP.previewRoute}),
+              trafficCSP.previewRoute.length or 0,#trafficCSP.previewRoute.nodes,
+              trafficCSP.previewRoute.loop and "замкнут" or "открыт"))
+            if trafficCSP.graphSpawnDone then
+              ui.text(string.format("CSP AI: поток активен | машин %d | направлений %d | интервал %.1f м",
+                trafficCSP.graphSpawnCount or 0, trafficCSP.graphSpawnRouteCount or 0,
+                trafficCSP.graphSpawnGap or 0))
+            elseif trafficCSP.graphSpawnFailed then
+              ui.text("CSP AI: " .. tostring(trafficCSP.graphSpawnFailed))
+            elseif trafficCSP.previewRoute.loop then
+              ui.text("CSP AI: ожидание активных AI-машин")
+            end
+          elseif trafficCSP.previewRouteError then
+            ui.text("CSP Route: " .. tostring(trafficCSP.previewRouteError))
+          end
+          if trafficCSP.roads and trafficCSP.roads.stats then
+            local r = trafficCSP.roads.stats
+            ui.text(string.format("CSP Roads: групп %d | линий %d | стеновых коррекций %d | конфликтов %d | встречные %d | параллельные %d | узлы %d | ray %s",
+              r.groups or 0, r.validLanes or 0, r.wallAdjusted or 0,
+              r.wallConflicts or 0, r.opposingConflicts or 0, r.parallelConflicts or 0,
+              r.boundaryJunctions or 0,r.wallRaycastAvailable and "OK" or "N/A"))
+          elseif trafficCSP.roadsError then
+            ui.text("CSP Roads: ошибка — " .. tostring(trafficCSP.roadsError))
+          end
+        else
+          ui.text("CSP Traffic: модуль не загружен")
+        end
+        if ui.checkbox("Показать границы CSP Traffic", state.showCSPRoads) then
+          state.showCSPRoads = not state.showCSPRoads
+        end
         if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
           state.steeringDiagnostics=not state.steeringDiagnostics
           writeLog("STEERING_DIAGNOSTICS %s",state.steeringDiagnostics and "ON" or "OFF")

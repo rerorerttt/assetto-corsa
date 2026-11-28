@@ -60,6 +60,11 @@ function Driver.setup(cfg, st, helpers)
 end
 
 local function refreshRouteMetrics()
+  if state.graphRouteSwitch and state.routeGeometry then
+    state.routeMetricCount = #state.nodes
+    state.routeMetricLoop = state.loopRoute
+    return
+  end
   if state.routeGeometry and state.routeMetricCount == #state.nodes and
      state.routeMetricLoop == state.loopRoute then return end
   state.routeGeometry = Geometry.build(state.nodes, state.loopRoute, 8)
@@ -650,7 +655,8 @@ local function carAheadInLane(carIndex,car,laneOffset,ignoreIndex)
         local otherFx,otherFz=normalize2(other.look.x,other.look.z)
         local otherRouteSample=progress and Geometry.sample(state.routeGeometry,progress)
         local directionDot=otherRouteSample and
-          (otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz) or 1.0
+          (otherFx*otherRouteSample.tx+otherFz*otherRouteSample.tz) or
+          (otherFx*ownSample.tx+otherFz*ownSample.tz)
         if progress~=nil and directionDot>=-0.25 then
           gap=routeGap(ownProgress,progress);actualLateral=lateral
         else
