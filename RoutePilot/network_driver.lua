@@ -200,7 +200,28 @@ function M.update(i,c,dt)
  local l=g.lanes[p.networkLaneId]
  if not l or p.networkS==nil then controls(i,0,0,1);p.trafficAction="NETWORK_NO_LANE";return end
  local q=projectNear(l,c.position,p.networkS,max(35,speed*1.8+15))
- if not q or q.distance>18 then controls(i,0,0,1);p.projectionLost=true;p.trafficAction="NETWORK_PROJECTION_LOST";return end
+ if not q or q.distance>18 then
+  -- Keep the assigned CSP lane when physical resistance (for example a
+  -- roadside barrier) prevents lateral movement. Never brake to a stop or
+  -- switch to a neighboring lane just because projection temporarily fails.
+  local look=clamp(10+speed*.45,10,35)
+  local aimS=l.loop and((p.networkS+look)%l.length)or min(l.length,p.networkS+look)
+  local aim=point(l,aimS)
+  local dx,dz=aim.x-c.position.x,aim.z-c.position.z
+  local hx,hz=norm(c.look.x,c.look.z);local tx,tz=norm(dx,dz)
+  local angle=atan2(hx*tz-hz*tx,clamp(dot(hx,hz,tx,tz),-1,1))
+  local recoverSteer=clamp(atan2(5.4*math.sin(angle),max(1,sqrt(dx*dx+dz*dz)))/.55,-1,1)
+  local previous=n(p.networkSteer,recoverSteer)
+  local step=max(0.05,n(CFG.STEER_RATE,4.5)*max(0,dt))
+  recoverSteer=previous+clamp(recoverSteer-previous,-step,step)
+  p.networkSteer=recoverSteer
+  local recoveryTarget=13.9
+  local recoveryGas=clamp((recoveryTarget-speed)*.35,0,0.65)
+  local recoveryBrake=clamp((speed-recoveryTarget)*.35,0,0.5)
+  controls(i,recoverSteer,recoveryGas,recoveryBrake)
+  p.projectionLost=true;p.trafficAction="NETWORK_HOLD_ASSIGNED_LANE"
+  return
+ end
  p.networkS=q.s;p.networkDistance=q.distance;p.networkHeightError=q.heightError
  local sim=ac.getSim()
  p.networkTransitionCooldown=max(0,n(p.networkTransitionCooldown)-max(0,dt))
@@ -220,20 +241,10 @@ function M.update(i,c,dt)
   H.log("NETWORK_JUNCTION id=%d from=%d to=%d distance=%.2f",i,old,l.id,q.distance)
  end
  local lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
- if lead and lead.gap<max(32,speed*2) and (lead.speed<speed-1.0 or lead.speed<0) then local change=laneChange(g,l,{s=p.networkS},i,sim,speed)
-  if change then
-   local old,oldS=l.id,p.networkS
-   l=g.lanes[change.id];p.networkLaneId=l.id;p.networkS=change.s
-   local targetProjection=projectNear(l,c.position,p.networkS,35)
-   if not targetProjection or targetProjection.distance>12 then
-    p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
-   else
-    q=targetProjection;p.networkS=q.s
-    lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
-    H.log("NETWORK_LANE_CHANGE id=%d from=%d to=%d",i,old,l.id)
-   end
-  end
- end
+ -- Lane changes are deliberately disabled. CSP adjacent polylines may be
+ -- separated by physical barriers; geometric proximity is not proof that a
+ -- car can cross. Traffic stays on its authored directed lane.
+ -- A blocked leader is handled by following/braking on that same lane.
  if p.networkS>=l.length-1.5 and not l.loop then
   local nextLane=p.networkTransitionCooldown<=0 and junction(g,l,{s=p.networkS},c,i,sim,blockedTarget) or nil
   if nextLane then
