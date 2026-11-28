@@ -1003,7 +1003,7 @@ function script.update(dt)
     end
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
-    if state.enabled then trySpawnTeleport(sim,dt) end
+    trySpawnTeleport(sim,dt)
     -- Ctrl+8 switches the player car into Assetto Corsa's native AI state.
     -- RoutePilot adopts car 0 only in that state and runs the same route,
     -- lane, traffic and control loop as every other AI car. Manual driving
