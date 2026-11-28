@@ -1,4 +1,4 @@
--- RoutePilot.lua — v0.9.2 (CSP 0.3.2-preview2)
+-- RoutePilot.lua — v0.10.0 (CSP 0.3.2-preview2)
 -- THE TRACE SAID IT ALL: 184 s of session, ZERO CAR_INIT/CAR= lines — the
 -- cars were never adopted (the spawn gate blocked driving forever) and drove
 -- on the STOCK game AI: that is where the zigzags, burnouts, wall-hunting
@@ -1443,6 +1443,6 @@ if ac.onRelease then
   end)
 end
 loadLine()
-writeLog("ROUTEPILOT 0.9.2 INITIALIZED track=%s points=%d csp=%s",
+writeLog("ROUTEPILOT 0.10.0 INITIALIZED track=%s points=%d csp=%s",
   getTrackTag(),#state.nodes,tostring(state.loadedFromCSP==true))
 flushLog()
