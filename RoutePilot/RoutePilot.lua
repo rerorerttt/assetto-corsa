@@ -1019,18 +1019,20 @@ render.on('main.track.transparent', function()
         local lane=state.trafficNetwork.lanes[laneId]
         local pts=lane and lane.points or {}
         if #pts>=2 then
-          local previous=pts[1]
+          local anchor=pts[1]
+          local previous=anchor
           local accumulated=0
           for k=2,#pts do
             local current=pts[k]
             local dx,dz=current.x-previous.x,current.z-previous.z
             accumulated=accumulated+math.sqrt(dx*dx+dz*dz)
             if accumulated>=6.0 or k==#pts then
-              render.debugLine(vec3(pts[1].x,pts[1].y+0.05,pts[1].z),
+              render.debugLine(vec3(anchor.x,anchor.y+0.05,anchor.z),
                 vec3(current.x,current.y+0.05,current.z),YELLOW)
-              pts[1]=current
+              anchor=current
               accumulated=0
             end
+            previous=current
           end
         end
       end
