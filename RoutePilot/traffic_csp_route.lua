@@ -85,12 +85,26 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
   local path, pathCost = Graph.shortestPath(
     graph, startEdge, options.targetEdge, options.maxVisited)
   if not path then return nil, pathCost end
-  local route = { nodes = {}, boundsL = {}, boundsR = {}, edges = path }
+  local loopRoute = false
+  if options.loop == true then
+    local terminal = path[#path]
+    local returnPath = Graph.shortestPath(graph, terminal, startEdge, options.maxVisited)
+    if returnPath and #returnPath >= 3 then
+      local combined = {}
+      for i = 1, #path do combined[#combined+1] = path[i] end
+      for i = 2, #returnPath-1 do combined[#combined+1] = returnPath[i] end
+      path = combined
+      loopRoute = true
+    elseif options.requireLoop then
+      return nil, 'no_directed_return_path'
+    end
+  end
+  local route = { nodes = {}, boundsL = {}, boundsR = {}, edges = path, loop = loopRoute }
   for i = 1, #path do
     local edge = path[i]
     local from = i == 1 and math.max(edge.from, startDistance or edge.from) or edge.from
     appendLaneRange(route, roads, edge, from, edge.to)
-    local nextEdge = path[i+1]
+    local nextEdge = path[i+1] or (loopRoute and path[1] or nil)
     if nextEdge then
       local movement = edge.nextMovement and edge.nextMovement[nextEdge.id]
       if movement then
@@ -109,13 +123,19 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
       return nil, 'route_point_limit'
     end
   end
+  if loopRoute and #route.nodes > 2 and distance(route.nodes[1], route.nodes[#route.nodes]) < 0.20 then
+    route.nodes[#route.nodes] = nil
+    route.boundsL[#route.boundsL] = nil
+    route.boundsR[#route.boundsR] = nil
+  end
   if #route.nodes < 2 then return nil, 'route_too_short' end
-  route.geometry = Geometry.build(route.nodes, false, 8)
+  route.geometry = Geometry.build(route.nodes, loopRoute, 8)
   if not route.geometry then return nil, 'route_geometry_failed' end
   route.length = route.geometry.total or 0
   route.pathCost = pathCost
   route.startEdge = startEdge
   route.endEdge = path[#path]
+  route.loop = loopRoute
   if route.length < (options.minLength or 80) then
     return nil, 'route_too_short'
   end
