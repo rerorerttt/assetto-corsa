@@ -818,7 +818,17 @@ function Converter.load(log)
     local segmentEnd=nextEdge and clamp(nextEdge.fromS,currentS,currentLane.length) or currentLane.length
     appendLaneSegment(currentLane,currentS,segmentEnd)
     if not nextEdge then
-      if currentLane.loop then routeLoop=true end
+      -- A closed authored lane can be looped only when this route began on
+      -- that same lane. Append its wrapped prefix so the closing geometry
+      -- follows the actual directed polyline instead of cutting across space.
+      if currentLane.loop and currentLane.id==startLane.id and
+        #routeLanes==1 and startS>0.25 then
+        appendLaneSegment(currentLane,0,startS)
+        routeLoop=true
+      elseif currentLane.loop and currentLane.id==startLane.id and
+        #routeLanes==1 then
+        routeLoop=true
+      end
       break
     end
 
