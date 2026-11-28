@@ -25,7 +25,8 @@ if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = ni
 local okTrafficCSP, TrafficCSP = pcall(require, "traffic_csp_import")
 if not okTrafficCSP or type(TrafficCSP) ~= "table" or type(TrafficCSP.new) ~= "function" then TrafficCSP = nil end
 local okCSPGraph, CSPGraph = pcall(require, "traffic_csp_graph")
-if not okCSPGraph or type(CSPGraph) ~= "table" or type(CSPGraph.nearestEdge) ~= "function" then CSPGraph = nil end
+if not okCSPGraph or type(CSPGraph) ~= "table" or type(CSPGraph.nearestEdge) ~= "function" or
+    type(CSPGraph.nearestEdges) ~= "function" then CSPGraph = nil end
 local okCSPRoutes, CSPRoutes = pcall(require, "traffic_csp_route")
 if not okCSPRoutes or type(CSPRoutes) ~= "table" or type(CSPRoutes.build) ~= "function" then CSPRoutes = nil end
 
