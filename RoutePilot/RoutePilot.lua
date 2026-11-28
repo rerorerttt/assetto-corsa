@@ -919,9 +919,10 @@ function script.update(dt)
         else
           trafficCSP.previewRouteError=lastError
           trafficCSPRouteFailures=trafficCSPRouteFailures+1
-          writeLog("CSP_ROUTE_PREVIEW_FAILED candidates=%d reason=%s attempt=%d",
-            #candidates,lastError,trafficCSPRouteFailures)
-          if trafficCSPRouteFailures>=10 then trafficCSPRouteAttempted=true end
+          if trafficCSPRouteFailures==1 or trafficCSPRouteFailures%5==0 then
+            writeLog("CSP_ROUTE_PREVIEW_RETRY candidates=%d reason=%s attempt=%d",
+              #candidates,lastError,trafficCSPRouteFailures)
+          end
         end
         flushLog()
       end
