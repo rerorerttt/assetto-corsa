@@ -277,3 +277,11 @@ Implemented:
 Open GDD gaps are recorded in ENGINEERING_AUDIT.md: default/inferred road bounds, the not-yet-time-optimal path/speed planner, distributed traffic arbitration, immediate full braking on projection loss, and unbenchmarked multi-car performance.
 
 Validation is static only. GitHub files were fetched back after the edits; no Lua compiler and no Assetto Corsa/CSP runtime test were available. Do not treat this branch as proven stable until the straight-line and subsequent traffic tests confirm it.
+
+
+## 2026-11-28 long-lane geometry precision pass
+
+- Corrected `nearestOnLane()` in `traffic_csp_roads.lua`: the previous implementation compared long sampled chords only. On densely resampled or long lanes, those chords could cut across bends and return an inaccurate closest point and direction, affecting same-road grouping, opposing/parallel corridor matching, and lateral boundary offsets.
+- The proximity query now keeps the four best coarse spans and refines each against the original adjacent-point segments, returning the exact local segment direction. Short lanes retain the direct exact-segment path. This preserves the coarse search while reducing bend-induced false grouping and boundary-placement errors.
+- Validation: fetched the committed file back from GitHub and confirmed the coarse-candidate/refinement path and exact-segment direction are present. No Lua compiler or Assetto Corsa/CSP runtime is available here; this is a targeted geometry correction, not proof of correct in-game grouping or non-overlapping boundaries.
+- Commit: `873e043e410455f22c9deb07744b11a61688f78a`.
