@@ -200,39 +200,43 @@ local function bezierConnector(out,fromLane,fromDistance,toLane,toDistance)
 end
 
 local function selectTransition(graph, currentLane, link, laneLinks, visited)
-  local allowed={}
-  local attrs=link.intersection.source and link.intersection.source.trajectoryAttributes
-  if type(attrs)=='table' then
-    for i=1,#attrs do
-      local item=attrs[i]
-      if type(item)=='table' and item[1]==currentLane.id and type(item[2])=='number' then
-        allowed[item[2]]=true
+  -- trajectoryAttributes in traffic.json describe curve/priority attributes;
+  -- they are NOT an allow-list. CSP compatibility is controlled separately
+  -- by disallowedTrajectories and its geometric intersection rules.
+  local disallowed={}
+  local source=link.intersection.source
+  local forbidden=source and source.disallowedTrajectories
+  if type(forbidden)=='table' then
+    for i=1,#forbidden do
+      local item=forbidden[i]
+      if type(item)=='table' and item[1]==currentLane.id then
+        disallowed[item[2]]=true
       end
     end
   end
+
   local candidates={}
   for _,id in ipairs(graph.laneOrder) do
-    if id==currentLane.id or not visited[tostring(link.intersection.id)..':'..tostring(id)] then
+    if not disallowed[id] and
+        (id==currentLane.id or not visited[tostring(link.intersection.id)..':'..tostring(id)]) then
       local target=graph.lanes[id]
-      local targetLink
       for j=1,#(laneLinks[id] or {}) do
-        if laneLinks[id][j].intersection.id==link.intersection.id then targetLink=laneLinks[id][j] break end
-      end
-      if targetLink and targetLink.exit < laneLength(target)-0.5 and
-          (next(allowed)==nil or allowed[id]) then
-        local p0=sampleLane(currentLane,link.enter)
-        local p1=sampleLane(target,targetLink.exit)
-        local gap=math.sqrt(dist2(p0,p1))
-        local ax,az=norm(p0.x-sampleLane(currentLane,math.max(0,link.enter-2)).x,
-          p0.z-sampleLane(currentLane,math.max(0,link.enter-2)).z)
-        local bx,bz=norm(sampleLane(target,math.min(laneLength(target),targetLink.exit+2)).x-p1.x,
-          sampleLane(target,math.min(laneLength(target),targetLink.exit+2)).z-p1.z)
-        local dot=ax*bx+az*bz
-        if gap<65 and dot>-0.65 then
-          local attrPenalty=next(allowed) and 0 or 3
-          local sameLaneBias=id==currentLane.id and -2.0 or 0
-          local score=gap*0.45+(1-dot)*10+attrPenalty+sameLaneBias
-          candidates[#candidates+1]={lane=target,link=targetLink,score=score}
+        local targetLink=laneLinks[id][j]
+        if targetLink.intersection.id==link.intersection.id and
+            targetLink.exit<laneLength(target)-0.5 then
+          local p0=sampleLane(currentLane,link.enter)
+          local p1=sampleLane(target,targetLink.exit)
+          local gap=math.sqrt(dist2(p0,p1))
+          local before=sampleLane(currentLane,math.max(0,link.enter-2))
+          local after=sampleLane(target,math.min(laneLength(target),targetLink.exit+2))
+          local ax,az=norm(p0.x-before.x,p0.z-before.z)
+          local bx,bz=norm(after.x-p1.x,after.z-p1.z)
+          local dot=ax*bx+az*bz
+          if gap<65 and dot>-0.65 then
+            local sameLaneBias=id==currentLane.id and -12.0 or 0
+            local score=gap*0.45+(1-dot)*10+sameLaneBias
+            candidates[#candidates+1]={lane=target,link=targetLink,score=score}
+          end
         end
       end
     end
