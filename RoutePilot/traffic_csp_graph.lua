@@ -453,8 +453,8 @@ function Graph.build(lanes, intersectionDefs, log)
               local movement = {
                 intersection = inter, from = incoming, to = outgoing,
                 fromEdge = incoming.inEdge, toEdge = outgoing.outEdge,
-                fromPos = incoming.toPos, toPos = outgoing.fromPos,
-                fromDir = incoming.toDir, toDir = outgoing.fromDir,
+                fromPos = incoming.fromPos, toPos = outgoing.toPos,
+                fromDir = incoming.fromDir, toDir = outgoing.toDir,
                 priority = tonumber(incoming.lane.priority) or 0,
                 weakLaneChange = weakLaneChange,
                 trafficLight = inter.definition.trafficLight,
@@ -485,8 +485,8 @@ function Graph.build(lanes, intersectionDefs, log)
               graph.movements[#graph.movements + 1] = movement
               incoming.inEdge.nextEdges[#incoming.inEdge.nextEdges + 1] = outgoing.outEdge
               incoming.inEdge.transitionPenalty = incoming.inEdge.transitionPenalty or {}
-              local directionDot = incoming.toDir.x*outgoing.fromDir.x +
-                incoming.toDir.y*outgoing.fromDir.y + incoming.toDir.z*outgoing.fromDir.z
+              local directionDot = incoming.fromDir.x*outgoing.toDir.x +
+                incoming.fromDir.y*outgoing.toDir.y + incoming.fromDir.z*outgoing.toDir.z
               local penalty = math.max(0, -movement.priority) * 0.1
               if weakLaneChange then penalty = penalty + 8 end
               if directionDot < 0.5 then penalty = penalty + 4 end
