@@ -1634,7 +1634,7 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
       local emergencyDanger=nearestGap~=nil and
         nearestGap<dangerDistance and
         nearestSpeed<=EMERGENCY_TARGET_MAX_SPEED
-      if emergencyDanger then
+      if emergencyDanger and rec.lanes.count>1 then
         local candidates={}
         for lane=1,rec.lanes.count do
           if lane~=current then
@@ -1658,15 +1658,19 @@ function Driver.prepareTraffic(sim,driveOrder,dt)
           p.emergencyRescueReady=false
           p.emergencyWaitLogged=false
         else
-          p.emergencyBlockedT=safeNumber(p.emergencyBlockedT)+math.max(0,dt or 0)
-          p.emergencyRescueReady=p.emergencyBlockedT>=10.0
-          p.coordinatorConflictSpeed=0.0
-          p.trafficAction="EMERGENCY_WAIT"
-          p.trafficReason="all_lanes_occupied"
+          -- No passing slot is not a reason to deadlock the whole lane.
+          -- Continue at the mathematically safe following speed; stop only
+          -- when the physical gap itself leaves no safe rolling speed.
+          p.emergencyBlockedT=0
+          p.emergencyRescueReady=false
+          p.coordinatorConflictSpeed=safeFollowingSpeed(
+            nearestGap,nearestSpeed,p.brakeAccelEstimate)
+          p.trafficAction="FOLLOW_NO_PASS_LANE"
+          p.trafficReason="safe_following_without_passing_slot"
           if not p.emergencyWaitLogged then
             p.emergencyWaitLogged=true
-            H.log("TRAFFIC_EMERGENCY_NO_LANE id=%d obstacle=%d gap=%.2f",
-              rec.index,nearestIndex or -1,nearestGap)
+            H.log("TRAFFIC_NO_PASS_SLOT_FOLLOW id=%d obstacle=%d gap=%.2f target=%.2f",
+              rec.index,nearestIndex or -1,nearestGap,p.coordinatorConflictSpeed)
           end
         end
       elseif not p.emergencyBlockedByOncoming then
