@@ -202,13 +202,14 @@ local function selectTransition(graph, currentLane, link, laneLinks, visited)
   end
   local candidates={}
   for _,id in ipairs(graph.laneOrder) do
-    if id~=currentLane.id and not visited[tostring(link.intersection.id)..':'..tostring(id)] then
+    if id==currentLane.id or not visited[tostring(link.intersection.id)..':'..tostring(id)] then
       local target=graph.lanes[id]
       local targetLink
       for j=1,#(laneLinks[id] or {}) do
         if laneLinks[id][j].intersection.id==link.intersection.id then targetLink=laneLinks[id][j] break end
       end
-      if targetLink and (next(allowed)==nil or allowed[id]) then
+      if targetLink and targetLink.exit < laneLength(target)-0.5 and
+          (next(allowed)==nil or allowed[id]) then
         local p0=sampleLane(currentLane,link.enter)
         local p1=sampleLane(target,targetLink.exit)
         local gap=math.sqrt(dist2(p0,p1))
@@ -219,7 +220,8 @@ local function selectTransition(graph, currentLane, link, laneLinks, visited)
         local dot=ax*bx+az*bz
         if gap<65 and dot>-0.65 then
           local attrPenalty=next(allowed) and 0 or 3
-          local score=gap*0.45+(1-dot)*10+attrPenalty
+          local sameLaneBias=id==currentLane.id and -2.0 or 0
+          local score=gap*0.45+(1-dot)*10+attrPenalty+sameLaneBias
           candidates[#candidates+1]={lane=target,link=targetLink,score=score}
         end
       end
@@ -287,14 +289,19 @@ local function collectRoute(graph, player)
     local target=transition.lane
     local targetLink=transition.link
     local targetKey=tostring(nextLink.intersection.id)..':'..tostring(target.id)
-    if visited[targetKey] then
-      loop=target.id==start.id
-      break
+    if target.id==lane.id then
+      -- Same-lane continuation through the junction is a valid CSP graph edge.
+      progress=targetLink.exit
+    else
+      if visited[targetKey] then
+        loop=target.id==start.id
+        break
+      end
+      visited[targetKey]=true
+      bezierConnector(raw,lane,nextLink.enter,target,targetLink.exit)
+      lane=target
+      progress=targetLink.exit
     end
-    visited[targetKey]=true
-    bezierConnector(raw,lane,nextLink.enter,target,targetLink.exit)
-    lane=target
-    progress=targetLink.exit
     if lane.id==start.id and progress<=startProgress+1.0 then
       loop=true
       break
