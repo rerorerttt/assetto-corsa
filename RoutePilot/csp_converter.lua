@@ -95,6 +95,15 @@ local function buildIntersectionLinks(graph)
     local inter=graph.intersections[ii]
     local poly=inter.points
     if #poly>=3 then
+      -- Match CSP FlatPolyShape's vertical gate. A 2D-only polygon test
+      -- incorrectly linked roads passing above/below a junction.
+      local minY,maxY=math.huge,-math.huge
+      for pi=1,#poly do
+        local y=poly[pi].y or 0
+        minY=math.min(minY,y); maxY=math.max(maxY,y)
+      end
+      local centerY=(minY+maxY)*0.5
+      local yThreshold=5.0+(maxY-minY)
       for _,id in ipairs(graph.laneOrder) do
         local lane=graph.lanes[id]
         local cumulative=0
@@ -110,28 +119,34 @@ local function buildIntersectionLinks(graph)
         for si=1,#lane.points-1 do
           local p1,p2=lane.points[si],lane.points[si+1]
           local segLen=math.sqrt(dist2(p1,p2))
-          local cuts={0,1}
-          for e=1,#poly do
-            local t=segmentHit(p1,p2,poly[e],poly[e%#poly+1])
-            if t then cuts[#cuts+1]=t end
-          end
-          table.sort(cuts)
-          for ci=1,#cuts-1 do
-            local t1,t2=cuts[ci],cuts[ci+1]
-            local tm=(t1+t2)*0.5
-            local mid={x=p1.x+(p2.x-p1.x)*tm,z=p1.z+(p2.z-p1.z)*tm}
-            local d1=cumulative+segLen*t1
-            local d2=cumulative+segLen*t2
-            if pointInside(poly,mid) then
-              if activeStart and d1<=activeEnd+0.15 then
-                activeEnd=d2
-              else
-                flushInterval()
-                activeStart,activeEnd=d1,d2
-              end
-            elseif d2-d1>0.02 then
-              flushInterval()
+          local verticallyValid=math.abs((p1.y or 0)-centerY)<=yThreshold and
+            math.abs((p2.y or 0)-centerY)<=yThreshold
+          if verticallyValid then
+            local cuts={0,1}
+            for e=1,#poly do
+              local t=segmentHit(p1,p2,poly[e],poly[e%#poly+1])
+              if t then cuts[#cuts+1]=t end
             end
+            table.sort(cuts)
+            for ci=1,#cuts-1 do
+              local t1,t2=cuts[ci],cuts[ci+1]
+              local tm=(t1+t2)*0.5
+              local mid={x=p1.x+(p2.x-p1.x)*tm,z=p1.z+(p2.z-p1.z)*tm}
+              local d1=cumulative+segLen*t1
+              local d2=cumulative+segLen*t2
+              if pointInside(poly,mid) then
+                if activeStart and d1<=activeEnd+0.15 then
+                  activeEnd=d2
+                else
+                  flushInterval()
+                  activeStart,activeEnd=d1,d2
+                end
+              elseif d2-d1>0.02 then
+                flushInterval()
+              end
+            end
+          else
+            flushInterval()
           end
           cumulative=cumulative+segLen
         end
@@ -233,7 +248,7 @@ local function selectTransition(graph, currentLane, link, laneLinks, visited)
           local ax,az=norm(p0.x-before.x,p0.z-before.z)
           local bx,bz=norm(after.x-p1.x,after.z-p1.z)
           local dot=ax*bx+az*bz
-          if gap<65 and dot>-0.5 then
+          if gap<30 and dot>-0.99 then
             local sameLaneBias=id==currentLane.id and -12.0 or 0
             local score=gap*0.45+(1-dot)*10+sameLaneBias
             candidates[#candidates+1]={lane=target,link=targetLink,score=score}
