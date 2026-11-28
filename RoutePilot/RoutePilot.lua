@@ -20,6 +20,8 @@
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
+local okConverter, CSPConverter = pcall(require, "csp_converter")
+if not okConverter or type(CSPConverter) ~= "table" or type(CSPConverter.load) ~= "function" then CSPConverter = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
@@ -47,7 +49,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  playerAutopilotLast=false, steeringDiagnostics=false,
+  playerAutopilotLast=false, steeringDiagnostics=false, autoImportAccum=0,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -203,6 +205,30 @@ local function loadLine()
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
     loadBounds(); flushLog()
     return true
+  end
+  -- No manually recorded line? Convert CSP Traffic Tool data automatically.
+  -- Existing RoutePilot route files always take precedence.
+  if CSPConverter then
+    local ok, nodes, loop, boundsL, boundsR, infoOrError = pcall(CSPConverter.load, writeLog)
+    if ok and type(nodes)=="table" and #nodes>=2 then
+      state.nodes=nodes
+      state.loopRoute=loop==true
+      state.boundsL=type(boundsL)=="table" and boundsL or {}
+      state.boundsR=type(boundsR)=="table" and boundsR or {}
+      state.p={}; state.spawnHints={}; state.routeGeometry=nil
+      state.loaded=true; state.loadedFromCSP=true
+      state.status=string.format("CSP: конвертировано %d точек",#nodes)
+      if not state.spawnPerformed then
+        state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
+      end
+      writeLog("CSP_IMPORT_SUCCESS points=%d loop=%s route_lanes=%s",
+        #nodes,tostring(state.loopRoute),
+        type(infoOrError)=="table" and #infoOrError.routeLanes or -1)
+      flushLog()
+      return true
+    end
+    writeLog("CSP_IMPORT_FAILED ok=%s reason=%s",tostring(ok),
+      tostring(ok and infoOrError or nodes))
   end
   state.status="Линия не найдена"; state.loaded=false
   return false
@@ -770,6 +796,13 @@ function script.update(dt)
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
+    if not state.loaded and not state.recLine and CSPConverter then
+      state.autoImportAccum=state.autoImportAccum+dt
+      if state.autoImportAccum>=2.0 then
+        state.autoImportAccum=0
+        loadLine()
+      end
+    end
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 then
