@@ -671,7 +671,8 @@ function Converter.load(log)
   local sourceTangent=tangentAt(lane,lane.cumulative[best.segment])
   for _,edge in ipairs(lane.adjacent or {}) do
     local candidate=graph.lanes[edge.to]
-    if candidate and best.s>=edge.fromStart and best.s<=edge.fromEnd then
+    local bestLaneS=lane.cumulative[best.segment] or 0
+    if candidate and bestLaneS>=edge.fromStart and bestLaneS<=edge.fromEnd then
       local lo=max(0,edge.toStart-12)
       local hi=min(candidate.length,edge.toEnd+12)
       local targetS=clamp((edge.toStart+edge.toEnd)*0.5,lo,hi)
@@ -692,7 +693,7 @@ function Converter.load(log)
   local startS=lane.cumulative[best.segment]
   local previousTargetS=nil
   local pairValid=pairedLane~=nil
-  local function projectPartner(pos,hintS)
+  local function projectPartner(pos,hintS,sourceS)
     local candidate=pairedLane
     local first,last=1,#candidate.points-1
     if hintS then
@@ -718,8 +719,8 @@ function Converter.load(log)
         local y=a.y+(b.y-a.y)*t
         local distance2=dx*dx+dz*dz
         local tx,tz=norm(vx,vz)
-        local sourceTx,sourceTz=tangentAt(lane,lane.cumulative[si] or startS).x,
-          tangentAt(lane,lane.cumulative[si] or startS).z
+        local sourceTangentHere=tangentAt(lane,sourceS or startS)
+        local sourceTx,sourceTz=sourceTangentHere.x,sourceTangentHere.z
         local alignment=sourceTx*tx+sourceTz*tz
         local score=distance2+(1-alignment)*(1-alignment)*16+
           (pos.y-y)*(pos.y-y)*4
@@ -738,7 +739,7 @@ function Converter.load(log)
     local centreX,centreY,centreZ=p.x,p.y,p.z
     local halfWidth=1.25
     if pairValid then
-      local q=projectPartner(p,previousTargetS)
+      local q=projectPartner(p,previousTargetS,lane.cumulative[i])
       if not q or q.distance<2.0 or q.distance>7.5 then
         pairValid=false
       else
@@ -765,10 +766,12 @@ function Converter.load(log)
     end
   end
   if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_LANE_TOO_SHORT" end
-  trace("CSP_RACING_CORRIDOR lane=%d neighbour=%d paired=%s points=%d passing=%s",
-    lane.id,pairedLane and pairedLane.id or -1,tostring(pairValid),#nodes,
-    tostring(pairValid))
-  return nodes,lane.loop,boundsL,boundsR,{
+  if type(log)=="function" then
+    pcall(log,"CSP_RACING_CORRIDOR lane=%d neighbour=%d paired=%s points=%d passing=%s",
+      lane.id,pairedLane and pairedLane.id or -1,tostring(pairValid),#nodes,
+      tostring(pairValid))
+  end
+  return nodes,false,boundsL,boundsR,{
     sourceLanes=graph.stats.validLanes,routeLanes={lane.id},
     racingCorridor=true,pairedLane=pairValid and pairedLane.id or nil,
     passingEnabled=pairValid,sourceTransitions=graph.stats.junctionTransitions,
