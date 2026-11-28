@@ -1274,7 +1274,7 @@ local function drawMapInRect(q0,q1)
       end
       -- Arrowhead follows the exact authored point order of this CSP lane.
       if count>=3 then
-        local mid=math.floor(count*0.5)
+        local mid=math.floor((count+1)*0.5)
         local a,b=points[mid-1],points[mid+1]
         local dx,dz=(b.x-a.x)*scale,(b.z-a.z)*scale
         local length=math.sqrt(dx*dx+dz*dz)
