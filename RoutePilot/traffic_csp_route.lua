@@ -123,6 +123,11 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
       return nil, 'route_point_limit'
     end
   end
+  if loopRoute and startDistance and startDistance > startEdge.from + 0.1 then
+    -- Close the cycle through the skipped prefix of the first edge so the
+    -- loop can begin at the player's projected position without a gap.
+    appendLaneRange(route, roads, startEdge, startEdge.from, startDistance)
+  end
   if loopRoute and #route.nodes > 2 and distance(route.nodes[1], route.nodes[#route.nodes]) < 0.20 then
     route.nodes[#route.nodes] = nil
     route.boundsL[#route.boundsL] = nil
