@@ -72,17 +72,14 @@ local function laneBoundsAt(roads, lane, position, direction)
   local rightPoint,rightDistance=nearestBoundaryPoint(position,group.boundaries.right,group.boundaryLoops.right)
   if not leftPoint or not leftDistance or leftDistance>40 or
       not rightPoint or not rightDistance or rightDistance>40 then
-    return nil, nil, 'missing_boundary_segment', leftDistance, rightDistance
+    return nil, nil
   end
   local left=(leftPoint.x-position.x)*leftX+(leftPoint.z-position.z)*leftZ
   local right=(rightPoint.x-position.x)*leftX+(rightPoint.z-position.z)*leftZ
-  if left<1.25 or right>-1.25 then
-    return nil, nil, 'insufficient_centerline_clearance', left, right, leftDistance, rightDistance
-  end
-  return left, right, 'ok', leftDistance, rightDistance
+  if left<1.25 or right>-1.25 then return nil, nil end
+  return left, right
 end
 
-Routes.debugLaneBounds = laneBoundsAt -- temporary CI fixture diagnostic
 local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
   local length = math.max(0, toDistance-fromDistance)
   local steps = math.max(1, math.ceil(length/2.0))
