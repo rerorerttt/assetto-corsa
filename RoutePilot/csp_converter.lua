@@ -854,6 +854,15 @@ function Converter.load(log)
     end
 
     local segmentEnd=nextEdge and clamp(nextEdge.fromS,currentS,currentLane.length) or currentLane.length
+    if nextEdge then
+      trace("CSP_ROUTE_STEP from=%d s=%.1f to=%d toS=%.1f kind=%s gap=%.1f",
+        currentLane.id,currentS,nextEdge.to,nextEdge.toS,
+        tostring(nextEdge.kind or "junction"),safeNumber and safeNumber(nextEdge.gap) or (nextEdge.gap or 0))
+    else
+      trace("CSP_ROUTE_TERMINUS lane=%d s=%.1f length=%.1f loop=%s junctions=%d adjacent=%d",
+        currentLane.id,currentS,currentLane.length,tostring(currentLane.loop),
+        #(currentLane.outgoing or {}),#(currentLane.adjacent or {}))
+    end
     appendLaneSegment(currentLane,currentS,segmentEnd)
     if not nextEdge then
       -- A closed authored lane can be looped only when this route began on
