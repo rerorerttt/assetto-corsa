@@ -154,7 +154,7 @@ local function intersectionBoundsAt(point, direction, intersection)
   local left=rayPolygonDistance(point,leftX,leftZ,polygon)
   local right=rayPolygonDistance(point,-leftX,-leftZ,polygon)
   if not left or not right then return nil,nil end
-  left,right=left-0.5,right-0.5
+  left,right=math.min(8.0,left-0.5),math.min(8.0,right-0.5)
   if left<1.25 or right<1.25 then return nil,nil end
   return left,right
 end
