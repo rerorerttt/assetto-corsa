@@ -678,7 +678,7 @@ local function tryRecycleGraphTraffic(route,order,player)
   if not route or not route.loop or not player or not ac.closerToRenderThan or
       not physics or type(physics.setAICarPosition)~="function" then return 0 end
   local projection=CSPRoutes.project(route,player.position,player.look)
-  if not projection or not projection.distance or projection.distance>60 then return 0 end
+  if not projection or not projection.distance or not projection.s or projection.distance>60 then return 0 end
   local total=route.length or 0
   if total<200 then return 0 end
   local behindThreshold=math.min(800,total*0.25)
@@ -707,8 +707,8 @@ local function tryRecycleGraphTraffic(route,order,player)
                 recycled=recycled+1
                 writeLog("CSP_TRAFFIC_RECYCLE id=%d behind=%.1f ahead=%.1f",
                   index,behindDistance,offsets[oi])
+                break
               end
-              break
             end
           end
         end
