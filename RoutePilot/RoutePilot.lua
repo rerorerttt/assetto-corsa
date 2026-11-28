@@ -331,6 +331,9 @@ local function loadLine(retryOnly)
       -- native AI or spawning. This keeps the map/world diagnostics available
       -- without silently turning a broken/open chain into a drivable route.
       state.nodes=nodes
+      -- Preview geometry must be visible immediately; this branch is used
+      -- precisely when the imported route is not yet safe for AI driving.
+      state.showWorldLines=true
       state.nativeSplinePath=nil; state.nativeSplineSignature=nil
       state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}
       state.nativeSplineRetryAt={}; state.nativeSplineSpawnNextTryAt=0
