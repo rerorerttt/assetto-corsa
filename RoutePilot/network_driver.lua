@@ -252,11 +252,12 @@ function M.update(i,c,dt)
  -- acceleration. It ends as soon as the section-based target is reached or
  -- the short launch window expires; normal traffic control then takes over.
  local boostTimer=n(p.networkSpawnBoostTimer)
+ local launchActive=false
  if boostTimer>0 then
   boostTimer=max(0,boostTimer-max(0,dt))
   local boostTarget=n(p.networkSpawnBoostTarget)
   if boostTarget>0 and speed<boostTarget-0.8 then
-   gas=1;brake=0;p.trafficAction="NETWORK_SPAWN_ACCEL"
+   gas=1;brake=0;launchActive=true
   else
    boostTimer=0
   end
@@ -267,7 +268,7 @@ function M.update(i,c,dt)
  p.networkDistance=q.distance;p.networkHeightError=q.heightError;p.lineDist=q.distance;p.segIdx=q.segment or 1;p.latOff=0
  p.targetSpeed=target;p.steer=steer;p.gas=gas;p.brake=brake
  p.trafficPriority=n(l.priority)
- p.trafficAction=lead and"NETWORK_FOLLOW"or"NETWORK_OPEN";p.trafficLeaderIndex=lead and lead.index or -1;p.trafficGap=lead and lead.gap or -1
+ p.trafficAction=launchActive and"NETWORK_SPAWN_ACCEL"or(lead and"NETWORK_FOLLOW"or"NETWORK_OPEN");p.trafficLeaderIndex=lead and lead.index or -1;p.trafficGap=lead and lead.gap or -1
  p.projectionLost=false;controls(i,steer,gas,brake)
 end
 return M
