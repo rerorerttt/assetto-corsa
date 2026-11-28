@@ -963,7 +963,7 @@ function Converter.load(log)
         local t=step/steps
         appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
           y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
-          z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-1.25,1.25)
+          z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
       end
     end
     currentLane=targetLane
