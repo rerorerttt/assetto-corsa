@@ -574,8 +574,10 @@ local function trySpawnTeleport(sim,dt)
           if distance>4 and distance<lane.length-3 then
             local position,direction=sampleLane(lane,distance)
             if position and direction and spotIsClear(position,carIndex) then
+              -- CSP lane points are stored in travel order; use that
+              -- forward tangent as the AI car heading, not its inverse.
               local ok,result=pcall(physics.setAICarPosition,carIndex,
-                position,vec3(-direction.x,-direction.y,-direction.z))
+                position,direction)
               if ok and result~=false then
                 moved=moved+1;placed=true;useCount[lane.id]=slot+1
                 state.p[carIndex]=nil;state.spawnHints[carIndex]=nil
