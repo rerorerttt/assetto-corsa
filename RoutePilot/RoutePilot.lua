@@ -534,8 +534,9 @@ local function trySpawnTeleport(sim,dt)
   flushLog()
 end
 local function trySpawnCSPTraffic(sim,dt,route)
-  if not trafficCSP or not route or not route.loop or trafficCSP.graphSpawnDone then return end
-  if trafficCSP.graphSpawnFailed then return end
+  if not trafficCSP or trafficCSP.graphSpawnDone then return end
+  local routes=trafficCSP.previewRoutes or (route and {route}) or {}
+  if #routes==0 then return end
   trafficCSP.graphSpawnWait=(trafficCSP.graphSpawnWait or 0)+dt
   local aiCars={}
   for i=1,sim.carsCount-1 do
@@ -564,24 +565,64 @@ local function trySpawnCSPTraffic(sim,dt,route)
     return
   end
 
-  local count=#aiCars
-  local startDistance=math.min(40.0,route.length*0.08)
-  local available=math.max(0,route.length-startDistance-10.0)
-  local gap=math.min(CFG.SPAWN_GAP,available/math.max(1,count))
-  if gap<CFG.SPAWN_MIN_GAP then
-    trafficCSP.graphSpawnFailed='insufficient_loop_length'
-    writeLog("CSP_SPAWN_FAILED reason=insufficient_loop_length length=%.1f cars=%d gap=%.2f",
-      route.length,count,gap)
+  local routeCount=math.min(#routes,#aiCars)
+  local plans=nil
+  while routeCount>0 and not plans do
+    local carsByRoute={}
+    for ri=1,routeCount do carsByRoute[ri]={} end
+    for order=1,#aiCars do
+      local ri=(order-1)%routeCount+1
+      carsByRoute[ri][#carsByRoute[ri]+1]=aiCars[order]
+    end
+    local candidatePlans={}
+    local minGap=math.huge
+    local valid=true
+    for ri=1,routeCount do
+      local currentRoute=routes[ri]
+      local groupCars=carsByRoute[ri]
+      local startDistance=math.min(40.0,currentRoute.length*0.08)
+      local available=math.max(0,currentRoute.length-startDistance-10.0)
+      local gap=math.min(CFG.SPAWN_GAP,available/math.max(1,#groupCars))
+      if not currentRoute.loop or gap<CFG.SPAWN_MIN_GAP then
+        valid=false
+        break
+      end
+      minGap=math.min(minGap,gap)
+      for order=1,#groupCars do
+        local index=groupCars[order]
+        local sample=CSPRoutes.sample(currentRoute,startDistance+(order-1)*gap)
+        if not sample then
+          valid=false
+          break
+        end
+        candidatePlans[#candidatePlans+1]={
+          index=index,routeIndex=ri,sample=sample,route=currentRoute
+        }
+      end
+      if not valid then break end
+    end
+    if valid and #candidatePlans==#aiCars then
+      plans=candidatePlans
+      trafficCSP.graphSpawnGap=minGap
+    else
+      routeCount=routeCount-1
+    end
+  end
+  if not plans then
+    trafficCSP.graphSpawnFailed='insufficient_route_capacity'
+    writeLog("CSP_SPAWN_FAILED reason=insufficient_route_capacity cars=%d routes=%d",
+      #aiCars,#routes)
+    flushLog()
     return
   end
 
   local backups,moved={},{}
   local failed=0
-  for order=1,count do
-    local index=aiCars[order]
-    local car=ac.getCar(index)
-    local sample=CSPRoutes.sample(route,startDistance+(order-1)*gap)
-    if car and sample then
+  trafficCSP.graphCarRoute={}
+  for pi=1,#plans do
+    local plan=plans[pi]
+    local index,car,sample=plan.index,ac.getCar(plan.index),plan.sample
+    if car then
       backups[index]={
         position=vec3(car.position.x,car.position.y,car.position.z),
         look=vec3(car.look.x,car.look.y,car.look.z)
@@ -595,6 +636,7 @@ local function trySpawnCSPTraffic(sim,dt,route)
         state.spawnHints[index]={segment=sample.seg,parameter=sample.t}
         state.rescueWatch=state.rescueWatch or {}
         state.rescueWatch[index]={cooldown=3.0}
+        trafficCSP.graphCarRoute[index]=plan.routeIndex
       else
         failed=failed+1
         writeLog("CSP_SPAWN_CAR_FAILED id=%d err=%s",index,tostring(result))
@@ -614,6 +656,7 @@ local function trySpawnCSPTraffic(sim,dt,route)
       end
       state.spawnHints[index]=nil
       state.p[index]=nil
+      trafficCSP.graphCarRoute[index]=nil
     end
     trafficCSP.graphSpawnFailed='spawn_transaction_rolled_back'
     writeLog("CSP_SPAWN_ROLLBACK moved=%d failed=%d",#moved,failed)
@@ -622,10 +665,10 @@ local function trySpawnCSPTraffic(sim,dt,route)
   end
 
   trafficCSP.graphSpawnDone=true
-  trafficCSP.graphSpawnCount=count
-  trafficCSP.graphSpawnGap=gap
-  writeLog("CSP_SPAWN_FINISH moved=%d gap=%.2f start=%.2f loop=%.1f",
-    count,gap,startDistance,route.length)
+  trafficCSP.graphSpawnCount=#plans
+  trafficCSP.graphSpawnRouteCount=routeCount
+  writeLog("CSP_SPAWN_FINISH moved=%d routes=%d min_gap=%.2f",
+    #plans,routeCount,trafficCSP.graphSpawnGap or 0)
   flushLog()
 end
 
