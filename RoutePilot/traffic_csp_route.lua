@@ -22,22 +22,56 @@ local function appendPoint(route, p, left, right)
   route.boundsR[#route.nodes] = right
 end
 
-local function laneBounds(roads, lane)
+local function nearestBoundaryPoint(position, points, loop)
+  if not points or #points < 2 then return nil end
+  local bestDistance, bestPoint = math.huge, nil
+  local count = loop and #points or #points-1
+  for i = 1, count do
+    local a, b = points[i], points[i % #points + 1]
+    local vx, vy, vz = b.x-a.x, b.y-a.y, b.z-a.z
+    local den = vx*vx+vy*vy+vz*vz
+    if den > 1e-8 then
+      local t = ((position.x-a.x)*vx+(position.y-a.y)*vy+(position.z-a.z)*vz)/den
+      t = math.max(0, math.min(1, t))
+      local q = vec3(a.x+vx*t,a.y+vy*t,a.z+vz*t)
+      local dx,dy,dz = position.x-q.x,position.y-q.y,position.z-q.z
+      local d = dx*dx+dy*dy+dz*dz
+      if d < bestDistance then bestDistance,bestPoint=d,q end
+    end
+  end
+  return bestPoint, bestDistance < math.huge and math.sqrt(bestDistance) or nil
+end
+
+local function laneBoundsAt(roads, lane, position, direction)
   local group = roads and roads.laneGroups and roads.laneGroups[lane]
-  if not group then return 3.0, -3.0 end
-  local offset = group.laneOffsets[lane] or 0
-  local left = group.leftOffset + group.boundaryOffset - offset
-  local right = group.rightOffset - group.boundaryOffset - offset
-  return math.max(1.0, left), math.min(-1.0, right)
+  if not group or not group.boundaries then return 3.0, -3.0 end
+  local tx,tz=direction.x,direction.z
+  local leftX,leftZ=-tz,tx
+  local leftPoint=nearestBoundaryPoint(position,group.boundaries.left,group.boundaryLoops.left)
+  local rightPoint=nearestBoundaryPoint(position,group.boundaries.right,group.boundaryLoops.right)
+  local left,right=nil,nil
+  if leftPoint then
+    left=(leftPoint.x-position.x)*leftX+(leftPoint.z-position.z)*leftZ
+  end
+  if rightPoint then
+    right=(rightPoint.x-position.x)*leftX+(rightPoint.z-position.z)*leftZ
+  end
+  local offset=group.laneOffsets[lane] or 0
+  local idealLeft=group.leftOffset+group.boundaryOffset-offset
+  local idealRight=group.rightOffset-group.boundaryOffset-offset
+  if not left or left<=0 then left=idealLeft end
+  if not right or right>=0 then right=idealRight end
+  return math.max(0.20,left), math.min(-0.20,right)
 end
 
 local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
   local length = math.max(0, toDistance-fromDistance)
   local steps = math.max(1, math.ceil(length/2.0))
-  local left, right = laneBounds(roads, edge.lane)
   for i = 0, steps do
     local d = fromDistance + length*i/steps
     local p = Graph.sampleLane(edge.lane, d)
+    local direction = Graph.directionAt(edge.lane, d)
+    local left, right = laneBoundsAt(roads, edge.lane, p, direction)
     appendPoint(route, p, left, right)
   end
 end
