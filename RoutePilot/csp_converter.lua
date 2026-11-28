@@ -937,11 +937,8 @@ function Converter.load(log)
     local sourceEnd=pointAt(currentLane,segmentEnd)
     local targetStart=pointAt(targetLane,nextEdge.toS)
     if targetLane.id==startLane.id then
-      -- A valid directed return to the starting lane may connect to its
-      -- opposite endpoint (e.g. lane 10 -> connector lane 9 -> lane 10).
-      -- In that case the missing prefix of the starting lane is the main
-      -- body of the circuit. Omitting it leaves only the short connector,
-      -- so every AI reaches the artificial route end and loses projection.
+      -- A return to the start lane can either close the route at its origin,
+      -- wrap through the lane prefix, or re-enter the lane farther ahead.
       local joinGap=dist(sourceEnd,targetStart)
       local sourceTangent=tangentAt(currentLane,segmentEnd)
       local targetTangent=tangentAt(startLane,nextEdge.toS)
@@ -965,50 +962,54 @@ function Converter.load(log)
           routeLoop=true
           trace("CSP_ROUTE_CLOSED via_lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
             startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
+          break
         elseif samePoint then
           routeLoop=true
           trace("CSP_ROUTE_CLOSED via_lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
             startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
           break
         elseif nextEdge.toS>startS+20.0 then
-          -- The connector rejoins the starting lane farther ahead, not at
-          -- the route origin. Continue along that lane from the re-entry
-          -- point; stopping here creates a tiny open route and strands AI.
+          -- Example: Shuto 135 -> 136 -> 135 returns at a later point on
+          -- lane 135. Continue from that point instead of truncating the route.
           trace("CSP_ROUTE_REENTER lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
             startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
           currentLane=targetLane
           currentS=clamp(nextEdge.toS,0,targetLane.length)
-          -- Continue the outer traversal loop with the new lane position.
-          -- The bridge has already been appended above.
-          goto continue_route
         else
           trace("CSP_ROUTE_RETURN_NOT_CLOSED lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
             startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
+          break
         end
       else
         trace("CSP_ROUTE_RETURN_REJECTED lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
           startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
+        break
       end
-      break
-    end
-    if visited[targetLane.id] then break end
+    else
+      -- A previously visited lane may be entered again only farther along its
+      -- directed geometry. Re-entering an already consumed interval is a cycle.
+      local previousTargetS=visited[targetLane.id]
+      if previousTargetS and nextEdge.toS<=previousTargetS+20.0 then
+        trace("CSP_ROUTE_REVISIT_STOP lane=%d s=%.1f previous=%.1f",
+          targetLane.id,nextEdge.toS,previousTargetS)
+        break
+      end
 
-    -- Bridge only the small authored junction gap; this is a directed
-    -- transition from the source lane to its declared destination, never a
-    -- nearest-line jump or a transition onto opposing traffic.
-    local gap=dist(sourceEnd,targetStart)
-    if gap>0.15 and gap<=18.0 then
-      local steps=math.max(1,math.ceil(gap/3.0))
-      for step=1,steps-1 do
-        local t=step/steps
-        appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
-          y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
-          z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
+      -- Bridge only the small authored junction gap; this is a directed
+      -- transition from the source lane to its declared destination.
+      local gap=dist(sourceEnd,targetStart)
+      if gap>0.15 and gap<=18.0 then
+        local steps=math.max(1,math.ceil(gap/3.0))
+        for step=1,steps-1 do
+          local t=step/steps
+          appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
+            y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
+            z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
+        end
       end
+      currentLane=targetLane
+      currentS=clamp(nextEdge.toS,0,targetLane.length)
     end
-    currentLane=targetLane
-    currentS=clamp(nextEdge.toS,0,targetLane.length)
-    ::continue_route::
   end
 
   if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_ROUTE_TOO_SHORT" end
