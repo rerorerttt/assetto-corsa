@@ -93,6 +93,11 @@ function M.write(path,nodes,loop)
   local ok,result=pcall(io.save,path,data,true)
   if not ok then return false,tostring(result) end
   if result==false then return false,"io_save_returned_false" end
+  local verifyOk,verified=pcall(io.load,path)
+  if not verifyOk or type(verified)~="string" or #verified~=#data then
+    return false,"ai_file_readback_failed"
+  end
+  if verified~=data then return false,"ai_file_readback_mismatch" end
   return true,nil,meta,#data
 end
 
