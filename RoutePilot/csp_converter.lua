@@ -257,6 +257,25 @@ local function collectRoute(graph, player)
   end
   if not start then return nil,nil,nil,'No CSP lane near the player in the driving direction' end
 
+  -- If several same-direction CSP lanes overlap at the player, seed the
+  -- longest usable lane in that parallel group. This avoids selecting a
+  -- short merge stub when a continuous main lane is directly beside it.
+  local seedDistance=startProjection.distance
+  local seedLength=laneLength(start)
+  for _,id in ipairs(graph.laneOrder) do
+    local candidate=graph.lanes[id]
+    if candidate.id~=start.id then
+      local p=project(candidate.points,player.position,hx,hz)
+      if p and p.distance<=math.max(6.0,seedDistance+1.5) then
+        local alignment=p.tx*startProjection.tx+p.tz*startProjection.tz
+        local length=laneLength(candidate)
+        if alignment>=0.85 and length>seedLength*1.15 then
+          start,startProjection,seedDistance,seedLength=candidate,p,p.distance,length
+        end
+      end
+    end
+  end
+
   local laneLinks=buildIntersectionLinks(graph)
   local raw,visited={},{}
   local lane=start
