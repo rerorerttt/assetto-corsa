@@ -388,8 +388,45 @@ function Graph.build(lanes, intersectionDefs, log)
     end
   end
 
-  -- Honor explicit forbidden movements. Each accepted movement is an edge-to-
-  -- edge transition; no transition is inferred from proximity alone.
+  local function movementLaneRules(inter, incoming, outgoing)
+    local entrySide = incoming.fromSide and inter.sides[incoming.fromSide] or nil
+    local exitSide = outgoing.toSide and inter.sides[outgoing.toSide] or nil
+    if entrySide and #entrySide.entries >= 2 and
+        incoming.entryRank and incoming.entryRank > 1 and
+        incoming.fromSide == outgoing.toSide then
+      return false, false
+    end
+    if entrySide and exitSide and #entrySide.entries >= 2 and #exitSide.exits >= 2 and
+        entrySide.entryDir and exitSide.exitDir then
+      local dot = entrySide.entryDir.x*exitSide.exitDir.x +
+        entrySide.entryDir.y*exitSide.exitDir.y + entrySide.entryDir.z*exitSide.exitDir.z
+      if dot < 0.5 then
+        local best, bestDistance = nil, math.huge
+        for j = 1, #entrySide.entries do
+          local candidate = entrySide.entries[j]
+          local dx = candidate.fromPos.x - exitSide.centerExits.x
+          local dz = candidate.fromPos.z - exitSide.centerExits.z
+          local d = dx*dx + dz*dz
+          if d < bestDistance then best, bestDistance = candidate, d end
+        end
+        if best and best ~= incoming then return false, false end
+      end
+    end
+    local weakLaneChange = false
+    if entrySide and exitSide and #entrySide.entries >= 2 and
+        #entrySide.entries == #exitSide.exits and entrySide.entryDir and exitSide.exitDir then
+      local dot = entrySide.entryDir.x*exitSide.exitDir.x +
+        entrySide.entryDir.y*exitSide.exitDir.y + entrySide.entryDir.z*exitSide.exitDir.z
+      if dot > -0.5 and incoming.entryRank and outgoing.exitRank and
+          incoming.entryRank ~= outgoing.exitRank then
+        weakLaneChange = true
+      end
+    end
+    return true, weakLaneChange
+  end
+
+  -- Honor explicit forbidden movements and CSP's key lane-order turn rules.
+  -- Each accepted movement is an edge-to-edge transition, never a proximity link.
   for i = 1, #graph.intersections do
     local inter = graph.intersections[i]
     for a = 1, #inter.links do
@@ -399,11 +436,14 @@ function Graph.build(lanes, intersectionDefs, log)
           local outgoing = inter.links[b]
           if outgoing.outEdge and outgoing.to < outgoing.lane.totalLength - 0.5 then
             local fromID, toID = tonumber(incoming.lane.id), tonumber(outgoing.lane.id)
-            if incoming.lane ~= outgoing.lane and not disallowed(inter.definition, fromID, toID) then
+            local rulesAllow, weakLaneChange = movementLaneRules(inter, incoming, outgoing)
+            if incoming.lane ~= outgoing.lane and rulesAllow and
+                not disallowed(inter.definition, fromID, toID) then
               local movement = {
                 intersection = inter, from = incoming, to = outgoing,
                 fromEdge = incoming.inEdge, toEdge = outgoing.outEdge,
-                priority = 0,
+                priority = 0, weakLaneChange = weakLaneChange,
+                trafficLight = inter.definition.trafficLight,
                 attributes = nil
               }
               local attributes = inter.definition.trajectoryAttributes
