@@ -778,7 +778,7 @@ function Converter.load(log)
   -- This keeps the imported path continuous and prevents every car from
   -- reaching an arbitrary short connector/branch terminus.
   local searchNodes=0
-  local searchLimit=30000
+  local searchLimit=50000
   local searchMaxHops=80
   local function routeCandidates(lane,fromS,visited)
     local candidates={}
@@ -856,6 +856,7 @@ function Converter.load(log)
 
   local plannedRoute=findCircuit(startLane,startS,{[startLane.id]=true},{},0)
   if plannedRoute then
+    trace("CSP_ROUTE_SEARCH cycle=true search_nodes=%d transitions=%d",searchNodes,#plannedRoute)
     for _,edge in ipairs(plannedRoute) do
       local sourceLane=graph.lanes[edge.from]
       local targetLane=graph.lanes[edge.to]
@@ -921,6 +922,17 @@ function Converter.load(log)
             y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
             z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
         end
+      end
+      if nextEdge.to==startLane.id and
+        (startLane.loop or nextEdge.toS<startS-20.0 or math.abs(nextEdge.toS-startS)<=20.0) then
+        if nextEdge.toS<startS-20.0 then
+          appendLaneSegment(startLane,nextEdge.toS,startS)
+        elseif startLane.loop and nextEdge.toS>startS+20.0 then
+          appendLaneSegment(startLane,nextEdge.toS,startLane.length)
+          appendLaneSegment(startLane,0,startS)
+        end
+        routeLoop=true
+        break
       end
       currentLane=targetLane
       currentS=clamp(nextEdge.toS,0,targetLane.length)
