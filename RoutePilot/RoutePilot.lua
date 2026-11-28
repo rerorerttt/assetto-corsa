@@ -800,7 +800,7 @@ function script.update(dt)
         trafficCSP.graph, player.position, player.look, 120)
       if edge then
         local route, routeError = CSPRoutes.build(
-          trafficCSP.graph, trafficCSP.roads, edge, along, { minLength = 250 })
+          trafficCSP.graph, trafficCSP.roads, edge, along, { minLength = 250, loop = true })
         if route then
           trafficCSP.previewRoute = route
           writeLog("CSP_ROUTE_PREVIEW_OK edge=%d distance=%.2f length=%.1f points=%d path_edges=%d",
@@ -1210,9 +1210,10 @@ function windowMain(dt)
             ui.text("CSP Graph: не построен")
           end
           if trafficCSP.previewRoute then
-            ui.text(string.format("CSP Route: %.0f м | точек %d | рёбер %d",
+            ui.text(string.format("CSP Route: %.0f м | точек %d | рёбер %d | %s",
               trafficCSP.previewRoute.length or 0, #trafficCSP.previewRoute.nodes,
-              #trafficCSP.previewRoute.edges))
+              #trafficCSP.previewRoute.edges,
+              trafficCSP.previewRoute.loop and "замкнут" or "открыт"))
           elseif trafficCSP.previewRouteError then
             ui.text("CSP Route: " .. tostring(trafficCSP.previewRouteError))
           end
