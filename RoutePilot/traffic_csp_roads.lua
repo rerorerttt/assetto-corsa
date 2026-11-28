@@ -150,7 +150,7 @@ local function parallelMatch(a, b)
     for i=1,n,step do
       local p=src.points[i]
       local d,q,dir=nearestOnLane(p,dst)
-      if d and q and d>=1.5 and d<=12 and math.abs(p.y-q.y)<=1.5 then
+      if d and q and d>=1.5 and d<=40 and math.abs(p.y-q.y)<=1.5 then
         local tx,ty,tz=tangentAt(src.points,i,src.loop)
         local dot=tx*dir[1]+ty*dir[2]+tz*dir[3]
         if dot>=0.92 then good,sum=good+1,sum+d end
