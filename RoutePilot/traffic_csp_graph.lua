@@ -598,6 +598,8 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
   local distances, previous, heap = { [startEdge.id] = 0 }, {}, {}
   heapPush(heap, { edge = startEdge, cost = 0 })
   local visited, reached = 0, nil
+  local farthestEdge, farthestCost = nil, -1
+  local terminalEdge, terminalCost = nil, -1
   maxVisited = maxVisited or 20000
   while #heap > 0 and visited < maxVisited do
     local item = heapPop(heap)
@@ -605,7 +607,12 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
     if cost <= (distances[edge.id] or math.huge) + 1e-7 then
       visited = visited + 1
       if targetEdge and edge == targetEdge then reached = edge; break end
-      if not targetEdge and #edge.nextEdges == 0 then reached = edge; break end
+      if not targetEdge then
+        if cost > farthestCost then farthestEdge, farthestCost = edge, cost end
+        if #edge.nextEdges == 0 and cost > terminalCost then
+          terminalEdge, terminalCost = edge, cost
+        end
+      end
       for i = 1, #edge.nextEdges do
         local nextEdge = edge.nextEdges[i]
         local transitionPenalty = edge.transitionPenalty and edge.transitionPenalty[nextEdge.id] or 0
@@ -618,6 +625,7 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
       end
     end
   end
+  if not targetEdge then reached = terminalEdge or farthestEdge end
   if not reached then return nil, visited >= maxVisited and 'search_limit' or 'no_path' end
   local path, cursor = {}, reached
   while cursor do
