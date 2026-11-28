@@ -806,7 +806,7 @@ function script.update(dt)
     local player=ac.getCar(0)
     if not state.loaded and not state.recLine and CSPConverter then
       state.autoImportAccum=state.autoImportAccum+dt
-      if state.autoImportAccum>=2.0 then
+      if state.autoImportAccum>=5.0 then
         state.autoImportAccum=0
         loadLine()
       end
