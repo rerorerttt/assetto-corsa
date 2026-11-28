@@ -176,7 +176,10 @@ local function saveLine()
     local ok,f=pcall(io.open,getLineFilePath(),"w")
     if ok and f then wroteFile=pcall(function() f:write(data) f:close() end) end
   end
-  if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
+  if ac.storage then
+    pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data)
+    pcall(ac.storage,"RP_CSP_LINE_DATA_"..getTrackTag(),state.loadedFromCSP==true)
+  end
   saveBounds()
   if wroteFile then
     state.status=string.format("Сохранено: %d точек",#state.nodes)
@@ -797,6 +800,10 @@ local function updateBoundsRecording(player)
   end
 end
 local function applyWidthPreset(preset)
+  if state.loadedFromCSP then
+    state.status="Ширина определяется CSP-линиями"
+    return
+  end
   state.widthPreset=preset
   local n=#state.nodes
   if n<2 then return end
@@ -1247,7 +1254,7 @@ function windowMain(dt)
     if ui.button("Загрузить",vec2(-0.25,22)) then loadLine() end
     ui.sameLine(0,4)
     if ui.button("Очистить",vec2(-0.25,22)) then
-      state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+      state.nodes={}; state.p={}; state.trafficNetwork=nil; state.loadedFromCSP=false; state.boundsL={}; state.boundsR={}
       state.status="Очищено"; state.loaded=false
     end
     ui.separator()
@@ -1299,6 +1306,8 @@ if ac.onRelease then
   end)
 end
 loadLine()
-loadBounds()
-writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d",getTrackTag(),#state.nodes)
+if not state.loadedFromCSP then loadBounds() end
+writeLog("ROUTEPILOT 0.9.1 INITIALIZED track=%s points=%d csp=%s lanes=%d",
+  getTrackTag(),#state.nodes,tostring(state.loadedFromCSP),
+  state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0)
 flushLog()
