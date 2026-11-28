@@ -57,9 +57,10 @@ local function resample(points, loop)
     local chord = b:distance(c)
     local steps = math.max(1, math.ceil(chord / SAMPLE_STEP))
     for j = 0, steps - 1 do
-      if i == 1 and j == 0 then out[#out + 1] = b:clone() end
       local t = j / steps
-      if j > 0 then out[#out + 1] = catmull(a, b, c, d, t) end
+      -- Keep every segment start. Skipping these points shortens the spline
+      -- and shifts every later sample away from its source lane geometry.
+      out[#out + 1] = j == 0 and b:clone() or catmull(a, b, c, d, t)
     end
   end
   if not loop then out[#out + 1] = points[count]:clone() end
