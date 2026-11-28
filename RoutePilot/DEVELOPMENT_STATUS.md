@@ -304,6 +304,8 @@ Static validation performed:
 - Lua syntax checks with `texlua` on the route builder, spawn/recycle functions, route-preview and multi-route driver blocks, and road-grouping helpers.
 - Synthetic directed-graph tests cover a valid closed cycle, rejection of a dead-end branch, and recognition of a standalone loop.
 - Synthetic lane-proximity tests cover curved open lanes and closed loops; nearest-segment refinement returns the expected local segment.
+- Synthetic road matching tests distinguish same-direction parallel lanes, opposing lanes, grade-separated lanes, and crossing lanes.
+- Spawn-capacity tests verify that short loops receive only the cars they can safely hold while longer loops absorb the remaining AI pool without violating the minimum gap.
 - Files were fetched back from GitHub after writes. These checks do not replace loading the complete app in CSP or driving it in Assetto Corsa.
 
 Release blockers:
