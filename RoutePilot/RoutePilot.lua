@@ -541,8 +541,10 @@ local function trySpawnCSPTraffic(sim,dt,route)
     if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
   end
   if #aiCars==0 then
-    if trafficCSP.graphSpawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
-      trafficCSP.graphSpawnFailed='no_active_ai_cars'
+    if trafficCSP.graphSpawnWait>=CFG.SPAWN_WAIT_TIMEOUT and not trafficCSP.graphSpawnNoCarsLogged then
+      trafficCSP.graphSpawnNoCarsLogged=true
+      writeLog("CSP_SPAWN_WAITING reason=no_active_ai_cars")
+      flushLog()
     end
     return
   end
@@ -554,7 +556,7 @@ local function trySpawnCSPTraffic(sim,dt,route)
   end
   trafficCSP.graphSpawnStable=(trafficCSP.graphSpawnStable or 0)+dt
   if trafficCSP.graphSpawnStable<CFG.SPAWN_STABLE_TIME then return end
-  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
+  if not physics or type(physics.setAICarPosition)~="function" then
     trafficCSP.graphSpawnFailed='no_ai_position_api'
     writeLog("CSP_SPAWN_FAILED reason=no_ai_position_api")
     return
