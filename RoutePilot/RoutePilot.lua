@@ -36,7 +36,7 @@ local CFG = {
   SLIP_DAMP_MIN_ANGLE=4.0*math.pi/180,
   TC_SLIP_START=0.10, TC_SLIP_FULL=0.28, TC_MAX_CUT=0.88,
   TC_RECOVERY_RATE=1.25, TC_CORNER_CUT=0.22,
-  SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
+  SPAWN_GAP=40.0, SPAWN_MIN_GAP=24.0, SPAWN_STABLE_TIME=0.12, SPAWN_WAIT_TIMEOUT=8.0,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
@@ -49,7 +49,7 @@ local state = {
   followGap=8.0, widthPreset=1,
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
-  spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
+  spawnHints={}, appTeleportGuard={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
   trafficNetwork=nil, loadedFromCSP=false, cspImportPending=false,
   autoImportAccum=0, autoImportAttempts=0,
@@ -586,6 +586,7 @@ local function trySpawnTeleport(sim,dt)
     if position and direction then
       -- Keep the previously user-verified orientation. The SDK documents
       -- an explicit direction vector but does not define its sign convention.
+      markAppTeleport(carIndex)
       local ok,result=pcall(physics.setAICarPosition,carIndex,
         position,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
@@ -688,7 +689,7 @@ local function teleportHome(carIndex,car)
 
   -- Every recovery point is sampled ahead of the player on the same route
   -- branch. Never use the stranded AI's coordinates to choose a destination.
-  for distance=25,145,8 do
+  for distance=70+(carIndex-1)*32,230,10 do
     local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
     if pos then
       local nextPos=walkLineSigned(sampleSeg,sampleT,3.0,sign)
@@ -696,10 +697,12 @@ local function teleportHome(carIndex,car)
         local dx,dz=normalize2(nextPos.x-pos.x,nextPos.z-pos.z)
         local safePos=vec3(pos.x,pos.y+0.15,pos.z)
         if spotIsClear(safePos,carIndex) then
+          markAppTeleport(carIndex)
           local ok,result=pcall(physics.setAICarPosition,carIndex,
             safePos,vec3(-dx,0,-dz))
           if ok and result~=false then
             state.p[carIndex]=nil
+            state.spawnHints[carIndex]={segment=sampleSeg,parameter=sampleT,boost=true}
             state.rescueWatch=state.rescueWatch or {}
             state.rescueWatch[carIndex]={cooldown=3.0}
             writeLog("RESCUE_FORWARD id=%d distance_ahead_player=%.1f player_route_error=%.1f seg=%d t=%.3f sign=%d pos=(%.2f,%.2f,%.2f)",
@@ -718,6 +721,32 @@ local function teleportHome(carIndex,car)
     carIndex,routeError)
   flushLog()
   return false
+end
+
+-- Reinsert an AI immediately when AC/CSP resets it to the session/grid spawn.
+local function markAppTeleport(carIndex)
+  state.appTeleportGuard=state.appTeleportGuard or {}
+  state.appTeleportGuard[carIndex]=0.75
+end
+if type(ac.onCarJumped)=="function" then
+  ac.onCarJumped(-1,function(carIndex)
+    if not carIndex or carIndex<=0 then return end
+    local car=ac.getCar(carIndex)
+    if not car or not car.isActive or not car.isAIControlled then return end
+    local guard=state.appTeleportGuard and state.appTeleportGuard[carIndex] or 0
+    if guard>0 then
+      state.appTeleportGuard[carIndex]=nil
+      writeLog("AC_CAR_JUMP_OWN_TELEPORT id=%d",carIndex)
+      return
+    end
+    writeLog("AC_CAR_JUMP_EXTERNAL id=%d pos=(%.2f,%.2f,%.2f) speed=%.2f; immediate route reinsertion",
+      carIndex,car.position.x,car.position.y,car.position.z,safeNumber(car.speedMs))
+    local rescued=teleportHome(carIndex,car)
+    writeLog("AC_CAR_JUMP_REINSERT id=%d success=%s",carIndex,tostring(rescued))
+    flushLog()
+  end)
+else
+  writeLog("AC_CAR_JUMP_HOOK_UNAVAILABLE")
 end
 
 local function updateRescueWatchdog(carIndex,car,dt)
@@ -873,6 +902,12 @@ local function ensureDriver()
   return true
 end
 function script.update(dt)
+  state.appTeleportGuard=state.appTeleportGuard or {}
+  for index,remaining in pairs(state.appTeleportGuard) do
+    remaining=remaining-dt
+    if remaining<=0 then state.appTeleportGuard[index]=nil
+    else state.appTeleportGuard[index]=remaining end
+  end
   if not dt or dt<=0 then return end
   dt=math.min(dt,0.05)
   local ok,err=pcall(function()
