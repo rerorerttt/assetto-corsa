@@ -123,7 +123,7 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
   if not graph or not startEdge then return nil, 'missing_start_edge' end
   local path, pathCost, loopRoute
   if options.loop == true then
-    path, pathCost = Graph.loopPath(graph, startEdge, options.maxVisited)
+    path, pathCost = Graph.loopPath(graph, startEdge, options.maxVisited, options.maxRouteLength or 20000)
     loopRoute = path ~= nil
     if not path then
       if options.requireLoop then return nil, pathCost end
@@ -158,7 +158,7 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
         end
       end
     end
-    if #route.nodes > (options.maxPoints or 50000) then
+    if #route.nodes > (options.maxPoints or 12000) then
       return nil, 'route_point_limit'
     end
   end
