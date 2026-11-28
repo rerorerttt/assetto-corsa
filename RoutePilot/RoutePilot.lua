@@ -651,11 +651,7 @@ local function trySpawnTeleport(sim,dt)
     player.position,metrics,player.look)
   spawnDiag("PLAYER pos=(%.3f,%.3f,%.3f) look=(%.4f,%.4f,%.4f) route_distance=%.3f route_error=%.3f route_length=%.3f loop=%s",player.position.x,player.position.y,player.position.z,player.look.x,player.look.y,player.look.z,routeDistance,routeError,metrics.length,tostring(metrics.loop))
   if routeError>25.0 then
-    writeLog("SPAWN_SKIPPED reason=player_off_route error=%.1f",routeError)
-    spawnDiag("ABORT reason=player_off_route error=%.3f limit=25.0",routeError)
-    state.spawnDone=true
-    flushLog()
-    return
+    writeLog("SPAWN_PLAYER_ROUTE_FAR error=%.1f; using nearest forward route projection",routeError)
   end
   local count=#aiCars
   local available=metrics.loop and metrics.length or
