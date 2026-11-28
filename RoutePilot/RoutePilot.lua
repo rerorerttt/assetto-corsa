@@ -984,34 +984,67 @@ end)
 
 -- MAP: window-local coords (comfy_map pattern). Bigger scale, thick lines,
 -- bounds with a minimum offset so they never merge with the AI line.
+local mapBoundsCache=nil
+local mapBoundsCacheNodes=nil
+local mapBoundsCacheLeft=nil
+local mapBoundsCacheRight=nil
+local mapBoundsCacheCount=-1
+local mapBoundsCacheLoop=nil
+local mapBoundsCacheLastX=nil
+local mapBoundsCacheLastZ=nil
 local function computeMapBounds()
-  local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
   local n=#state.nodes
+  local last=n>0 and state.nodes[n] or nil
+  local lastX=last and last.x or nil
+  local lastZ=last and last.z or nil
+  -- The route is static between imports/recorded samples. Re-scanning every
+  -- point on every UI frame was needless O(N) work and caused FPS loss on
+  -- CSP networks containing thousands of samples.
+  if mapBoundsCache and mapBoundsCacheNodes==state.nodes and
+      mapBoundsCacheLeft==state.boundsL and mapBoundsCacheRight==state.boundsR and
+      mapBoundsCacheCount==n and mapBoundsCacheLoop==state.loopRoute and
+      mapBoundsCacheLastX==lastX and mapBoundsCacheLastZ==lastZ then
+    return mapBoundsCache
+  end
+  local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
   for i=1,n do
     local nd=state.nodes[i]
-    local l,r=boundsAt(i)
-    local b=segEnd(i)
-    -- Open routes have no segment after the final node. Use the incoming
-    -- tangent there; indexing a missing endpoint used to throw every UI frame.
-    if not b then b=state.nodes[i-1] end
-    if b then
-      local dx,dz=b.x-nd.x,b.z-nd.z
-      if i==n and not state.loopRoute then dx,dz=-dx,-dz end
-      local lx,lz=normalize2(dx,dz)
-      local pts={
-        {x=nd.x-lz*l,z=nd.z+lx*l},
-        {x=nd.x-lz*r,z=nd.z+lx*r},
-      }
-      for _,q in ipairs(pts) do
-        if q.x<minX then minX=q.x end
-        if q.x>maxX then maxX=q.x end
-        if q.z<minZ then minZ=q.z end
-        if q.z>maxZ then maxZ=q.z end
+    if nd then
+      local l,r=boundsAt(i)
+      local b=segEnd(i)
+      -- Open routes have no outgoing segment at the final vertex. Use the
+      -- incoming tangent; if even that is unavailable, skip this vertex.
+      if not b and i>1 then b=state.nodes[i-1] end
+      if b then
+        local dx,dz=b.x-nd.x,b.z-nd.z
+        if i==n and not state.loopRoute then dx,dz=-dx,-dz end
+        local lx,lz=normalize2(dx,dz)
+        local pts={
+          {x=nd.x-lz*l,z=nd.z+lx*l},
+          {x=nd.x-lz*r,z=nd.z+lx*r},
+        }
+        for _,q in ipairs(pts) do
+          if q.x<minX then minX=q.x end
+          if q.x>maxX then maxX=q.x end
+          if q.z<minZ then minZ=q.z end
+          if q.z>maxZ then maxZ=q.z end
+        end
       end
     end
   end
-  if minX==math.huge then return nil end
-  return {minX=minX,maxX=maxX,minZ=minZ,maxZ=maxZ}
+  if minX==math.huge then
+    mapBoundsCache=nil
+  else
+    mapBoundsCache={minX=minX,maxX=maxX,minZ=minZ,maxZ=maxZ}
+  end
+  mapBoundsCacheNodes=state.nodes
+  mapBoundsCacheLeft=state.boundsL
+  mapBoundsCacheRight=state.boundsR
+  mapBoundsCacheCount=n
+  mapBoundsCacheLoop=state.loopRoute
+  mapBoundsCacheLastX=lastX
+  mapBoundsCacheLastZ=lastZ
+  return mapBoundsCache
 end
 local function drawMapInRect(q0,q1)
   local b=computeMapBounds()
