@@ -79,7 +79,9 @@ local function occupancy(g,laneId,s,index,sim,range)
 end
 local function laneChange(g,l,p,index,sim,speed)
  local best,score
- for _,e in ipairs(l.adjacent or{})do if p.s>=e.fromStart+2 and p.s<=e.fromEnd-2 then
+ for _,e in ipairs(l.adjacent or{})do
+  local transitionDistance=clamp(speed*0.35,8,20)
+  if p.s>=e.fromStart+2 and p.s<=e.fromEnd-transitionDistance then
   local target=g.lanes[e.to]
   if target then local src=point(l,p.s);local q=projectNear(target,src,(e.toStart+e.toEnd)*.5,(e.toEnd-e.toStart)*.5+10)
    if q and q.distance>=2 and q.distance<=8 then
