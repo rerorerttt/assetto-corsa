@@ -167,11 +167,11 @@ local function claimNativeSpline(carIndex)
       return false
     end
   end
-  local path,err=ensureNativeSplineFile()
-  if not path then return false end
   local last=safeNumber(state.nativeSplineRetryAt[carIndex],-100)
   if now-last<0.5 then return false end
   state.nativeSplineRetryAt[carIndex]=now
+  local path,err=ensureNativeSplineFile()
+  if not path then return false end
   local ok,result=pcall(physics.setAISpline,carIndex,path,nil)
   if ok and result==true then
     state.nativeSplineApplied[carIndex]=true
@@ -942,6 +942,17 @@ local function installCarJumpTrace()
     ac.onCarJumped(-1,function(carIndex)
       local car=ac.getCar(carIndex)
       if not car or not car.position then return end
+      local jumpSim=ac.getSim()
+      local jumpTime=jumpSim and safeNumber(jumpSim.gameTime) or 0
+      local ownApiAt=state.teleportDiagApiAt and state.teleportDiagApiAt[carIndex]
+      local ownApiAge=ownApiAt and (jumpTime-ownApiAt) or math.huge
+      if car.isAIControlled and ownApiAge>1.0 then
+        state.nativeSplineApplied[carIndex]=nil
+        state.nativeSplineAppliedAt[carIndex]=nil
+        state.nativeSplineRetryAt[carIndex]=nil
+        writeLog("NATIVE_SPLINE_RECLAIM_TRIGGER id=%d reason=external_car_jump api_age=%.2f",
+          carIndex,ownApiAge)
+      end
       if state.teleportDiagnostics then
         local now=teleportDiagSnapshot(car)
         local before=state.teleportDiagSnapshots and state.teleportDiagSnapshots[carIndex]
@@ -970,6 +981,9 @@ local function installCarJumpTrace()
   end
   if type(ac.onCarAIToggle)=="function" then
     ac.onCarAIToggle(-1,function(carIndex,aiActive)
+      state.nativeSplineApplied[carIndex]=nil
+      state.nativeSplineAppliedAt[carIndex]=nil
+      state.nativeSplineRetryAt[carIndex]=nil
       if not state.teleportDiagnostics then return end
       local car=ac.getCar(carIndex)
       local pos=car and car.position
