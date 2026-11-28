@@ -106,13 +106,8 @@ local function laneIntersectionIntervals(lane, inter)
     total = total + segLen
   end
   if active then result[#result + 1] = active end
-  if lane.loop and #result > 1 then
-    local first, last = result[1], result[#result]
-    if first.from <= 0.1 and total - last.to <= 0.1 then
-      first.from = last.from - total
-      table.remove(result)
-    end
-  end
+  -- Keep seam-crossing spans split at 0/total. The graph builder links
+  -- the two ends explicitly; negative distances would corrupt lane ordering.
   return result
 end
 
@@ -206,6 +201,13 @@ function Graph.build(lanes, intersectionDefs, log)
       end
       if cursor < length - 0.5 then
         graph.edges[#graph.edges + 1] = { lane = lane, from = cursor, to = length, enter = previous, exit = nil }
+      end
+      if lane.loop and #lane.graphLinks > 0 then
+        local first, last = lane.graphLinks[1], lane.graphLinks[#lane.graphLinks]
+        graph.edges[#graph.edges + 1] = {
+          lane = lane, from = last.to, to = first.from,
+          enter = last, exit = first, wrap = true
+        }
       end
       if #lane.graphLinks == 0 then graph.stats.disconnectedLanes = graph.stats.disconnectedLanes + 1 end
     end
