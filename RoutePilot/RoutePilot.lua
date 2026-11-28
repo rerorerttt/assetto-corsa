@@ -538,6 +538,7 @@ local function trySpawnCSPTraffic(sim,dt,route)
   local routes=trafficCSP.previewRoutes or (route and {route}) or {}
   if #routes==0 then return end
   table.sort(routes,function(a,b) return (a.length or 0)>(b.length or 0) end)
+  trafficCSP.previewRoute=routes[1]
   trafficCSP.graphSpawnWait=(trafficCSP.graphSpawnWait or 0)+dt
   local aiCars={}
   for i=1,sim.carsCount-1 do
@@ -1619,7 +1620,7 @@ function windowMain(dt)
             ui.text("CSP Graph: не построен")
           end
           if trafficCSP.previewRoute then
-            ui.text(string.format("CSP Routes: %d | ближайший %.0f м | точки %d | %s",
+            ui.text(string.format("CSP Routes: %d | основной %.0f м | точки %d | %s",
               #(trafficCSP.previewRoutes or {trafficCSP.previewRoute}),
               trafficCSP.previewRoute.length or 0,#trafficCSP.previewRoute.nodes,
               trafficCSP.previewRoute.loop and "замкнут" or "открыт"))
