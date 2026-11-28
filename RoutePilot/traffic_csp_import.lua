@@ -17,9 +17,9 @@ local SAMPLE_STEP = 1.5
 local RAY_START_OFFSET = 2.0
 local RAY_LENGTH = 4.0
 local MAX_SURFACE_SNAP = 1.5
-local SURFACE_EDGE_STEP = 0.5
+local SURFACE_EDGE_STEP = 0.25
 local SURFACE_EDGE_MAX = 8.0
-local SURFACE_EDGE_GAP = 12.0
+local SURFACE_EDGE_GAP = 6.0
 local MIN_LANE_POINTS = 2
 
 local function finite(v)
@@ -169,6 +169,9 @@ local function measureLaneSurfaceBounds(lane)
   local leftWidths, rightWidths = {}, {}
   local n = #lane.points
   for i = 1, n do
+    -- Probe every 3 m along the lane; missing samples are filled only from
+    -- nearby verified widths and always use the narrower neighbor.
+    if i % 2 == 1 or i == n then
     local previousIndex = i > 1 and i-1 or (lane.loop and n or 1)
     local nextIndex = i < n and i+1 or (lane.loop and 1 or n)
     local a, b = lane.points[previousIndex], lane.points[nextIndex]
@@ -188,6 +191,7 @@ local function measureLaneSurfaceBounds(lane)
     if not driveableSurface(centerType, centerType) then return false end
     leftWidths[i] = measureSideWidth(lane.points[i], lx, lz, centerType)
     rightWidths[i] = measureSideWidth(lane.points[i], -lx, -lz, centerType)
+    end
   end
   local leftValid = fillBoundaryGaps(leftWidths, lane.loop)
   local rightValid = fillBoundaryGaps(rightWidths, lane.loop)
