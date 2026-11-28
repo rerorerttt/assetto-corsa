@@ -176,8 +176,10 @@ local function newPersonality(carIndex)
       p.spawnSeeded=true
       p.segIdx=spawnHint.segment
       if spawnHint.boost then
-        p.spawnBoostT=2.25
-        p.spawnBoostTarget=30.0
+        -- A speed setpoint, not a timed throttle pulse: accelerate normally
+        -- under the route planner until reaching traffic speed.
+        p.spawnLaunchActive=true
+        p.spawnLaunchTarget=30.0
       end
       H.log("ROUTE_SEED id=%d seg=%d t=%.3f progress=%.2f boost=%s",
         carIndex,spawnHint.segment,spawnHint.parameter,seededProgress,
@@ -1777,20 +1779,7 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
   gas=gas*p.tractionScale*cornerScale
 
-  -- Respawn launch pulse: a short acceleration assist to bring the car back
-  -- into the traffic stream. Traction and cornering cuts remain authoritative.
-  if safeNumber(p.spawnBoostT)>0 then
-    p.spawnBoostT=math.max(0,p.spawnBoostT-math.max(0,dt or 0))
-    if targetSpeed>speed+1.5 and
-        speed<safeNumber(p.spawnBoostTarget,30.0)-0.8 then
-      gas=math.max(gas,0.92*p.tractionScale*cornerScale)
-      brake=0
-    elseif speed>=safeNumber(p.spawnBoostTarget,26.0)-0.8 then
-      p.spawnBoostT=0
-    end
-  end
-
-  if speed<5 and safeNumber(p.spawnBoostT)<=0 then gas=math.min(gas,0.6) end
+  if speed<5 and not p.spawnLaunchActive then gas=math.min(gas,0.6) end
   if error>=0 then brake=0 end
   p.gas=clamp(gas,0,CFG.MAX_GAS)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)
@@ -2077,17 +2066,23 @@ function Driver.update(carIndex, car, dt)
       not p.offTrackRecovering and safeNumber(p.emergencyBlockedT)<=0 then
     rescueReason="stuck_gas_10s" end
   if rescueReason and p.rescueRetryT<=0 then
-    p.stuck=0
     p.rescueRetryT=5.0
-    local rescued=H.teleportHome and H.teleportHome(carIndex,car) or false
-    H.log("RESCUE_ATTEMPT id=%d reason=%s success=%s elapsed=%.2f",
-      carIndex,rescueReason,tostring(rescued),
-      rescueReason=="traffic_blocked_10s" and safeNumber(p.emergencyBlockedT) or safeNumber(p.offTrackT))
-    if rescued then return end
+    H.log("RESCUE_SUPPRESSED id=%d reason=%s offtrack=%.2f blocked=%.2f; preserving failure state",
+      carIndex,rescueReason,safeNumber(p.offTrackT),safeNumber(p.emergencyBlockedT))
   end
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
+  if p.spawnLaunchActive then
+    local launchTarget=clamp(safeNumber(p.spawnLaunchTarget,30.0),0,30.0)
+    if speed>=launchTarget-0.8 then
+      p.spawnLaunchActive=false
+      H.log("SPAWN_LAUNCH_REACHED id=%d speed=%.1f target=%.1f",
+        carIndex,speed,launchTarget)
+    elseif not p.projectionLost and not p.racingPlanBlocked then
+      targetSpeed=math.max(targetSpeed,launchTarget)
+    end
+  end
   if p.offTrackRecovering and not p.projectionLost then
     targetSpeed=math.min(targetSpeed,8.0)
   end
