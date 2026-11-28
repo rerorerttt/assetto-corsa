@@ -638,11 +638,23 @@ function Converter.load(log)
     return nil,nil,nil,nil,"PLAYER_CAR_UNAVAILABLE"
   end
   local best,bestScore=nil,nil
+  local candidateLanes,scannedSegments=0,0
   if player and player.position and player.look then
     local hx,hz=norm(player.look.x,player.look.z)
+    local playerX,playerY,playerZ=player.position.x,player.position.y,player.position.z
     for _,id in ipairs(graph.laneOrder) do
       local lane=graph.lanes[id]
+      local box=lane.aabb
+      local dx=box and math.max(box.minX-playerX,0,playerX-box.maxX) or 0
+      local dz=box and math.max(box.minZ-playerZ,0,playerZ-box.maxZ) or 0
+      local dy=box and math.max(box.minY-playerY,0,playerY-box.maxY) or 0
+      -- Reject whole lanes outside the local search volume before visiting
+      -- their polyline segments. The old all-lanes scan delayed first spawn
+      -- by traversing every point in a 593-lane Shuto network.
+      if dx*dx+dz*dz<=80.0*80.0 and dy<=4.0 then
+        candidateLanes=candidateLanes+1
       for i=1,#lane.points-1 do
+        scannedSegments=scannedSegments+1
         local a,b=lane.points[i],lane.points[i+1]
         local vx,vz=b.x-a.x,b.z-a.z
         local l2=vx*vx+vz*vz
@@ -666,11 +678,17 @@ function Converter.load(log)
           end
         end
       end
+      end
     end
+    trace("CSP_ACQUIRE_SCAN candidate_lanes=%d scanned_segments=%d total_lanes=%d",
+      candidateLanes,scannedSegments,#graph.laneOrder)
   end
   if not best then
+    trace("CSP_ACQUIRE_FAILED reason=no_same_deck_forward_lane")
     return nil,nil,nil,nil,"NO_CSP_LANE_NEAR_PLAYER"
   end
+  trace("CSP_ACQUIRE_SELECTED lane=%d segment=%d t=%.3f planar=%.2f score=%.2f",
+    best.lane.id,best.segment,best.t,math.sqrt(math.max(0,bestScore)),bestScore)
 
   local nodes,boundsL,boundsR={},{},{}
   local routeLanes,visited={},{}
