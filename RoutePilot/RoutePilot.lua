@@ -327,7 +327,7 @@ local function getVertexCurvature(index)
   if angle<0.02 then return 0 end
   return angle/math.max(0.1,(l1+l2)*0.5)
 end
-local function findNearestSeg(pos,hintSeg,allowGlobal,heading)
+local function findNearestSeg(pos,hintSeg,allowGlobal,heading,directedHeading)
   local nodes=state.nodes; local segs=segmentCount()
   if segs<1 then return 1,0,0 end
   local px,pz=pos.x,pos.z
@@ -350,7 +350,8 @@ local function findNearestSeg(pos,hintSeg,allowGlobal,heading)
     local score=dSq
     if hx then
       local tx,tz=normalize2(vx,vz)
-      local alignment=math.abs(hx*tx+hz*tz)
+      local alignment=hx*tx+hz*tz
+      if not directedHeading then alignment=math.abs(alignment) end
       score=score+12*(1-alignment)
     end
     if score<bestScore then
@@ -648,14 +649,19 @@ local function teleportHome(carIndex,car)
   -- Reuse the car's last route segment to disambiguate nearby track branches.
   local driverState=state.p and state.p[carIndex]
   local hintSeg=driverState and driverState.segIdx or 1
-  local allowGlobal=not (driverState and driverState.routeLocked and driverState.segIdx)
-  local seg,t,routeError=findNearestSeg(car.position,hintSeg,allowGlobal,nil)
-  if not allowGlobal and routeError>15.0 then
-    seg,t,routeError=findNearestSeg(car.position,hintSeg,true,nil)
-  end
+  -- Rescue is rare, so use one global route acquisition instead of the old
+  -- oversized "local" window (25% of the entire route). On large CSP routes
+  -- that window can span kilometres and select a nearby crossing/ramp branch.
+  -- Prefer the authored travel direction, then reject distant projections:
+  -- a failed rescue is safer than teleporting a car onto unrelated terrain.
+  local seg,t,routeError=findNearestSeg(
+    car.position,hintSeg,true,car.look,true)
   local sign=1
-  if routeError>250 then
-    writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f",carIndex,routeError)
+  writeLog("RESCUE_ACQUIRE id=%d seg=%d t=%.3f error=%.1f heading_directed=true",
+    carIndex,seg or -1,t or 0,routeError or math.huge)
+  if not routeError or routeError>35.0 then
+    writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f limit=35.0",
+      carIndex,routeError or math.huge)
     return false
   end
 
