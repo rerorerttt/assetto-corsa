@@ -30,7 +30,14 @@ local STEER_DEAD   = 0.002  -- suppress only sub-resolution steering noise
 local EMERGENCY_TARGET_MAX_SPEED = 1.5 -- m/s: emergency sidestep is only for stopped/crawling leaders
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
-local function lerp(a, b, t) return a + (b - a) * t end
+local function lerp(a, b, t)
+  -- Spawn/adoption can expose partially initialized controller state for one
+  -- frame. A missing interpolation endpoint must never abort AI control.
+  if type(a)~="number" or a~=a or a==math.huge or a==-math.huge then a=0 end
+  if type(b)~="number" or b~=b or b==math.huge or b==-math.huge then b=a end
+  if type(t)~="number" or t~=t or t==math.huge or t==-math.huge then t=0 end
+  return a+(b-a)*clamp(t,0,1)
+end
 local function normalize2(x, z)
   local l = math.sqrt(x * x + z * z)
   if l < 0.00001 then return 0, 1 end
