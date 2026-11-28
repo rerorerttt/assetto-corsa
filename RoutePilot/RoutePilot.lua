@@ -226,6 +226,9 @@ local function loadLine(retryOnly)
       -- controller; they do not need to be native AC AI splines.
       state.loaded=true; state.loadedFromCSP=true
       state.playerRouteInvalid=false
+      state.showWorldLines=true
+      state.spawnDone=false; state.spawnWait=0; state.spawnStable=0
+      state.spawnLastRoster=""; state.spawnedCars={}
       state.cspImportPending=false; state.autoImportAttempts=0
       state.status="CSP: собственный AI, исходные линии Traffic Tool"
       writeLog("CSP_IMPORT_CUSTOM_DRIVER_READY points=%d length=%.1f loop=%s reason=%s lanes=%d",
@@ -244,6 +247,7 @@ local function loadLine(retryOnly)
       state.p={}; state.spawnHints={}; state.spawnedCars={}; state.routeGeometry=nil
       state.loaded=true; state.loadedFromCSP=true
       state.playerRouteInvalid=false
+      state.showWorldLines=true
       state.cspImportPending=false; state.autoImportAttempts=0
       state.status=string.format("CSP: %d точек | %d линий",
         #nodes,state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0)
@@ -549,7 +553,7 @@ local function sampleSpawnRoute(metrics,distance)
 end
 local function snapSpawnToAuthoredLane(position,direction)
   local graph=state.trafficNetwork
-  if not graph then return nil end
+  if not state.loadedFromCSP or not graph or #(graph.laneOrder or {})==0 then return nil end
   local hx,hz=normalize2(direction.x,direction.z)
   local best,bestScore=nil,math.huge
   for _,laneId in ipairs(graph.laneOrder or {}) do
@@ -575,7 +579,9 @@ local function snapSpawnToAuthoredLane(position,direction)
             local planar=math.sqrt(dx*dx+dz*dz)
             local tx,tz=normalize2(vx,vz)
             local alignment=hx*tx+hz*tz
-            if planar<=1.5 and math.abs(dy)<=1.5 and alignment>=0.85 then
+            -- Spawn only on the visible authored yellow Traffic Tool polyline.
+            -- The route sample is never accepted as a fallback destination.
+            if planar<=0.35 and math.abs(dy)<=0.75 and alignment>=0.85 then
               local score=dx*dx+dz*dz+dy*dy*4+(1-alignment)*2
               if score<bestScore then
                 bestScore=score
@@ -612,6 +618,16 @@ end
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone then return end
   if not state.loaded or state.recLine or #state.nodes<2 then return end
+  -- No yellow CSP source network means no legal teleport surface.
+  if not state.loadedFromCSP or not state.trafficNetwork or
+      #(state.trafficNetwork.laneOrder or {})==0 then
+    state.spawnDone=true
+    if not state.spawnGateLogged then
+      state.spawnGateLogged=true
+      writeLog("SPAWN_BLOCKED reason=no_yellow_csp_source_lines")
+    end
+    return
+  end
   local simNow=ac.getSim()
   local gameNow=simNow and safeNumber(simNow.gameTime) or 0
   if gameNow<safeNumber(state.spawnTeleportNextTryAt) then return end
@@ -685,22 +701,20 @@ local function trySpawnTeleport(sim,dt)
       local candidate,candidateDirection,candidateSegment,candidateT=
         sampleSpawnRoute(metrics,startDistance+(order-1)*gap+advance)
       if not candidate then break end
-      if state.loadedFromCSP then
-        snapped=snapSpawnToAuthoredLane(candidate,candidateDirection)
-        if snapped then
-          position,direction=snapped.position,snapped.direction
-          routeSegment,routeParameter=candidateSegment,candidateT
-          break
-        end
-      else
-        position,direction=candidate,candidateDirection
+      snapped=snapSpawnToAuthoredLane(candidate,candidateDirection)
+      if snapped then
+        position,direction=snapped.position,snapped.direction
         routeSegment,routeParameter=candidateSegment,candidateT
+        writeLog("SPAWN_LANE_LOCK id=%d lane=%s segment=%d t=%.3f planar_error=%.3f",
+          carIndex,tostring(snapped.lane),snapped.segment,snapped.t,snapped.error)
         break
       end
     end
     if position and direction then
       -- RoutePilot controls the car itself. Teleport directly to the imported
       -- directed Traffic Tool line; no native AI spline is assigned.
+      -- position is accepted only from snapSpawnToAuthoredLane(); never use
+      -- the interpolated RoutePilot route point as a teleport destination.
       local spawnDir=vec3(-direction.x,-direction.y,-direction.z)
       local simNow=ac.getSim()
       local spawnGameTime=simNow and safeNumber(simNow.gameTime) or 0
