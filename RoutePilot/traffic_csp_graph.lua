@@ -386,6 +386,8 @@ function Graph.build(lanes, intersectionDefs, log)
         }
         inter.movements[#inter.movements + 1] = continuation
         graph.movements[#graph.movements + 1] = continuation
+        link.inEdge.nextMovement = link.inEdge.nextMovement or {}
+        link.inEdge.nextMovement[link.outEdge.id] = continuation
       end
     end
   end
@@ -484,6 +486,8 @@ function Graph.build(lanes, intersectionDefs, log)
               inter.movements[#inter.movements + 1] = movement
               graph.movements[#graph.movements + 1] = movement
               incoming.inEdge.nextEdges[#incoming.inEdge.nextEdges + 1] = outgoing.outEdge
+              incoming.inEdge.nextMovement = incoming.inEdge.nextMovement or {}
+              incoming.inEdge.nextMovement[outgoing.outEdge.id] = movement
               incoming.inEdge.transitionPenalty = incoming.inEdge.transitionPenalty or {}
               local directionDot = incoming.fromDir.x*outgoing.toDir.x +
                 incoming.fromDir.y*outgoing.toDir.y + incoming.fromDir.z*outgoing.toDir.z
