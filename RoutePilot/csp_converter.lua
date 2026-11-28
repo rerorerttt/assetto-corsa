@@ -673,15 +673,15 @@ function Converter.load(log)
     local candidate=graph.lanes[edge.to]
     local bestLaneS=lane.cumulative[best.segment] or 0
     if candidate and bestLaneS>=edge.fromStart and bestLaneS<=edge.fromEnd then
-      local lo=max(0,edge.toStart-12)
-      local hi=min(candidate.length,edge.toEnd+12)
+      local lo=math.max(0,edge.toStart-12)
+      local hi=math.min(candidate.length,edge.toEnd+12)
       local targetS=clamp((edge.toStart+edge.toEnd)*0.5,lo,hi)
       local targetPoint=pointAt(candidate,targetS)
       local targetTangent=tangentAt(candidate,targetS)
       local gap=dist(sourcePoint,targetPoint)
       local alignment=sourceTangent.x*targetTangent.x+
         sourceTangent.z*targetTangent.z
-      local dy=abs(sourcePoint.y-targetPoint.y)
+      local dy=math.abs(sourcePoint.y-targetPoint.y)
       local score=gap+(1-alignment)*12+dy*4
       if gap>=2.0 and gap<=7.5 and alignment>=0.94 and dy<=1.5 and
           (not pairScore or score<pairScore) then
@@ -698,14 +698,14 @@ function Converter.load(log)
     local first,last=1,#candidate.points-1
     if hintS then
       local lo,hi=1,#candidate.cumulative-1
-      local target=max(0,hintS-24)
+      local target=math.max(0,hintS-24)
       while lo<hi do local mid=math.floor((lo+hi)*0.5)
         if candidate.cumulative[mid+1]<target then lo=mid+1 else hi=mid end end
       first=lo;lo,hi=first,#candidate.cumulative-1
-      target=min(candidate.length,hintS+24)
+      target=math.min(candidate.length,hintS+24)
       while lo<hi do local mid=math.floor((lo+hi)*0.5)
         if candidate.cumulative[mid]<target then lo=mid+1 else hi=mid end end
-      last=max(first,lo)
+      last=math.max(first,lo)
     end
     local bestQ,bestD=nil,nil
     for si=first,last do
@@ -724,7 +724,7 @@ function Converter.load(log)
         local alignment=sourceTx*tx+sourceTz*tz
         local score=distance2+(1-alignment)*(1-alignment)*16+
           (pos.y-y)*(pos.y-y)*4
-        if alignment>=0.94 and abs(pos.y-y)<=1.5 and
+        if alignment>=0.94 and math.abs(pos.y-y)<=1.5 and
             (not bestD or score<bestD) then
           bestD=score
           bestQ={x=x,y=y,z=z,s=candidate.cumulative[si]+math.sqrt(ll)*t,
