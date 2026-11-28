@@ -500,32 +500,36 @@ function Converter.load(log)
   local graph,err=Converter.loadNetwork(log)
   if not graph then return nil,nil,nil,nil,err end
   local player=ac.getCar(0)
-  if not player or not player.position or not player.look then
-    return nil,nil,nil,nil,"PLAYER_CAR_UNAVAILABLE"
-  end
-  local hx,hz=norm(player.look.x,player.look.z)
   local best,bestScore=nil,nil
-  for _,id in ipairs(graph.laneOrder) do
-    local lane=graph.lanes[id]
-    for i=1,#lane.points-1 do
-      local a,b=lane.points[i],lane.points[i+1]
-      local vx,vz=b.x-a.x,b.z-a.z
-      local l2=vx*vx+vz*vz
-      if l2>1e-8 then
-        local t=clamp(((player.position.x-a.x)*vx+(player.position.z-a.z)*vz)/l2,0,1)
-        local q={x=a.x+vx*t,y=a.y+(b.y-a.y)*t,z=a.z+vz*t}
-        local dx,dz=player.position.x-q.x,player.position.z-q.z
-        local tx,tz=norm(vx,vz)
-        local alignment=hx*tx+hz*tz
-        local score=dx*dx+dz*dz+(1-alignment)*(1-alignment)*25
-        if alignment>0.15 and math.sqrt(dx*dx+dz*dz)<80 and
-          (not bestScore or score<bestScore) then
-          bestScore=score; best={lane=lane,segment=i,t=t}
+  if player and player.position and player.look then
+    local hx,hz=norm(player.look.x,player.look.z)
+    for _,id in ipairs(graph.laneOrder) do
+      local lane=graph.lanes[id]
+      for i=1,#lane.points-1 do
+        local a,b=lane.points[i],lane.points[i+1]
+        local vx,vz=b.x-a.x,b.z-a.z
+        local l2=vx*vx+vz*vz
+        if l2>1e-8 then
+          local t=clamp(((player.position.x-a.x)*vx+(player.position.z-a.z)*vz)/l2,0,1)
+          local q={x=a.x+vx*t,y=a.y+(b.y-a.y)*t,z=a.z+vz*t}
+          local dx,dz=player.position.x-q.x,player.position.z-q.z
+          local tx,tz=norm(vx,vz)
+          local alignment=hx*tx+hz*tz
+          local score=dx*dx+dz*dz+(1-alignment)*(1-alignment)*25
+          if alignment>0.15 and math.sqrt(dx*dx+dz*dz)<80 and
+            (not bestScore or score<bestScore) then
+            bestScore=score; best={lane=lane,segment=i,t=t}
+          end
         end
       end
     end
   end
-  if not best then return nil,nil,nil,nil,"NO_DIRECTED_CSP_LANE_NEAR_PLAYER" end
+  -- Import must not depend on where the player spawned. This compatibility
+  -- route is only a UI/legacy placeholder; AI uses the complete graph.
+  if not best and #graph.laneOrder>0 then
+    best={lane=graph.lanes[graph.laneOrder[1]],segment=1,t=0}
+  end
+  if not best then return nil,nil,nil,nil,"NO_VALID_CSP_LANES" end
   local lane=best.lane
   local nodes={}
   for i=best.segment,#lane.points do
