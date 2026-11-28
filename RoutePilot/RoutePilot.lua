@@ -612,8 +612,51 @@ local function trySpawnCSPTraffic(sim,dt,route)
       if not valid then break end
     end
     if valid and #candidatePlans==#aiCars then
-      plans=candidatePlans
-      trafficCSP.graphSpawnGap=minGap
+      -- Validate the complete teleport transaction before moving any car.
+      -- Ignore current positions of cars that are part of this transaction,
+      -- but keep the player and all non-moving active cars as hard obstacles.
+      local movingCars={}
+      for ci=1,#aiCars do movingCars[aiCars[ci]]=true end
+      local clear=true
+      local conflictA,conflictB=nil,nil
+      local clearSq=CFG.SAFE_RESPAWN_CLEAR*CFG.SAFE_RESPAWN_CLEAR
+      for pi=1,#candidatePlans do
+        local sample=candidatePlans[pi].sample
+        for ci=0,sim.carsCount-1 do
+          if not movingCars[ci] then
+            local other=ac.getCar(ci)
+            if other and other.isActive then
+              local dx=other.position.x-sample.x
+              local dz=other.position.z-sample.z
+              if dx*dx+dz*dz<clearSq then
+                clear=false
+                conflictA,conflictB=candidatePlans[pi].index,ci
+                break
+              end
+            end
+          end
+        end
+        if not clear then break end
+        for pj=1,pi-1 do
+          local previous=candidatePlans[pj].sample
+          local dx=previous.x-sample.x
+          local dz=previous.z-sample.z
+          if dx*dx+dz*dz<clearSq then
+            clear=false
+            conflictA,conflictB=candidatePlans[pi].index,candidatePlans[pj].index
+            break
+          end
+        end
+        if not clear then break end
+      end
+      if clear then
+        plans=candidatePlans
+        trafficCSP.graphSpawnGap=minGap
+      else
+        writeLog("CSP_SPAWN_PLAN_REJECT reason=occupied_destination car=%d other=%d routes=%d",
+          conflictA or -1,conflictB or -1,routeCount)
+        routeCount=routeCount-1
+      end
     else
       routeCount=routeCount-1
     end
