@@ -1382,6 +1382,14 @@ function windowMain(dt)
               trafficCSP.previewRoute.length or 0, #trafficCSP.previewRoute.nodes,
               #trafficCSP.previewRoute.edges,
               trafficCSP.previewRoute.loop and "замкнут" or "открыт"))
+            if trafficCSP.graphSpawnDone then
+              ui.text(string.format("CSP AI: поток активен | машин %d | интервал %.1f м",
+                trafficCSP.graphSpawnCount or 0, trafficCSP.graphSpawnGap or 0))
+            elseif trafficCSP.graphSpawnFailed then
+              ui.text("CSP AI: " .. tostring(trafficCSP.graphSpawnFailed))
+            elseif trafficCSP.previewRoute.loop then
+              ui.text("CSP AI: ожидание активных AI-машин")
+            end
           elseif trafficCSP.previewRouteError then
             ui.text("CSP Route: " .. tostring(trafficCSP.previewRouteError))
           end
