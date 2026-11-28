@@ -662,10 +662,9 @@ function Converter.load(log)
       end
     end
   end
-  if not best and #graph.laneOrder>0 then
-    best={lane=graph.lanes[graph.laneOrder[1]],segment=1,t=0}
-  end
-  if not best then return nil,nil,nil,nil,"NO_VALID_CSP_LANES" end
+  -- Never attach to an arbitrary first lane when the player is not near
+  -- a direction-compatible CSP lane. Let the legacy saved route be fallback.
+  if not best then return nil,nil,nil,nil,"NO_NEARBY_DIRECTION_COMPATIBLE_CSP_LANE" end
 
   local nodes,boundsL,boundsR={},{},{}
   local routeLanes,visited={},{}
