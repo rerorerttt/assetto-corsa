@@ -21,8 +21,24 @@ end
 local function project(l,pos,hint,window)
  local first,last=1,#l.points-1
  if hint and window then
-  while first<last and l.cumulative[first+1]<hint-window do first=first+1 end
-  last=first;while last<#l.points-1 and l.cumulative[last]<hint+window do last=last+1 end
+  -- Binary-search both ends of the local projection window. The previous
+  -- linear walk from point 1 made every car projection O(route length), and
+  -- occupancy repeats that work for every other car on every frame.
+  local c=l.cumulative
+  local lo,hi=1,#c-1
+  local target=max(0,hint-window)
+  while lo<hi do
+   local mid=math.floor((lo+hi)*0.5)
+   if c[mid+1]<target then lo=mid+1 else hi=mid end
+  end
+  first=lo
+  lo,hi=first,#c-1
+  target=min(l.length,hint+window)
+  while lo<hi do
+   local mid=math.floor((lo+hi+1)*0.5)
+   if c[mid]<target then lo=mid else hi=mid-1 end
+  end
+  last=max(first,lo)
  end
  local best,bd
  for i=first,last do
