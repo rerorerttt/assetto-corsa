@@ -1035,6 +1035,11 @@ render.on('main.track.transparent', function()
         render.debugLine(vec3(previous.x,previous.y+0.12,previous.z),
           vec3(last.x,last.y+0.12,last.z),rgbm(0.0,0.9,1.0,1.0))
       end
+      if state.loopRoute then
+        local first=state.nodes[1]
+        render.debugLine(vec3(last.x,last.y+0.12,last.z),
+          vec3(first.x,first.y+0.12,first.z),rgbm(0.0,0.9,1.0,1.0))
+      end
       return
     end
     local seg=select(1,findNearestSeg(player.position,1))
@@ -1224,6 +1229,13 @@ local function drawMapInRect(q0,q1)
       local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
       if prev and segVisible(prev.x,prev.y,point.x,point.y) then
         ui.drawLine(prev,point,rgbm(0.0,0.9,1.0,1.0),3)
+      end
+      if state.loopRoute then
+        local first=state.nodes[1]
+        local firstPoint=vec2(mx+(first.x-cx)*scale,my+(first.z-cz)*scale)
+        if segVisible(point.x,point.y,firstPoint.x,firstPoint.y) then
+          ui.drawLine(point,firstPoint,rgbm(0.0,0.9,1.0,1.0),3)
+        end
       end
     end
   else
