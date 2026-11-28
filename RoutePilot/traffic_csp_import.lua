@@ -16,6 +16,7 @@ local DOWN = vec3(0, -1, 0)
 local SAMPLE_STEP = 1.5
 local RAY_START_OFFSET = 2.0
 local RAY_LENGTH = 4.0
+local MAX_SURFACE_SNAP = 1.5
 local MIN_LANE_POINTS = 2
 
 local function finite(v)
@@ -90,6 +91,9 @@ local function projectToTrack(p)
   end
   local projected = p:clone()
   projected.y = origin.y - distance
+  if math.abs(projected.y - p.y) > MAX_SURFACE_SNAP then
+    return nil, nil, surfaceType or 'unclassified', 'surface_height_mismatch'
+  end
   return projected, normal, surfaceType or 'unclassified', nil
 end
 
