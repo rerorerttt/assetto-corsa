@@ -189,13 +189,14 @@ local function measureLaneSurfaceBounds(lane)
     leftWidths[i] = measureSideWidth(lane.points[i], lx, lz, centerType)
     rightWidths[i] = measureSideWidth(lane.points[i], -lx, -lz, centerType)
   end
-  if not fillBoundaryGaps(leftWidths, lane.loop) or
-      not fillBoundaryGaps(rightWidths, lane.loop) then
-    return false
-  end
-  lane.surfaceBounds = { left = leftWidths, right = rightWidths }
-  lane.surfaceBoundsValid = true
-  return true
+  local leftValid = fillBoundaryGaps(leftWidths, lane.loop)
+  local rightValid = fillBoundaryGaps(rightWidths, lane.loop)
+  lane.surfaceBounds = {
+    left = leftWidths, right = rightWidths,
+    leftValid = leftValid, rightValid = rightValid
+  }
+  lane.surfaceBoundsValid = leftValid and rightValid
+  return lane.surfaceBoundsValid
 end
 
 function Importer.new(log)
