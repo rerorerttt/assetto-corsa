@@ -325,6 +325,31 @@ local function loadLine(retryOnly)
   if CSPConverter then
     local ok, nodes, loop, boundsL, boundsR, infoOrError =
       pcall(CSPConverter.load, writeLog)
+    if ok and type(nodes)=="table" and #nodes>=2 and
+        type(infoOrError)=="table" and infoOrError.previewOnly==true then
+      -- Show the actual imported CSP geometry even though it is not safe for
+      -- native AI or spawning. This keeps the map/world diagnostics available
+      -- without silently turning a broken/open chain into a drivable route.
+      state.nodes=nodes
+      state.nativeSplinePath=nil; state.nativeSplineSignature=nil
+      state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}
+      state.nativeSplineRetryAt={}; state.nativeSplineSpawnNextTryAt=0
+      state.trafficNetwork=infoOrError.network
+      state.loopRoute=loop==true
+      state.boundsL=type(boundsL)=="table" and boundsL or {}
+      state.boundsR=type(boundsR)=="table" and boundsR or {}
+      state.p={}; state.spawnHints={}; state.spawnedCars={}; state.routeGeometry=nil
+      state.loaded=false; state.loadedFromCSP=true
+      state.playerRouteInvalid=true
+      state.cspImportPending=true; state.autoImportAttempts=0
+      state.status="CSP: предпросмотр, маршрут не замкнут/короткий"
+      writeLog("CSP_IMPORT_PREVIEW_ONLY points=%d length=%.1f loop=%s reason=%s lanes=%d",
+        #nodes,safeNumber(infoOrError.routeLength),tostring(loop==true),
+        tostring(infoOrError.rejectReason),
+        #(infoOrError.network and infoOrError.network.laneOrder or {}))
+      flushLog()
+      return false
+    end
     if ok and type(nodes)=="table" and #nodes>=2 then
       state.nodes=nodes
       state.nativeSplinePath=nil; state.nativeSplineSignature=nil
