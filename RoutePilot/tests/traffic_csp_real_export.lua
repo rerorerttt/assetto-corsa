@@ -72,7 +72,7 @@ for i=1,#importer.graph.edges do
   local path=Graph.loopPath(importer.graph,importer.graph.edges[i],2000,20000)
   if path then cycleStarts=cycleStarts+1 end
 end
-local openRoutes,bestOpenLength,endKinds=0,0,{}
+local openRoutes,bestOpenLength,endKinds,openGroups=0,0,{},{}
 for i=1,#importer.graph.edges do
   local route=Routes.build(importer.graph,nil,importer.graph.edges[i],
     importer.graph.edges[i].from,{minLength=250})
@@ -89,6 +89,7 @@ for i=1,#importer.graph.edges do
     bestOpenLength=math.max(bestOpenLength,route.length or 0)
     local terminalKind=route.edges[#route.edges].toNode.kind
     endKinds[terminalKind]=(endKinds[terminalKind] or 0)+1
+    openGroups[importer.roads.laneGroups[route.startEdge.lane]]=true
   end
 end
 assert(cycleStarts==0,"fixture unexpectedly gained a directed cycle; review route selection assumptions")
@@ -96,10 +97,14 @@ assert(openRoutes>0 and bestOpenLength>=250,
   "fixture has no usable open route for one-way traffic fallback")
 assert(endKinds.lane_end==openRoutes,
   "open routes must terminate at a real lane end, not at an unserved intersection")
+local openGroupCount=0
+for _ in pairs(openGroups) do openGroupCount=openGroupCount+1 end
+assert(openGroupCount>=4,
+  "representative export has too few independent road groups for multi-route traffic")
 
 for kind,count in pairs(endKinds) do print("OPEN_ROUTE_END",kind,count) end
 print(string.format(
-  "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts, %d valid open routes (max %.0f m)",
+  "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts, %d valid open routes across %d road groups (max %.0f m)",
   importer.stats.usable,importer.stats.lanes,#importer.intersections,
   #importer.graph.edges,importer.graph.stats.intersectionLinks,
-  importer.graph.stats.movements,cycleStarts,openRoutes,bestOpenLength))
+  importer.graph.stats.movements,cycleStarts,openRoutes,openGroupCount,bestOpenLength))
