@@ -649,30 +649,46 @@ local function teleportHome(carIndex,car)
   end
   if #state.nodes<2 or not car or not car.position then return false end
 
-  -- Recovery direction is fixed by the recorded line order, never by
-  -- the vehicle's current heading or velocity after a spin/collision.
-  -- Reuse the car's last route segment to disambiguate nearby track branches.
-  local driverState=state.p and state.p[carIndex]
-  local hintSeg=driverState and driverState.segIdx or 1
-  -- Rescue is rare, so use one global route acquisition instead of the old
-  -- oversized "local" window (25% of the entire route). On large CSP routes
-  -- that window can span kilometres and select a nearby crossing/ramp branch.
-  -- Prefer the authored travel direction, then reject distant projections:
-  -- a failed rescue is safer than teleporting a car onto unrelated terrain.
+  -- Recovery is anchored to the player's live position, never to the stranded
+  -- AI car. An AI that has fallen/frozen outside the map has no trustworthy
+  -- spatial reference; projecting that position onto a 200 km route can select
+  -- an unrelated segment (often the same remote segment for every AI).
+  local player=ac.getCar(0)
+  if not player or not player.isActive or not player.position or not player.look then
+    writeLog("RESCUE_FAILED id=%d reason=player_unavailable",carIndex)
+    return false
+  end
+
+  local playerState=state.playerTelemetry
+  local hintSeg=playerState and playerState.segIdx or 1
   local seg,t,routeError=findNearestSeg(
-    car.position,hintSeg,true,car.look,true,true)
-  local sign=1
-  writeLog("RESCUE_ACQUIRE id=%d seg=%d t=%.3f error=%.1f heading_directed=true",
-    carIndex,seg or -1,t or 0,routeError or math.huge)
-  if not routeError or routeError>35.0 then
-    writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f limit=35.0",
+    player.position,hintSeg,true,player.look,true,true)
+  if not routeError or routeError>15.0 then
+    writeLog("RESCUE_FAILED id=%d reason=player_not_on_route error=%.1f limit=15.0",
       carIndex,routeError or math.huge)
     return false
   end
 
-  -- Never search backward along the recorded line. Candidate points are
-  -- sampled strictly in increasing route-node order, beyond the obstruction.
-  for distance=20,320,10 do
+  -- Determine which way along the imported route is physically in front of
+  -- the player. This also handles routes whose node order is opposite to the
+  -- current driving direction.
+  local a,b=state.nodes[seg],segEnd(seg)
+  local tx,tz=normalize2(b.x-a.x,b.z-a.z)
+  local px,pz=normalize2(player.look.x,player.look.z)
+  local alignment=tx*px+tz*pz
+  if math.abs(alignment)<0.25 then
+    writeLog("RESCUE_FAILED id=%d reason=player_heading_ambiguous alignment=%.3f seg=%d",
+      carIndex,alignment,seg)
+    return false
+  end
+  local sign=alignment>=0 and 1 or -1
+  writeLog("RESCUE_PLAYER_ANCHOR id=%d player=(%.2f,%.2f,%.2f) seg=%d t=%.3f error=%.2f alignment=%.3f sign=%d",
+    carIndex,player.position.x,player.position.y,player.position.z,
+    seg,t,routeError,alignment,sign)
+
+  -- Every recovery point is sampled ahead of the player on the same route
+  -- branch. Never use the stranded AI's coordinates to choose a destination.
+  for distance=25,145,8 do
     local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
     if pos then
       local nextPos=walkLineSigned(sampleSeg,sampleT,3.0,sign)
@@ -686,18 +702,19 @@ local function teleportHome(carIndex,car)
             state.p[carIndex]=nil
             state.rescueWatch=state.rescueWatch or {}
             state.rescueWatch[carIndex]={cooldown=3.0}
-            writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=RECORDED_LINE_FORWARD sign=%d pos=(%.2f,%.2f,%.2f)",
-              carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
+            writeLog("RESCUE_FORWARD id=%d distance_ahead_player=%.1f player_route_error=%.1f seg=%d t=%.3f sign=%d pos=(%.2f,%.2f,%.2f)",
+              carIndex,distance,routeError,sampleSeg,sampleT,sign,
+              safePos.x,safePos.y,safePos.z)
             flushLog()
             return true
           end
-          writeLog("RESCUE_FORWARD_FAILED id=%d distance=%.1f error=%s",
+          writeLog("RESCUE_FORWARD_FAILED id=%d distance_ahead_player=%.1f error=%s",
             carIndex,distance,tostring(result))
         end
       end
     end
   end
-  writeLog("RESCUE_FAILED id=%d reason=no_clear_forward_point route_error=%.1f",
+  writeLog("RESCUE_FAILED id=%d reason=no_clear_point_ahead_of_player player_route_error=%.1f",
     carIndex,routeError)
   flushLog()
   return false
