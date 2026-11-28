@@ -26,9 +26,11 @@ local okTrafficCSP, TrafficCSP = pcall(require, "traffic_csp_import")
 if not okTrafficCSP or type(TrafficCSP) ~= "table" or type(TrafficCSP.new) ~= "function" then TrafficCSP = nil end
 local okCSPGraph, CSPGraph = pcall(require, "traffic_csp_graph")
 if not okCSPGraph or type(CSPGraph) ~= "table" or type(CSPGraph.nearestEdge) ~= "function" or
-    type(CSPGraph.nearestEdges) ~= "function" then CSPGraph = nil end
+    type(CSPGraph.nearestEdges) ~= "function" or type(CSPGraph.loopPath) ~= "function" or
+    type(CSPGraph.sampleLane) ~= "function" or type(CSPGraph.directionAt) ~= "function" then CSPGraph = nil end
 local okCSPRoutes, CSPRoutes = pcall(require, "traffic_csp_route")
-if not okCSPRoutes or type(CSPRoutes) ~= "table" or type(CSPRoutes.build) ~= "function" then CSPRoutes = nil end
+if not okCSPRoutes or type(CSPRoutes) ~= "table" or type(CSPRoutes.build) ~= "function" or
+    type(CSPRoutes.sample) ~= "function" then CSPRoutes = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
