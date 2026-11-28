@@ -1,0 +1,39 @@
+name: RoutePilot Lua validation
+
+on:
+  push:
+    paths:
+      - "RoutePilot/**/*.lua"
+      - ".github/workflows/routepilot-lua-check.yml"
+  pull_request:
+    paths:
+      - "RoutePilot/**/*.lua"
+      - ".github/workflows/routepilot-lua-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lua-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install Lua 5.1 (CSP-compatible syntax)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1
+      - name: Parse every RoutePilot Lua module
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find RoutePilot -type f -name '*.lua' -print0)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Lua files found"
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            echo "Checking $file"
+            luac5.1 -p "$file"
+          done
