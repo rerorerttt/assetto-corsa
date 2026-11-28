@@ -1013,6 +1013,29 @@ render.on('main.track.transparent', function()
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
+    if state.trafficNetwork then
+      -- Render the source CSP lane network as-is; boundary geometry is omitted.
+      for _,laneId in ipairs(state.trafficNetwork.laneOrder or {}) do
+        local lane=state.trafficNetwork.lanes[laneId]
+        local pts=lane and lane.points or {}
+        if #pts>=2 then
+          local previous=pts[1]
+          local accumulated=0
+          for k=2,#pts do
+            local current=pts[k]
+            local dx,dz=current.x-previous.x,current.z-previous.z
+            accumulated=accumulated+math.sqrt(dx*dx+dz*dz)
+            if accumulated>=6.0 or k==#pts then
+              render.debugLine(vec3(pts[1].x,pts[1].y+0.05,pts[1].z),
+                vec3(current.x,current.y+0.05,current.z),YELLOW)
+              pts[1]=current
+              accumulated=0
+            end
+          end
+        end
+      end
+      return
+    end
     local seg=select(1,findNearestSeg(player.position,1))
     local first,last
     local maxBack=isRec and CFG.PREVIEW_BACK or 90.0
