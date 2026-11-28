@@ -775,7 +775,7 @@ function Converter.load(log)
         if not q then pairValid=false;break end
         projected[i]={x=(sample.p.x+q.x)*0.5,
           y=(sample.p.y+q.y)*0.5,z=(sample.p.z+q.z)*0.5,
-          half=q.distance*0.5}
+          half=q.distance*0.5+1.75}
         hintS=q.s
       end
     end
