@@ -849,6 +849,45 @@ function script.update(dt)
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
+    -- Rebuild the directed CSP route when the player is teleported to another
+    -- part of a large network. The original route is intentionally rooted at
+    -- the player's position at import time; continuing to use it after a
+    -- multi-kilometre teleport leaves every AI on a stale route and can send
+    -- rescue/spawn logic to unrelated coordinates.
+    if player and player.isActive and state.loaded and state.loadedFromCSP and
+        not state.recLine and player.position then
+      local lastX,lastZ=state.lastPlayerWorldX,state.lastPlayerWorldZ
+      if lastX~=nil and lastZ~=nil then
+        local dx,dz=player.position.x-lastX,player.position.z-lastZ
+        local jump=math.sqrt(dx*dx+dz*dz)
+        if jump>150.0 then
+          writeLog("PLAYER_TELEPORT_DETECTED jump=%.1f; rebuilding CSP route",jump)
+          local oldState={
+            nodes=state.nodes,boundsL=state.boundsL,boundsR=state.boundsR,
+            trafficNetwork=state.trafficNetwork,loadedFromCSP=state.loadedFromCSP,
+            loaded=state.loaded,loopRoute=state.loopRoute,
+            routeGeometry=state.routeGeometry,routeLength=state.routeLength,
+            routeMetricCount=state.routeMetricCount,routeMetricLoop=state.routeMetricLoop,
+            p=state.p,spawnHints=state.spawnHints,status=state.status,
+          }
+          local rebuilt=loadLine(true)
+          if rebuilt then
+            driverReady=false
+            state.spawnWait=0
+            state.spawnStable=0
+            state.spawnLastRoster=""
+            state.spawnDone=false
+            writeLog("PLAYER_TELEPORT_ROUTE_REBUILT points=%d",#state.nodes)
+            flushLog()
+          else
+            for key,value in pairs(oldState) do state[key]=value end
+            writeLog("PLAYER_TELEPORT_ROUTE_REBUILD_FAILED; retaining previous route")
+          end
+        end
+      end
+      state.lastPlayerWorldX=player.position.x
+      state.lastPlayerWorldZ=player.position.z
+    end
     if state.cspImportPending and not state.loaded then
       state.autoImportAccum=state.autoImportAccum+dt
       if state.autoImportAccum>=1.0 then
