@@ -818,14 +818,14 @@ function Converter.load(log)
     for _,edge in ipairs(lane.adjacent or {}) do
       local target=graph.lanes[edge.to]
       local fromEnd=finite(edge.fromEnd) and edge.fromEnd or nil
-      local toStart=finite(edge.toStart) and edge.toStart or nil
-      if target and fromEnd and toStart and fromEnd>=fromS+8.0 and
+      local toEnd=finite(edge.toEnd) and edge.toEnd or nil
+      if target and fromEnd and toEnd and fromEnd>=fromS+8.0 and
         not visited[target.id] and
-        targetHasForwardContinuation(target,toStart,lane.id,fromEnd) then
+        targetHasForwardContinuation(target,toEnd,lane.id,fromEnd) then
         local extent=fromEnd-math.max(fromS,edge.fromStart or fromS)
         adjacent[#adjacent+1]={from=lane.id,to=target.id,fromS=fromEnd,
-          toS=clamp(toStart,0,target.length),gap=dist(
-            pointAt(lane,fromEnd),pointAt(target,clamp(toStart,0,target.length))),
+          toS=clamp(toEnd,0,target.length),gap=dist(
+            pointAt(lane,fromEnd),pointAt(target,clamp(toEnd,0,target.length))),
           alignment=1,kind="lane_change",_extent=extent}
       end
     end
