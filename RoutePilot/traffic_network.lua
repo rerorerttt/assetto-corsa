@@ -53,9 +53,10 @@ local function roleRules(data)
   return result
 end
 
--- Returns a graph keyed by the original numeric lane IDs. An edge exists only
--- when CSP explicitly supplies a trajectoryAttributes transition; proximity
--- between two polylines is never treated as proof of connectivity.
+-- Returns the authored directed lane records keyed by their original IDs.
+-- trajectoryAttributes is sparse optional transition metadata in traffic.json,
+-- not a complete connectivity allow-list. The converter separately validates
+-- lane passages through CSP intersection shapes and disallowedTrajectories.
 function Network.build(data)
   if type(data) ~= "table" or type(data.lanes) ~= "table" then
     return nil, "TRAFFIC_JSON_MISSING_LANES"
@@ -123,7 +124,8 @@ function Network.build(data)
     if type(intersection) == "table" then
       local record = { id = intersection.id, name = intersection.name,
         points = {}, transitions = 0, source = intersection,
-        trajectoryAttributes = type(intersection.trajectoryAttributes) == "table" and intersection.trajectoryAttributes or {} }
+        trajectoryAttributes = type(intersection.trajectoryAttributes) == "table" and intersection.trajectoryAttributes or {},
+        disallowedTrajectories = type(intersection.disallowedTrajectories) == "table" and intersection.disallowedTrajectories or {} }
       if type(intersection.points) == "table" then
         for j = 1, #intersection.points do
           local p = point3(intersection.points[j])
