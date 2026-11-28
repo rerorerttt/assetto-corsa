@@ -1763,10 +1763,11 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   -- into the traffic stream. Traction and cornering cuts remain authoritative.
   if safeNumber(p.spawnBoostT)>0 then
     p.spawnBoostT=math.max(0,p.spawnBoostT-math.max(0,dt or 0))
-    if speed<safeNumber(p.spawnBoostTarget,26.0)-0.8 then
+    if targetSpeed>speed+1.5 and
+        speed<safeNumber(p.spawnBoostTarget,26.0)-0.8 then
       gas=math.max(gas,0.92*p.tractionScale*cornerScale)
       brake=0
-    else
+    elseif speed>=safeNumber(p.spawnBoostTarget,26.0)-0.8 then
       p.spawnBoostT=0
     end
   end
