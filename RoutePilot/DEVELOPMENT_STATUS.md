@@ -369,3 +369,11 @@ Additional local check: the environment's `texlua` executable was found and used
 - The workflow has been committed but its GitHub Actions run has not yet been observed; do not report the CI check as passed until a completed run is available.
 - This gate catches syntax errors only. It does not emulate CSP APIs, validate traffic.json against every track, or replace in-game testing.
 - Release blockers remain unchanged: complete app load in CSP, real-track surface projection and lane-boundary validation, route continuity, spawn/recycle visibility, cross-route intersection arbitration, multi-car passing, recovery behavior, and sustained-session stability.
+
+## 2026-11-28 loop-intersection seam regression
+
+- Fixed a topology hole for a valid closed lane whose intersection interval straddles the lane's distance-zero seam. The graph previously split the interval into first/last links but did not connect their shared self-edge as a cycle; loopPath() could therefore reject a physically closed lane.
+- The graph now marks the seam self-edge as a wrap cycle and attaches explicit continuation metadata from the last intersection span to the first. Route sampling appends both seam spans, preserving the road geometry through the intersection rather than relying on a long implicit closure chord.
+- Added RoutePilot/tests/traffic_csp_loop_seam.lua, a synthetic closed-lane/intersection regression that builds the graph, checks the self-cycle, runs loop search, and builds a closed route.
+- GitHub Actions run for commit 1f53966658c3a3a8abcef1dfda63fb8a38699c4d passed: all RoutePilot Lua files parsed with Lua 5.1 and the synthetic regression passed.
+- This validates the isolated topology case only. Real traffic.json variants, CSP surface projection, route selection and vehicle behavior still require track/runtime testing.
