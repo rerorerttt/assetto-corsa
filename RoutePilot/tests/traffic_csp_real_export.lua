@@ -31,6 +31,7 @@ _G.physics={
 }
 
 local Importer=require("traffic_csp_import")
+local Graph=require("traffic_csp_graph")
 local importer=Importer.new()
 assert(importer:load(),"representative CSP export failed to import: "..tostring(importer.error))
 assert(importer.stats.lanes==25,"unexpected lane count in fixture")
@@ -55,7 +56,13 @@ assert(main and main.speedLimit==80 and main.priority==0,
 assert(highway and highway.speedLimit==90 and highway.priority==4,
   "Highway lane role was not resolved to 90 km/h / priority 4")
 
+local cycleStarts=0
+for i=1,#importer.graph.edges do
+  local path=Graph.loopPath(importer.graph,importer.graph.edges[i],2000,20000)
+  if path then cycleStarts=cycleStarts+1 end
+end
 print(string.format(
-  "PASS: real CSP export imported %d/%d lanes, %d intersections, %d links, %d movements and role metadata",
+  "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts",
   importer.stats.usable,importer.stats.lanes,#importer.intersections,
-  importer.graph.stats.intersectionLinks,importer.graph.stats.movements))
+  #importer.graph.edges,importer.graph.stats.intersectionLinks,
+  importer.graph.stats.movements,cycleStarts))
