@@ -59,7 +59,15 @@ function Driver.setup(cfg, st, helpers)
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
-  if NetworkDriver and NetworkDriver.setup then NetworkDriver.setup(cfg, st, helpers) end
+  if NetworkDriver and NetworkDriver.setup then
+    NetworkDriver.setup(cfg, st, helpers)
+    if st.trafficNetwork and helpers and helpers.log then
+      helpers.log("CSP_NETWORK_DRIVER_ACTIVE lanes=%d",
+        #(st.trafficNetwork.laneOrder or {}))
+    end
+  elseif st.trafficNetwork and helpers and helpers.log then
+    helpers.log("CSP_NETWORK_DRIVER_UNAVAILABLE")
+  end
 end
 
 local function refreshRouteMetrics()
