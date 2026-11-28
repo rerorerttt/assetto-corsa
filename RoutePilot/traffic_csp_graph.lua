@@ -671,9 +671,9 @@ end
 
 -- Finds the closest directed lane segment to a world position. Heading is used
 -- to reject the opposite carriageway at crossings and parallel roads.
-function Graph.nearestEdge(graph, position, heading, maxDistance)
-  if not graph or not position then return nil end
-  local best, bestDistance, bestAlong = nil, maxDistance or math.huge, nil
+function Graph.nearestEdges(graph, position, heading, maxDistance, maxCount)
+  if not graph or not position then return {} end
+  local candidates = {}
   local hx, hz = 0, 0
   if heading then
     local h = math.sqrt(heading.x*heading.x + heading.z*heading.z)
@@ -683,6 +683,7 @@ function Graph.nearestEdge(graph, position, heading, maxDistance)
     local edge, lane = graph.edges[i], graph.edges[i].lane
     local points, cumulative = lane.points, lane.cumulative
     local count = lane.loop and #points or #points-1
+    local edgeBest, edgeAlong = math.huge, nil
     for j = 1, count do
       local a, b = points[j], points[j % #points + 1]
       local d0, d1 = cumulative[j] or 0, cumulative[j+1] or lane.totalLength
@@ -698,16 +699,26 @@ function Graph.nearestEdge(graph, position, heading, maxDistance)
         local distance = math.sqrt(dx*dx+dy*dy+dz*dz)
         local dirLength = math.sqrt(vx*vx+vz*vz)
         local alignment = dirLength > 1e-6 and (hx*vx+hz*vz)/dirLength or 1
-        if (not heading or alignment >= -0.15) and distance < bestDistance then
-          bestDistance = distance
-          best = edge
-          bestAlong = d0 + (d1-d0)*t
+        if (not heading or alignment >= -0.15) and distance < edgeBest then
+          edgeBest = distance
+          edgeAlong = d0 + (d1-d0)*t
         end
       end
     end
+    if edgeAlong and (not maxDistance or edgeBest <= maxDistance) then
+      candidates[#candidates+1] = { edge=edge, along=edgeAlong, distance=edgeBest }
+    end
   end
+  table.sort(candidates, function(a,b) return a.distance < b.distance end)
+  while maxCount and #candidates > maxCount do table.remove(candidates) end
+  return candidates
+end
+
+function Graph.nearestEdge(graph, position, heading, maxDistance)
+  local candidates = Graph.nearestEdges(graph, position, heading, maxDistance, 1)
+  local best = candidates[1]
   if not best then return nil end
-  return best, bestAlong, bestDistance
+  return best.edge, best.along, best.distance
 end
 
 return Graph
