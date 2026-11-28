@@ -797,7 +797,7 @@ function Converter.load(log)
     end
     if #candidates>0 then
       table.sort(candidates,function(a,b)
-        if math.abs(a.fromS-b.fromS)>2.0 then return a.fromS<b.fromS end
+        if a.fromS~=b.fromS then return a.fromS<b.fromS end
         local sa=(finite(a.alignment) and a.alignment or 0)*100-
           (finite(a.gap) and a.gap or 0)
         local sb=(finite(b.alignment) and b.alignment or 0)*100-
