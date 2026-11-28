@@ -657,6 +657,7 @@ local function trySpawnCSPTraffic(sim,dt,route)
       end
       state.spawnHints[index]=nil
       state.p[index]=nil
+      if state.rescueWatch then state.rescueWatch[index]=nil end
       trafficCSP.graphCarRoute[index]=nil
     end
     trafficCSP.graphSpawnFailed='spawn_transaction_rolled_back'
