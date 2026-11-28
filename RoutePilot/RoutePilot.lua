@@ -731,7 +731,7 @@ local function updateRescueWatchdog(carIndex,car,dt)
   state.rescueWatch=state.rescueWatch or {}
   local w=state.rescueWatch[carIndex]
   if not w then
-    w={rolloverT=0,gasStallT=0,lastPosition=vec3(car.position.x,car.position.y,car.position.z),progressPositionX=car.position.x,progressPositionZ=car.position.z,progressCheckT=0,cooldown=0}
+    w={rolloverT=0,gasStallT=0,trafficWaitT=0,lastPosition=vec3(car.position.x,car.position.y,car.position.z),progressPositionX=car.position.x,progressPositionZ=car.position.z,progressCheckT=0,cooldown=0}
     state.rescueWatch[carIndex]=w
   end
   w.cooldown=math.max(0,(w.cooldown or 0)-dt)
@@ -760,6 +760,12 @@ local function updateRescueWatchdog(carIndex,car,dt)
     else
       w.gasStallT=0
     end
+    if trafficWaiting and speed<0.75 and progress<0.5 and
+        trafficCSP and trafficCSP.graphSpawnDone and state.loopRoute then
+      w.trafficWaitT=safeNumber(w.trafficWaitT)+w.progressCheckT
+    else
+      w.trafficWaitT=0
+    end
     w.progressPositionX=car.position.x
     w.progressPositionZ=car.position.z
     w.progressCheckT=0
@@ -770,6 +776,7 @@ local function updateRescueWatchdog(carIndex,car,dt)
   local reason=nil
   if w.rolloverT>=10.0 then reason="rollover_10s"
   elseif offTrackT>=10.0 then reason="offtrack_10s"
+  elseif w.trafficWaitT>=5.0 then reason="traffic_wait_deadlock_5s"
   elseif w.gasStallT>=10.0 then reason="gas_no_progress_10s" end
   w.retryT=math.max(0,safeNumber(w.retryT)-dt)
   if reason and w.retryT<=0 then
