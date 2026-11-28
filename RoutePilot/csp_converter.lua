@@ -778,7 +778,7 @@ function Converter.load(log)
   -- This keeps the imported path continuous and prevents every car from
   -- reaching an arbitrary short connector/branch terminus.
   local searchNodes=0
-  local searchLimit=12000
+  local searchLimit=30000
   local searchMaxHops=80
   local function routeCandidates(lane,fromS,visited)
     local candidates={}
@@ -804,14 +804,10 @@ function Converter.load(log)
           (finite(b.gap) and b.gap or 0)
         return sa>sb
       end)
-      local firstExit=candidates[1].fromS
-      local filtered={}
-      for _,edge in ipairs(candidates) do
-        if math.abs(edge.fromS-firstExit)<=2.0 then
-          filtered[#filtered+1]=edge
-        end
-      end
-      return filtered
+      -- Keep later exits available to DFS: an earlier exit can be a
+      -- short connector/dead-end, while a later authored junction continues
+      -- the actual road circuit.
+      return candidates
     end
 
     local adjacent={}
