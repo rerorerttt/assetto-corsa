@@ -25,67 +25,68 @@ local function tangentAt(points, i, loop)
   return norm(b.x-a.x, b.y-a.y, b.z-a.z)
 end
 
-local function nearestOnLane(p, lane)
-  local pts = lane.points
-  local n = #pts
-  local count = lane.loop and n or n - 1
-  if count < 1 then return nil end
+local function nearestOnLane(position, lane)
+  local points=lane.points
+  local n=#points
+  if n<2 then return nil end
+  local count=lane.loop and n or n-1
+  local step=math.max(1,math.floor(n/400))
+  local best,bestPoint,bestDir=math.huge,nil,nil
 
-  -- Coarse spans keep long CSP lanes inexpensive to compare. Their chords
-  -- can cut across bends, however, so retain several candidates and refine
-  -- against the original adjacent-point segments before returning a distance.
-  local step = math.max(1, math.floor(n / 400))
-  local candidates = {}
-  local function project(a, b)
-    local vx, vy, vz = b.x-a.x, b.y-a.y, b.z-a.z
-    local den = vx*vx+vy*vy+vz*vz
-    if den <= 1e-8 then return nil end
-    local t = ((p.x-a.x)*vx+(p.y-a.y)*vy+(p.z-a.z)*vz)/den
-    t = math.max(0, math.min(1, t))
-    local q = vec3(a.x+vx*t, a.y+vy*t, a.z+vz*t)
-    return dist2(p, q), q, { norm(vx, vy, vz) }
-  end
-
-  for i = 1, count, step do
-    local nextIndex
-    if lane.loop then nextIndex = (i + step - 1) % n + 1
-    else nextIndex = math.min(n, i + step) end
-    local d, q, dir = project(pts[i], pts[nextIndex])
-    if d then
-      local item = { index = i, distance = d, point = q, direction = dir }
-      local insertAt = #candidates + 1
-      for j = 1, #candidates do
-        if d < candidates[j].distance then insertAt = j break end
-      end
-      table.insert(candidates, insertAt, item)
-      if #candidates > 4 then candidates[5] = nil end
+  local function testSegment(i)
+    if not lane.loop and i>=n then return end
+    local nextIndex=i%n+1
+    local a,b=points[i],points[nextIndex]
+    local vx,vy,vz=b.x-a.x,b.y-a.y,b.z-a.z
+    local den=vx*vx+vy*vy+vz*vz
+    if den<=1e-8 then return end
+    local t=((position.x-a.x)*vx+(position.y-a.y)*vy+(position.z-a.z)*vz)/den
+    t=math.max(0,math.min(1,t))
+    local q=vec3(a.x+vx*t,a.y+vy*t,a.z+vz*t)
+    local d=dist2(position,q)
+    if d<best then
+      best,bestPoint,bestDir=d,q,{norm(vx,vy,vz)}
     end
   end
 
-  if step == 1 then
-    local best = candidates[1]
-    return best and math.sqrt(best.distance) or nil,
-      best and best.point or nil, best and best.direction or nil
+  if step==1 then
+    for i=1,count do testSegment(i) end
+  else
+    local candidates={}
+    for i=1,count,step do
+      local nextIndex=lane.loop and ((i+step-1)%n+1) or math.min(n,i+step)
+      local a,b=points[i],points[nextIndex]
+      local vx,vy,vz=b.x-a.x,b.y-a.y,b.z-a.z
+      local den=vx*vx+vy*vy+vz*vz
+      if den>1e-8 then
+        local t=((position.x-a.x)*vx+(position.y-a.y)*vy+(position.z-a.z)*vz)/den
+        t=math.max(0,math.min(1,t))
+        local q=vec3(a.x+vx*t,a.y+vy*t,a.z+vz*t)
+        local d=dist2(position,q)
+        local spanSteps=lane.loop and step or math.min(step,count-i+1)
+        local item={start=i,steps=spanSteps,d=d}
+        local inserted=false
+        for j=1,#candidates do
+          if d<candidates[j].d then
+            table.insert(candidates,j,item)
+            inserted=true
+            break
+          end
+        end
+        if not inserted then candidates[#candidates+1]=item end
+        if #candidates>4 then candidates[5]=nil end
+      end
+    end
+    for ci=1,#candidates do
+      local candidate=candidates[ci]
+      for offset=0,candidate.steps-1 do
+        local segment=(candidate.start+offset-1)%n+1
+        testSegment(segment)
+      end
+    end
   end
-
-  local bestD, bestP, bestDir = math.huge, nil, nil
-  local tested = {}
-  local function testSegment(index)
-    if lane.loop then index = (index - 1) % count + 1
-    elseif index < 1 or index > count then return end
-    if tested[index] then return end
-    tested[index] = true
-    local nextIndex = index % n + 1
-    local d, q, dir = project(pts[index], pts[nextIndex])
-    if d and d < bestD then bestD, bestP, bestDir = d, q, dir end
-  end
-
-  for i = 1, #candidates do
-    local first = candidates[i].index - 1
-    local last = candidates[i].index + step
-    for segment = first, last do testSegment(segment) end
-  end
-  return bestD < math.huge and math.sqrt(bestD) or nil, bestP, bestDir
+  if bestPoint then return math.sqrt(best),bestPoint,bestDir end
+  return nil
 end
 
 local function sharedTopology(a, b)
