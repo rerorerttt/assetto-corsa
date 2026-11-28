@@ -168,6 +168,16 @@ local function newPersonality(carIndex)
   }
   local spawnHint=state.spawnHints and state.spawnHints[carIndex]
   if spawnHint and state.routeGeometry then
+    -- setAICarPosition is applied by the physics thread. The car snapshot can
+    -- still contain its old grid position for one update after the call.
+    -- Keep the exact placement target so that this expected world-space jump
+    -- cannot invalidate the route seed before the physics position catches up.
+    if spawnHint.position then
+      p.spawnExpectedPosition={
+        x=spawnHint.position.x,y=spawnHint.position.y,z=spawnHint.position.z}
+      p.spawnAwaitTime=0
+      p.spawnAwaitLogged=false
+    end
     local seededProgress=Geometry.distanceAt(
       state.routeGeometry,spawnHint.segment,spawnHint.parameter)
     if seededProgress~=nil then
@@ -1937,6 +1947,51 @@ function Driver.update(carIndex, car, dt)
   end
 
   local speed, fx, fz = readVehicleDynamics(car, p, dt)
+  -- Wait for the physics thread to publish the position requested by the
+  -- initial spawn. On Shuto, the grid pose can be kilometres from the road;
+  -- treating that one-frame stale pose as a real teleport destroys the
+  -- explicitly seeded route progress and leaves AC AI without a valid line.
+  local expectedSpawn=p.spawnExpectedPosition
+  if expectedSpawn then
+    local ex,ez=car.position.x-expectedSpawn.x,car.position.z-expectedSpawn.z
+    local ey=car.position.y-expectedSpawn.y
+    local spawnError=math.sqrt(ex*ex+ez*ez)
+    if spawnError>12.0 or math.abs(ey)>6.0 then
+      p.spawnAwaitTime=safeNumber(p.spawnAwaitTime)+math.max(0,dt or 0)
+      if not p.spawnAwaitLogged then
+        p.spawnAwaitLogged=true
+        H.log("SPAWN_WAIT_PHYSICS_POSITION id=%d expected=(%.2f,%.2f,%.2f) actual=(%.2f,%.2f,%.2f) error=%.1f",
+          carIndex,expectedSpawn.x,expectedSpawn.y,expectedSpawn.z,
+          car.position.x,car.position.y,car.position.z,spawnError)
+      end
+      -- Hold only while the single requested physics placement is pending.
+      local okWait,waitControls=pcall(ac.overrideCarControls,carIndex)
+      if okWait and waitControls then
+        waitControls.combineAxis=false
+        waitControls.steer=0
+        waitControls.gas=0
+        waitControls.brake=1
+        waitControls.handbrake=0
+      end
+      p.lastWorldX=nil
+      p.lastWorldZ=nil
+      if p.spawnAwaitTime>=1.5 then
+        H.log("SPAWN_POSITION_ACK_TIMEOUT id=%d error=%.1f; route seed released",
+          carIndex,spawnError)
+        p.spawnExpectedPosition=nil
+        p.spawnSeeded=false
+        p.routeLocked=false
+        p.routeProgress=nil
+      else
+        return
+      end
+    else
+      H.log("SPAWN_POSITION_ACK id=%d error=%.2f",carIndex,spawnError)
+      p.spawnExpectedPosition=nil
+      p.lastWorldX=car.position.x
+      p.lastWorldZ=car.position.z
+    end
+  end
   -- CSP/AC teleports can move a car to a different world-space location in
   -- one physics step. Invalidate its old progress lock before projection;
   -- otherwise the local window can keep selecting a distant, stale segment.
