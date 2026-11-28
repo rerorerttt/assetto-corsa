@@ -98,7 +98,7 @@ function Importer.new(log)
     lanes = {},
     intersections = {},
     areas = {},
-    stats = { lanes = 0, usable = 0, invalid = 0, samples = 0, hits = 0, misses = 0 },
+    stats = { lanes = 0, usable = 0, invalid = 0, samples = 0, hits = 0, misses = 0, trimmed = 0 },
   }, Importer)
 end
 
