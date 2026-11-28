@@ -61,6 +61,7 @@ local state = {
   teleportDiagnostics=false, teleportDiagAccum=0,
   teleportDiagSnapshots={}, teleportDiagApiAt={},
   nativeSplinePath=nil, nativeSplineSignature=nil, nativeSplineApplied={}, nativeSplineAppliedAt={}, nativeSplineRetryAt={}, nativeSplineSpawnNextTryAt=0,
+  nativeAIParked={},
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -195,6 +196,30 @@ local function nativeSplineSettled(carIndex)
   local sim=ac.getSim()
   local now=sim and safeNumber(sim.gameTime) or assignedAt
   return now-assignedAt>=0.5
+end
+
+-- Never hand an uncontrolled AI car back to the stock track spline when
+-- RoutePilot has no verified route. CSP documents setAINoInput() as a parked
+-- state; this is deliberately a fail-closed guard, not a moving-AI controller.
+local function setNativeAIParked(carIndex, parked, reason)
+  if type(physics)~="table" or type(physics.setAINoInput)~="function" then
+    if not state.nativeAIParkApiMissingLogged then
+      state.nativeAIParkApiMissingLogged=true
+      writeLog("NATIVE_AI_PARK_UNAVAILABLE reason=setAINoInput_api_missing")
+    end
+    return false
+  end
+  if state.nativeAIParked[carIndex]==(parked==true) then return true end
+  local ok,result=pcall(physics.setAINoInput,carIndex,parked==true,false)
+  if ok and result~=false then
+    state.nativeAIParked[carIndex]=parked==true
+    writeLog("NATIVE_AI_PARK_STATE id=%d parked=%s reason=%s",
+      carIndex,tostring(parked==true),tostring(reason or "route_state"))
+    return true
+  end
+  writeLog("NATIVE_AI_PARK_FAIL id=%d parked=%s pcall_ok=%s result=%s",
+    carIndex,tostring(parked==true),tostring(ok),tostring(result))
+  return false
 end
 
 
@@ -997,6 +1022,7 @@ local function installCarJumpTrace()
       state.nativeSplineApplied[carIndex]=nil
       state.nativeSplineAppliedAt[carIndex]=nil
       state.nativeSplineRetryAt[carIndex]=nil
+      state.nativeAIParked[carIndex]=nil
       if not state.teleportDiagnostics then return end
       local car=ac.getCar(carIndex)
       local pos=car and car.position
@@ -1183,9 +1209,17 @@ function script.update(dt)
         if state.loadedFromCSP and not state.spawnDone then shouldDrive=false end
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
+          -- A verified RoutePilot spline is installed before the native AI is
+          -- released from its parked fail-safe state.
+          setNativeAIParked(i,false,"routepilot_control_ready")
           driveOrder[#driveOrder+1]=i
-        elseif state.p[i] then
-          releaseCar(i)
+        else
+          if car and car.isActive and car.isAIControlled then
+            setNativeAIParked(i,true,
+              state.loadedFromCSP and not state.spawnDone and "csp_spawn_pending" or
+              "route_or_spline_not_verified")
+          end
+          if state.p[i] then releaseCar(i) end
         end
       end
       -- Resolve every car's lane and near-future traffic conflicts as one batch.
