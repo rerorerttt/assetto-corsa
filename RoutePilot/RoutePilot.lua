@@ -354,7 +354,7 @@ local function loadLine(retryOnly)
   if loaded then
     state.nodes=loaded; state.p={}; state.spawnHints={}; state.spawnedCars={}
     state.nativeSplinePath=nil; state.nativeSplineSignature=nil
-    state.nativeSplineApplied={}; state.nativeSplineRetryAt={}
+    state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}; state.nativeSplineRetryAt={}
     state.routeGeometry=nil; state.loaded=true
     state.loadedFromCSP=false
     if ac.storage then
