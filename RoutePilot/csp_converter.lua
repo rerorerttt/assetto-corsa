@@ -226,88 +226,119 @@ end
 -- crossing ramps and merely nearby roads are rejected by tangent + distance.
 local function buildLaneChanges(graph)
   local changes={}
-  local step=8.0
+  local cellSize=12.0
+  local spatial={}
+  local samplesByLane={}
+  local function cell(x,z)
+    local cx,cz=math.floor(x/cellSize),math.floor(z/cellSize)
+    local col=spatial[cx]
+    if not col then col={} spatial[cx]=col end
+    local bucket=col[cz]
+    if not bucket then bucket={} col[cz]=bucket end
+    return bucket
+  end
+  -- Sample every authored lane once and build a spatial index. This avoids
+  -- an O(points^2) comparison of long Shuto lane polylines.
+  for _,id in ipairs(graph.laneOrder) do
+    local lane=graph.lanes[id]
+    local samples={}
+    for distance=0,lane.length,8.0 do
+      local p=pointAt(lane,distance)
+      local t=tangentAt(lane,distance)
+      local sample={laneId=id,s=distance,p=p,tx=t.x,tz=t.z}
+      samples[#samples+1]=sample
+      cell(p.x,p.z)[#cell(p.x,p.z)+1]=sample
+    end
+    samplesByLane[id]=samples
+  end
   for ai=1,#graph.laneOrder do
-    local a=graph.lanes[graph.laneOrder[ai]]
+    local aId=graph.laneOrder[ai]
+    local a=graph.lanes[aId]
     for bi=ai+1,#graph.laneOrder do
-      local b=graph.lanes[graph.laneOrder[bi]]
-      local samplesAB,samplesBA={},{}
+      local bId=graph.laneOrder[bi]
+      local b=graph.lanes[bId]
       local function scan(src,dst,out)
-        local runStart,runLast,runCount=nil,nil,0
-        local function finish()
+        local runStart,runLast,runLastTarget,runCount=nil,nil,nil,0
+        local function flush()
           if runCount>=3 and runLast-runStart>=16 then
-            out[#out+1]={fromS=runStart,toS=runLast}
+            out[#out+1]={fromS=runStart,toS=runLast,
+              targetStart=runStartTarget,targetEnd=runLastTarget}
           end
-          runStart,runLast,runCount=nil,nil,0
+          runStart,runLast,runLastTarget,runStartTarget,runCount=nil,nil,nil,nil,0
         end
-        for s=0,src.length,step do
-          local p=pointAt(src,s)
-          local tSrc=tangentAt(src,s)
+        local srcSamples=samplesByLane[src.id]
+        for si=1,#srcSamples do
+          local sample=srcSamples[si]
+          local p=sample.p
           local best,bestScore=nil,nil
-          for ds=0,dst.length,step do
-            local q=pointAt(dst,ds)
-            local dx,dz=q.x-p.x,q.z-p.z
-            local lateral=math.sqrt(dx*dx+dz*dz)
-            if lateral>=2.0 and lateral<=7.5 and math.abs(q.y-p.y)<=1.5 then
-              local tDst=tangentAt(dst,ds)
-              local align=tSrc.x*tDst.x+tSrc.z*tDst.z
-              if align>=0.94 then
-                local score=lateral+(1-align)*8
-                if not bestScore or score<bestScore then
-                  bestScore=score; best={s=s,ds=ds,gap=lateral,alignment=align}
+          local cx,cz=math.floor(p.x/cellSize),math.floor(p.z/cellSize)
+          for ox=-1,1 do
+            local col=spatial[cx+ox]
+            if col then
+              for oz=-1,1 do
+                local bucket=col[cz+oz]
+                if bucket then
+                  for k=1,#bucket do
+                    local candidate=bucket[k]
+                    if candidate.laneId==dst.id then
+                      local dx,dz=candidate.p.x-p.x,candidate.p.z-p.z
+                      local gap=math.sqrt(dx*dx+dz*dz)
+                      if gap>=2.0 and gap<=7.5 and
+                          math.abs(candidate.p.y-p.y)<=1.5 then
+                        local alignment=sample.tx*candidate.tx+sample.tz*candidate.tz
+                        if alignment>=0.94 then
+                          local score=gap+(1-alignment)*8
+                          if not bestScore or score<bestScore then
+                            bestScore=score
+                            best={s=sample.s,ds=candidate.s,gap=gap,alignment=alignment}
+                          end
+                        end
+                      end
+                    end
+                  end
                 end
               end
             end
           end
           if best then
-            if runLast and (s-runLast>step*1.6 or math.abs(best.ds-(runLastTarget or best.ds))>step*2.5) then finish() end
-            if not runStart then runStart=s end
-            runLast=s; runLastTarget=best.ds; runCount=runCount+1
-          else finish(); runLastTarget=nil end
+            if runLast and (sample.s-runLast>12.1 or
+                math.abs(best.ds-runLastTarget)>20.0) then flush() end
+            if not runStart then
+              runStart=sample.s
+              runStartTarget=best.ds
+            end
+            runLast=sample.s
+            runLastTarget=best.ds
+            runCount=runCount+1
+          else
+            flush()
+          end
         end
-        finish()
+        flush()
       end
-      scan(a,b,samplesAB)
-      scan(b,a,samplesBA)
-      for _,r in ipairs(samplesAB) do
-        local mid=(r.fromS+r.toS)*0.5
-        local p=pointAt(a,mid)
-        local best,bestD=nil,nil
-        for ds=0,b.length,step do
-          local q=pointAt(b,ds)
-          local dd=d2(p,q)
-          if not bestD or dd<bestD then bestD=dd; best=ds end
-        end
-        if best then
-          local e={from=a.id,to=b.id,fromStart=r.fromS,fromEnd=r.toS,
-            toStart=math.max(0,best-(r.toS-r.fromS)*0.5),
-            toEnd=math.min(b.length,best+(r.toS-r.fromS)*0.5),kind="lane_change"}
-          a.adjacent[#a.adjacent+1]=e
-          changes[#changes+1]=e
-        end
+      local ab,ba={},{}
+      scan(a,b,ab)
+      scan(b,a,ba)
+      for _,r in ipairs(ab) do
+        local e={from=a.id,to=b.id,fromStart=r.fromS,fromEnd=r.toS,
+          toStart=math.max(0,math.min(r.targetStart,r.targetEnd)-8.0),
+          toEnd=math.min(b.length,math.max(r.targetStart,r.targetEnd)+8.0),
+          kind="lane_change"}
+        a.adjacent[#a.adjacent+1]=e
+        changes[#changes+1]=e
       end
-      for _,r in ipairs(samplesBA) do
-        local mid=(r.fromS+r.toS)*0.5
-        local p=pointAt(b,mid)
-        local best,bestD=nil,nil
-        for ds=0,a.length,step do
-          local q=pointAt(a,ds)
-          local dd=d2(p,q)
-          if not bestD or dd<bestD then bestD=dd; best=ds end
-        end
-        if best then
-          local e={from=b.id,to=a.id,fromStart=r.fromS,fromEnd=r.toS,
-            toStart=math.max(0,best-(r.toS-r.fromS)*0.5),
-            toEnd=math.min(a.length,best+(r.toS-r.fromS)*0.5),kind="lane_change"}
-          b.adjacent[#b.adjacent+1]=e
-          changes[#changes+1]=e
-        end
+      for _,r in ipairs(ba) do
+        local e={from=b.id,to=a.id,fromStart=r.fromS,fromEnd=r.toS,
+          toStart=math.max(0,math.min(r.targetStart,r.targetEnd)-8.0),
+          toEnd=math.min(a.length,math.max(r.targetStart,r.targetEnd)+8.0),
+          kind="lane_change"}
+        b.adjacent[#b.adjacent+1]=e
+        changes[#changes+1]=e
       end
     end
   end
   return changes
 end
-
 function Converter.build(data,log)
   local function trace(fmt,...) if type(log)=="function" then pcall(log,fmt,...) end end
   if type(data)~="table" or type(data.lanes)~="table" then return nil,"TRAFFIC_JSON_MISSING_LANES" end
