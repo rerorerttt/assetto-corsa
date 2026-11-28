@@ -88,7 +88,6 @@ function M.encode(nodes, loop)
   -- intentional: RoutePilot's own recorded boundaries remain authoritative.
   chunks[#chunks+1]=string.pack("<i4",count)
   for i=1,count do
-    local prev=points[i==1 and (loop and count or 1) or i-1]
     local nextIndex=i==count and (loop and 1 or count) or i+1
     local nextPoint=points[nextIndex]
     local tx,tz=normalized(nextPoint.x-p.x,nextPoint.z-p.z)
