@@ -335,3 +335,11 @@ Release blockers:
 - Movement generation now accepts that zero-offset entry only when the lane is explicitly closed/looped and the graph has already created a valid `incoming.inEdge`; ordinary open-lane start points remain excluded.
 - Static verification: confirmed the new guard in the fetched source. This case still needs a synthetic graph/runtime test against CSP data before it can be considered fully validated.
 - Commit: `6b21738887f3fe75fbe0316269f03b4d264da814`.
+
+
+## 2026-11-28 native player AI wrong-way guard
+
+- Removed the fallback that silently assigned car 0 to route 1 when no player-aligned route exists. If all nearby graph routes point against the player's heading, car 0 is no longer adopted into an opposite-direction RoutePilot route.
+- Car 0 is now included in the CSP route group only when a player-aligned route was actually found; the adoption state also reflects this requirement. Other AI traffic can still use the available graph routes.
+- Static verification: confirmed there is no default-to-route-1 fallback, both player route assignment sites preserve a missing route index, and adoption requires a valid aligned route. In-game Ctrl+8 behavior remains to be tested.
+- Commit: `b13b32fe5b7da253d2520303d5b9410e5b3c4062`.
