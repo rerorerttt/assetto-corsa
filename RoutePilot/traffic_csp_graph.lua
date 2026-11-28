@@ -472,7 +472,7 @@ function Graph.build(lanes, intersectionDefs, log)
                   local item = attributes[k]
                   if type(item) == 'table' and tonumber(item[1]) == fromID and tonumber(item[2]) == toID then
                     movement.attributes = item[3]
-                    movement.priority = tonumber(item[3] and item[3].po) or 0
+                    movement.priority = movement.priority + (tonumber(item[3] and item[3].po) or 0)
                     break
                   end
                 end
