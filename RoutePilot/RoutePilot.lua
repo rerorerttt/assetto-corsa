@@ -55,6 +55,7 @@ local state = {
   autoImportAccum=0, autoImportAttempts=0,
   playerTeleportPending=false, playerTeleportWait=0, playerTeleportStable=0,
   playerTeleportCandidateX=nil, playerTeleportCandidateZ=nil,
+  playerRouteInvalid=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -212,6 +213,7 @@ local function loadLine(retryOnly)
       state.boundsR=type(boundsR)=="table" and boundsR or {}
       state.p={}; state.spawnHints={}; state.spawnedCars={}; state.routeGeometry=nil
       state.loaded=true; state.loadedFromCSP=true
+      state.playerRouteInvalid=false
       state.cspImportPending=false; state.autoImportAttempts=0
       state.status=string.format("CSP: %d точек | %d линий",
         #nodes,state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0)
@@ -533,7 +535,7 @@ local function spotIsClear(pos, exceptIndex)
 end
 -- Spawn teleport runs when the roster is stable; it NEVER blocks driving.
 local function trySpawnTeleport(sim,dt)
-  if state.spawnDone then return end
+  if state.spawnDone or state.playerRouteInvalid then return end
   if not state.loaded or state.recLine or #state.nodes<2 then return end
   state.spawnWait=state.spawnWait+dt
   local aiCars={}
@@ -888,7 +890,8 @@ function script.update(dt)
             writeLog("PLAYER_TELEPORT_ROUTE_REBUILT points=%d",#state.nodes)
           else
             for key,value in pairs(oldState) do state[key]=value end
-            writeLog("PLAYER_TELEPORT_ROUTE_REBUILD_FAILED; retaining previous route")
+            state.playerRouteInvalid=true
+            writeLog("PLAYER_TELEPORT_ROUTE_REBUILD_FAILED; spawn blocked until player reacquires a CSP lane")
           end
           state.playerTeleportPending=false
           state.playerTeleportWait=0
