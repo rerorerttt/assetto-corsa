@@ -522,6 +522,63 @@ local function trySpawnTeleport(sim,dt)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
     state.spawnDone=true; return
   end
+  -- CSP mode: distribute cars over the authored directed lanes instead of
+  -- spawning the entire field on the legacy single preview line.
+  if state.trafficNetwork then
+    local graph=state.trafficNetwork
+    local lanes={}
+    for _,laneId in ipairs(graph.laneOrder or {}) do
+      local lane=graph.lanes[laneId]
+      if lane and lane.length>CFG.SPAWN_MIN_GAP+20 then lanes[#lanes+1]=lane end
+    end
+    table.sort(lanes,function(a,b) return a.id<b.id end)
+    local useCount={}
+    local moved,failed=0,0
+    local function sampleLane(lane,distance)
+      distance=clamp(distance,0,lane.length)
+      local c=lane.cumulative
+      local lo,hi=1,#c-1
+      while lo<hi do local mid=math.floor((lo+hi)*0.5);if c[mid+1]<distance then lo=mid+1 else hi=mid end end
+      local a,b=lane.points[lo],lane.points[lo+1]
+      local span=c[lo+1]-c[lo]
+      local t=span>1e-8 and (distance-c[lo])/span or 0
+      local direction=vec3(b.x-a.x,b.y-a.y,b.z-a.z)
+      if direction:length()<0.0001 then return nil,nil end
+      direction:normalize()
+      return vec3(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,a.z+(b.z-a.z)*t),direction
+    end
+    for order=1,#aiCars do
+      local carIndex=aiCars[order]
+      local placed=false
+      if #lanes>0 then
+        for attempt=0,#lanes*3-1 do
+          local laneIndex=((order+attempt-2)%#lanes)+1
+          local lane=lanes[laneIndex]
+          local slot=useCount[lane.id] or 0
+          local distance=math.min(lane.length-8,12+slot*math.max(CFG.SPAWN_GAP,CFG.SPAWN_MIN_GAP))
+          if distance>4 and distance<lane.length-3 then
+            local position,direction=sampleLane(lane,distance)
+            if position and direction and spotIsClear(position,carIndex) then
+              local ok,result=pcall(physics.setAICarPosition,carIndex,
+                position,vec3(-direction.x,-direction.y,-direction.z))
+              if ok and result~=false then
+                moved=moved+1;placed=true;useCount[lane.id]=slot+1
+                state.p[carIndex]=nil;state.spawnHints[carIndex]=nil
+                writeLog("SPAWN_CSP_LANE id=%d lane=%d s=%.1f pos=(%.2f,%.2f,%.2f)",
+                  carIndex,lane.id,distance,position.x,position.y,position.z)
+                break
+              end
+            end
+          end
+        end
+      end
+      if not placed then failed=failed+1 end
+    end
+    state.spawnDone=true
+    writeLog("SPAWN_CSP_FINISH moved=%d failed=%d lanes=%d",moved,failed,#lanes)
+    flushLog()
+    return
+  end
   local metrics=buildSpawnRouteMetrics()
   if not metrics then state.spawnDone=true; return end
   local count=#aiCars
