@@ -1006,37 +1006,44 @@ render.on('main.track.transparent', function()
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
     if state.trafficNetwork then
-      -- Render the source CSP lane network as-is; boundary geometry is omitted.
-      for _,laneId in ipairs(state.trafficNetwork.laneOrder or {}) do
+      -- Keep the live 3D overlay bounded: a CSP network can contain hundreds
+      -- of long lanes, so rendering every source point on every frame is costly.
+      local laneIds=state.trafficNetwork.laneOrder or {}
+      local nearby={}
+      for _,laneId in ipairs(laneIds) do
         local lane=state.trafficNetwork.lanes[laneId]
         local box=lane and lane.aabb
-        local near=true
-        if box then
-          local dx=math.max(box.minX-player.position.x,0,player.position.x-box.maxX)
-          local dz=math.max(box.minZ-player.position.z,0,player.position.z-box.maxZ)
-          near=dx*dx+dz*dz<=650.0*650.0
-        end
-        local pts=near and lane and lane.points or {}
-        if #pts>=2 then
-          local anchor=pts[1]
-          local previous=anchor
-          local accumulated=0
-          for k=2,#pts do
-            local current=pts[k]
-            local dx,dz=current.x-previous.x,current.z-previous.z
-            accumulated=accumulated+math.sqrt(dx*dx+dz*dz)
-            if accumulated>=6.0 or k==#pts then
-              local mx=(anchor.x+current.x)*0.5-player.position.x
-              local mz=(anchor.z+current.z)*0.5-player.position.z
-              if mx*mx+mz*mz<=650.0*650.0 then
-                render.debugLine(vec3(anchor.x,anchor.y+0.05,anchor.z),
-                  vec3(current.x,current.y+0.05,current.z),YELLOW)
-              end
-              anchor=current
-              accumulated=0
-            end
-            previous=current
+        if lane and #lane.points>=2 then
+          local near=true
+          if box then
+            local dx=math.max(box.minX-player.position.x,0,player.position.x-box.maxX)
+            local dz=math.max(box.minZ-player.position.z,0,player.position.z-box.maxZ)
+            near=dx*dx+dz*dz<=650.0*650.0
           end
+          if near then nearby[#nearby+1]=lane end
+        end
+      end
+      local perLaneBudget=math.max(8,math.floor(1600/math.max(1,#nearby)))
+      for _,lane in ipairs(nearby) do
+        local pts=lane.points
+        local stride=math.max(1,math.ceil((#pts-1)/perLaneBudget))
+        local previous
+        for k=1,#pts,stride do
+          local current=pts[k]
+          if previous then
+            local mx=(previous.x+current.x)*0.5-player.position.x
+            local mz=(previous.z+current.z)*0.5-player.position.z
+            if mx*mx+mz*mz<=650.0*650.0 then
+              render.debugLine(vec3(previous.x,previous.y+0.05,previous.z),
+                vec3(current.x,current.y+0.05,current.z),YELLOW)
+            end
+          end
+          previous=current
+        end
+        local last=pts[#pts]
+        if previous~=last then
+          render.debugLine(vec3(previous.x,previous.y+0.05,previous.z),
+            vec3(last.x,last.y+0.05,last.z),YELLOW)
         end
       end
       return
