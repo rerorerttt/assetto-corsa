@@ -442,10 +442,21 @@ function Graph.build(lanes, intersectionDefs, log)
               local movement = {
                 intersection = inter, from = incoming, to = outgoing,
                 fromEdge = incoming.inEdge, toEdge = outgoing.outEdge,
-                priority = 0, weakLaneChange = weakLaneChange,
+                priority = tonumber(incoming.lane.priority) or 0,
+                weakLaneChange = weakLaneChange,
                 trafficLight = inter.definition.trafficLight,
                 attributes = nil
               }
+              local entryOffsets = inter.definition.entryPriorityOffsets
+              if type(entryOffsets) == 'table' then
+                for k = 1, #entryOffsets do
+                  local item = entryOffsets[k]
+                  if type(item) == 'table' and tonumber(item.lane) == fromID then
+                    movement.priority = movement.priority + (tonumber(item.offset) or 0)
+                    break
+                  end
+                end
+              end
               local attributes = inter.definition.trajectoryAttributes
               if type(attributes) == 'table' then
                 for k = 1, #attributes do
@@ -460,6 +471,14 @@ function Graph.build(lanes, intersectionDefs, log)
               inter.movements[#inter.movements + 1] = movement
               graph.movements[#graph.movements + 1] = movement
               incoming.inEdge.nextEdges[#incoming.inEdge.nextEdges + 1] = outgoing.outEdge
+              incoming.inEdge.transitionPenalty = incoming.inEdge.transitionPenalty or {}
+              local directionDot = incoming.toDir.x*outgoing.fromDir.x +
+                incoming.toDir.y*outgoing.fromDir.y + incoming.toDir.z*outgoing.fromDir.z
+              local penalty = math.max(0, -movement.priority) * 0.1
+              if weakLaneChange then penalty = penalty + 8 end
+              if directionDot < 0.5 then penalty = penalty + 4 end
+              if directionDot < -0.5 then penalty = penalty + 12 end
+              incoming.inEdge.transitionPenalty[outgoing.outEdge.id] = penalty
             end
           end
         end
