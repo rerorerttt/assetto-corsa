@@ -77,6 +77,16 @@ function Network.build(data)
       else
         local points, err, length = cleanPoints(source.points)
         if points then
+          -- CSP loop lanes are cyclic even when the serialized point array
+          -- omits the duplicate closing vertex. Close the runtime polyline.
+          if source.loop == true then
+            local first, last = points[1], points[#points]
+            local gap = flatDistance(first, last)
+            if gap > 0.015 then
+              points[#points + 1] = { x=first.x, y=first.y, z=first.z }
+              length = length + gap
+            end
+          end
           local role = graph.rules[source.role or source.laneRole or ""]
           graph.lanes[id] = {
             id = id, name = tostring(source.name or ("Lane #" .. id)),
