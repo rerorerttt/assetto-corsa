@@ -149,13 +149,33 @@ function Importer:load()
       valid = false,
     }
     local sourcePoints = {}
+    local malformedSourcePoint = false
     if type(src.points) == 'table' then
       for j = 1, #src.points do
         local p = point3(src.points[j])
-        if p then sourcePoints[#sourcePoints + 1] = p end
+        if not p then
+          malformedSourcePoint = true
+          break
+        end
+        -- Duplicate editor points create zero-length spline segments and can
+        -- destabilize Catmull-Rom tangents. Collapse only adjacent duplicates.
+        if #sourcePoints == 0 or sourcePoints[#sourcePoints]:distance(p) > 0.05 then
+          sourcePoints[#sourcePoints + 1] = p
+        end
       end
+    else
+      malformedSourcePoint = true
     end
-    local samples = resample(sourcePoints, lane.loop)
+    if lane.loop and #sourcePoints > 2 and
+        sourcePoints[1]:distance(sourcePoints[#sourcePoints]) <= 0.05 then
+      sourcePoints[#sourcePoints] = nil
+    end
+    local samples = not malformedSourcePoint and resample(sourcePoints, lane.loop) or nil
+    if malformedSourcePoint then
+      lane.invalidReason = 'malformed_source_point'
+    elseif not samples then
+      lane.invalidReason = 'insufficient_source_points'
+    end
     if samples then
       local laneHits, laneMisses = 0, 0
       for j = 1, #samples do
