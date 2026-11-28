@@ -186,6 +186,29 @@ local function saveLine()
 end
 local function loadLine()
   local loaded=nil
+  -- Prefer the CSP conversion; a saved RoutePilot line is the fallback.
+  if CSPConverter then
+    local ok, nodes, loop, boundsL, boundsR, infoOrError = pcall(CSPConverter.load, writeLog)
+    if ok and type(nodes)=="table" and #nodes>=2 then
+      state.nodes=nodes
+      state.loopRoute=loop==true
+      state.boundsL=type(boundsL)=="table" and boundsL or {}
+      state.boundsR=type(boundsR)=="table" and boundsR or {}
+      state.p={}; state.spawnHints={}; state.routeGeometry=nil
+      state.loaded=true; state.loadedFromCSP=true
+      state.status=string.format("CSP: конвертировано %d точек",#nodes)
+      if not state.spawnPerformed then
+        state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
+      end
+      writeLog("CSP_IMPORT_SUCCESS points=%d loop=%s route_lanes=%s",
+        #nodes,tostring(state.loopRoute),
+        type(infoOrError)=="table" and #infoOrError.routeLanes or -1)
+      flushLog()
+      return true
+    end
+    writeLog("CSP_IMPORT_FAILED ok=%s reason=%s",tostring(ok),
+      tostring(ok and infoOrError or nodes))
+  end
   if io and io.open then
     local ok,f=pcall(io.open,getLineFilePath(),"r")
     if ok and f then
@@ -213,30 +236,6 @@ local function loadLine()
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
     loadBounds(); flushLog()
     return true
-  end
-  -- No manually recorded line? Convert CSP Traffic Tool data automatically.
-  -- Existing RoutePilot route files always take precedence.
-  if CSPConverter then
-    local ok, nodes, loop, boundsL, boundsR, infoOrError = pcall(CSPConverter.load, writeLog)
-    if ok and type(nodes)=="table" and #nodes>=2 then
-      state.nodes=nodes
-      state.loopRoute=loop==true
-      state.boundsL=type(boundsL)=="table" and boundsL or {}
-      state.boundsR=type(boundsR)=="table" and boundsR or {}
-      state.p={}; state.spawnHints={}; state.routeGeometry=nil
-      state.loaded=true; state.loadedFromCSP=true
-      state.status=string.format("CSP: конвертировано %d точек",#nodes)
-      if not state.spawnPerformed then
-        state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
-      end
-      writeLog("CSP_IMPORT_SUCCESS points=%d loop=%s route_lanes=%s",
-        #nodes,tostring(state.loopRoute),
-        type(infoOrError)=="table" and #infoOrError.routeLanes or -1)
-      flushLog()
-      return true
-    end
-    writeLog("CSP_IMPORT_FAILED ok=%s reason=%s",tostring(ok),
-      tostring(ok and infoOrError or nodes))
   end
   state.status="Линия не найдена"; state.loaded=false
   return false
