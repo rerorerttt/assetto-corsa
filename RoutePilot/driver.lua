@@ -261,6 +261,14 @@ local function planTargetSpeed(p,speed)
   local target=p.cruiseSpeed
   local brakeAccel=clamp(safeNumber(p.brakeAccelEstimate,CFG.BRAKE_ACCEL),2.5,22.0)
   local currentSpeed=math.max(0,safeNumber(speed))
+  if not route.loop then
+    -- Open one-way routes have a real terminal, not an implicit wrap to the
+    -- first node. Brake to a controlled stop before that endpoint; offscreen
+    -- recycling can then return the car to a safe entrance slot.
+    local terminalRoom=math.max(0,route.total-p.routeProgress-4.0)
+    local terminalSpeed=math.sqrt(2*brakeAccel*terminalRoom)
+    target=math.min(target,terminalSpeed)
+  end
   local brakingDistance=currentSpeed*currentSpeed/(2*brakeAccel)
   local horizon=math.max(CFG.PLAN_HORIZON,brakingDistance+currentSpeed*1.5+35.0)
   if p.racingPlanBlockedDistance then
