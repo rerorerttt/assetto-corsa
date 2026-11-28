@@ -1164,7 +1164,6 @@ local function drawMapInRect(q0,q1)
     end
   end
   -- AI line: yellow, thick (manual-route fallback only).
-  if not state.trafficNetwork then
   do
     local prev=vec2(mx+(state.nodes[1].x-cx)*scale,my+(state.nodes[1].z-cz)*scale)
     for i=2,n do
@@ -1210,7 +1209,14 @@ function windowMain(dt)
   local okDraw,errDraw=pcall(function()
     ui.tabBar("RoutePilotTabs", function()
       ui.tabItem("Маршрут", function()
-    ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
+    if state.trafficNetwork then
+      local ns=state.trafficNetwork.stats or {}
+      ui.text(string.format("CSP: %d линий | %d переходов | %d перестроений | %s",
+        safeNumber(ns.validLanes),safeNumber(ns.junctionTransitions),
+        safeNumber(ns.laneChanges),state.status))
+    else
+      ui.text(string.format("Точек: %d | %s",#state.nodes,state.status))
+    end
     for idx=1,4 do
       local label=string.format("%d %s",idx,idx==1 and "машина" or "машины")
       if idx>1 then ui.sameLine(0,4) end
