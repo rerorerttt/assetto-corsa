@@ -102,7 +102,7 @@ local function junction(g,l,p,car,index,sim)
    local q=point(t,e.toS)
    local routeAlignment=n(e.alignment,1)
    local gap=dist(car.position,q)
-   if headingAlignment>-0.25 and routeAlignment>-0.25 and gap<32 then
+   if headingAlignment>-0.25 and routeAlignment>=-0.25 and gap<32 then
     local block=occupancy(g,t.id,e.toS,index,sim,25)
     if not block or block.gap>8 then
      local v=routeAlignment*10+headingAlignment*2-gap*.03
