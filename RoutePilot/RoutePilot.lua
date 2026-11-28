@@ -916,9 +916,27 @@ function script.update(dt)
 end
 
 -- 3D WORLD LINES.
--- Recording: only existing nodes within 8 m back .. 30 m ahead of the player
--- (data is written only under the car; the loop segment is never shown far).
--- Finished track ("Показать линии"): the whole route at long distance.
+-- Draw only a bounded window around the player. The previous implementation
+-- submitted three debug lines for every route sample on every render frame,
+-- even when most of a long route was hundreds of metres away.
+local function routeOffsetPoint(index, offset)
+  local n=#state.nodes
+  local prevIndex=index-1
+  local nextIndex=index+1
+  if state.loopRoute then
+    if prevIndex<1 then prevIndex=n end
+    if nextIndex>n then nextIndex=1 end
+  else
+    if prevIndex<1 then prevIndex=index end
+    if nextIndex>n then nextIndex=index end
+  end
+  local p=state.nodes[index]
+  local a=state.nodes[prevIndex]
+  local b=state.nodes[nextIndex]
+  local lx,lz=normalize2(b.x-a.x,b.z-a.z)
+  return vec3(p.x-lz*offset,p.y+0.05,p.z+lx*offset)
+end
+
 render.on('main.track.transparent', function()
   local n=#state.nodes
   if n<2 then return end
@@ -931,50 +949,60 @@ render.on('main.track.transparent', function()
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
     local seg=select(1,findNearestSeg(player.position,1))
-    local fromI,toI=1,n
-    if isRec then
-      -- forward window up to PREVIEW_AHEAD meters
-      fromI=seg; toI=seg
-      local dist=0
-      local i=seg
-      while dist<CFG.PREVIEW_AHEAD do
-        local a=state.nodes[i]
-        local b=state.nodes[(i%n)+1]
-        dist=dist+flatDist(a,b)
-        i=(i%n)+1
-        toI=i
-        if i==seg then break end
-      end
-      -- backward window up to PREVIEW_BACK meters
-      local j=seg
-      local back=0
-      while back<CFG.PREVIEW_BACK do
-        local prev=(j-2)%n+1
-        back=back+flatDist(state.nodes[prev],state.nodes[j])
-        j=prev
-        fromI=prev
-      end
+    local first,last
+    local maxBack=isRec and CFG.PREVIEW_BACK or 90.0
+    local maxAhead=isRec and CFG.PREVIEW_AHEAD or 360.0
+    first,last=seg,seg
+    local distance=0
+    local idx=seg
+    while distance<maxBack do
+      if not state.loopRoute and idx<=1 then break end
+      local prev=idx-1
+      if prev<1 then prev=n end
+      distance=distance+flatDist(state.nodes[prev],state.nodes[idx])
+      idx=prev
+      first=idx
+      if idx==seg then break end
     end
-    -- draw all segments in [fromI..toI] (loop-aware); finished track: all
-    local count=0
-    local maxSteps=n
-    local i2=fromI
-    while count<=maxSteps do
-      count=count+1
-      local node=state.nodes[i2]
-      local nx=state.nodes[(i2%n)+1]
-      local lx,lz=normalize2(nx.x-node.x,nx.z-node.z)
-      local al,ar=boundsAt(i2)
-      -- distance cull only for the finished track (long range view)
-      if isRec or flatDist(player.position,node)<CFG.DRAW_RANGE then
-        render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
-        render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
-          vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
-        render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
-          vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+    distance=0
+    idx=seg
+    while distance<maxAhead do
+      if not state.loopRoute and idx>=n then break end
+      local nxt=idx+1
+      if nxt>n then nxt=1 end
+      distance=distance+flatDist(state.nodes[idx],state.nodes[nxt])
+      idx=nxt
+      last=idx
+      if idx==seg then break end
+    end
+
+    -- Keep a maximum spacing of roughly 6 m between submitted segments.
+    -- Each boundary endpoint uses its own centred tangent, so neighbouring
+    -- segments share exactly the same endpoint instead of opening gaps.
+    local previousIndex=first
+    local accumulated=0
+    local i=first
+    local steps=0
+    local maxSteps=state.loopRoute and n or (last-first)
+    if state.loopRoute and last<first then maxSteps=(n-first)+last end
+    while i~=last and steps<=maxSteps do
+      steps=steps+1
+      local nextIndex=i+1
+      if nextIndex>n then nextIndex=1 end
+      accumulated=accumulated+flatDist(state.nodes[i],state.nodes[nextIndex])
+      local shouldDraw=accumulated>=6.0 or nextIndex==last
+      if shouldDraw then
+        local a=state.nodes[previousIndex]
+        local b=state.nodes[nextIndex]
+        render.debugLine(vec3(a.x,a.y+0.05,a.z),vec3(b.x,b.y+0.05,b.z),YELLOW)
+        local al,ar=boundsAt(previousIndex)
+        local bl,br=boundsAt(nextIndex)
+        render.debugLine(routeOffsetPoint(previousIndex,al),routeOffsetPoint(nextIndex,bl),RED)
+        render.debugLine(routeOffsetPoint(previousIndex,ar),routeOffsetPoint(nextIndex,br),RED)
+        previousIndex=nextIndex
+        accumulated=0
       end
-      if i2==toI then break end
-      i2=(i2%n)+1
+      i=nextIndex
     end
   end)
   if not ok then
@@ -1067,7 +1095,7 @@ local function drawMapInRect(q0,q1)
   -- bounds: dark red, thick, min offset from the line
   -- Cap map drawing work: the source can contain thousands of 3 m samples.
   -- A screen map does not benefit from drawing every sample on every UI frame.
-  local stride=math.max(1,math.ceil(n/500))
+  local stride=math.max(1,math.ceil(n/240))
   local lastIndex=state.loopRoute and n or math.max(1,n-1)
   for pass=1,2 do
     local prev
