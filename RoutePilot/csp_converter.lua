@@ -798,6 +798,8 @@ function Converter.load(log)
     routeLanes[#routeLanes+1]=currentLane.id
 
     local nextEdge,nextScore,firstExit=nil,nil,math.huge
+    -- First prefer an authored directed junction transition. It is the
+    -- strongest topology signal and must never be replaced by a nearby lane.
     for _,edge in ipairs(currentLane.outgoing or {}) do
       local target=graph.lanes[edge.to]
       if target and finite(edge.fromS) and finite(edge.toS) and
@@ -814,6 +816,38 @@ function Converter.load(log)
           if not nextScore or score>nextScore then
             nextEdge=edge
             nextScore=score
+          end
+        end
+      end
+    end
+
+    -- A common CSP export has long same-direction parallel lanes but only
+    -- sparse intersection polygons. If no forward junction exists, continue
+    -- through an explicitly detected same-direction lane-change interval.
+    -- This is a real graph edge (same heading, sustained overlap), not a
+    -- nearest-lane guess and never permits a jump to opposing traffic.
+    if not nextEdge then
+      local bestExtent=-math.huge
+      for _,edge in ipairs(currentLane.adjacent or {}) do
+        local target=graph.lanes[edge.to]
+        local fromEnd=finite(edge.fromEnd) and edge.fromEnd or nil
+        local toEnd=finite(edge.toEnd) and edge.toEnd or nil
+        if target and fromEnd and toEnd and fromEnd>=currentS+8.0 and
+          (not visited[target.id] or target.id==startLane.id) then
+          local sourceEnd=pointAt(currentLane,fromEnd)
+          local targetEnd=pointAt(target,clamp(toEnd,0,target.length))
+          local gap=dist(sourceEnd,targetEnd)
+          local ta=tangentAt(currentLane,fromEnd)
+          local tb=tangentAt(target,clamp(toEnd,0,target.length))
+          local alignment=ta.x*tb.x+ta.z*tb.z
+          if gap>=1.5 and gap<=9.0 and alignment>=0.94 then
+            local extent=fromEnd-math.max(currentS,edge.fromStart or currentS)
+            if extent>bestExtent then
+              bestExtent=extent
+              nextEdge={from=currentLane.id,to=target.id,
+                fromS=fromEnd,toS=clamp(toEnd,0,target.length),
+                gap=gap,alignment=alignment,kind="lane_change"}
+            end
           end
         end
       end
