@@ -49,7 +49,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  playerAutopilotLast=false, steeringDiagnostics=false, autoImportAccum=0,
+  playerAutopilotLast=false, steeringDiagnostics=false, autoImportAccum=0, cspImportPending=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -184,7 +184,7 @@ local function saveLine()
     flushLog()
   else state.status="Ошибка сохранения" end
 end
-local function loadLine()
+local function loadLine(retryOnly)
   local loaded=nil
   -- Prefer the CSP conversion; a saved RoutePilot line is the fallback.
   if CSPConverter then
@@ -195,7 +195,7 @@ local function loadLine()
       state.boundsL=type(boundsL)=="table" and boundsL or {}
       state.boundsR=type(boundsR)=="table" and boundsR or {}
       state.p={}; state.spawnHints={}; state.routeGeometry=nil
-      state.loaded=true; state.loadedFromCSP=true
+      state.loaded=true; state.loadedFromCSP=true; state.cspImportPending=false
       state.status=string.format("CSP: конвертировано %d точек",#nodes)
       if not state.spawnPerformed then
         state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
@@ -206,9 +206,13 @@ local function loadLine()
       flushLog()
       return true
     end
-    writeLog("CSP_IMPORT_FAILED ok=%s reason=%s",tostring(ok),
-      tostring(ok and infoOrError or nodes))
+    local reason=tostring(ok and infoOrError or nodes)
+    state.cspImportPending=reason:find("player car unavailable",1,true)~=nil or
+      reason:find("No CSP lane near",1,true)~=nil
+    writeLog("CSP_IMPORT_FAILED ok=%s reason=%s pending=%s",tostring(ok),
+      reason,tostring(state.cspImportPending))
   end
+  if retryOnly then return false end
   if io and io.open then
     local ok,f=pcall(io.open,getLineFilePath(),"r")
     if ok and f then
@@ -803,11 +807,11 @@ function script.update(dt)
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
-    if not state.loaded and not state.recLine and CSPConverter then
+    if (state.cspImportPending or not state.loaded) and not state.recLine and CSPConverter then
       state.autoImportAccum=state.autoImportAccum+dt
       if state.autoImportAccum>=5.0 then
         state.autoImportAccum=0
-        loadLine()
+        loadLine(state.cspImportPending)
       end
     end
     if state.recLine and player then addPoint(player.position) end
