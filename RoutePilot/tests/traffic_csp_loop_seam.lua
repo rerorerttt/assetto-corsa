@@ -50,6 +50,26 @@ local intersection = {
 }
 
 
+local function roadGroupFor(lane)
+  local left,right={},{}
+  local d=0
+  while d<lane.totalLength do
+    local p=Graph.sampleLane(lane,d)
+    local direction=Graph.directionAt(lane,d)
+    local lx,lz=-direction.z,direction.x
+    left[#left+1]=vec3(p.x+lx*3,p.y,p.z+lz*3)
+    right[#right+1]=vec3(p.x-lx*3,p.y,p.z-lz*3)
+    d=d+0.5
+  end
+  return {
+    boundariesVerified=true,
+    boundaries={left=left,right=right},
+    boundaryLoops={left=true,right=true},
+    laneOffsets={[lane]=0},
+    leftOffset=0,rightOffset=0,leftBoundaryOffset=3,rightBoundaryOffset=3
+  }
+end
+
 local graph = Graph.build({ lane }, { intersection })
 local roads={laneGroups={[lane]=roadGroupFor(lane)}}
 assert(#lane.graphLinks >= 2, "expected intersection spans at both sides of the loop seam")
