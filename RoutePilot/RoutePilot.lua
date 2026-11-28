@@ -24,6 +24,10 @@ local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 local okTrafficCSP, TrafficCSP = pcall(require, "traffic_csp_import")
 if not okTrafficCSP or type(TrafficCSP) ~= "table" or type(TrafficCSP.new) ~= "function" then TrafficCSP = nil end
+local okCSPGraph, CSPGraph = pcall(require, "traffic_csp_graph")
+if not okCSPGraph or type(CSPGraph) ~= "table" or type(CSPGraph.nearestEdge) ~= "function" then CSPGraph = nil end
+local okCSPRoutes, CSPRoutes = pcall(require, "traffic_csp_route")
+if not okCSPRoutes or type(CSPRoutes) ~= "table" or type(CSPRoutes.build) ~= "function" then CSPRoutes = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
@@ -67,6 +71,7 @@ local function flushLog()
 end
 local trafficCSP = TrafficCSP and TrafficCSP.new(writeLog) or nil
 local trafficCSPAttempted = false
+local trafficCSPRouteAttempted = false
 local function clamp(v,lo,hi) return math.max(lo,math.min(hi,v)) end
 local function lerp(a,b,t) return a+(b-a)*t end
 local function flatDist(a,b)
@@ -788,6 +793,29 @@ function script.update(dt)
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
+    if not trafficCSPRouteAttempted and trafficCSP and trafficCSP.loaded and
+        trafficCSP.graph and trafficCSP.roads and CSPGraph and CSPRoutes and player then
+      trafficCSPRouteAttempted = true
+      local edge, along, distance = CSPGraph.nearestEdge(
+        trafficCSP.graph, player.position, player.look, 120)
+      if edge then
+        local route, routeError = CSPRoutes.build(
+          trafficCSP.graph, trafficCSP.roads, edge, along, { minLength = 250 })
+        if route then
+          trafficCSP.previewRoute = route
+          writeLog("CSP_ROUTE_PREVIEW_OK edge=%d distance=%.2f length=%.1f points=%d path_edges=%d",
+            edge.id, distance or -1, route.length or 0, #route.nodes, #route.edges)
+        else
+          trafficCSP.previewRouteError = tostring(routeError)
+          writeLog("CSP_ROUTE_PREVIEW_FAILED edge=%d distance=%.2f reason=%s",
+            edge.id, distance or -1, tostring(routeError))
+        end
+      else
+        trafficCSP.previewRouteError = 'no_lane_near_player'
+        writeLog("CSP_ROUTE_PREVIEW_FAILED reason=no_lane_near_player")
+      end
+      flushLog()
+    end
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 then
