@@ -192,8 +192,8 @@ local function measureLaneSurfaceBounds(lane)
     lx, ly, lz = lx/leftLength, ly/leftLength, lz/leftLength
     local centerType = lane.surfaceTypes[i]
     if not driveableSurface(centerType, centerType) then return false end
-    leftWidths[i] = measureSideWidth(lane.points[i], lx, lz, centerType)
-    rightWidths[i] = measureSideWidth(lane.points[i], -lx, -lz, centerType)
+    leftWidths[i] = measureSideWidth(lane.points[i], lx, lz, centerType) or false
+    rightWidths[i] = measureSideWidth(lane.points[i], -lx, -lz, centerType) or false
     end
   end
   local leftValid = fillBoundaryGaps(leftWidths, lane.loop)
