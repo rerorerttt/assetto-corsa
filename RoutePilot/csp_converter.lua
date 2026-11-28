@@ -2,6 +2,7 @@
 -- Converts EVERY authored CSP lane into an immutable directed network.
 -- No road boundaries, synthetic centreline, lane merging or route truncation.
 local Converter = {}
+local makeLane
 local okJSON, JSON = pcall(require, "routepilot_json")
 if not okJSON or type(JSON) ~= "table" then JSON = nil end
 
@@ -30,12 +31,18 @@ local function saveNetworkCache(graph, log)
   if not JSON or not io or type(io.save) ~= "function" then return false end
   local path, folder = trackCachePath()
   if not path then return false end
+  local alreadyThere=false
   if type(io.fileExists) == "function" then
     local ok, exists = pcall(io.fileExists, path)
-    if ok and exists then
-      if type(log)=="function" then pcall(log,"CSP_CACHE_KEEP path=%s",path) end
-      return true
-    end
+    alreadyThere=ok and exists==true
+  end
+  if not alreadyThere and type(io.load)=="function" then
+    local ok, existing=pcall(io.load,path,"")
+    alreadyThere=ok and type(existing)=="string" and existing~=""
+  end
+  if alreadyThere then
+    if type(log)=="function" then pcall(log,"CSP_CACHE_KEEP path=%s",path) end
+    return true
   end
   if type(io.createDirectory) == "function" then pcall(io.createDirectory, folder) end
   local payload = {version=CACHE_VERSION, lanes={}, stats=graph.stats}
@@ -54,10 +61,16 @@ local function saveNetworkCache(graph, log)
   local okEncode, raw = pcall(JSON.encode, payload)
   if not okEncode or type(raw)~="string" or raw=="" then return false end
   -- Never replace an existing track cache, even if it is stale or damaged.
-  if type(io.fileExists) == "function" then
-    local ok, exists = pcall(io.fileExists, path)
-    if ok and exists then return true end
+  local existsNow=false
+  if type(io.fileExists)=="function" then
+    local ok,exists=pcall(io.fileExists,path)
+    existsNow=ok and exists==true
   end
+  if not existsNow and type(io.load)=="function" then
+    local ok,existing=pcall(io.load,path,"")
+    existsNow=ok and type(existing)=="string" and existing~=""
+  end
+  if existsNow then return true end
   local okSave = pcall(io.save, path, raw)
   if okSave and type(log)=="function" then
     pcall(log,"CSP_CACHE_SAVED path=%s lanes=%d bytes=%d",path,#payload.lanes,#raw)
@@ -151,7 +164,7 @@ local function tangentAt(lane,s)
   local tx,tz=norm(b.x-a.x,b.z-a.z)
   return {x=tx,z=tz}
 end
-local function makeLane(source)
+makeLane = function(source)
   if type(source)~="table" or not finite(source.id) or type(source.points)~="table" then return nil end
   local points,cumulative={},{}
   local length=0
