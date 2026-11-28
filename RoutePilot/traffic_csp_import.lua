@@ -17,7 +17,7 @@ local SAMPLE_STEP = 1.5
 local RAY_START_OFFSET = 2.0
 local RAY_LENGTH = 4.0
 local MAX_SURFACE_SNAP = 1.5
-local SURFACE_EDGE_STEP = 0.25
+local SURFACE_EDGE_STEP = 0.5
 local SURFACE_EDGE_MAX = 8.0
 local SURFACE_EDGE_GAP = 6.0
 local MIN_LANE_POINTS = 2
@@ -129,6 +129,13 @@ local function measureSideWidth(point, dx, dz, centerType)
     if driveableSurface(surfaceType, centerType) then
       lastDriveable = offset
     else
+      if lastDriveable > 0 then
+        local refineOffset = lastDriveable + SURFACE_EDGE_STEP*0.5
+        local refinedType = surfaceAtOffset(point, dx, dz, refineOffset)
+        if driveableSurface(refinedType, centerType) then
+          lastDriveable = refineOffset
+        end
+      end
       return lastDriveable >= 1.0 and lastDriveable or nil
     end
   end
