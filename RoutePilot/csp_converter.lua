@@ -97,8 +97,15 @@ local function buildIntersectionLinks(graph)
       for _,id in ipairs(graph.laneOrder) do
         local lane=graph.lanes[id]
         local cumulative=0
-        local first,last=nil,nil
-        local insideStart=nil
+        local activeStart,activeEnd=nil,nil
+        local function flushInterval()
+          if activeStart and activeEnd and activeEnd-activeStart>0.5 then
+            links[id][#links[id]+1]={
+              intersection=inter,enter=activeStart,exit=activeEnd
+            }
+          end
+          activeStart,activeEnd=nil,nil
+        end
         for si=1,#lane.points-1 do
           local p1,p2=lane.points[si],lane.points[si+1]
           local segLen=math.sqrt(dist2(p1,p2))
@@ -112,19 +119,22 @@ local function buildIntersectionLinks(graph)
             local t1,t2=cuts[ci],cuts[ci+1]
             local tm=(t1+t2)*0.5
             local mid={x=p1.x+(p2.x-p1.x)*tm,z=p1.z+(p2.z-p1.z)*tm}
-            local isInside=pointInside(poly,mid)
             local d1=cumulative+segLen*t1
             local d2=cumulative+segLen*t2
-            if isInside then
-              if not first then first=d1 end
-              last=d2
+            if pointInside(poly,mid) then
+              if activeStart and d1<=activeEnd+0.15 then
+                activeEnd=d2
+              else
+                flushInterval()
+                activeStart,activeEnd=d1,d2
+              end
+            elseif d2-d1>0.02 then
+              flushInterval()
             end
           end
           cumulative=cumulative+segLen
         end
-        if first and last and last-first>0.5 then
-          links[id][#links[id]+1]={intersection=inter,enter=first,exit=last}
-        end
+        flushInterval()
       end
     end
   end
