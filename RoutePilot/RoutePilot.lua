@@ -24,8 +24,6 @@ local okConverter, CSPConverter = pcall(require, "csp_converter")
 if not okConverter or type(CSPConverter) ~= "table" or
     type(CSPConverter.load) ~= "function" then CSPConverter = nil end
 local okDriver, Driver = pcall(require, "driver")
-local okAiSpline, AiSpline = pcall(require, "ai_spline")
-if not okAiSpline or type(AiSpline)~="table" or type(AiSpline.write)~="function" then AiSpline=nil end
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
@@ -60,8 +58,6 @@ local state = {
   playerRouteInvalid=false,
   teleportDiagnostics=false, teleportDiagAccum=0,
   teleportDiagSnapshots={}, teleportDiagApiAt={},
-  nativeSplinePath=nil, nativeSplineSignature=nil, nativeSplineApplied={}, nativeSplineAppliedAt={}, nativeSplineRetryAt={}, nativeSplineSpawnNextTryAt=0,
-  nativeAIParked={},
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -109,119 +105,6 @@ end
 local function getBoundsFilePath()
   return string.gsub(getLineFilePath(),"%.txt$","_bounds.txt")
 end
-
--- Replace the stock track fast_lane for every controlled AI car with a spline
--- generated from the exact RoutePilot route. The stock fastline remains present
--- for AC/CSP startup compatibility, but is no longer the active per-car spline.
-
-local function nativeSplineSignature()
-  local n=#state.nodes
-  if n<3 then return nil end
-  local a,b=state.nodes[1],state.nodes[n]
-  return table.concat({n,state.loopRoute and 1 or 0,
-    string.format("%.3f,%.3f,%.3f",a.x,a.y,a.z),
-    string.format("%.3f,%.3f,%.3f",b.x,b.y,b.z)},":")
-end
-
-local function ensureNativeSplineFile()
-  if not AiSpline then return nil,"ai_spline_module_unavailable" end
-  local signature=nativeSplineSignature()
-  if not signature then return nil,"route_not_ready" end
-  if state.nativeSplinePath and state.nativeSplineSignature==signature then
-    return state.nativeSplinePath
-  end
-  local path=string.gsub(getLineFilePath(),"%.txt$","_routepilot.ai")
-  local ok,err,meta,bytes=AiSpline.write(path,state.nodes,state.loopRoute)
-  if not ok then
-    writeLog("NATIVE_SPLINE_WRITE_FAIL path=%s reason=%s",path,tostring(err))
-    return nil,err
-  end
-  state.nativeSplinePath=path
-  state.nativeSplineSignature=signature
-  state.nativeSplineApplied={}
-  state.nativeSplineAppliedAt={}
-  state.nativeSplineRetryAt={}
-  writeLog("NATIVE_SPLINE_FILE_READY path=%s version=%d points=%d length=%.1f bytes=%d",
-    path,safeNumber(meta and meta.version,7),safeNumber(meta and meta.count),
-    safeNumber(meta and meta.length),safeNumber(bytes))
-  return path
-end
-
--- AC keeps its internal AI recovery active. Replacing only input values is
--- insufficient: recovery still snaps cars to the stock fast_lane.ai. Assign
--- the RoutePilot route as the per-car AI spline before allowing control.
-local function claimNativeSpline(carIndex)
-  if state.nativeSplineApplied[carIndex] then return true end
-  if type(physics)~="table" or type(physics.setAISpline)~="function" then
-    if not state.nativeSplineApiMissingLogged then
-      state.nativeSplineApiMissingLogged=true
-      writeLog("NATIVE_SPLINE_BLOCKED reason=setAISpline_api_unavailable")
-    end
-    return false
-  end
-  local now=0
-  local sim=ac.getSim()
-  if sim then
-    now=safeNumber(sim.gameTime)
-    if sim.customAISplinesAllowed==false then
-      local last=safeNumber(state.nativeSplineRetryAt[carIndex],-100)
-      if now-last>=2 then
-        state.nativeSplineRetryAt[carIndex]=now
-        writeLog("NATIVE_SPLINE_BLOCKED id=%d reason=session_permission_denied",carIndex)
-      end
-      return false
-    end
-  end
-  local last=safeNumber(state.nativeSplineRetryAt[carIndex],-100)
-  if now-last<0.5 then return false end
-  state.nativeSplineRetryAt[carIndex]=now
-  local path,err=ensureNativeSplineFile()
-  if not path then return false end
-  local ok,result=pcall(physics.setAISpline,carIndex,path,nil)
-  if ok and result==true then
-    state.nativeSplineApplied[carIndex]=true
-    state.nativeSplineAppliedAt[carIndex]=now
-    writeLog("NATIVE_SPLINE_ASSIGNED id=%d path=%s stock_fastline_replaced=true",
-      carIndex,path)
-    return true
-  end
-  writeLog("NATIVE_SPLINE_ASSIGN_FAIL id=%d path=%s pcall_ok=%s result=%s",
-    carIndex,path,tostring(ok),tostring(result))
-  return false
-end
-
-local function nativeSplineSettled(carIndex)
-  local assignedAt=state.nativeSplineAppliedAt[carIndex]
-  if assignedAt==nil then return false end
-  local sim=ac.getSim()
-  local now=sim and safeNumber(sim.gameTime) or assignedAt
-  return now-assignedAt>=0.5
-end
-
--- Never hand an uncontrolled AI car back to the stock track spline when
--- RoutePilot has no verified route. CSP documents setAINoInput() as a parked
--- state; this is deliberately a fail-closed guard, not a moving-AI controller.
-local function setNativeAIParked(carIndex, parked, reason)
-  if type(physics)~="table" or type(physics.setAINoInput)~="function" then
-    if not state.nativeAIParkApiMissingLogged then
-      state.nativeAIParkApiMissingLogged=true
-      writeLog("NATIVE_AI_PARK_UNAVAILABLE reason=setAINoInput_api_missing")
-    end
-    return false
-  end
-  if state.nativeAIParked[carIndex]==(parked==true) then return true end
-  local ok,result=pcall(physics.setAINoInput,carIndex,parked==true,false)
-  if ok and result~=false then
-    state.nativeAIParked[carIndex]=parked==true
-    writeLog("NATIVE_AI_PARK_STATE id=%d parked=%s reason=%s",
-      carIndex,tostring(parked==true),tostring(reason or "route_state"))
-    return true
-  end
-  writeLog("NATIVE_AI_PARK_FAIL id=%d parked=%s pcall_ok=%s result=%s",
-    carIndex,tostring(parked==true),tostring(ok),tostring(result))
-  return false
-end
-
 
 local function serializeNodes(nodes)
   local out={}
@@ -334,9 +217,6 @@ local function loadLine(retryOnly)
       -- Preview geometry must be visible immediately; this branch is used
       -- precisely when the imported route is not yet safe for AI driving.
       state.showWorldLines=true
-      state.nativeSplinePath=nil; state.nativeSplineSignature=nil
-      state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}
-      state.nativeSplineRetryAt={}; state.nativeSplineSpawnNextTryAt=0
       state.trafficNetwork=infoOrError.network
       state.loopRoute=loop==true
       state.boundsL=type(boundsL)=="table" and boundsL or {}
@@ -357,8 +237,6 @@ local function loadLine(retryOnly)
     end
     if ok and type(nodes)=="table" and #nodes>=2 then
       state.nodes=nodes
-      state.nativeSplinePath=nil; state.nativeSplineSignature=nil
-      state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}; state.nativeSplineRetryAt={}; state.nativeSplineSpawnNextTryAt=0
       state.trafficNetwork=type(infoOrError)=="table" and infoOrError.network or nil
       state.loopRoute=loop==true
       state.boundsL=type(boundsL)=="table" and boundsL or {}
@@ -415,8 +293,6 @@ local function loadLine(retryOnly)
   end
   if loaded then
     state.nodes=loaded; state.p={}; state.spawnHints={}; state.spawnedCars={}
-    state.nativeSplinePath=nil; state.nativeSplineSignature=nil
-    state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}; state.nativeSplineRetryAt={}; state.nativeSplineSpawnNextTryAt=0
     state.routeGeometry=nil; state.loaded=true
     state.loadedFromCSP=false
     if ac.storage then
@@ -1077,13 +953,6 @@ local function installCarJumpTrace()
       local jumpTime=jumpSim and safeNumber(jumpSim.gameTime) or 0
       local ownApiAt=state.teleportDiagApiAt and state.teleportDiagApiAt[carIndex]
       local ownApiAge=ownApiAt and (jumpTime-ownApiAt) or math.huge
-      if car.isAIControlled and ownApiAge>1.0 then
-        state.nativeSplineApplied[carIndex]=nil
-        state.nativeSplineAppliedAt[carIndex]=nil
-        state.nativeSplineRetryAt[carIndex]=nil
-        writeLog("NATIVE_SPLINE_RECLAIM_TRIGGER id=%d reason=external_car_jump api_age=%.2f",
-          carIndex,ownApiAge)
-      end
       if state.teleportDiagnostics then
         local now=teleportDiagSnapshot(car)
         local before=state.teleportDiagSnapshots and state.teleportDiagSnapshots[carIndex]
@@ -1112,10 +981,6 @@ local function installCarJumpTrace()
   end
   if type(ac.onCarAIToggle)=="function" then
     ac.onCarAIToggle(-1,function(carIndex,aiActive)
-      state.nativeSplineApplied[carIndex]=nil
-      state.nativeSplineAppliedAt[carIndex]=nil
-      state.nativeSplineRetryAt[carIndex]=nil
-      state.nativeAIParked[carIndex]=nil
       if not state.teleportDiagnostics then return end
       local car=ac.getCar(carIndex)
       local pos=car and car.position
