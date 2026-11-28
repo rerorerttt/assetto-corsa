@@ -113,6 +113,9 @@ local function collectRoute(graph, player)
     if first then
       append(raw, pointAt(lane, startProjection.segment, startProjection.t))
       for j = startProjection.segment + 1, #lane.points do append(raw, lane.points[j]) end
+      if lane.loop then
+        for j = 1, startProjection.segment do append(raw, lane.points[j]) end
+      end
       first = false
     else
       -- A short connector bridges the gap between CSP lane endpoint and
@@ -131,7 +134,10 @@ local function collectRoute(graph, player)
       for j = 1, #lane.points do append(raw, lane.points[j]) end
     end
     local nextLane = chooseNext(graph, lane, visited)
-    if not nextLane then break end
+    if not nextLane then
+      if lane.id == start.id and lane.loop then loop = true end
+      break
+    end
     lane = nextLane
   end
   if #raw < 2 then return nil, nil, nil, 'CSP route contains fewer than two points' end
@@ -181,13 +187,15 @@ local function buildCorridor(graph, raw)
       if offsets[j] < 0 and offsets[j] >= lo-5.5 then lo=offsets[j] end
       if offsets[j] > 0 and offsets[j] <= hi+5.5 then hi=offsets[j] end
     end
-    local laneCount=math.max(1,math.floor((hi-lo)/2.4+1.5))
+    local laneCount=math.max(1,math.floor((hi-lo)/3.0+1.5))
     local width=laneCount==1 and 6.0 or laneCount*3.0
     local centerShift=(lo+hi)*0.5
     local center={x=p.x+nx*centerShift,y=p.y,z=p.z+nz*centerShift}
-    append(nodes,center)
-    left[#left+1]=-(width*0.5)
-    right[#right+1]=width*0.5
+    if #nodes==0 or dist2(nodes[#nodes],center)>0.01 then
+      nodes[#nodes+1]=vec3(center.x,center.y,center.z)
+      left[#left+1]=-(width*0.5)
+      right[#right+1]=width*0.5
+    end
   end
   if #nodes < 2 then return nil,nil,nil end
   -- Align bounds with deduplicated node list.
