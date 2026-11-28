@@ -878,95 +878,62 @@ function Converter.load(log)
     -- directed graph and choose the continuation with the greatest reachable
     -- road distance; this prevents a short ramp/return edge from truncating a
     -- long through lane (the Shuto 136 -> 135 dead-end was exactly this case).
+    -- Choose a continuous road continuation locally. A global longest-path
+    -- search is invalid for Traffic Tool networks: ramps, service roads and
+    -- loop connectors can make a branch appear to have the largest reachable
+    -- distance, causing one synthetic route to weave through the entire city.
+    -- Prefer authored lane priority and forward tangent continuity instead.
     local function chooseBestJunctionEdge(originLane,originS)
-      local function copyVisits(source)
-        local result={}
-        for id,s in pairs(source) do result[id]=s end
-        return result
-      end
-      local frontier={{lane=originLane,s=originS,distance=0,
-        firstEdge=nil,visits=copyVisits(visited)}}
-      local bestEdge,bestDistance=nil,-math.huge
-      local sequence=0
-      local maxDepth,beamWidth=8,128
-      for depth=1,maxDepth do
-        local expanded={}
-        for _,state in ipairs(frontier) do
-          local consumed=copyVisits(state.visits)
-          local oldS=consumed[state.lane.id]
-          if not oldS or state.s>oldS then consumed[state.lane.id]=state.s end
-          local options={}
-          for _,edge in ipairs(state.lane.outgoing or {}) do
-            local target=graph.lanes[edge.to]
-            local previous=target and consumed[target.id] or nil
-            if target and finite(edge.fromS) and finite(edge.toS) and
-              edge.fromS>=state.s+0.5 and
-              (target.id==startLane.id or not previous or
-                edge.toS>previous+20.0) then
-              options[#options+1]=edge
-            end
-          end
-          if #options==0 then
-            local score=state.distance+math.max(0,state.lane.length-state.s)
-            if state.firstEdge and score>bestDistance then
-              bestDistance=score
-              bestEdge=state.firstEdge
-            end
-          else
-            for _,edge in ipairs(options) do
-              local target=graph.lanes[edge.to]
-              local first=state.firstEdge or edge
-              local distance=state.distance+
-                math.max(0,edge.fromS-state.s)+
-                math.max(0,finite(edge.gap) and edge.gap or 0)
-              -- Returning to the start lane at its origin (or its prefix)
-              -- closes a real directed loop. Do not expand that cycle again.
-              if target.id==startLane.id and edge.toS<=startS+20.0 then
-                local score=distance+math.max(0,startS-edge.toS)
-                if score>bestDistance then
-                  bestDistance=score
-                  bestEdge=first
-                end
-              else
-                local nextVisits=copyVisits(consumed)
-                expanded[#expanded+1]={lane=target,s=edge.toS,
-                  distance=distance,firstEdge=first,visits=nextVisits,
-                  order=sequence+1}
-                sequence=sequence+1
-              end
-            end
-          end
-        end
-        if #expanded==0 then break end
-        for _,state in ipairs(expanded) do
-          state.priority=state.distance+
-            math.max(0,state.lane.length-state.s)
-        end
-        table.sort(expanded,function(a,b)
-          if a.priority==b.priority then return a.order<b.order end
-          return a.priority>b.priority
-        end)
-        frontier={}
-        for i=1,math.min(beamWidth,#expanded) do
-          frontier[i]=expanded[i]
-        end
-        if depth==maxDepth then
-          for _,state in ipairs(frontier) do
-            local score=state.distance+
-              math.max(0,state.lane.length-state.s)
-            if state.firstEdge and score>bestDistance then
-              bestDistance=score
-              bestEdge=state.firstEdge
-            end
+      local bestEdge,bestScore=nil,-math.huge
+      local candidates=0
+      for _,edge in ipairs(originLane.outgoing or {}) do
+        local target=graph.lanes[edge.to]
+        local previous=target and visited[target.id] or nil
+        if target and finite(edge.fromS) and finite(edge.toS) and
+            edge.fromS>=originS+0.5 and
+            (target.id==startLane.id or not previous or
+              edge.toS>previous+20.0) then
+          candidates=candidates+1
+          local alignment=finite(edge.alignment) and edge.alignment or -1.0
+          local targetPriority=finite(target.priority) and target.priority or 0
+          local sourcePriority=finite(originLane.priority) and originLane.priority or 0
+          local roleContinuity=(target.role~=nil and originLane.role~=nil and
+            target.role==originLane.role) and 1 or 0
+          local gap=finite(edge.gap) and edge.gap or 18.0
+          local advance=math.max(0,edge.fromS-originS)
+          -- Priority distinguishes the actual main/highway lanes from
+          -- secondary roads and parking connectors. Alignment keeps the
+          -- selected path in the authored direction; gap and distance are
+          -- tie-breakers, not incentives to explore distant branches.
+          local score=alignment*60.0+
+            targetPriority*8.0+
+            (targetPriority-sourcePriority)*2.0+
+            roleContinuity*6.0-
+            gap*2.0-
+            advance*0.005
+          if score>bestScore or
+              (score==bestScore and bestEdge and edge.to<bestEdge.to) then
+            bestScore=score
+            bestEdge=edge
           end
         end
       end
-      return bestEdge,bestDistance
+      if bestEdge then
+        trace("CSP_ROUTE_CHOICE from=%d to=%d fromS=%.1f toS=%.1f align=%.3f priority=%.1f gap=%.1f candidates=%d score=%.2f",
+          originLane.id,bestEdge.to,bestEdge.fromS,bestEdge.toS,
+          finite(bestEdge.alignment) and bestEdge.alignment or -1,
+          finite(graph.lanes[bestEdge.to].priority) and graph.lanes[bestEdge.to].priority or 0,
+          finite(bestEdge.gap) and bestEdge.gap or -1,candidates,bestScore)
+      else
+        trace("CSP_ROUTE_CHOICE_NONE lane=%d s=%.1f candidates=%d",
+          originLane.id,originS,candidates)
+      end
+      return bestEdge,bestScore
     end
 
     local nextEdge,lookaheadDistance=chooseBestJunctionEdge(currentLane,currentS)
     if nextEdge then
-      trace("CSP_ROUTE_LOOKAHEAD from=%d chosen=%d reachable=%.1f",
+      trace("CSP_ROUTE_CONTINUE from=%d chosen=%d score=%.2f",
         currentLane.id,nextEdge.to,lookaheadDistance)
     end
 
