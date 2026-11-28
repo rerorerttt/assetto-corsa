@@ -899,16 +899,20 @@ function script.update(dt)
           trafficCSP.graph,player.position,player.look,120,12)
         local lastError='no_lane_near_player'
         local selected=nil
+        trafficCSP.failedRouteEdges=trafficCSP.failedRouteEdges or {}
         for ci=1,#candidates do
           local candidate=candidates[ci]
-          local route,routeError=CSPRoutes.build(
-            trafficCSP.graph,trafficCSP.roads,candidate.edge,candidate.along,
-            {minLength=250,loop=true,requireLoop=true})
-          if route then
-            selected={route=route,candidate=candidate}
-            break
+          if not trafficCSP.failedRouteEdges[candidate.edge.id] then
+            local route,routeError=CSPRoutes.build(
+              trafficCSP.graph,trafficCSP.roads,candidate.edge,candidate.along,
+              {minLength=250,loop=true,requireLoop=true})
+            if route then
+              selected={route=route,candidate=candidate}
+              break
+            end
+            trafficCSP.failedRouteEdges[candidate.edge.id]=true
+            lastError=tostring(routeError)
           end
-          lastError=tostring(routeError)
         end
         if selected then
           trafficCSPRouteAttempted=true
