@@ -37,6 +37,7 @@ local CFG = {
   TC_SLIP_START=0.10, TC_SLIP_FULL=0.28, TC_MAX_CUT=0.88,
   TC_RECOVERY_RATE=1.25, TC_CORNER_CUT=0.22,
   SPAWN_GAP=25.0, SPAWN_MIN_GAP=14.0, SPAWN_STABLE_TIME=0.35, SPAWN_WAIT_TIMEOUT=8.0,
+  RESPAWN_PLAYER_DISTANCE=300.0, RESPAWN_DISTANCE_CHECK=0.5,
   LOG_INTERVAL=1.0, MAX_ROUTE_POINTS=50000, RECORD_DISTANCE=3.0,
   PREVIEW_AHEAD=30.0, PREVIEW_BACK=8.0, DRAW_RANGE=600.0,
   BOUNDS_MIN_PASS=3.0, SAFE_RESPAWN_CLEAR=8.0,
@@ -769,63 +770,105 @@ local function teleportHome(carIndex,car)
     writeLog("RESCUE_FAILED id=%d reason=no_teleport_api",carIndex)
     return false
   end
-  if #state.nodes<2 or not car or not car.position then return false end
+  if #state.nodes<2 or not state.loaded or not car then return false end
   if not state.loadedFromCSP or not state.trafficNetwork or
       #(state.trafficNetwork.laneOrder or {})==0 then
     writeLog("RESCUE_FAILED id=%d reason=no_yellow_csp_source_lines",carIndex)
     return false
   end
 
-  -- Recovery direction is fixed by the recorded line order, never by
-  -- the vehicle's current heading or velocity after a spin/collision.
-  -- Reuse the car's last route segment to disambiguate nearby track branches.
-  local driverState=state.p and state.p[carIndex]
-  local hintSeg=driverState and driverState.segIdx or 1
-  local allowGlobal=not (driverState and driverState.routeLocked and driverState.segIdx)
-  local seg,t,routeError=findNearestSeg(car.position,hintSeg,allowGlobal,nil)
-  if not allowGlobal and routeError>15.0 then
-    seg,t,routeError=findNearestSeg(car.position,hintSeg,true,nil)
-  end
-  local sign=1
-  if routeError>250 then
-    writeLog("RESCUE_FAILED id=%d reason=route_too_far error=%.1f",carIndex,routeError)
+  -- Recovery is anchored to the PLAYER, never to the lost AI car. This makes
+  -- recovery independent of how far away the AI has travelled or fallen.
+  local player=ac.getCar(0)
+  if not player or not player.isActive or not player.position or not player.look then
+    writeLog("RESCUE_FAILED id=%d reason=player_unavailable",carIndex)
     return false
   end
+  local metrics=buildSpawnRouteMetrics()
+  if not metrics then
+    writeLog("RESCUE_FAILED id=%d reason=route_metrics_unavailable",carIndex)
+    return false
+  end
+  local routeDistance,routeError=findRouteDistanceAtPosition(
+    player.position,metrics,player.look)
 
-  -- Never search backward along the recorded line. Candidate points are
-  -- sampled strictly in increasing route-node order, beyond the obstruction.
-  for distance=20,320,10 do
-    local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
+  -- Stable per-car slots: every AI is placed ahead of the player with enough
+  -- separation. The AI's old position, route error and distance are irrelevant.
+  local sim=ac.getSim()
+  local order=1
+  if sim then
+    order=0
+    for i=1,sim.carsCount-1 do
+      local other=ac.getCar(i)
+      if other and other.isActive and other.isAIControlled then
+        order=order+1
+        if i==carIndex then break end
+      end
+    end
+    if order<1 then order=1 end
+  end
+  local baseDistance=35.0+(order-1)*24.0
+  local chosenPos,chosenDir,chosenSeg,chosenT=nil,nil,nil,nil
+  local firstValidPos,firstValidDir,firstValidSeg,firstValidT=nil,nil,nil,nil
+
+  -- Search progressively farther ahead on the player's current RoutePilot
+  -- line. Every candidate is snapped back to the original CSP yellow source
+  -- polyline before it can reach the teleport API.
+  for extra=0,120,8 do
+    local pos,seg,t=sampleSpawnRoute(metrics,routeDistance+baseDistance+extra)
     if pos then
-      local nextPos=walkLineSigned(sampleSeg,sampleT,3.0,sign)
+      local nextPos=sampleSpawnRoute(metrics,routeDistance+baseDistance+extra+3.0)
       if nextPos then
         local dx,dz=normalize2(nextPos.x-pos.x,nextPos.z-pos.z)
         local snapped=snapSpawnToAuthoredLane(pos,vec3(dx,0,dz))
         if snapped then
-          local safePos=vec3(snapped.position.x,snapped.position.y+0.15,snapped.position.z)
-          if spotIsClear(safePos,carIndex) then
-            local ok,result=pcall(physics.setAICarPosition,carIndex,
-              safePos,vec3(-snapped.direction.x,0,-snapped.direction.z))
-            if ok and result~=false then
-              state.p[carIndex]=nil
-              state.rescueWatch=state.rescueWatch or {}
-              state.rescueWatch[carIndex]={cooldown=3.0}
-              writeLog("RESCUE_FORWARD id=%d distance=%.1f route_error=%.1f direction=RECORDED_LINE_FORWARD sign=%d pos=(%.2f,%.2f,%.2f)",
-                carIndex,distance,routeError,sign,safePos.x,safePos.y,safePos.z)
-              flushLog()
-              return true
-            end
-            writeLog("RESCUE_FORWARD_FAILED id=%d distance=%.1f error=%s",
-              carIndex,distance,tostring(result))
+          local candidate=vec3(snapped.position.x,snapped.position.y+0.15,snapped.position.z)
+          if not firstValidPos then
+            firstValidPos=candidate
+            firstValidDir=snapped.direction
+            firstValidSeg,firstValidT=seg,t
+          end
+          -- Prefer an unoccupied slot, but occupancy can never veto recovery.
+          if spotIsClear(candidate,carIndex) then
+            chosenPos,chosenDir,chosenSeg,chosenT=
+              candidate,snapped.direction,seg,t
+            break
           end
         end
       end
     end
   end
-  writeLog("RESCUE_FAILED id=%d reason=no_clear_forward_point route_error=%.1f",
-    carIndex,routeError)
+
+  -- If every ahead slot is occupied, use the first valid authored-line point
+  -- anyway. A nearby car must not prevent a lost car from being recovered.
+  if not chosenPos then
+    chosenPos,chosenDir,chosenSeg,chosenT=
+      firstValidPos,firstValidDir,firstValidSeg,firstValidT
+  end
+  if not chosenPos or not chosenDir then
+    writeLog("RESCUE_FAILED id=%d reason=no_forward_yellow_point player_route=%.1f player_route_error=%.1f route_length=%.1f slot=%.1f",
+      carIndex,routeDistance,routeError,metrics.length,baseDistance)
+    flushLog()
+    return false
+  end
+
+  local spawnDir=vec3(-chosenDir.x,0,-chosenDir.z)
+  local ok,result=pcall(physics.setAICarPosition,carIndex,chosenPos,spawnDir)
+  if not ok or result==false then
+    writeLog("RESCUE_FAILED id=%d reason=teleport_api error=%s",carIndex,tostring(result))
+    flushLog()
+    return false
+  end
+
+  state.p[carIndex]=nil
+  state.rescueWatch=state.rescueWatch or {}
+  state.rescueWatch[carIndex]={cooldown=3.0,distanceCheckT=0}
+  state.spawnHints[carIndex]={segment=chosenSeg,parameter=chosenT,boost=true}
+  writeLog("RESCUE_AHEAD_OF_PLAYER id=%d order=%d player_route=%.1f player_route_error=%.1f slot=%.1f extra=%.1f pos=(%.2f,%.2f,%.2f)",
+    carIndex,order,routeDistance,routeError,baseDistance,
+    math.max(0,routeDistance+baseDistance+120-metrics.length),chosenPos.x,chosenPos.y,chosenPos.z)
   flushLog()
-  return false
+  return true
 end
 
 local function updateRescueWatchdog(carIndex,car,dt)
@@ -873,9 +916,31 @@ local function updateRescueWatchdog(carIndex,car,dt)
 
   local offTrackT=safeNumber(p and p.offTrackT)
   local reason=nil
-  if w.rolloverT>=10.0 then reason="rollover_10s"
+  -- Projection loss is a hard recovery event: do not leave the AI braking
+  -- forever while waiting for the old ten-second off-track timer.
+  if p and p.projectionLost then reason="projection_lost"
+  elseif w.rolloverT>=10.0 then reason="rollover_10s"
   elseif offTrackT>=10.0 then reason="offtrack_10s"
   elseif w.gasStallT>=10.0 then reason="gas_no_progress_10s" end
+
+  -- Recycle any AI that falls too far behind/ahead of the player, even if its
+  -- local controller still reports valid progress. This check is independent
+  -- of the AI's own coordinates relative to the authored route.
+  w.distanceCheckT=safeNumber(w.distanceCheckT)+dt
+  if not reason and w.distanceCheckT>=0.5 then
+    w.distanceCheckT=0
+    local player=ac.getCar(0)
+    if player and player.isActive and player.position then
+      local dx=car.position.x-player.position.x
+      local dz=car.position.z-player.position.z
+      local playerDistance=math.sqrt(dx*dx+dz*dz)
+      if playerDistance>=300.0 then
+        reason="player_distance_300m"
+        writeLog("RESPAWN_DISTANCE_TRIGGER id=%d distance=%.1f threshold=300.0",
+          carIndex,playerDistance)
+      end
+    end
+  end
   w.retryT=math.max(0,safeNumber(w.retryT)-dt)
   if reason and w.retryT<=0 then
     local rescued=teleportHome(carIndex,car)
