@@ -695,7 +695,7 @@ function Graph.loopPath(graph, startEdge, maxVisited)
   local tries = math.min(#candidates, 48)
   for i = 1, tries do
     local candidate = candidates[i]
-    local backPath = Graph.shortestPath(graph, candidate.edge, startEdge, maxVisited)
+    local backPath, backCost = Graph.shortestPath(graph, candidate.edge, startEdge, maxVisited)
     if backPath and #backPath >= 2 then
       local outPath, cursor = {}, candidate.edge
       while cursor do
@@ -708,7 +708,7 @@ function Graph.loopPath(graph, startEdge, maxVisited)
         for j = 1, #outPath do combined[#combined+1] = outPath[j] end
         for j = 2, #backPath-1 do combined[#combined+1] = backPath[j] end
         if #combined > 1 then
-          return combined, (distances[candidate.edge.id] or 0) + (backPath.totalCost or 0)
+          return combined, (distances[candidate.edge.id] or 0) + (backCost or 0)
         end
       end
     end
