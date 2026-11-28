@@ -48,6 +48,8 @@ local debugPath, debugCost = Graph.shortestPath({edges={edgeA,edgeB}}, edgeA, ed
 assert(debugPath and #debugPath == 2, "synthetic graph did not produce two-edge path")
 assert(Graph.sampleLane(a, 0) and Graph.sampleLane(a, 5) and Graph.sampleLane(a, 10),
   "synthetic lane samples are unavailable")
+print("DEBUG lane samples", Graph.sampleLane(a,0).x, Graph.sampleLane(a,5).x,
+  Graph.sampleLane(a,10).x, "edge range", edgeA.from, edgeA.to)
 local route, err = Routes.build({edges={edgeA,edgeB}}, nil, edgeA, 0,
   {targetEdge=edgeB})
 assert(route, "route build failed: "..tostring(err))
