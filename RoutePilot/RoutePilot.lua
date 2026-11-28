@@ -1023,7 +1023,14 @@ render.on('main.track.transparent', function()
       -- Render the source CSP lane network as-is; boundary geometry is omitted.
       for _,laneId in ipairs(state.trafficNetwork.laneOrder or {}) do
         local lane=state.trafficNetwork.lanes[laneId]
-        local pts=lane and lane.points or {}
+        local box=lane and lane.aabb
+        local near=true
+        if box then
+          local dx=math.max(box.minX-player.position.x,0,player.position.x-box.maxX)
+          local dz=math.max(box.minZ-player.position.z,0,player.position.z-box.maxZ)
+          near=dx*dx+dz*dz<=650.0*650.0
+        end
+        local pts=near and lane and lane.points or {}
         if #pts>=2 then
           local anchor=pts[1]
           local previous=anchor
@@ -1255,11 +1262,13 @@ local function drawMapInRect(q0,q1)
   end
   -- Draw every authored CSP traffic line. No boundaries and no merged centreline.
   if state.trafficNetwork then
-    for _,laneId in ipairs(state.trafficNetwork.laneOrder or {}) do
+    local laneIds=state.trafficNetwork.laneOrder or {}
+    local perLaneBudget=math.max(16,math.floor(5000/math.max(1,#laneIds)))
+    for _,laneId in ipairs(laneIds) do
       local lane=state.trafficNetwork.lanes[laneId]
       local points=lane and lane.points or {}
       local count=#points
-      local step=math.max(1,math.ceil(count/90))
+      local step=math.max(1,math.ceil(count/perLaneBudget))
       local prev
       for k=1,count,step do
         local node=points[k]
