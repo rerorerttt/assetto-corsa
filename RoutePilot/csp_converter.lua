@@ -59,6 +59,13 @@ local function makeLane(source)
     end
   end
   if #points<2 or length<0.5 then return nil,"LANE_TOO_SHORT" end
+  local minX,maxX,minY,maxY,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge,math.huge,-math.huge
+  for i=1,#points do
+    local p=points[i]
+    minX=math.min(minX,p.x);maxX=math.max(maxX,p.x)
+    minY=math.min(minY,p.y);maxY=math.max(maxY,p.y)
+    minZ=math.min(minZ,p.z);maxZ=math.max(maxZ,p.z)
+  end
   local loop=source.loop==true
   if loop and dist(points[1],points[#points])>0.015 then
     length=length+dist(points[#points],points[1])
@@ -69,6 +76,7 @@ local function makeLane(source)
     id=source.id,name=tostring(source.name or ("Lane #"..source.id)),
     loop=loop,points=points,cumulative=cumulative,length=length,
     role=source.role or source.laneRole,source=source,
+    aabb={minX=minX,maxX=maxX,minY=minY,maxY=maxY,minZ=minZ,maxZ=maxZ},
     outgoing={},incoming={},adjacent={},bounds=nil
   }
 end
@@ -161,10 +169,22 @@ local function buildJunctionTransitions(graph)
   for _,id in ipairs(graph.laneOrder) do transitions[id]={} end
   for _,intersection in ipairs(graph.intersections) do
     local passages={}
+    local minX,maxX,minZ,maxZ=math.huge,-math.huge,-math.huge,math.huge
+    for _,p in ipairs(intersection.points) do
+      minX=math.min(minX,p.x);maxX=math.max(maxX,p.x)
+      minZ=math.min(minZ,p.z);maxZ=math.max(maxZ,p.z)
+    end
+    -- Skip lane polylines whose bounding boxes cannot reach this junction.
+    -- The generous margin includes segments whose endpoints lie outside it.
+    local margin=22.0
     for _,id in ipairs(graph.laneOrder) do
       local lane=graph.lanes[id]
-      local intervals=intersectionIntervals(lane,intersection.points)
-      if #intervals>0 then passages[#passages+1]={lane=lane,intervals=intervals} end
+      local box=lane.aabb
+      if box.maxX>=minX-margin and box.minX<=maxX+margin and
+          box.maxZ>=minZ-margin and box.minZ<=maxZ+margin then
+        local intervals=intersectionIntervals(lane,intersection.points)
+        if #intervals>0 then passages[#passages+1]={lane=lane,intervals=intervals} end
+      end
     end
     for i=1,#passages do
       local from=passages[i]
