@@ -123,15 +123,26 @@ local function appendBezier(route, roads, movement)
   local directionDot = movement.fromDir.x*movement.toDir.x +
     movement.fromDir.y*movement.toDir.y + movement.fromDir.z*movement.toDir.z
   local handleFactor = directionDot < -0.5 and 0.22 or (directionDot < 0.5 and 0.30 or 0.42)
-  local handle = math.max(1.0, math.min(12.0, chord*handleFactor))
+  local attributes = type(movement.attributes) == 'table' and movement.attributes or nil
+  local cb = attributes and tonumber(attributes.cb) or nil
+  local ce = attributes and tonumber(attributes.ce) or nil
+  if not cb or cb ~= cb or cb == math.huge or cb == -math.huge then cb = handleFactor end
+  if not ce or ce ~= ce or ce == math.huge or ce == -math.huge then ce = handleFactor end
+  -- CSP Traffic Tool stores normalized Bezier handle lengths as fractions of
+  -- the entry/exit chord. Keep those values instead of replacing authored
+  -- turn trajectories with a generic direction-based curve.
+  cb = math.max(0.05, math.min(1.5, cb))
+  ce = math.max(0.05, math.min(1.5, ce))
+  local handleA = math.max(1.0, math.min(12.0, chord*cb))
+  local handleB = math.max(1.0, math.min(12.0, chord*ce))
   local p1 = vec3(
-    p0.x + movement.fromDir.x*handle,
-    p0.y + movement.fromDir.y*handle,
-    p0.z + movement.fromDir.z*handle)
+    p0.x + movement.fromDir.x*handleA,
+    p0.y + movement.fromDir.y*handleA,
+    p0.z + movement.fromDir.z*handleA)
   local p2 = vec3(
-    p3.x - movement.toDir.x*handle,
-    p3.y - movement.toDir.y*handle,
-    p3.z - movement.toDir.z*handle)
+    p3.x - movement.toDir.x*handleB,
+    p3.y - movement.toDir.y*handleB,
+    p3.z - movement.toDir.z*handleB)
   local leftA,rightA=laneBoundsAt(roads,movement.from.lane,p0,movement.fromDir)
   local leftB,rightB=laneBoundsAt(roads,movement.to.lane,p3,movement.toDir)
   local halfWidth=math.max(0.05,math.min(3.5,leftA,-rightA,leftB,-rightB))
