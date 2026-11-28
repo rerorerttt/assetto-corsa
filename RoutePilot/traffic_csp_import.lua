@@ -168,6 +168,9 @@ local function measureLaneSurfaceBounds(lane)
   if not Surfaces or #lane.points < 2 then return false end
   local leftWidths, rightWidths = {}, {}
   local n = #lane.points
+  -- Keep the arrays dense while probing alternate samples; Lua's length
+  -- operator is undefined for sparse tables with holes.
+  for i = 1, n do leftWidths[i], rightWidths[i] = false, false end
   for i = 1, n do
     -- Probe every 3 m along the lane; missing samples are filled only from
     -- nearby verified widths and always use the narrower neighbor.
