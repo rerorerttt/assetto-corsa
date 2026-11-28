@@ -21,8 +21,6 @@ if not okVehicleDynamics or type(VehicleDynamics) ~= "table" or
   VehicleDynamics = nil
 end
 local CFG, state, H
-local okNetworkDriver, NetworkDriver = pcall(require, "network_driver")
-if not okNetworkDriver or type(NetworkDriver) ~= "table" then NetworkDriver = nil end
 
 local BOUND_MARGIN = 0.4
 local RESCUE_SPEED = 1.5
@@ -59,15 +57,6 @@ function Driver.setup(cfg, st, helpers)
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
-  if NetworkDriver and NetworkDriver.setup then
-    NetworkDriver.setup(cfg, st, helpers)
-    if st.trafficNetwork and helpers and helpers.log then
-      helpers.log("CSP_NETWORK_DRIVER_ACTIVE lanes=%d",
-        #(st.trafficNetwork.laneOrder or {}))
-    end
-  elseif st.trafficNetwork and helpers and helpers.log then
-    helpers.log("CSP_NETWORK_DRIVER_UNAVAILABLE")
-  end
 end
 
 local function refreshRouteMetrics()
@@ -791,9 +780,12 @@ local function updateRacingPlan(carIndex,car,p,speed,dt)
   p.racingPlanStartProgress=p.routeProgress
   -- Search failure falls back to the recorded route spline. Only NO_FIT means
   -- the vehicle physically cannot fit the immediate corridor and may stop.
-  p.racingPlanBlocked=nextPlan==nil and planFailure=="NO_FIT"
-  p.racingPlanFailure=p.racingPlanBlocked and
-    (planFailure or originalFailure or "NO_SAFE_PATH") or nil
+  -- NO_FIT means the optimiser cannot fit its sampled footprint inside
+  -- the imported bounds; it does not prove that the authored racing line is
+  -- physically blocked. Keep following the valid route spline. A real traffic
+  -- obstacle is handled independently by updateTrafficControl().
+  p.racingPlanBlocked=false
+  p.racingPlanFailure=nil
   p.racingPlanFallback=fallbackKind
   p.racingPlanTrafficBlocked=false
   p.racingPlanTrafficBlockedDistance=nil
@@ -1927,7 +1919,10 @@ function Driver.update(carIndex, car, dt)
     p = state.p[carIndex]
   end
 
-  p.retireT = p.retireT + dt
+  -- Some spawn/adoption paths create a partial state record before the
+  -- personality is attached. Retirement prevention must never crash the
+  -- complete control update because that optional timer is absent.
+  p.retireT = safeNumber(p.retireT, 2.0) + math.max(0, safeNumber(dt))
   if p.retireT >= 2.0 then
     p.retireT = 0
     if physics and physics.preventAIFromRetiring then
