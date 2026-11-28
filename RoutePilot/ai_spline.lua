@@ -28,23 +28,30 @@ function M.encode(nodes, loop)
     return nil,"route_needs_at_least_3_points"
   end
 
-  local count=#nodes
-  local cumulative={}
-  local total=0
-  for i=1,count do
+  local points={}
+  for i=1,#nodes do
     local p=nodes[i]
     if not p or not finite(p.x) or not finite(p.y) or not finite(p.z) then
       return nil,"invalid_route_point_"..tostring(i)
     end
-    if i>1 then
-      local d=distance(nodes[i-1],p)
-      if d<0.05 then return nil,"degenerate_segment_"..tostring(i-1) end
-      total=total+d
+    if #points==0 or distance(points[#points],p)>=0.05 then
+      points[#points+1]=p
     end
+  end
+  if loop and #points>3 and distance(points[#points],points[1])<0.05 then
+    points[#points]=nil
+  end
+  local count=#points
+  if count<3 then return nil,"route_needs_3_distinct_points" end
+
+  local cumulative={}
+  local total=0
+  for i=1,count do
+    if i>1 then total=total+distance(points[i-1],points[i]) end
     cumulative[i]=total
   end
   if loop then
-    local closing=distance(nodes[count],nodes[1])
+    local closing=distance(points[count],points[1])
     if closing<0.05 then return nil,"degenerate_closing_segment" end
     total=total+closing
   end
@@ -53,7 +60,7 @@ function M.encode(nodes, loop)
   local chunks={}
   chunks[#chunks+1]=string.pack("<i4i4i4i4",7,count,0,0)
   for i=1,count do
-    local p=nodes[i]
+    local p=points[i]
     chunks[#chunks+1]=string.pack("<ffffi4",
       p.x,p.y,p.z,cumulative[i],i-1)
   end
@@ -62,8 +69,8 @@ function M.encode(nodes, loop)
   -- intentional: RoutePilot's own recorded boundaries remain authoritative.
   chunks[#chunks+1]=string.pack("<i4",count)
   for i=1,count do
-    local prev=nodes[i==1 and (loop and count or 1) or i-1]
-    local next=nodes[i==count and (loop and 1 or count) or i+1]
+    local prev=points[i==1 and (loop and count or 1) or i-1]
+    local next=points[i==count and (loop and 1 or count) or i+1]
     local tx,tz=normalized(next.x-prev.x,next.z-prev.z)
     local direction=math.atan2(tz,tx)
     local length=cumulative[i]
