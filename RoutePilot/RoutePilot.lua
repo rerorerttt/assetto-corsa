@@ -1186,11 +1186,11 @@ function script.update(dt)
       end
     end
     local graphRoute=trafficCSP and trafficCSP.previewRoute or nil
-    if state.enabled and not state.recLine and not state.recBounds and graphRoute and graphRoute.loop then
+    if state.enabled and not state.recLine and not state.recBounds and graphRoute then
       trySpawnCSPTraffic(sim,dt,graphRoute)
     end
     local useCSPRoute=state.enabled and not state.recLine and not state.recBounds and
-      graphRoute and graphRoute.loop and trafficCSP.graphSpawnDone==true
+      graphRoute and trafficCSP.graphSpawnDone==true
     if trafficCSP then
       if useCSPRoute then
         if not trafficCSP.graphDriverModeActive then
@@ -1215,7 +1215,7 @@ function script.update(dt)
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 and
-        not (graphRoute and graphRoute.loop and not trafficCSP.graphSpawnFailed and
+        not (graphRoute and not trafficCSP.graphSpawnFailed and
           not state.recLine and not state.recBounds) then
       trySpawnTeleport(sim,dt)
     end
@@ -1293,11 +1293,11 @@ function script.update(dt)
             state.nodes=route.nodes
             state.boundsL=route.boundsL
             state.boundsR=route.boundsR
-            state.loopRoute=true
+            state.loopRoute=route.loop==true
             state.routeGeometry=route.geometry
             state.routeLength=route.length
             state.routeMetricCount=#route.nodes
-            state.routeMetricLoop=true
+            state.routeMetricLoop=route.loop==true
             tryRecycleGraphTraffic(route,order,player)
 
             local savedOther={}
