@@ -59,6 +59,7 @@ function RacingLine.plan(route, sampleFn, progress, car, boundsAt, startOffset, 
 
   for i = 0, count do
     local d = i * step
+    if not route.loop and progress + d > route.total then break end
     local sample = sampleFn and sampleFn(route, progress + d) or nil
     if not sample then break end
     local left, right = boundsAt(sample)
