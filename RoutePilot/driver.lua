@@ -1230,9 +1230,8 @@ local function coordinatorMove(record,targetLane,records,reason,otherIndex)
 end
 
 function Driver.prepareTraffic(sim,driveOrder,dt)
-  if state.trafficNetwork and NetworkDriver and NetworkDriver.prepareTraffic then
-    return NetworkDriver.prepareTraffic(sim,driveOrder,dt)
-  end
+  -- CSP geometry supplies the route and corridor bounds; traffic coordination
+  -- remains the same RoutePilot planner used for recorded racing lines.
   refreshRouteMetrics()
   if not sim or not state.routeGeometry then return end
   local records={}
@@ -1920,9 +1919,8 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
 end
 
 function Driver.update(carIndex, car, dt)
-  if state.trafficNetwork and NetworkDriver and NetworkDriver.update then
-    return NetworkDriver.update(carIndex,car,dt)
-  end
+  -- Never hand CSP cars to the legacy lane-following controller. The ordinary
+  -- RoutePilot steering, braking, passing, recovery and traffic rules own them.
   local p = state.p[carIndex]
   if not p then
     newPersonality(carIndex)
