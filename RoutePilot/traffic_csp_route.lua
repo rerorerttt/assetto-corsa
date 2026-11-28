@@ -124,8 +124,9 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
   local path, pathCost = Graph.shortestPath(
     graph, startEdge, options.targetEdge, options.maxVisited)
   if not path then return nil, pathCost end
-  local loopRoute = false
-  if options.loop == true then
+  local loopRoute = options.loop == true and #path == 1 and
+    startEdge.wrap == true and startEdge.fromNode == startEdge.toNode
+  if options.loop == true and not loopRoute then
     local terminal = path[#path]
     local returnPath = Graph.shortestPath(graph, terminal, startEdge, options.maxVisited)
     if returnPath and #returnPath >= 2 then
