@@ -649,132 +649,220 @@ function Converter.load(log)
           local score=dx*dx+dz*dz+(1-alignment)*(1-alignment)*25
           if alignment>0.15 and math.sqrt(dx*dx+dz*dz)<80 and
             (not bestScore or score<bestScore) then
-            bestScore=score; best={lane=lane,segment=i,t=t}
+            bestScore=score
+            best={lane=lane,segment=i,t=t}
           end
         end
       end
     end
   end
-  -- Import must not depend on where the player spawned. This compatibility
-  -- route is only a UI/legacy placeholder; AI uses the complete graph.
   if not best and #graph.laneOrder>0 then
     best={lane=graph.lanes[graph.laneOrder[1]],segment=1,t=0}
   end
   if not best then return nil,nil,nil,nil,"NO_VALID_CSP_LANES" end
-  local lane=best.lane
-  -- The authored yellow CSP lines delimit the usable racing corridor. Build
-  -- its centreline between the nearest same-direction adjacent line pair.
-  -- If no such neighbour exists, the authored line itself is the racing line
-  -- and the narrow fallback bounds deliberately disable passing.
-  local pairedLane,pairedEdge,pairScore=nil,nil,nil
-  local sourcePoint=pointAt(lane,lane.cumulative[best.segment])
-  local sourceTangent=tangentAt(lane,lane.cumulative[best.segment])
-  for _,edge in ipairs(lane.adjacent or {}) do
-    local candidate=graph.lanes[edge.to]
-    local bestLaneS=lane.cumulative[best.segment] or 0
-    if candidate and bestLaneS>=edge.fromStart and bestLaneS<=edge.fromEnd then
-      local lo=math.max(0,edge.toStart-12)
-      local hi=math.min(candidate.length,edge.toEnd+12)
-      local targetS=clamp((edge.toStart+edge.toEnd)*0.5,lo,hi)
-      local targetPoint=pointAt(candidate,targetS)
-      local targetTangent=tangentAt(candidate,targetS)
-      local gap=dist(sourcePoint,targetPoint)
-      local alignment=sourceTangent.x*targetTangent.x+
-        sourceTangent.z*targetTangent.z
-      local dy=math.abs(sourcePoint.y-targetPoint.y)
-      local score=gap+(1-alignment)*12+dy*4
-      if gap>=2.0 and gap<=7.5 and alignment>=0.94 and dy<=1.5 and
-          (not pairScore or score<pairScore) then
-        pairedLane,pairedEdge,pairScore=candidate,edge,score
-      end
-    end
-  end
+
   local nodes,boundsL,boundsR={},{},{}
-  local startS=lane.cumulative[best.segment]
-  local previousTargetS=nil
-  local pairValid=pairedLane~=nil
-  local function projectPartner(pos,hintS,sourceS)
-    local candidate=pairedLane
+  local routeLanes,visited={},{}
+  local anyPassing=false
+  local startLane=best.lane
+  local startS=startLane.cumulative[best.segment]+
+    (startLane.cumulative[best.segment+1]-startLane.cumulative[best.segment])*best.t
+  local function appendPoint(p,left,right)
+    local previous=nodes[#nodes]
+    if previous then
+      local dx,dz=p.x-previous.x,p.z-previous.z
+      if dx*dx+dz*dz<0.01 then return end
+    end
+    nodes[#nodes+1]=vec3(p.x,p.y,p.z)
+    boundsL[#boundsL+1]=left
+    boundsR[#boundsR+1]=right
+  end
+  local function projectPartner(candidate,pos,hintS,sourceLane,sourceS)
     local first,last=1,#candidate.points-1
     if hintS then
-      local lo,hi=1,#candidate.cumulative-1
-      local target=math.max(0,hintS-24)
-      while lo<hi do local mid=math.floor((lo+hi)*0.5)
-        if candidate.cumulative[mid+1]<target then lo=mid+1 else hi=mid end end
-      first=lo;lo,hi=first,#candidate.cumulative-1
-      target=math.min(candidate.length,hintS+24)
-      while lo<hi do local mid=math.floor((lo+hi)*0.5)
-        if candidate.cumulative[mid]<target then lo=mid+1 else hi=mid end end
+      local c=candidate.cumulative
+      local lo,hi=1,#c-1
+      local target=math.max(0,hintS-28)
+      while lo<hi do
+        local mid=math.floor((lo+hi)*0.5)
+        if c[mid+1]<target then lo=mid+1 else hi=mid end
+      end
+      first=lo
+      lo,hi=first,#c-1
+      target=math.min(candidate.length,hintS+28)
+      while lo<hi do
+        local mid=math.floor((lo+hi)*0.5)
+        if c[mid]<target then lo=mid+1 else hi=mid end
+      end
       last=math.max(first,lo)
     end
-    local bestQ,bestD=nil,nil
-    for si=first,last do
-      local a,b=candidate.points[si],candidate.points[si+1]
+    local st=tangentAt(sourceLane,sourceS)
+    local bestQ,bestScore=nil,nil
+    for i=first,last do
+      local a,b=candidate.points[i],candidate.points[i+1]
       local vx,vz=b.x-a.x,b.z-a.z
       local ll=vx*vx+vz*vz
       if ll>1e-8 then
         local t=clamp(((pos.x-a.x)*vx+(pos.z-a.z)*vz)/ll,0,1)
         local x,z=a.x+vx*t,a.z+vz*t
-        local dx,dz=pos.x-x,pos.z-z
         local y=a.y+(b.y-a.y)*t
-        local distance2=dx*dx+dz*dz
+        local dx,dz=pos.x-x,pos.z-z
+        local dy=pos.y-y
         local tx,tz=norm(vx,vz)
-        local sourceTangentHere=tangentAt(lane,sourceS or startS)
-        local sourceTx,sourceTz=sourceTangentHere.x,sourceTangentHere.z
-        local alignment=sourceTx*tx+sourceTz*tz
-        local score=distance2+(1-alignment)*(1-alignment)*16+
-          (pos.y-y)*(pos.y-y)*4
-        if alignment>=0.94 and math.abs(pos.y-y)<=1.5 and
-            (not bestD or score<bestD) then
-          bestD=score
-          bestQ={x=x,y=y,z=z,s=candidate.cumulative[si]+math.sqrt(ll)*t,
-            distance=math.sqrt(distance2),tx=tx,tz=tz}
+        local alignment=st.x*tx+st.z*tz
+        local distance=math.sqrt(dx*dx+dz*dz)
+        local score=dx*dx+dz*dz+(1-alignment)*(1-alignment)*16+dy*dy*4
+        if alignment>=0.94 and math.abs(dy)<=1.5 and
+          distance>=2.0 and distance<=7.5 and
+          (not bestScore or score<bestScore) then
+          bestScore=score
+          bestQ={x=x,y=y,z=z,s=candidate.cumulative[i]+math.sqrt(ll)*t,distance=distance}
         end
       end
     end
     return bestQ
   end
-  for i=best.segment,#lane.points do
-    local p=lane.points[i]
-    local centreX,centreY,centreZ=p.x,p.y,p.z
-    local halfWidth=1.25
-    if pairValid then
-      local q=projectPartner(p,previousTargetS,lane.cumulative[i])
-      if not q or q.distance<2.0 or q.distance>7.5 then
-        pairValid=false
-      else
-        previousTargetS=q.s
-        centreX=(p.x+q.x)*0.5
-        centreY=(p.y+q.y)*0.5
-        centreZ=(p.z+q.z)*0.5
-        halfWidth=q.distance*0.5
+  local function appendLaneSegment(lane,fromS,toS)
+    fromS=clamp(fromS,0,lane.length)
+    toS=clamp(toS,fromS,lane.length)
+    if toS-fromS<0.25 then return end
+    local samples={{s=fromS,p=pointAt(lane,fromS)}}
+    for i=1,#lane.points do
+      local ss=lane.cumulative[i]
+      if ss>fromS+0.20 and ss<toS-0.20 then
+        samples[#samples+1]={s=ss,p=lane.points[i]}
       end
     end
-    nodes[#nodes+1]=vec3(centreX,centreY,centreZ)
-    boundsL[#boundsL+1]=-halfWidth
-    boundsR[#boundsR+1]=halfWidth
-  end
-  if not pairValid then
-    -- Never create a partial/tearing midpoint route. A single authored line
-    -- remains the racing trajectory and has no passing corridor.
-    nodes,boundsL,boundsR={},{},{}
-    for i=best.segment,#lane.points do
-      local p=lane.points[i]
-      nodes[#nodes+1]=vec3(p.x,p.y,p.z)
-      boundsL[#boundsL+1]=-1.25
-      boundsR[#boundsR+1]=1.25
+    samples[#samples+1]={s=toS,p=pointAt(lane,toS)}
+
+    local midS=(fromS+toS)*0.5
+    local pairedLane,pairedEdge,pairScore=nil,nil,nil
+    for _,edge in ipairs(lane.adjacent or {}) do
+      if midS>=edge.fromStart and midS<=edge.fromEnd then
+        local candidate=graph.lanes[edge.to]
+        if candidate then
+          local source=pointAt(lane,midS)
+          local targetS=clamp((edge.toStart+edge.toEnd)*0.5,0,candidate.length)
+          local target=pointAt(candidate,targetS)
+          local gap=dist(source,target)
+          local a=tangentAt(lane,midS)
+          local b=tangentAt(candidate,targetS)
+          local alignment=a.x*b.x+a.z*b.z
+          local dy=math.abs(source.y-target.y)
+          local score=gap+(1-alignment)*12+dy*4
+          if gap>=2.0 and gap<=7.5 and alignment>=0.94 and dy<=1.5 and
+            (not pairScore or score<pairScore) then
+            pairedLane,pairedEdge,pairScore=candidate,edge,score
+          end
+        end
+      end
     end
+
+    local projected={}
+    local pairValid=pairedLane~=nil
+    local hintS=pairedEdge and clamp((pairedEdge.toStart+pairedEdge.toEnd)*0.5,
+      0,pairedLane.length) or nil
+    if pairValid then
+      for i=1,#samples do
+        local sample=samples[i]
+        local q=projectPartner(pairedLane,sample.p,hintS,lane,sample.s)
+        if not q then pairValid=false;break end
+        projected[i]={x=(sample.p.x+q.x)*0.5,
+          y=(sample.p.y+q.y)*0.5,z=(sample.p.z+q.z)*0.5,
+          half=q.distance*0.5}
+        hintS=q.s
+      end
+    end
+    for i=1,#samples do
+      local sample=samples[i]
+      if pairValid then
+        local q=projected[i]
+        appendPoint(q,-q.half,q.half)
+      else
+        appendPoint(sample.p,-1.25,1.25)
+      end
+    end
+    if pairValid then anyPassing=true end
   end
-  if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_LANE_TOO_SHORT" end
+
+  local currentLane,currentS=startLane,startS
+  local routeLoop=false
+  local maxHops=#graph.laneOrder+1
+  for hop=1,maxHops do
+    if visited[currentLane.id] then break end
+    visited[currentLane.id]=true
+    routeLanes[#routeLanes+1]=currentLane.id
+
+    local nextEdge,nextScore,firstExit=nil,nil,math.huge
+    for _,edge in ipairs(currentLane.outgoing or {}) do
+      local target=graph.lanes[edge.to]
+      if target and finite(edge.fromS) and finite(edge.toS) and
+        edge.fromS>=currentS-0.5 and
+        (not visited[target.id] or target.id==startLane.id) then
+        if edge.fromS<firstExit-2.0 then
+          firstExit=edge.fromS
+          nextEdge=nil
+          nextScore=nil
+        end
+        if math.abs(edge.fromS-firstExit)<=2.0 then
+          local score=(finite(edge.alignment) and edge.alignment or 0)*100-
+            (finite(edge.gap) and edge.gap or 0)
+          if not nextScore or score>nextScore then
+            nextEdge=edge
+            nextScore=score
+          end
+        end
+      end
+    end
+
+    local segmentEnd=nextEdge and clamp(nextEdge.fromS,currentS,currentLane.length) or currentLane.length
+    appendLaneSegment(currentLane,currentS,segmentEnd)
+    if not nextEdge then
+      if currentLane.loop then routeLoop=true end
+      break
+    end
+
+    local targetLane=graph.lanes[nextEdge.to]
+    if not targetLane then break end
+    local sourceEnd=pointAt(currentLane,segmentEnd)
+    local targetStart=pointAt(targetLane,nextEdge.toS)
+    if targetLane.id==startLane.id then
+      local join=dist(sourceEnd,pointAt(startLane,startS))
+      if math.abs(nextEdge.toS-startS)<=20.0 and join<=12.0 then
+        routeLoop=true
+      end
+      break
+    end
+    if visited[targetLane.id] then break end
+
+    -- Bridge only the small authored junction gap; this is a directed
+    -- transition from the source lane to its declared destination, never a
+    -- nearest-line jump or a transition onto opposing traffic.
+    local gap=dist(sourceEnd,targetStart)
+    if gap>0.15 and gap<=18.0 then
+      local steps=math.max(1,math.ceil(gap/3.0))
+      for step=1,steps-1 do
+        local t=step/steps
+        appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
+          y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
+          z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-1.25,1.25)
+      end
+    end
+    currentLane=targetLane
+    currentS=clamp(nextEdge.toS,0,targetLane.length)
+  end
+
+  if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_ROUTE_TOO_SHORT" end
   if type(log)=="function" then
     pcall(log,"CSP_RACING_CORRIDOR lane=%d neighbour=%d paired=%s points=%d passing=%s",
-      lane.id,pairedLane and pairedLane.id or -1,tostring(pairValid),#nodes,
-      tostring(pairValid))
+      startLane.id,-1,tostring(anyPassing),#nodes,tostring(anyPassing))
+    pcall(log,"CSP_ROUTE_CHAIN lanes=%d points=%d loop=%s transitions=%d",
+      #routeLanes,#nodes,tostring(routeLoop),math.max(0,#routeLanes-1))
   end
-  return nodes,false,boundsL,boundsR,{
-    sourceLanes=graph.stats.validLanes,routeLanes={lane.id},
-    racingCorridor=true,pairedLane=pairValid and pairedLane.id or nil,
-    passingEnabled=pairValid,sourceTransitions=graph.stats.junctionTransitions,
+  return nodes,routeLoop,boundsL,boundsR,{
+    sourceLanes=graph.stats.validLanes,routeLanes=routeLanes,
+    racingCorridor=true,pairedLane=nil,passingEnabled=anyPassing,
+    sourceTransitions=graph.stats.junctionTransitions,
     laneChanges=graph.stats.laneChanges,network=graph
   }
 end
