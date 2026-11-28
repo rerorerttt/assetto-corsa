@@ -114,8 +114,27 @@ local function lateralOffset(reference, candidate)
   return median(offsets)
 end
 
+local function wallDistance(position, direction, maxDistance)
+  if not render or type(render.createRay) ~= 'function' then return nil end
+  local best = nil
+  for _, height in ipairs({ 0.35, 0.85, 1.35 }) do
+    local origin = vec3(position.x, position.y + height, position.z)
+    local hit, normal = vec3(), vec3()
+    local ok, distance = pcall(function()
+      local ray = render.createRay(origin, direction, maxDistance)
+      return ray:physics(hit, normal, false, false)
+    end)
+    if ok and type(distance) == 'number' and distance > 0.15 and distance < maxDistance and
+        math.abs(normal.y) <= 0.65 then
+      if not best or distance < best then best = distance end
+    end
+  end
+  return best
+end
+
 local function makeBoundary(lane, side, offset)
   local out, pts = {}, lane.points
+  local adjusted, conflicts = 0, 0
   for i = 1, #pts do
     local tx, ty, tz = tangentAt(pts, i, lane.loop)
     local normal = lane.normals and lane.normals[i]
@@ -129,12 +148,20 @@ local function makeBoundary(lane, side, offset)
     if lx == 0 and ly == 0 and lz == 0 then
       lx, ly, lz = -tz, 0, tx
     end
+    local dir = vec3(lx*side, ly*side, lz*side)
+    local wall = wallDistance(pts[i], dir, offset + 1.0)
+    local distance = offset
+    if wall and wall < offset then
+      distance = math.max(0.20, wall - 0.40)
+      adjusted = adjusted + 1
+      if wall <= 0.60 then conflicts = conflicts + 1 end
+    end
     out[#out+1] = vec3(
-      pts[i].x + lx*offset*side,
-      pts[i].y + ly*offset*side,
-      pts[i].z + lz*offset*side)
+      pts[i].x + dir.x*distance,
+      pts[i].y + dir.y*distance,
+      pts[i].z + dir.z*distance)
   end
-  return out
+  return out, adjusted, conflicts
 end
 
 function Roads.build(lanes, log)
@@ -182,10 +209,11 @@ function Roads.build(lanes, log)
     group.leftLane, group.rightLane = leftLane, rightLane
     group.boundaryOffset = #group.lanes == 1 and 3.0 or 2.5
     group.leftOffset, group.rightOffset = leftOffset, rightOffset
-    group.boundaries = {
-      left = makeBoundary(leftLane, 1, group.boundaryOffset),
-      right = makeBoundary(rightLane, -1, group.boundaryOffset)
-    }
+    local leftBoundary, leftAdjusted, leftConflicts = makeBoundary(leftLane, 1, group.boundaryOffset)
+    local rightBoundary, rightAdjusted, rightConflicts = makeBoundary(rightLane, -1, group.boundaryOffset)
+    group.boundaries = { left = leftBoundary, right = rightBoundary }
+    group.wallAdjusted = leftAdjusted + rightAdjusted
+    group.wallConflicts = leftConflicts + rightConflicts
   end
   if log then
     local multi = 0
