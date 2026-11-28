@@ -1145,6 +1145,13 @@ function windowMain(dt)
           else
             ui.text("CSP Graph: не построен")
           end
+          if trafficCSP.roads and trafficCSP.roads.stats then
+            local r = trafficCSP.roads.stats
+            ui.text(string.format("CSP Roads: групп %d | линий %d",
+              r.groups or 0, r.validLanes or 0))
+          elseif trafficCSP.roadsError then
+            ui.text("CSP Roads: ошибка — " .. tostring(trafficCSP.roadsError))
+          end
         else
           ui.text("CSP Traffic: модуль не загружен")
         end
