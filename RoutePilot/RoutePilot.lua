@@ -815,13 +815,18 @@ local function teleportHome(carIndex,car)
   -- line. Every candidate is snapped back to the original CSP yellow source
   -- polyline before it can reach the teleport API.
   for extra=0,120,8 do
-    local pos,seg,t=sampleSpawnRoute(metrics,routeDistance+baseDistance+extra)
-    if pos then
+    local pos,candidateDirection,seg,t=
+      sampleSpawnRoute(metrics,routeDistance+baseDistance+extra)
+    if pos and candidateDirection then
       local nextPos=sampleSpawnRoute(metrics,routeDistance+baseDistance+extra+3.0)
-      if nextPos then
-        local dx,dz=normalize2(nextPos.x-pos.x,nextPos.z-pos.z)
-        local snapped=snapSpawnToAuthoredLane(pos,vec3(dx,0,dz))
-        if snapped then
+      local dx,dz
+      if nextPos and flatDist(pos,nextPos)>0.05 then
+        dx,dz=normalize2(nextPos.x-pos.x,nextPos.z-pos.z)
+      else
+        dx,dz=normalize2(candidateDirection.x,candidateDirection.z)
+      end
+      local snapped=snapSpawnToAuthoredLane(pos,vec3(dx,0,dz))
+      if snapped then
           local candidate=vec3(snapped.position.x,snapped.position.y+0.15,snapped.position.z)
           if not firstValidPos then
             firstValidPos=candidate
@@ -834,7 +839,6 @@ local function teleportHome(carIndex,car)
               candidate,snapped.direction,seg,t
             break
           end
-        end
       end
     end
   end
