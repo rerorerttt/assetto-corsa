@@ -28,8 +28,8 @@ local function segmentCrossing(ax, az, bx, bz, cx, cz, dx, dz)
   local qx, qz = cx - ax, cz - az
   local t = (qx * sz - qz * sx) / den
   local u = (qx * rz - qz * rx) / den
-  if t > 1e-6 and t < 1 - 1e-6 and u >= -1e-6 and u <= 1 + 1e-6 then
-    return t, u
+  if t >= -1e-6 and t <= 1 + 1e-6 and u >= -1e-6 and u <= 1 + 1e-6 then
+    return math.max(0, math.min(1, t)), u
   end
   return nil
 end
