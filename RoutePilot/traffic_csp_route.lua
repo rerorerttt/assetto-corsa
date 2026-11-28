@@ -80,7 +80,10 @@ local function appendBezier(route, roads, movement)
   local p0, p3 = movement.fromPos, movement.toPos
   if not p0 or not p3 then return false end
   local chord = distance(p0, p3)
-  local handle = math.max(1.5, math.min(12.0, chord*0.42))
+  local directionDot = movement.fromDir.x*movement.toDir.x +
+    movement.fromDir.y*movement.toDir.y + movement.fromDir.z*movement.toDir.z
+  local handleFactor = directionDot < -0.5 and 0.22 or (directionDot < 0.5 and 0.30 or 0.42)
+  local handle = math.max(1.0, math.min(12.0, chord*handleFactor))
   local p1 = vec3(
     p0.x + movement.fromDir.x*handle,
     p0.y + movement.fromDir.y*handle,
