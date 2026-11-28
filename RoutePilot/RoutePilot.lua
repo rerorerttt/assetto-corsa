@@ -1147,9 +1147,10 @@ function windowMain(dt)
           end
           if trafficCSP.roads and trafficCSP.roads.stats then
             local r = trafficCSP.roads.stats
-            ui.text(string.format("CSP Roads: групп %d | линий %d | границы у стен %d | конфликтов %d | узлов %d",
+            ui.text(string.format("CSP Roads: групп %d | линий %d | стеновых коррекций %d | конфликтов %d | узлов %d | ray %s",
               r.groups or 0, r.validLanes or 0, r.wallAdjusted or 0,
-              r.wallConflicts or 0, r.boundaryJunctions or 0))
+              r.wallConflicts or 0, r.boundaryJunctions or 0,
+              r.wallRaycastAvailable and "OK" or "N/A"))
           elseif trafficCSP.roadsError then
             ui.text("CSP Roads: ошибка — " .. tostring(trafficCSP.roadsError))
           end
