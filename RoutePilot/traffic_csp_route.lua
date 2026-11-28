@@ -73,8 +73,8 @@ local function laneBoundsAt(roads, lane, position, direction)
     right=(rightPoint.x-position.x)*leftX+(rightPoint.z-position.z)*leftZ
   end
   local offset=group.laneOffsets[lane] or 0
-  local idealLeft=group.leftOffset+group.boundaryOffset-offset
-  local idealRight=group.rightOffset-group.boundaryOffset-offset
+  local idealLeft=group.leftOffset+(group.leftBoundaryOffset or group.boundaryOffset)-offset
+  local idealRight=group.rightOffset-(group.rightBoundaryOffset or group.boundaryOffset)-offset
   if not left or left<=0 then left=idealLeft end
   if not right or right>=0 then right=idealRight end
   return math.max(0.20,left), math.min(-0.20,right)
