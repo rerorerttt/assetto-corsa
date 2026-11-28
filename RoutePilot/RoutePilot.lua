@@ -548,15 +548,15 @@ local function trySpawnTeleport(sim,dt)
   local gap=math.min(CFG.SPAWN_GAP,metrics.length/(count+1))
   if gap<CFG.SPAWN_MIN_GAP then state.spawnDone=true; return end
   local startDistance=0
-  if metrics.loop then
-    local player=ac.getCar(0)
-    if player then
-      local routeDistance,routeError=findRouteDistanceAtPosition(
-        player.position,metrics,player.look)
-      startDistance=routeDistance+gap
-      writeLog("SPAWN_REFERENCE route=%.1f error=%.2f heading=(%.3f,%.3f)",
-        routeDistance,routeError,player.look.x,player.look.z)
-    else startDistance=gap end
+  local player=ac.getCar(0)
+  if player then
+    local routeDistance,routeError=findRouteDistanceAtPosition(
+      player.position,metrics,player.look)
+    startDistance=routeDistance+gap
+    writeLog("SPAWN_REFERENCE route=%.1f error=%.2f ahead=%.1f heading=(%.3f,%.3f)",
+      routeDistance,routeError,gap,player.look.x,player.look.z)
+  else
+    startDistance=gap
   end
   local moved,failed=0,0
   for order=1,count do
