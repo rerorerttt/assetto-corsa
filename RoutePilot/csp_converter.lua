@@ -164,6 +164,18 @@ local function forbiddenPair(intersection,fromId,toId)
   return false
 end
 
+local function trajectoryAttribute(intersection,fromId,toId)
+  local rows=intersection.trajectoryAttributes
+  if type(rows)~="table" then return nil end
+  for i=1,#rows do
+    local row=rows[i]
+    if type(row)=="table" and row[1]==fromId and row[2]==toId then
+      return type(row[3])=="table" and row[3] or nil
+    end
+  end
+  return nil
+end
+
 local function buildJunctionTransitions(graph)
   local transitions={}
   for _,id in ipairs(graph.laneOrder) do transitions[id]={} end
@@ -202,11 +214,19 @@ local function buildJunctionTransitions(graph)
                 local tb=tangentAt(to.lane,b.enter)
                 local alignment=ta.x*tb.x+ta.z*tb.z
                 local gap=dist(pa,pb)
-                if gap<=18 and alignment>=0.20 then
+                local attributes=trajectoryAttribute(intersection.source,
+                  from.lane.id,to.lane.id)
+                -- Explicit CSP trajectory metadata can authorize sharp turns.
+                -- Without it, require a close, forward-continuous geometric join
+                -- so perpendicular crossing traffic is never treated as a route.
+                local maxGap=attributes and 18.0 or 10.0
+                local minAlignment=attributes and -0.25 or 0.50
+                if gap<=maxGap and alignment>=minAlignment then
                   local e={from=from.lane.id,to=to.lane.id,
                     intersectionId=intersection.id,
                     fromS=a.exit,toS=b.enter,gap=gap,
-                    alignment=alignment,kind="junction"}
+                    alignment=alignment,trajectoryAttributes=attributes,
+                    kind="junction"}
                   transitions[from.lane.id][#transitions[from.lane.id]+1]=e
                 end
               end
