@@ -141,14 +141,16 @@ function Importer:load()
 
   for i = 1, #data.lanes do
     local src = data.lanes[i]
+    local malformedLane = type(src) ~= 'table'
+    if malformedLane then src = {} end
     local lane = {
       id = src.id,
       name = src.name or ('Lane ' .. tostring(src.id or i)),
       loop = src.loop == true,
       role = src.role,
-      priority = src.priority,
-      speedLimit = src.speedLimit,
-      params = src.params or {},
+      priority = finite(tonumber(src.priority)) and tonumber(src.priority) or 0,
+      speedLimit = finite(tonumber(src.speedLimit)) and tonumber(src.speedLimit) or 90,
+      params = type(src.params) == 'table' and src.params or {},
       source = src,
       points = {},
       normals = {},
@@ -157,7 +159,7 @@ function Importer:load()
       valid = false,
     }
     local sourcePoints = {}
-    local malformedSourcePoint = false
+    local malformedSourcePoint = malformedLane
     if type(src.points) == 'table' then
       for j = 1, #src.points do
         local p = point3(src.points[j])
