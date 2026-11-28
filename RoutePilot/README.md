@@ -1,6 +1,6 @@
 # RoutePilot — CSP Traffic integration (experimental)
 
-RoutePilot is a Custom Shaders Patch Lua app for Assetto Corsa. This branch adds an optional navigation layer based on the active track's CSP Traffic Tool `traffic.json`. It imports directed lanes and intersections, validates lane samples against the physical track surface, builds a directed road graph and closed routes, and uses the existing RoutePilot driver to control active AI cars. The recorded-route controller remains available as a fallback.
+RoutePilot is a Custom Shaders Patch Lua app for Assetto Corsa. This branch adds an optional navigation layer based on the active track's CSP Traffic Tool `traffic.json`. It imports directed lanes and intersections, validates lane samples against the physical track surface, builds a directed road graph and route candidates, and uses the existing RoutePilot driver to control active AI cars. The recorded-route controller remains available as a fallback.
 
 ## Requirements
 
@@ -20,7 +20,7 @@ Keep the subfolders `lib`, `shared`, and `tests` in place. Enable RoutePilot in 
 
 When the active layout provides a readable `traffic.json`, RoutePilot imports it automatically. The importer keeps lane direction and intersection definitions, samples lane splines, projects samples onto the physical track surface, rejects unsupported or vertically mismatched samples, then builds road corridors and a directed intersection graph. Route selection prefers lanes aligned with the player's heading and retains other reachable directions for traffic.
 
-Active AI cars are assigned to available closed routes and placed only after a complete spawn plan has passed occupancy checks. The player remains under manual control unless Assetto Corsa's native Ctrl+8 AI mode is active. When Ctrl+8 is active and a player-aligned graph route exists, RoutePilot adopts car 0.
+Route selection prefers genuine directed loops. If the exported road network has no usable cycle, RoutePilot falls back to long open one-way routes without inventing reverse links or cutting across the map. Active AI cars are placed only after a complete spawn plan has passed occupancy checks. On open routes, cars are recycled to clear, spaced entrance slots only after reaching the terminal section and leaving render range. The player remains under manual control unless Assetto Corsa's native Ctrl+8 AI mode is active. When Ctrl+8 is active and a player-aligned graph route exists, RoutePilot adopts car 0.
 
 The Dev tab shows import, graph, route, road-boundary and driver diagnostics. The app writes `routepilot_trace.txt` for troubleshooting.
 
@@ -30,6 +30,6 @@ If the layout has no usable CSP Traffic Tool data, RoutePilot can use a saved re
 
 ## Validation status
 
-The branch includes automated Lua 5.1 syntax validation and synthetic regression tests for loop topology, directed-cycle search and vertical surface projection. These tests run in GitHub Actions. They do not validate CSP API behavior on a real track, vehicle handling, collisions, overtaking, recycling or long-session stability.
+The branch includes automated Lua 5.1 syntax validation and regression tests for loop topology, directed-cycle search, vertical surface projection, CSP Bezier trajectories, and a representative real CSP Traffic Tool export. The fixture graph contains 25 usable lanes, 14 intersections, 31 links and 25 directed movements; it has no directed cycles, so the open-route fallback is exercised. These tests run in GitHub Actions. They do not validate physical CSP raycasts, vehicle handling, collisions, overtaking, recycling or long-session stability.
 
 This branch is experimental and is not considered release-ready until the complete app has been run in Assetto Corsa/CSP on representative track layouts with multiple AI cars and the resulting traces have passed review.
