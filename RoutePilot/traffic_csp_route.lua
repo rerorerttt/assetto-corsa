@@ -13,13 +13,15 @@ local function appendPoint(route, p, left, right)
   local last = route.nodes[#route.nodes]
   if last and distance(last, p) < 0.20 then
     local i = #route.nodes
-    route.boundsL[i] = math.min(route.boundsL[i], left)
-    route.boundsR[i] = math.max(route.boundsR[i], right)
+    route.boundsL[i] = math.max(route.boundsL[i], right)
+    route.boundsR[i] = math.min(route.boundsR[i], left)
     return
   end
   route.nodes[#route.nodes+1] = vec3(p.x, p.y, p.z)
-  route.boundsL[#route.nodes] = left
-  route.boundsR[#route.nodes] = right
+  -- RoutePilot stores lateral lower/upper limits: right is negative,
+  -- left is positive. Keep this convention for the driver's safe corridor.
+  route.boundsL[#route.nodes] = right
+  route.boundsR[#route.nodes] = left
 end
 
 local function nearestBoundaryPoint(position, points, loop)
