@@ -1021,6 +1021,16 @@ function script.update(dt)
           local dir=CSPGraph.directionAt(firstSame.edge.lane,firstSame.along)
           if hx*dir.x+hz*dir.z>=0.5 then addCandidate(firstSame) end
         end
+        -- Keep additional player-aligned lanes as fallbacks. Previously only
+        -- the single nearest same-direction edge was attempted, so one bad
+        -- route candidate could hide every other valid lane in that direction.
+        for ci=1,#sameCandidates do
+          local candidate=sameCandidates[ci]
+          if candidate~=firstSame then
+            local dir=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
+            if hx*dir.x+hz*dir.z>=0.5 then addCandidate(candidate) end
+          end
+        end
         local oppositeCandidates,otherCandidates={},{}
         for ci=1,#allCandidates do
           local candidate=allCandidates[ci]
