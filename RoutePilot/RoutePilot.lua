@@ -862,13 +862,8 @@ function script.update(dt)
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
-    if (state.cspImportPending or not state.loaded) and not state.recLine and CSPConverter then
-      state.autoImportAccum=state.autoImportAccum+dt
-      if state.autoImportAccum>=5.0 then
-        state.autoImportAccum=0
-        loadLine(state.cspImportPending)
-      end
-    end
+    -- CSP traffic discovery is a one-shot startup operation. The converted
+    -- graph is cached per track by csp_converter; never rescan from update().
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
     if state.enabled and state.loaded and #state.nodes>=2 then
