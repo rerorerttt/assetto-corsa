@@ -176,9 +176,8 @@ local function newPersonality(carIndex)
       p.spawnSeeded=true
       p.segIdx=spawnHint.segment
 
-      H.log("ROUTE_SEED id=%d seg=%d t=%.3f progress=%.2f boost=%s",
-        carIndex,spawnHint.segment,spawnHint.parameter,seededProgress,
-        tostring(spawnHint.boost==true))
+      H.log("ROUTE_SEED id=%d seg=%d t=%.3f progress=%.2f",
+        carIndex,spawnHint.segment,spawnHint.parameter,seededProgress)
     else
       H.log("ROUTE_SEED_FAILED id=%d seg=%d t=%.3f",
         carIndex,spawnHint.segment,spawnHint.parameter)
