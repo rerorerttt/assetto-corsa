@@ -191,6 +191,7 @@ function Roads.build(lanes, log)
     end
     byRoot[r].lanes[#byRoot[r].lanes+1] = valid[i]
   end
+  local wallAdjusted, wallConflicts = 0, 0
   for i = 1, #groups do
     local group = groups[i]
     local reference = group.lanes[1]
@@ -214,13 +215,19 @@ function Roads.build(lanes, log)
     group.boundaries = { left = leftBoundary, right = rightBoundary }
     group.wallAdjusted = leftAdjusted + rightAdjusted
     group.wallConflicts = leftConflicts + rightConflicts
+    wallAdjusted = wallAdjusted + group.wallAdjusted
+    wallConflicts = wallConflicts + group.wallConflicts
   end
   if log then
     local multi = 0
     for i = 1, #groups do if #groups[i].lanes > 1 then multi = multi + 1 end end
-    log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d multi_lane_groups=%d', #valid, #groups, multi)
+    log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d multi_lane_groups=%d wall_adjusted=%d wall_conflicts=%d',
+      #valid, #groups, multi, wallAdjusted, wallConflicts)
   end
-  return { groups = groups, stats = { validLanes = #valid, groups = #groups } }
+  return { groups = groups, stats = {
+    validLanes = #valid, groups = #groups,
+    wallAdjusted = wallAdjusted, wallConflicts = wallConflicts
+  } }
 end
 
 return Roads
