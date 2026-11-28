@@ -732,14 +732,30 @@ function Converter.load(log)
     fromS=clamp(fromS,0,lane.length)
     toS=clamp(toS,fromS,lane.length)
     if toS-fromS<0.25 then return end
+    -- CSP exports can contain very sparse polyline vertices. Feed the legacy
+    -- Catmull-Rom route builder a bounded point spacing so long chords and
+    -- abrupt lane joins cannot create enormous spline curvature.
     local samples={{s=fromS,p=pointAt(lane,fromS)}}
-    for i=1,#lane.points do
-      local ss=lane.cumulative[i]
-      if ss>fromS+0.20 and ss<toS-0.20 then
-        samples[#samples+1]={s=ss,p=lane.points[i]}
+    local lastS=fromS
+    for i=1,#lane.points-1 do
+      local segA=lane.cumulative[i]
+      local segB=lane.cumulative[i+1]
+      local a=math.max(fromS,segA)
+      local b=math.min(toS,segB)
+      if b>a+0.20 then
+        local steps=math.max(1,math.ceil((b-a)/6.0))
+        for k=1,steps do
+          local ss=a+(b-a)*k/steps
+          if ss>lastS+0.20 and ss<toS-0.20 then
+            samples[#samples+1]={s=ss,p=pointAt(lane,ss)}
+            lastS=ss
+          end
+        end
       end
     end
-    samples[#samples+1]={s=toS,p=pointAt(lane,toS)}
+    if toS>lastS+0.20 then
+      samples[#samples+1]={s=toS,p=pointAt(lane,toS)}
+    end
 
     local midS=(fromS+toS)*0.5
     local pairCandidates,seenPairs={},{}
@@ -816,10 +832,20 @@ function Converter.load(log)
 
   local currentLane,currentS=startLane,startS
   local routeLoop=false
-  local maxHops=#graph.laneOrder+1
+  local maxHops=#graph.laneOrder*2+8
   for hop=1,maxHops do
-    if visited[currentLane.id] then break end
-    visited[currentLane.id]=true
+    -- A directed route can legitimately re-enter the same authored lane at
+    -- a later distance (Shuto 135 -> 136 -> 135 is one example). A boolean
+    -- visited flag incorrectly truncates that route. Track the furthest
+    -- consumed distance per lane and only stop when traversal goes backwards
+    -- into an already consumed interval.
+    local previousVisitS=visited[currentLane.id]
+    if previousVisitS and currentS<=previousVisitS+20.0 then
+      trace("CSP_ROUTE_REVISIT_STOP lane=%d s=%.1f previous=%.1f",
+        currentLane.id,currentS,previousVisitS)
+      break
+    end
+    visited[currentLane.id]=currentS
     routeLanes[#routeLanes+1]=currentLane.id
 
     local nextEdge,nextScore,firstExit=nil,nil,math.huge
@@ -829,7 +855,8 @@ function Converter.load(log)
       local target=graph.lanes[edge.to]
       if target and finite(edge.fromS) and finite(edge.toS) and
         edge.fromS>=currentS-0.5 and
-        (not visited[target.id] or target.id==startLane.id) then
+        (not visited[target.id] or edge.toS>visited[target.id]+20.0 or
+          target.id==startLane.id) then
         if edge.fromS<firstExit-2.0 then
           firstExit=edge.fromS
           nextEdge=nil
@@ -858,7 +885,8 @@ function Converter.load(log)
         local fromEnd=finite(edge.fromEnd) and edge.fromEnd or nil
         local toEnd=finite(edge.toEnd) and edge.toEnd or nil
         if target and fromEnd and toEnd and fromEnd>=currentS+8.0 and
-          (not visited[target.id] or target.id==startLane.id) then
+          (not visited[target.id] or toEnd>visited[target.id]+20.0 or
+            target.id==startLane.id) then
           local sourceEnd=pointAt(currentLane,fromEnd)
           local targetEnd=pointAt(target,clamp(toEnd,0,target.length))
           local gap=dist(sourceEnd,targetEnd)
@@ -941,6 +969,18 @@ function Converter.load(log)
           routeLoop=true
           trace("CSP_ROUTE_CLOSED via_lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
             startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
+          break
+        elseif nextEdge.toS>startS+20.0 then
+          -- The connector rejoins the starting lane farther ahead, not at
+          -- the route origin. Continue along that lane from the re-entry
+          -- point; stopping here creates a tiny open route and strands AI.
+          trace("CSP_ROUTE_REENTER lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
+            startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
+          currentLane=targetLane
+          currentS=clamp(nextEdge.toS,0,targetLane.length)
+          -- Continue the outer traversal loop with the new lane position.
+          -- The bridge has already been appended above.
+          goto continue_route
         else
           trace("CSP_ROUTE_RETURN_NOT_CLOSED lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
             startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
@@ -968,6 +1008,7 @@ function Converter.load(log)
     end
     currentLane=targetLane
     currentS=clamp(nextEdge.toS,0,targetLane.length)
+    ::continue_route::
   end
 
   if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_ROUTE_TOO_SHORT" end
