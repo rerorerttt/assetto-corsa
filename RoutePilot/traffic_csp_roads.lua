@@ -124,7 +124,7 @@ end
 local function wallDistance(position, direction, maxDistance)
   if not render or type(render.createRay) ~= 'function' then return nil end
   local best = nil
-  for _, height in ipairs({ 0.35, 0.85, 1.35 }) do
+  for _, height in ipairs({ 0.40, 1.00 }) do
     local origin = vec3(position.x, position.y + height, position.z)
     local hit, normal = vec3(), vec3()
     local ok, distance = pcall(function()
@@ -154,7 +154,10 @@ local function makeBoundary(lane, side, offset)
     lx, ly, lz = norm(lx, ly, lz)
     if lx == 0 and ly == 0 and lz == 0 then lx, ly, lz = -tz, 0, tx end
     local dir = vec3(lx*side, ly*side, lz*side)
-    local wall = wallDistance(pts[i], dir, offset + 1.0)
+    local wall = nil
+    if i == 1 or i == #pts or i % 2 == 1 then
+      wall = wallDistance(pts[i], dir, offset + 1.0)
+    end
     local distance = offset
     if wall and wall < offset then
       distance = math.max(0.20, wall - 0.40)
@@ -162,6 +165,10 @@ local function makeBoundary(lane, side, offset)
       if wall <= 0.60 then conflicts = conflicts + 1 end
     end
     directions[i], distances[i] = dir, distance
+  end
+  -- Fill skipped ray samples conservatively from their neighbors.
+  for i = 2, #pts-1, 2 do
+    distances[i] = math.min(offset, (distances[i-1] + distances[i+1]) * 0.5)
   end
   -- Smooth only inward: a neighboring wall constraint can pull the corridor
   -- inward, but smoothing can never push a boundary through a detected wall.
