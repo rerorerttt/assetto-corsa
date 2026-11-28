@@ -528,6 +528,98 @@ local function trySpawnTeleport(sim,dt)
   writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
   flushLog()
 end
+local function trySpawnCSPTraffic(sim,dt,route)
+  if not trafficCSP or not route or not route.loop or trafficCSP.graphSpawnDone then return end
+  if trafficCSP.graphSpawnFailed then return end
+  trafficCSP.graphSpawnWait=(trafficCSP.graphSpawnWait or 0)+dt
+  local aiCars={}
+  for i=1,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive and car.isAIControlled then aiCars[#aiCars+1]=i end
+  end
+  if #aiCars==0 then
+    if trafficCSP.graphSpawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
+      trafficCSP.graphSpawnFailed='no_active_ai_cars'
+    end
+    return
+  end
+  local roster=table.concat(aiCars,",")
+  if roster~=trafficCSP.graphSpawnLastRoster then
+    trafficCSP.graphSpawnLastRoster=roster
+    trafficCSP.graphSpawnStable=0
+    return
+  end
+  trafficCSP.graphSpawnStable=(trafficCSP.graphSpawnStable or 0)+dt
+  if trafficCSP.graphSpawnStable<CFG.SPAWN_STABLE_TIME then return end
+  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
+    trafficCSP.graphSpawnFailed='no_ai_position_api'
+    writeLog("CSP_SPAWN_FAILED reason=no_ai_position_api")
+    return
+  end
+
+  local count=#aiCars
+  local startDistance=math.min(40.0,route.length*0.08)
+  local available=math.max(0,route.length-startDistance-10.0)
+  local gap=math.min(CFG.SPAWN_GAP,available/math.max(1,count))
+  if gap<CFG.SPAWN_MIN_GAP then
+    trafficCSP.graphSpawnFailed='insufficient_loop_length'
+    writeLog("CSP_SPAWN_FAILED reason=insufficient_loop_length length=%.1f cars=%d gap=%.2f",
+      route.length,count,gap)
+    return
+  end
+
+  local backups,moved={},{}
+  local failed=0
+  for order=1,count do
+    local index=aiCars[order]
+    local car=ac.getCar(index)
+    local sample=CSPRoutes.sample(route,startDistance+(order-1)*gap)
+    if car and sample then
+      backups[index]={
+        position=vec3(car.position.x,car.position.y,car.position.z),
+        look=vec3(car.look.x,car.look.y,car.look.z)
+      }
+      local position=vec3(sample.x,sample.y,sample.z)
+      local direction=vec3(-sample.tx,0,-sample.tz)
+      local ok,result=pcall(physics.setAICarPosition,index,position,direction)
+      if ok and result~=false then
+        moved[#moved+1]=index
+        state.p[index]=nil
+        state.spawnHints[index]={segment=sample.seg,parameter=sample.t}
+      else
+        failed=failed+1
+        writeLog("CSP_SPAWN_CAR_FAILED id=%d err=%s",index,tostring(result))
+      end
+    else
+      failed=failed+1
+    end
+  end
+
+  if failed>0 then
+    for i=1,#moved do
+      local index=moved[i]
+      local backup=backups[index]
+      if backup then
+        pcall(physics.setAICarPosition,index,backup.position,
+          vec3(-backup.look.x,-backup.look.y,-backup.look.z))
+      end
+      state.spawnHints[index]=nil
+      state.p[index]=nil
+    end
+    trafficCSP.graphSpawnFailed='spawn_transaction_rolled_back'
+    writeLog("CSP_SPAWN_ROLLBACK moved=%d failed=%d",#moved,failed)
+    flushLog()
+    return
+  end
+
+  trafficCSP.graphSpawnDone=true
+  trafficCSP.graphSpawnCount=count
+  trafficCSP.graphSpawnGap=gap
+  writeLog("CSP_SPAWN_FINISH moved=%d gap=%.2f start=%.2f loop=%.1f",
+    count,gap,startDistance,route.length)
+  flushLog()
+end
+
 local function walkLineSigned(startSeg,startT,distance,sign)
   local segs=segmentCount()
   if segs<1 then return nil end
