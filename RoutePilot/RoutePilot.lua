@@ -1535,13 +1535,14 @@ function windowMain(dt)
             ui.text("CSP Graph: не построен")
           end
           if trafficCSP.previewRoute then
-            ui.text(string.format("CSP Route: %.0f м | точек %d | рёбер %d | %s",
-              trafficCSP.previewRoute.length or 0, #trafficCSP.previewRoute.nodes,
-              #trafficCSP.previewRoute.edges,
+            ui.text(string.format("CSP Routes: %d | ближайший %.0f м | точки %d | %s",
+              #(trafficCSP.previewRoutes or {trafficCSP.previewRoute}),
+              trafficCSP.previewRoute.length or 0,#trafficCSP.previewRoute.nodes,
               trafficCSP.previewRoute.loop and "замкнут" or "открыт"))
             if trafficCSP.graphSpawnDone then
-              ui.text(string.format("CSP AI: поток активен | машин %d | интервал %.1f м",
-                trafficCSP.graphSpawnCount or 0, trafficCSP.graphSpawnGap or 0))
+              ui.text(string.format("CSP AI: поток активен | машин %d | направлений %d | интервал %.1f м",
+                trafficCSP.graphSpawnCount or 0, trafficCSP.graphSpawnRouteCount or 0,
+                trafficCSP.graphSpawnGap or 0))
             elseif trafficCSP.graphSpawnFailed then
               ui.text("CSP AI: " .. tostring(trafficCSP.graphSpawnFailed))
             elseif trafficCSP.previewRoute.loop then
@@ -1552,10 +1553,10 @@ function windowMain(dt)
           end
           if trafficCSP.roads and trafficCSP.roads.stats then
             local r = trafficCSP.roads.stats
-            ui.text(string.format("CSP Roads: групп %d | линий %d | стеновых коррекций %d | конфликтов %d | узлов %d | ray %s",
+            ui.text(string.format("CSP Roads: групп %d | линий %d | стеновых коррекций %d | конфликтов %d | встречные %d | параллельные %d | узлы %d | ray %s",
               r.groups or 0, r.validLanes or 0, r.wallAdjusted or 0,
-              r.wallConflicts or 0, r.boundaryJunctions or 0,
-              r.wallRaycastAvailable and "OK" or "N/A"))
+              r.wallConflicts or 0, r.opposingConflicts or 0, r.parallelConflicts or 0,
+              r.boundaryJunctions or 0,r.wallRaycastAvailable and "OK" or "N/A"))
           elseif trafficCSP.roadsError then
             ui.text("CSP Roads: ошибка — " .. tostring(trafficCSP.roadsError))
           end
