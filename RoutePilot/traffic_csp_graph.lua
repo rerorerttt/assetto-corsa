@@ -470,7 +470,11 @@ function Graph.build(lanes, intersectionDefs, log)
           if outgoing.outEdge and outgoing.to < outgoing.lane.totalLength - 0.5 then
             local fromID, toID = tonumber(incoming.lane.id), tonumber(outgoing.lane.id)
             local rulesAllow, weakLaneChange = movementLaneRules(inter, incoming, outgoing)
-            if incoming.lane ~= outgoing.lane and rulesAllow and
+            local directionDot = incoming.fromDir.x*outgoing.toDir.x +
+              incoming.fromDir.y*outgoing.toDir.y + incoming.fromDir.z*outgoing.toDir.z
+            local uturnAllowed = directionDot >= -0.5 or
+              (incoming.lane.params and incoming.lane.params.allowUTurns == true)
+            if incoming.lane ~= outgoing.lane and rulesAllow and uturnAllowed and
                 not disallowed(inter.definition, fromID, toID) then
               local movement = {
                 intersection = inter, from = incoming, to = outgoing,
