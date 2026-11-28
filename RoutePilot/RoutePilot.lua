@@ -535,7 +535,7 @@ local function trySpawnTeleport(sim,dt)
 end
 local function trySpawnCSPTraffic(sim,dt,route)
   if not trafficCSP or trafficCSP.graphSpawnDone then return end
-  local routes=trafficCSP.previewRoutes or (route and {route}) or {}
+  local routes=trafficCSP.allPreviewRoutes or trafficCSP.previewRoutes or (route and {route}) or {}
   if #routes==0 then return end
   table.sort(routes,function(a,b)
     if a.playerAligned~=b.playerAligned then return a.playerAligned==true end
@@ -1139,6 +1139,7 @@ function script.update(dt)
         end
         if #selectedRoutes>0 then
           trafficCSPRouteAttempted=true
+          trafficCSP.allPreviewRoutes=selectedRoutes
           trafficCSP.previewRoutes=selectedRoutes
           trafficCSP.previewRoute=selectedRoutes[1]
           for ri=1,#selectedRoutes do
