@@ -73,13 +73,6 @@ end
 
 local graph = Graph.build({ lane }, { intersection })
 local roads={laneGroups={[lane]=roadGroupFor(lane)}}
-for d=0,lane.totalLength,2 do
-  local p=Graph.sampleLane(lane,d)
-  local direction=Graph.directionAt(lane,d)
-  local left,right,status,a,b=Routes.debugLaneBounds(roads,lane,p,direction)
-  print(string.format("SEAM_BOUNDS d=%.1f left=%s right=%s status=%s extra=%s,%s",
-    d,tostring(left),tostring(right),tostring(status),tostring(a),tostring(b)))
-end
 assert(#lane.graphLinks >= 2, "expected intersection spans at both sides of the loop seam")
 local first, last = lane.graphLinks[1], lane.graphLinks[#lane.graphLinks]
 assert(first.from <= 0.5, "first span must begin at the lane seam")
