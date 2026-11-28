@@ -955,6 +955,7 @@ function script.update(dt)
 
     -- Drive every active car which Assetto Corsa currently marks as AI,
     -- including car 0 only while the native Ctrl+8 autopilot is active.
+    local routeSnapshot=nil
     if state.enabled and (#state.nodes>=2 or useCSPRoute) and Driver and ensureDriver() then
       local driveOrder={}
       for i=0,sim.carsCount-1 do
@@ -967,7 +968,6 @@ function script.update(dt)
           releaseCar(i)
         end
       end
-      local routeSnapshot=nil
       if useCSPRoute then
         routeSnapshot={
           nodes=state.nodes,boundsL=state.boundsL,boundsR=state.boundsR,
