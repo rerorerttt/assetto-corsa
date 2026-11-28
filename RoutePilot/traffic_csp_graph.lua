@@ -476,6 +476,7 @@ function Graph.build(lanes, intersectionDefs, log)
                 intersection = inter, from = incoming, to = outgoing,
                 fromEdge = incoming.inEdge, toEdge = outgoing.outEdge,
                 fromPos = incoming.fromPos, toPos = outgoing.toPos,
+                fromOrigPos = incoming.fromOrigPos, toOrigPos = outgoing.toOrigPos,
                 fromDir = incoming.fromDir, toDir = outgoing.toDir,
                 priority = tonumber(incoming.lane.priority) or 0,
                 weakLaneChange = weakLaneChange,
@@ -532,7 +533,7 @@ function Graph.build(lanes, intersectionDefs, log)
       local dot = movement.fromDir.x*movement.toDir.x +
         movement.fromDir.y*movement.toDir.y + movement.fromDir.z*movement.toDir.z
       movement.directionDot = dot
-      if dot > 0.5 and movement.fromPos and movement.toPos then
+      if dot > 0.5 and movement.fromOrigPos and movement.toOrigPos then
         straightMovements[#straightMovements+1] = movement
       end
     end
@@ -542,17 +543,17 @@ function Graph.build(lanes, intersectionDefs, log)
     local dot = movement.directionDot
     if dot and dot < -0.5 then
       movement.priority = movement.priority - 200
-    elseif dot and dot <= 0.5 and movement.fromPos and movement.toPos then
+    elseif dot and dot <= 0.5 and movement.fromOrigPos and movement.toOrigPos then
       for j = 1, #straightMovements do
         local straight = straightMovements[j]
         if straight ~= movement and straight.from ~= movement.from and
             straight.to ~= movement.to then
           local t, u = segmentCrossing(
-            movement.fromPos.x, movement.fromPos.z, movement.toPos.x, movement.toPos.z,
-            straight.fromPos.x, straight.fromPos.z, straight.toPos.x, straight.toPos.z)
+            movement.fromOrigPos.x, movement.fromOrigPos.z, movement.toOrigPos.x, movement.toOrigPos.z,
+            straight.fromOrigPos.x, straight.fromOrigPos.z, straight.toOrigPos.x, straight.toOrigPos.z)
           if t and t > 0.02 and t < 0.98 and u > 0.02 and u < 0.98 then
-            local yA = movement.fromPos.y + (movement.toPos.y-movement.fromPos.y)*t
-            local yB = straight.fromPos.y + (straight.toPos.y-straight.fromPos.y)*u
+            local yA = movement.fromOrigPos.y + (movement.toOrigPos.y-movement.fromOrigPos.y)*t
+            local yB = straight.fromOrigPos.y + (straight.toOrigPos.y-straight.fromOrigPos.y)*u
             if math.abs(yA-yB) <= 1.5 then
               movement.priority = movement.priority - 100
               break
