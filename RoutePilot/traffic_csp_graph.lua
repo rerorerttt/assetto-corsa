@@ -667,53 +667,78 @@ function Graph.loopPath(graph, startEdge, maxVisited)
   if startEdge.wrap and startEdge.fromNode == startEdge.toNode then
     return { startEdge }, startEdge.length or 0
   end
+
+  -- Reverse reachability identifies the strongly connected portion that can
+  -- actually return to this start edge. Dead-end branches are excluded first.
+  local predecessors = {}
+  for i = 1, #graph.edges do
+    local edge = graph.edges[i]
+    for j = 1, #edge.nextEdges do
+      local nextEdge = edge.nextEdges[j]
+      local list = predecessors[nextEdge.id] or {}
+      predecessors[nextEdge.id] = list
+      list[#list+1] = edge
+    end
+  end
+  local canReturn, queue, head = { [startEdge.id] = true }, { startEdge }, 1
+  while head <= #queue do
+    local edge = queue[head]
+    head = head + 1
+    local list = predecessors[edge.id] or {}
+    for i = 1, #list do
+      local previousEdge = list[i]
+      if not canReturn[previousEdge.id] then
+        canReturn[previousEdge.id] = true
+        queue[#queue+1] = previousEdge
+      end
+    end
+  end
+
   local distances, previous, heap = { [startEdge.id] = 0 }, {}, {}
   heapPush(heap, { edge = startEdge, cost = 0 })
-  local candidates, visited = {}, 0
+  local farthestEdge, farthestCost, visited = nil, -1, 0
   maxVisited = maxVisited or 20000
   while #heap > 0 and visited < maxVisited do
     local item = heapPop(heap)
     local edge, cost = item.edge, item.cost
     if cost <= (distances[edge.id] or math.huge) + 1e-7 then
       visited = visited + 1
-      if edge ~= startEdge and #edge.nextEdges > 0 then
-        candidates[#candidates+1] = { edge = edge, cost = cost }
+      if edge ~= startEdge and cost > farthestCost then
+        farthestEdge, farthestCost = edge, cost
       end
       for i = 1, #edge.nextEdges do
         local nextEdge = edge.nextEdges[i]
-        local penalty = edge.transitionPenalty and edge.transitionPenalty[nextEdge.id] or 0
-        local nextCost = cost + math.max(0.1, nextEdge.length) + penalty
-        if nextCost < (distances[nextEdge.id] or math.huge) then
-          distances[nextEdge.id] = nextCost
-          previous[nextEdge.id] = edge
-          heapPush(heap, { edge = nextEdge, cost = nextCost })
+        if canReturn[nextEdge.id] then
+          local penalty = edge.transitionPenalty and edge.transitionPenalty[nextEdge.id] or 0
+          local nextCost = cost + math.max(0.1, nextEdge.length) + penalty
+          if nextCost < (distances[nextEdge.id] or math.huge) then
+            distances[nextEdge.id] = nextCost
+            previous[nextEdge.id] = edge
+            heapPush(heap, { edge = nextEdge, cost = nextCost })
+          end
         end
       end
     end
   end
-  table.sort(candidates, function(a,b) return a.cost > b.cost end)
-  local tries = math.min(#candidates, 48)
-  for i = 1, tries do
-    local candidate = candidates[i]
-    local backPath, backCost = Graph.shortestPath(graph, candidate.edge, startEdge, maxVisited)
-    if backPath and #backPath >= 2 then
-      local outPath, cursor = {}, candidate.edge
-      while cursor do
-        table.insert(outPath, 1, cursor)
-        if cursor == startEdge then break end
-        cursor = previous[cursor.id]
-      end
-      if outPath[1] == startEdge then
-        local combined = {}
-        for j = 1, #outPath do combined[#combined+1] = outPath[j] end
-        for j = 2, #backPath-1 do combined[#combined+1] = backPath[j] end
-        if #combined > 1 then
-          return combined, (distances[candidate.edge.id] or 0) + (backCost or 0)
-        end
-      end
-    end
+  if not farthestEdge then
+    return nil, visited >= maxVisited and 'loop_search_limit' or 'no_directed_cycle'
   end
-  return nil, visited >= maxVisited and 'loop_search_limit' or 'no_directed_cycle'
+
+  local outPath, cursor = {}, farthestEdge
+  while cursor do
+    table.insert(outPath, 1, cursor)
+    if cursor == startEdge then break end
+    cursor = previous[cursor.id]
+  end
+  if outPath[1] ~= startEdge then return nil, 'broken_cycle_path' end
+  local backPath, backCost = Graph.shortestPath(graph, farthestEdge, startEdge, maxVisited)
+  if not backPath or #backPath < 2 then return nil, backCost or 'no_directed_return_path' end
+
+  local combined = {}
+  for i = 1, #outPath do combined[#combined+1] = outPath[i] end
+  for i = 2, #backPath-1 do combined[#combined+1] = backPath[i] end
+  if #combined < 2 then return nil, 'cycle_too_short' end
+  return combined, farthestCost + (backCost or 0)
 end
 
 Graph.sampleLane = lanePositionAt
