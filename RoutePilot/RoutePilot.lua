@@ -735,7 +735,7 @@ local function tryRecycleGraphTraffic(route,order,player)
     -- This keeps every visible vehicle on the authored direction of travel.
     local total=route.length or 0
     if total<150 then return 0 end
-    local terminalThreshold=math.min(500,math.max(150,total*0.08))
+    local terminalThreshold=math.min(500,math.max(60,total*0.08))
     local recycled=0
     for _,index in ipairs(order or {}) do
       local car=ac.getCar(index)
