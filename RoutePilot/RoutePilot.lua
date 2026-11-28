@@ -1095,7 +1095,7 @@ local function drawMapInRect(q0,q1)
   -- bounds: dark red, thick, min offset from the line
   -- Cap map drawing work: the source can contain thousands of 3 m samples.
   -- A screen map does not benefit from drawing every sample on every UI frame.
-  local stride=math.max(1,math.ceil(n/240))
+  local stride=math.max(1,math.ceil(n/120))
   local lastIndex=state.loopRoute and n or math.max(1,n-1)
   for pass=1,2 do
     local prev
