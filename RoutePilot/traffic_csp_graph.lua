@@ -124,25 +124,34 @@ local function laneIntersectionIntervals(lane, inter)
     local dx, dz = b.x - a.x, b.z - a.z
     local segLen = math.sqrt(dx * dx + dz * dz + (b.y - a.y) * (b.y - a.y))
     if segLen > 1e-5 then
-      local cuts = { 0, 1 }
+      local cuts = { { t = 0, side = nil }, { t = 1, side = nil } }
       for k = 1, #inter.points do
         local p, q = inter.points[k], inter.points[k % #inter.points + 1]
         local t = segmentCrossing(a.x, a.z, b.x, b.z, p[1], p[3], q[1], q[3])
-        if t then cuts[#cuts + 1] = t end
+        if t then cuts[#cuts + 1] = { t = t, side = k } end
       end
-      table.sort(cuts)
+      table.sort(cuts, function(x, y) return x.t < y.t end)
       local unique = {}
       for k = 1, #cuts do
-        if #unique == 0 or math.abs(cuts[k] - unique[#unique]) > 1e-6 then unique[#unique + 1] = cuts[k] end
+        local item = cuts[k]
+        if #unique == 0 or math.abs(item.t - unique[#unique].t) > 1e-6 then
+          unique[#unique + 1] = item
+        elseif unique[#unique].side == nil then
+          unique[#unique].side = item.side
+        end
       end
       for k = 1, #unique - 1 do
-        local t0, t1 = unique[k], unique[k + 1]
+        local t0, t1 = unique[k].t, unique[k + 1].t
         local tm = (t0 + t1) * 0.5
         local y = a.y + (b.y - a.y) * tm
         local inside = math.abs(y - inter.centerY) <= inter.yThreshold and pointInside(a.x + dx * tm, a.z + dz * tm, inter.points)
         local d0, d1 = total + segLen * t0, total + segLen * t1
         if inside then
-          if not active then active = { from = d0, to = d1 } else active.to = d1 end
+          if not active then
+            active = { from = d0, to = d1, fromSide = unique[k].side, toSide = unique[k + 1].side }
+          else
+            active.to, active.toSide = d1, unique[k + 1].side or active.toSide
+          end
         elseif active then
           result[#result + 1] = active
           active = nil
@@ -208,7 +217,14 @@ function Graph.build(lanes, intersectionDefs, log)
         for k = 1, #intervals do
           local span = intervals[k]
           if span.to - span.from >= 1.0 then
-            local link = { intersection = inter, lane = lane, from = span.from, to = span.to }
+            local link = {
+              intersection = inter, lane = lane, from = span.from, to = span.to,
+              fromSide = span.fromSide, toSide = span.toSide,
+              fromPos = lanePositionAt(lane, span.from),
+              toPos = lanePositionAt(lane, span.to),
+              fromDir = laneDirectionAt(lane, span.from),
+              toDir = laneDirectionAt(lane, span.to)
+            }
             inter.links[#inter.links + 1] = link
             lane.graphLinks[#lane.graphLinks + 1] = link
             graph.stats.intersectionLinks = graph.stats.intersectionLinks + 1
