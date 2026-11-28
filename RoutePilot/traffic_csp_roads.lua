@@ -339,7 +339,7 @@ local function segmentNearIntersections(a, b, intersections)
     local inter = intersections[i]
     if x >= inter.minX-5 and x <= inter.maxX+5 and
         z >= inter.minZ-5 and z <= inter.maxZ+5 and
-        math.abs(y-inter.centerY) <= math.min(inter.yThreshold,1.5)+0.5 then
+        math.abs(y-inter.centerY) <= math.min(inter.yThreshold or 5,1.5)+0.5 then
       return true
     end
   end
