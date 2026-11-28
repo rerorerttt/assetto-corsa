@@ -20,6 +20,9 @@
 
 local okLogger, Logger = pcall(require, "logger")
 if not okLogger or type(Logger) ~= "table" then Logger = nil end
+local okConverter, CSPConverter = pcall(require, "csp_converter")
+if not okConverter or type(CSPConverter) ~= "table" or
+    type(CSPConverter.load) ~= "function" then CSPConverter = nil end
 local okDriver, Driver = pcall(require, "driver")
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
@@ -48,6 +51,8 @@ local state = {
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
   playerAutopilotLast=false, steeringDiagnostics=false,
+  trafficNetwork=nil, loadedFromCSP=false, cspImportPending=false,
+  autoImportAccum=0, autoImportAttempts=0,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -179,8 +184,57 @@ local function saveLine()
     flushLog()
   else state.status="Ошибка сохранения" end
 end
-local function loadLine()
+local function loadLine(retryOnly)
+  state.trafficNetwork=nil
+  state.loadedFromCSP=false
+  state.loaded=false
+  state.nodes={}; state.p={}; state.boundsL={}; state.boundsR={}
+  state.routeGeometry=nil
   local loaded=nil
+
+  -- CSP traffic.json is the primary route source. The converter builds the
+  -- racing line midway between same-direction parallel traffic lines and
+  -- exposes the complete source network for rendering. The legacy driver,
+  -- its traffic coordinator and all control algorithms remain unchanged.
+  if CSPConverter then
+    local ok, nodes, loop, boundsL, boundsR, infoOrError =
+      pcall(CSPConverter.load, writeLog)
+    if ok and type(nodes)=="table" and #nodes>=2 then
+      state.nodes=nodes
+      state.trafficNetwork=type(infoOrError)=="table" and infoOrError.network or nil
+      state.loopRoute=loop==true
+      state.boundsL=type(boundsL)=="table" and boundsL or {}
+      state.boundsR=type(boundsR)=="table" and boundsR or {}
+      state.p={}; state.spawnHints={}; state.routeGeometry=nil
+      state.loaded=true; state.loadedFromCSP=true
+      state.cspImportPending=false; state.autoImportAttempts=0
+      state.status=string.format("CSP: %d точек | %d линий",
+        #nodes,state.trafficNetwork and #(state.trafficNetwork.laneOrder or {}) or 0)
+      state.spawnPerformed=false
+      state.spawnDone=false; state.spawnWait=0; state.spawnStable=0
+      state.spawnLastRoster=""
+      local ns=state.trafficNetwork and state.trafficNetwork.stats or {}
+      writeLog("CSP_IMPORT_SUCCESS points=%d loop=%s lanes=%d junctions=%d lane_changes=%d",
+        #nodes,tostring(state.loopRoute),safeNumber(ns.validLanes),
+        safeNumber(ns.junctionTransitions),safeNumber(ns.laneChanges))
+      if infoOrError and infoOrError.passingEnabled then
+        writeLog("CSP_OVERTAKE_CORRIDOR enabled=true paired_lane=%s",
+          tostring(infoOrError.pairedLane))
+      else
+        writeLog("CSP_OVERTAKE_CORRIDOR enabled=false reason=single_lane_or_no_parallel_lane")
+      end
+      flushLog()
+      return true
+    end
+    local reason=tostring(ok and infoOrError or nodes)
+    state.cspImportPending=
+      reason:find("PLAYER_CAR_UNAVAILABLE",1,true)~=nil or
+      reason:find("NO_CSP_LANE_NEAR_PLAYER",1,true)~=nil
+    writeLog("CSP_IMPORT_FAILED ok=%s reason=%s pending=%s",
+      tostring(ok),reason,tostring(state.cspImportPending))
+  end
+
+  if retryOnly then return false end
   if io and io.open then
     local ok,f=pcall(io.open,getLineFilePath(),"r")
     if ok and f then
@@ -195,9 +249,12 @@ local function loadLine()
     if ok and raw then loaded=parseNodes(raw) end
   end
   if loaded then
-    state.nodes=loaded; state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
-    if not state.spawnPerformed then
-      state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
+    state.nodes=loaded; state.p={}; state.spawnHints={}
+    state.routeGeometry=nil; state.loaded=true
+    state.loadedFromCSP=false
+    if ac.storage then
+      local okCSP,flag=pcall(ac.storage,"RP_CSP_LINE_DATA_"..getTrackTag())
+      state.loadedFromCSP=okCSP and flag==true
     end
     state.status=string.format("Загружено: %d точек",#loaded)
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
