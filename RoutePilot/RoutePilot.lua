@@ -533,8 +533,92 @@ local function trySpawnTeleport(sim,dt)
   writeLog("SPAWN_FINISH moved=%d failed=%d gap=%.2f",moved,failed,gap)
   flushLog()
 end
+local function tryAddGraphTrafficCars(sim)
+  if not trafficCSP or not trafficCSP.graphSpawnDone or
+      not physics or type(physics.setAICarPosition)~="function" then return 0 end
+  local routes=trafficCSP.previewRoutes or {}
+  if #routes==0 then return 0 end
+  local player=ac.getCar(0)
+  if not player then return 0 end
+  local counts={}
+  for ri=1,#routes do counts[ri]=0 end
+  for _,ri in pairs(trafficCSP.graphCarRoute or {}) do
+    if counts[ri]~=nil then counts[ri]=counts[ri]+1 end
+  end
+  local newCars={}
+  for i=1,sim.carsCount-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive and car.isAIControlled and
+        not (trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[i]) then
+      newCars[#newCars+1]=i
+    end
+  end
+  if #newCars==0 then return 0 end
+  local offsets={120,180,240,300,360,420,480,540,600,660,720}
+  local clearDistance=CFG.SAFE_RESPAWN_CLEAR or 20
+  local added=0
+  for _,index in ipairs(newCars) do
+    local routeOrder={}
+    for ri=1,#routes do routeOrder[ri]=ri end
+    table.sort(routeOrder,function(a,b)
+      if counts[a]~=counts[b] then return counts[a]<counts[b] end
+      if a==(trafficCSP.playerRouteIndex or 1) then return true end
+      if b==(trafficCSP.playerRouteIndex or 1) then return false end
+      return a<b
+    end)
+    local carAdded=false
+    for oi=1,#routeOrder do
+      local ri=routeOrder[oi]
+      local route=routes[ri]
+      local projection=CSPRoutes.project(route,player.position,player.look)
+      if projection and projection.distance and projection.distance<=60 and projection.s then
+        for si=1,#offsets do
+          local sample=CSPRoutes.sample(route,projection.s+offsets[si])
+          if sample then
+            local position=vec3(sample.x,sample.y,sample.z)
+            local clear=true
+            for otherIndex=0,sim.carsCount-1 do
+              if otherIndex~=index then
+                local other=ac.getCar(otherIndex)
+                if other and other.isActive and flatDist(position,other.position)<clearDistance then
+                  clear=false
+                  break
+                end
+              end
+            end
+            if clear then
+              local direction=vec3(-sample.tx,0,-sample.tz)
+              local ok,result=pcall(physics.setAICarPosition,index,position,direction)
+              if ok and result~=false then
+                trafficCSP.graphCarRoute[index]=ri
+                state.p[index]=nil
+                state.spawnHints[index]={segment=sample.seg,parameter=sample.t}
+                state.rescueWatch=state.rescueWatch or {}
+                state.rescueWatch[index]={cooldown=3.0}
+                counts[ri]=counts[ri]+1
+                trafficCSP.graphSpawnCount=(trafficCSP.graphSpawnCount or 0)+1
+                added=added+1
+                carAdded=true
+                writeLog("CSP_TRAFFIC_ADD id=%d route=%d ahead=%.1f",index,ri,offsets[si])
+                break
+              end
+            end
+          end
+        end
+      end
+      if carAdded then break end
+    end
+  end
+  if added>0 then flushLog() end
+  return added
+end
+
 local function trySpawnCSPTraffic(sim,dt,route)
-  if not trafficCSP or trafficCSP.graphSpawnDone then return end
+  if not trafficCSP then return end
+  if trafficCSP.graphSpawnDone then
+    tryAddGraphTrafficCars(sim)
+    return
+  end
   local routes=trafficCSP.allPreviewRoutes or trafficCSP.previewRoutes or (route and {route}) or {}
   if #routes==0 then return end
   table.sort(routes,function(a,b)
