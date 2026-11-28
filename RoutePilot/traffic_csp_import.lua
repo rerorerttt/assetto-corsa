@@ -147,12 +147,14 @@ function Importer:load()
     local src = data.lanes[i]
     local malformedLane = type(src) ~= 'table'
     if malformedLane then src = {} end
+    local priority = tonumber(src.priorityOffset)
+    if not finite(priority) then priority = tonumber(src.priority) end
     local lane = {
       id = src.id,
       name = src.name or ('Lane ' .. tostring(src.id or i)),
       loop = src.loop == true,
       role = src.role,
-      priority = finite(tonumber(src.priority)) and tonumber(src.priority) or 0,
+      priority = finite(priority) and priority or 0,
       speedLimit = finite(tonumber(src.speedLimit)) and tonumber(src.speedLimit) or 90,
       speedLimitExplicit = finite(tonumber(src.speedLimit)),
       params = type(src.params) == 'table' and src.params or {},
