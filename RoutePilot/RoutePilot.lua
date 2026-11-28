@@ -60,7 +60,7 @@ local state = {
   playerRouteInvalid=false,
   teleportDiagnostics=false, teleportDiagAccum=0,
   teleportDiagSnapshots={}, teleportDiagApiAt={},
-  nativeSplinePath=nil, nativeSplineSignature=nil, nativeSplineApplied={}, nativeSplineAppliedAt={}, nativeSplineRetryAt={},
+  nativeSplinePath=nil, nativeSplineSignature=nil, nativeSplineApplied={}, nativeSplineAppliedAt={}, nativeSplineRetryAt={}, nativeSplineSpawnNextTryAt=0,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -297,7 +297,7 @@ local function loadLine(retryOnly)
     if ok and type(nodes)=="table" and #nodes>=2 then
       state.nodes=nodes
       state.nativeSplinePath=nil; state.nativeSplineSignature=nil
-      state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}; state.nativeSplineRetryAt={}
+      state.nativeSplineApplied={}; state.nativeSplineAppliedAt={}; state.nativeSplineRetryAt={}; state.nativeSplineSpawnNextTryAt=0
       state.trafficNetwork=type(infoOrError)=="table" and infoOrError.network or nil
       state.loopRoute=loop==true
       state.boundsL=type(boundsL)=="table" and boundsL or {}
@@ -630,6 +630,10 @@ end
 local function trySpawnTeleport(sim,dt)
   if state.spawnDone or state.playerRouteInvalid then return end
   if not state.loaded or state.recLine or #state.nodes<2 then return end
+  local simNow=ac.getSim()
+  local gameNow=simNow and safeNumber(simNow.gameTime) or 0
+  if gameNow<safeNumber(state.nativeSplineSpawnNextTryAt) then return end
+  state.nativeSplineSpawnNextTryAt=gameNow+0.25
   state.spawnWait=state.spawnWait+dt
   local aiCars={}
   for i=1,sim.carsCount-1 do
