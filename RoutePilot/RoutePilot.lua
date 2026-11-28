@@ -674,6 +674,50 @@ local function trySpawnCSPTraffic(sim,dt,route)
   flushLog()
 end
 
+local function tryRecycleGraphTraffic(route,order,player)
+  if not route or not route.loop or not player or not ac.closerToRenderThan or
+      not physics or type(physics.setAICarPosition)~="function" then return 0 end
+  local projection=CSPRoutes.project(route,player.position,player.look)
+  if not projection or not projection.distance or projection.distance>60 then return 0 end
+  local total=route.length or 0
+  if total<200 then return 0 end
+  local behindThreshold=math.min(800,total*0.25)
+  local recycled=0
+  for _,index in ipairs(order) do
+    local car=ac.getCar(index)
+    local person=state.p[index]
+    if car and person and person.routeProgress and
+        not ac.closerToRenderThan(car.position,1000) then
+      local aheadDelta=(person.routeProgress-projection.s)%total
+      local behindDistance=aheadDelta>total*0.5 and total-aheadDelta or 0
+      if behindDistance>behindThreshold then
+        local offsets={120,180,240,300,360,420}
+        for oi=1,#offsets do
+          local sample=CSPRoutes.sample(route,projection.s+offsets[oi])
+          if sample then
+            local position=vec3(sample.x,sample.y,sample.z)
+            if spotIsClear(position,index) then
+              local direction=vec3(-sample.tx,0,-sample.tz)
+              local ok,result=pcall(physics.setAICarPosition,index,position,direction)
+              if ok and result~=false then
+                state.p[index]=nil
+                state.spawnHints[index]={segment=sample.seg,parameter=sample.t}
+                state.rescueWatch=state.rescueWatch or {}
+                state.rescueWatch[index]={cooldown=3.0}
+                recycled=recycled+1
+                writeLog("CSP_TRAFFIC_RECYCLE id=%d behind=%.1f ahead=%.1f",
+                  index,behindDistance,offsets[oi])
+              end
+              break
+            end
+          end
+        end
+      end
+    end
+  end
+  return recycled
+end
+
 local function walkLineSigned(startSeg,startT,distance,sign)
   local segs=segmentCount()
   if segs<1 then return nil end
