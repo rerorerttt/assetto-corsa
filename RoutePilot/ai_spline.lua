@@ -20,6 +20,15 @@ local function normalized(x,z)
   return x/l,z/l
 end
 
+local function curveRadius(a,b,c)
+  local ab=distance(a,b)
+  local bc=distance(b,c)
+  local ac=distance(a,c)
+  local cross=math.abs((b.x-a.x)*(c.z-a.z)-(b.z-a.z)*(c.x-a.x))
+  if cross<1e-5 then return 100000.0 end
+  return math.max(1.0,math.min(100000.0,ab*bc*ac/(2.0*cross)))
+end
+
 function M.encode(nodes, loop)
   if type(string.pack)~="function" then
     return nil,"string.pack_unavailable"
@@ -72,10 +81,17 @@ function M.encode(nodes, loop)
     local prev=points[i==1 and (loop and count or 1) or i-1]
     local next=points[i==count and (loop and 1 or count) or i+1]
     local tx,tz=normalized(next.x-prev.x,next.z-prev.z)
-    local direction=math.atan2(tz,tx)
+    local radius=100000.0
+    if loop or (i>1 and i<count) then
+      local a=points[i==1 and count or i-1]
+      local c=points[i==count and 1 or i+1]
+      radius=curveRadius(a,points[i],c)
+    end
     local length=cumulative[i]
+    -- AiPointExtra.Direction is a camber-side sign (+/-1), not a yaw angle.
+    -- The forward vector carries the actual world-space route direction.
     chunks[#chunks+1]=string.pack("<18f",
-      60.0, 1.0, 0.0, 0.0, 1.5, 3.5, 3.5, 0.0, direction,
+      60.0, 1.0, 0.0, 0.0, radius, 3.5, 3.5, 0.0, 1.0,
       0.0, 1.0, 0.0, length, tx, 0.0, tz, 0.0, 0.0)
   end
 
