@@ -57,18 +57,53 @@ local function polygonInfo(def)
 end
 
 local function laneLength(lane)
-  local length = 0
+  local length, cumulative = 0, { [1] = 0 }
   for i = 2, #lane.points do
     local a, b = lane.points[i - 1], lane.points[i]
     local dx, dy, dz = b.x - a.x, b.y - a.y, b.z - a.z
     length = length + math.sqrt(dx * dx + dy * dy + dz * dz)
+    cumulative[i] = length
   end
   if lane.loop and #lane.points > 2 then
     local a, b = lane.points[#lane.points], lane.points[1]
     local dx, dy, dz = b.x - a.x, b.y - a.y, b.z - a.z
     length = length + math.sqrt(dx * dx + dy * dy + dz * dz)
+    cumulative[#lane.points + 1] = length
   end
+  lane.cumulative = cumulative
   return length
+end
+
+local function lanePositionAt(lane, distance)
+  local points, cumulative = lane.points, lane.cumulative
+  local n = #points
+  distance = math.max(0, math.min(lane.totalLength, distance))
+  for i = 1, n do
+    local d0, d1 = cumulative[i] or 0, cumulative[i + 1] or lane.totalLength
+    if distance <= d1 or i == n then
+      local a = points[i]
+      local b = points[i % n + 1]
+      local span = d1 - d0
+      local t = span > 1e-6 and math.max(0, math.min(1, (distance - d0) / span)) or 0
+      return vec3(a.x + (b.x-a.x)*t, a.y + (b.y-a.y)*t, a.z + (b.z-a.z)*t)
+    end
+  end
+  return points[n]
+end
+
+local function laneDirectionAt(lane, distance)
+  local points, cumulative = lane.points, lane.cumulative
+  local n = #points
+  for i = 1, n do
+    local d0, d1 = cumulative[i] or 0, cumulative[i + 1] or lane.totalLength
+    if distance <= d1 or i == n then
+      local a, b = points[i], points[i % n + 1]
+      local dx, dy, dz = b.x-a.x, b.y-a.y, b.z-a.z
+      local length = math.sqrt(dx*dx+dy*dy+dz*dz)
+      if length > 1e-6 then return vec3(dx/length, dy/length, dz/length) end
+    end
+  end
+  return vec3(0, 0, 1)
 end
 
 local function laneIntersectionIntervals(lane, inter)
