@@ -16,6 +16,7 @@ _G.physics = {
 }
 _G.__util = nil
 
+local Graph = require("traffic_csp_graph")
 local Routes = require("traffic_csp_route")
 local function lane(id, points)
   local length = 0
@@ -43,6 +44,10 @@ local movement = {
   attributes={cb=0.1,ce=0.9}
 }
 edgeA.nextMovement = {[edgeB.id]=movement}
+local debugPath, debugCost = Graph.shortestPath({edges={edgeA,edgeB}}, edgeA, edgeB)
+assert(debugPath and #debugPath == 2, "synthetic graph did not produce two-edge path")
+assert(Graph.sampleLane(a, 0) and Graph.sampleLane(a, 5) and Graph.sampleLane(a, 10),
+  "synthetic lane samples are unavailable")
 local route, err = Routes.build({edges={edgeA,edgeB}}, nil, edgeA, 0,
   {targetEdge=edgeB})
 assert(route, "route build failed: "..tostring(err))
