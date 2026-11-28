@@ -77,6 +77,14 @@ for i=1,#importer.graph.edges do
   local route=Routes.build(importer.graph,nil,importer.graph.edges[i],
     importer.graph.edges[i].from,{minLength=250})
   if route and not route.loop then
+    local startSample=Routes.sample(route,0)
+    local endSample=Routes.sample(route,route.length)
+    local clampedEnd=Routes.sample(route,route.length+100)
+    assert(startSample and endSample and clampedEnd,
+      "open route geometry could not be sampled")
+    local endDelta=math.sqrt((endSample.x-clampedEnd.x)^2+
+      (endSample.z-clampedEnd.z)^2)
+    assert(endDelta<1e-4,"open route geometry wrapped past its terminal point")
     openRoutes=openRoutes+1
     bestOpenLength=math.max(bestOpenLength,route.length or 0)
   end
