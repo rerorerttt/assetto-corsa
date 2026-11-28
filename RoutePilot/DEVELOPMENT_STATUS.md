@@ -351,3 +351,6 @@ Release blockers:
 - Added a degenerate-segment tangent fallback that searches the remaining segments with correct wraparound for both open and closed lanes.
 - Validation: source was fetched back and the binary-search paths verified. A randomized comparison across open and looped non-degenerate cumulative-distance arrays confirmed that the new segment selection matches the previous linear scan. No Lua/CSP runtime compilation was available.
 - Commits: `312987b00658612c8f3788d3e1ade99877bd5b92`, `6aa13a857b294f8b7b0a847b788565146cc2a8fb`.
+
+
+Tangent fallback follow-up: for an open lane whose final segment is degenerate, the fallback now searches backward from the end instead of wrapping to the first segment. Closed lanes retain circular search. This prevents a malformed endpoint from assigning a distant, unrelated heading. Commit: `7c610b36c08fbc487d627f29ec7fb81d3d08ace0`.
