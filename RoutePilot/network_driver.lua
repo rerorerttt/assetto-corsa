@@ -46,7 +46,10 @@ local function occupancy(g,laneId,s,index,sim,range)
  local l=g.lanes[laneId];local ahead,behind
  for i=0,sim.carsCount-1 do if i~=index then local c=ac.getCar(i);if c and c.isActive then
   local q=project(l,c.position,s,range+20)
-  if q and q.distance<4.8 then local hx,hz=norm(c.look.x,c.look.z)
+  local otherState=S.p[i]
+  local sameLane=otherState and otherState.networkLaneId==laneId
+  local occupancyRadius=sameLane and 4.8 or 2.0
+  if q and q.distance<occupancyRadius then local hx,hz=norm(c.look.x,c.look.z)
    if dot(hx,hz,q.tx,q.tz)>0.15 then local gap=q.s-s
     if l.loop then if gap>l.length*.5 then gap=gap-l.length elseif gap< -l.length*.5 then gap=gap+l.length end end
     if gap>=0 and gap<range and(not ahead or gap<ahead.gap)then ahead={gap=gap,speed=max(0,n(c.speedMs)),index=i}
@@ -176,6 +179,7 @@ function M.update(i,c,dt)
  p.networkLaneId=l.id;p.networkS=p.networkS;p.routeProgress=p.networkS;p.routeLocked=true
  p.networkDistance=q.distance;p.lineDist=q.distance;p.segIdx=q.segment or 1;p.latOff=0
  p.targetSpeed=target;p.steer=steer;p.gas=gas;p.brake=brake
+ p.trafficPriority=n(l.priority)
  p.trafficAction=lead and"NETWORK_FOLLOW"or"NETWORK_OPEN";p.trafficLeaderIndex=lead and lead.index or -1;p.trafficGap=lead and lead.gap or -1
  p.projectionLost=false;controls(i,steer,gas,brake)
 end
