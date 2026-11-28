@@ -1268,6 +1268,22 @@ local function drawMapInRect(q0,q1)
           ui.drawLine(prev,point,rgbm(1.0,0.78,0.12,0.90),2)
         end
       end
+      -- Arrowhead follows the exact authored point order of this CSP lane.
+      if count>=3 then
+        local mid=math.floor(count*0.5)
+        local a,b=points[mid-1],points[mid+1]
+        local dx,dz=(b.x-a.x)*scale,(b.z-a.z)*scale
+        local length=math.sqrt(dx*dx+dz*dz)
+        if length>0.001 then
+          dx,dz=dx/length,dz/length
+          local node=points[mid]
+          local tip=vec2(mx+(node.x-cx)*scale+dx*6,my+(node.z-cz)*scale+dz*6)
+          local baseX,baseY=tip.x-dx*6,tip.y-dz*6
+          local wing=vec2(-dz*3,dx*3)
+          ui.drawLine(tip,vec2(baseX+wing.x,baseY+wing.y),rgbm(1.0,0.95,0.45,1),2)
+          ui.drawLine(tip,vec2(baseX-wing.x,baseY-wing.y),rgbm(1.0,0.95,0.45,1),2)
+        end
+      end
     end
   else
     -- Manual RoutePilot route fallback.
