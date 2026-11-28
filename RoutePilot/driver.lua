@@ -909,7 +909,15 @@ local function coordinatorLaneGeometry(seg,car)
   local width=right-left
   if width<=0.1 then return {left=(left+right)*0.5,right=(left+right)*0.5,
     count=1,centers={(left+right)*0.5}} end
-  local count=clamp(math.floor((width+1.0)/4.0),1,4)
+  -- CSP converter bounds use 6 m for a single source lane and 3 m
+  -- per lane for multi-lane corridors. Derive matching passing slots from
+  -- that width model; retain legacy 3/7/11/15 m presets for recorded routes.
+  local count
+  if state.loadedFromCSP then
+    count=clamp(math.floor((width+0.25)/3.0),1,4)
+  else
+    count=clamp(math.floor((width+1.0)/4.0),1,4)
+  end
   local carWidth=math.max(1.5,safeNumber(car and car.aabbSize and car.aabbSize.x,2.0))
   while count>1 and width/count<carWidth+0.55 do count=count-1 end
   local slotWidth=width/count
