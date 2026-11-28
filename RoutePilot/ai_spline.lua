@@ -94,7 +94,7 @@ function M.encode(nodes, loop)
     local length=cumulative[i]
     -- AiPointExtra.Direction is a camber-side sign (+/-1), not a yaw angle.
     -- The forward vector carries the actual world-space route direction.
-    chunks[#chunks+1]=string.pack("<18f",
+    chunks[#chunks+1]=string.pack("<ffffffffffffffffff",
       60.0, 1.0, 0.0, 0.0, radius, 3.5, 3.5, 0.0, 1.0,
       0.0, 1.0, 0.0, length, tx, 0.0, tz, 0.0, 0.0)
   end
