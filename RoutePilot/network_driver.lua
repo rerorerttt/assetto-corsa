@@ -131,7 +131,7 @@ local function clearLaneCrossing(src,dst,srcS,dstS)
  -- A geometric neighbour is not necessarily physically reachable: a fence
  -- can sit between two parallel CSP lines. Test the crossing against the
  -- track's physical mesh at several points before allowing a lane change.
- if not physics or type(physics.raycastTrack)~="function" or type(vec3)~="function" then return false end
+ if not physics or type(physics.raycastTrack)~="function" or not vec3 then return false end
  local offsets={0,5,10}
  for _,offset in ipairs(offsets)do
   local ss=src.loop and((srcS+offset)%src.length)or min(src.length,srcS+offset)
