@@ -119,11 +119,11 @@ function M.update(i,c,dt)
  local lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
  if lead and lead.gap<max(32,speed*2)then local change=laneChange(g,l,{s=p.networkS},i,sim,speed)
   if change then
-   local old=l.id
+   local old,oldS=l.id,p.networkS
    l=g.lanes[change.id];p.networkLaneId=l.id;p.networkS=change.s
    local targetProjection=project(l,c.position,p.networkS,35)
    if not targetProjection or targetProjection.distance>12 then
-    p.networkLaneId=old;l=g.lanes[old]
+    p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
    else
     q=targetProjection;p.networkS=q.s
     lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
