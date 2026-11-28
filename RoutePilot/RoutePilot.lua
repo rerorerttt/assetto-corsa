@@ -49,7 +49,7 @@ local state = {
   boundsL={}, boundsR={}, recBoundsSeg=0, showWorldLines=false,
   spawnDone=false, spawnPerformed=false, spawnWait=0, spawnStable=0, spawnLastRoster="",
   spawnHints={}, nodes={}, p={}, status="Готов", logAccum=0, loaded=false,
-  playerAutopilotLast=false, steeringDiagnostics=false,
+  playerAutopilotLast=false, steeringDiagnostics=false, showCSPRoads=false,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -905,6 +905,29 @@ render.on('main.track.transparent', function()
     render.setDepthMode(render.DepthMode.Off)
     local YELLOW=rgbm(1.0,0.85,0.0,1)
     local RED=rgbm(0.6,0.05,0.05,1)
+    if state.showCSPRoads and trafficCSP and trafficCSP.roads then
+      local roads=trafficCSP.roads
+      local green=rgbm(0.1,0.9,0.35,0.95)
+      local cyan=rgbm(0.1,0.65,1.0,0.95)
+      for gi=1,#roads.groups do
+        local group=roads.groups[gi]
+        local left,right=group.boundaries.left,group.boundaries.right
+        for bi=1,2 do
+          local line=bi==1 and left or right
+          local color=bi==1 and green or cyan
+          local count=#line
+          local segments=group.boundaryLoops[bi==1 and "left" or "right"] and count or count-1
+          for si=1,segments do
+            local a,b=line[si],line[si%count+1]
+            local dx,dz=a.x-player.position.x,a.z-player.position.z
+            local ex,ez=b.x-player.position.x,b.z-player.position.z
+            if dx*dx+dz*dz<360000 or ex*ex+ez*ez<360000 then
+              render.debugLine(a,b,color)
+            end
+          end
+        end
+      end
+    end
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
     if isRec then
@@ -1156,6 +1179,9 @@ function windowMain(dt)
           end
         else
           ui.text("CSP Traffic: модуль не загружен")
+        end
+        if ui.checkbox("Показать границы CSP Traffic", state.showCSPRoads) then
+          state.showCSPRoads = not state.showCSPRoads
         end
         if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
           state.steeringDiagnostics=not state.steeringDiagnostics
