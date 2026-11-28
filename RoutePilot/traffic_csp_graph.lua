@@ -117,9 +117,10 @@ local function laneDirectionAt(lane, distance)
   local length=math.sqrt(dx*dx+dy*dy+dz*dz)
   if length>1e-6 then return vec3(dx/length,dy/length,dz/length) end
   -- Degenerate duplicate samples are skipped without changing the distance map.
-  for offset=1,n-1 do
-    local nextIndex=lane.loop and ((i+offset-1)%n+1) or math.min(n-1,i+offset)
-    local p,q=points[nextIndex],points[nextIndex+1]
+  local segmentCount=lane.loop and n or n-1
+  for offset=1,segmentCount-1 do
+    local nextIndex=(i+offset-1)%segmentCount+1
+    local p,q=points[nextIndex],points[nextIndex%n+1]
     if p and q then
       dx,dy,dz=q.x-p.x,q.y-p.y,q.z-p.z
       length=math.sqrt(dx*dx+dy*dy+dz*dz)
