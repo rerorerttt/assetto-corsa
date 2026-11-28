@@ -248,11 +248,13 @@ local function makeBoundary(lane, side, offset)
     lx, ly, lz = norm(lx, ly, lz)
     if lx == 0 and ly == 0 and lz == 0 then lx, ly, lz = -tz, 0, tx end
     local dir = vec3(lx*side, ly*side, lz*side)
+    local baseOffset = type(offset) == 'table' and offset[i] or offset
+    if type(baseOffset) ~= 'number' or baseOffset <= 0 then return nil, adjusted, conflicts end
     local wall = nil
     if i == 1 or i == #pts or i % 2 == 1 then
-      wall = wallDistance(pts[i], dir, offset + 1.0)
+      wall = wallDistance(pts[i], dir, baseOffset + 1.0)
     end
-    local distance = offset
+    local distance = baseOffset
     if wall and wall < offset then
       distance = math.max(0.20, wall - 0.40)
       adjusted = adjusted + 1
@@ -458,42 +460,89 @@ function Roads.build(lanes, log)
     laneGroups[valid[i]] = byRoot[r]
   end
   local wallAdjusted, wallConflicts = 0, 0
+  local verifiedGroups, unverifiedGroups = 0, 0
+  local function measuredWidth(lane, side)
+    local bounds = lane.surfaceBounds
+    if not bounds or bounds[side .. 'Valid'] ~= true or type(bounds[side]) ~= 'table' then
+      return nil
+    end
+    local values = {}
+    for k = 1, #bounds[side] do
+      if type(bounds[side][k]) ~= 'number' then return nil end
+      values[#values+1] = bounds[side][k]
+    end
+    if #values ~= #lane.points then return nil end
+    return median(values)
+  end
   for i = 1, #groups do
     local group = groups[i]
     local reference = group.lanes[1]
     for j = 2, #group.lanes do
       if #group.lanes[j].points > #reference.points then reference = group.lanes[j] end
     end
-    local leftLane, rightLane = reference, reference
-    local leftOffset, rightOffset = 0, 0
+    group.reference = reference
     group.laneOffsets = {}
+    local leftLane, rightLane
+    local leftOffset, rightOffset = 0, 0
+    local leftWidth, rightWidth = nil, nil
+    local leftReach, rightReach = -math.huge, math.huge
     for j = 1, #group.lanes do
       local lane = group.lanes[j]
       local offset = lane == reference and 0 or lateralOffset(reference, lane)
       group.laneOffsets[lane] = offset
-      if offset > leftOffset then leftOffset, leftLane = offset, lane end
-      if offset < rightOffset then rightOffset, rightLane = offset, lane end
+      local laneLeftWidth = measuredWidth(lane, 'left')
+      if laneLeftWidth then
+        local reach = offset + laneLeftWidth
+        if reach > leftReach then
+          leftReach, leftLane, leftOffset, leftWidth = reach, lane, offset, laneLeftWidth
+        end
+      end
+      local laneRightWidth = measuredWidth(lane, 'right')
+      if laneRightWidth then
+        local reach = offset - laneRightWidth
+        if reach < rightReach then
+          rightReach, rightLane, rightOffset, rightWidth = reach, lane, offset, laneRightWidth
+        end
+      end
     end
-    group.reference = reference
     group.leftLane, group.rightLane = leftLane, rightLane
-    group.boundaryOffset = #group.lanes == 1 and 3.0 or 2.5
-    group.leftBoundaryOffset, group.rightBoundaryOffset = group.boundaryOffset, group.boundaryOffset
     group.leftOffset, group.rightOffset = leftOffset, rightOffset
-    local leftBoundary, leftAdjusted, leftConflicts = makeBoundary(leftLane, 1, group.boundaryOffset)
-    local rightBoundary, rightAdjusted, rightConflicts = makeBoundary(rightLane, -1, group.boundaryOffset)
-    group.boundaries = { left = leftBoundary, right = rightBoundary }
-    group.boundaryLoops = { left = leftLane.loop, right = rightLane.loop }
-    group.wallAdjusted = leftAdjusted + rightAdjusted
-    group.wallConflicts = leftConflicts + rightConflicts
-    wallAdjusted = wallAdjusted + group.wallAdjusted
-    wallConflicts = wallConflicts + group.wallConflicts
+    group.leftBoundaryOffset, group.rightBoundaryOffset = leftWidth, rightWidth
+    group.boundaryOffset = leftWidth and rightWidth and (leftWidth+rightWidth)*0.5 or nil
+    group.boundariesVerified = leftLane ~= nil and rightLane ~= nil
+    if group.boundariesVerified then
+      local leftBoundary, leftAdjusted, leftConflicts =
+        makeBoundary(leftLane, 1, leftLane.surfaceBounds.left)
+      local rightBoundary, rightAdjusted, rightConflicts =
+        makeBoundary(rightLane, -1, rightLane.surfaceBounds.right)
+      if leftBoundary and rightBoundary then
+        group.boundaries = { left = leftBoundary, right = rightBoundary }
+        group.boundaryLoops = { left = leftLane.loop, right = rightLane.loop }
+        group.wallAdjusted = leftAdjusted + rightAdjusted
+        group.wallConflicts = leftConflicts + rightConflicts
+        wallAdjusted = wallAdjusted + group.wallAdjusted
+        wallConflicts = wallConflicts + group.wallConflicts
+        verifiedGroups = verifiedGroups + 1
+      else
+        group.boundariesVerified = false
+        group.boundaries = nil
+        group.boundaryLoops = nil
+        unverifiedGroups = unverifiedGroups + 1
+      end
+    else
+      group.boundaries = nil
+      group.boundaryLoops = nil
+      group.wallAdjusted = 0
+      group.wallConflicts = 0
+      unverifiedGroups = unverifiedGroups + 1
+    end
   end
   local opposingAdjusted, opposingConflicts = 0, 0
   for i = 1, #groups do
     local a = groups[i]
     for j = i+1, #groups do
       local b = groups[j]
-      if oppositeMatch(a.reference,b.reference) then
+      if a.boundariesVerified and b.boundariesVerified and oppositeMatch(a.reference,b.reference) then
         local centerOffset=lateralOffset(a.reference,b.reference)
         local side=nil
         if centerOffset > a.leftOffset and centerOffset > 0 then side='left'
@@ -538,7 +587,7 @@ function Roads.build(lanes, log)
     local a = groups[i]
     for j = i+1, #groups do
       local b = groups[j]
-      if parallelMatch(a.reference,b.reference) then
+      if a.boundariesVerified and b.boundariesVerified and parallelMatch(a.reference,b.reference) then
         local centerOffset=lateralOffset(a.reference,b.reference)
         local side=nil
         if centerOffset > a.leftOffset and centerOffset > 0 then side='left'
@@ -579,26 +628,29 @@ function Roads.build(lanes, log)
   local boundaryLines = {}
   for i = 1, #groups do
     local group = groups[i]
-    boundaryLines[#boundaryLines+1] = {
-      group = group, side = 'left', points = group.boundaries.left,
-      loop = group.boundaryLoops.left
-    }
-    boundaryLines[#boundaryLines+1] = {
-      group = group, side = 'right', points = group.boundaries.right,
-      loop = group.boundaryLoops.right
-    }
+    if group.boundariesVerified then
+      boundaryLines[#boundaryLines+1] = {
+        group = group, side = 'left', points = group.boundaries.left,
+        loop = group.boundaryLoops.left
+      }
+      boundaryLines[#boundaryLines+1] = {
+        group = group, side = 'right', points = group.boundaries.right,
+        loop = group.boundaryLoops.right
+      }
+    end
   end
   local junctions = mergeBoundaryCrossings(boundaryLines)
 
   if log then
     local multi = 0
     for i = 1, #groups do if #groups[i].lanes > 1 then multi = multi + 1 end end
-    log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d multi_lane_groups=%d wall_adjusted=%d wall_conflicts=%d opposing_adjusted=%d opposing_conflicts=%d parallel_adjusted=%d parallel_conflicts=%d boundary_junctions=%d',
-      #valid, #groups, multi, wallAdjusted, wallConflicts, opposingAdjusted, opposingConflicts,
-      parallelAdjusted, parallelConflicts, junctions)
+    log('CSP_ROADS_GROUPED valid_lanes=%d groups=%d verified_groups=%d unverified_groups=%d multi_lane_groups=%d wall_adjusted=%d wall_conflicts=%d opposing_adjusted=%d opposing_conflicts=%d parallel_adjusted=%d parallel_conflicts=%d boundary_junctions=%d',
+      #valid, #groups, verifiedGroups, unverifiedGroups, multi, wallAdjusted, wallConflicts,
+      opposingAdjusted, opposingConflicts, parallelAdjusted, parallelConflicts, junctions)
   end
   return { groups = groups, laneGroups = laneGroups, stats = {
     validLanes = #valid, groups = #groups,
+    verifiedGroups = verifiedGroups, unverifiedGroups = unverifiedGroups,
     wallAdjusted = wallAdjusted, wallConflicts = wallConflicts,
     opposingAdjusted = opposingAdjusted, opposingConflicts = opposingConflicts,
     parallelAdjusted = parallelAdjusted, parallelConflicts = parallelConflicts,
