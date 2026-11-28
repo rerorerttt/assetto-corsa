@@ -403,13 +403,19 @@ local function recordSecondTelemetry(sim)
     local car=ac.getCar(i)
     local p=state.p[i]
     if car and car.isActive and car.isAIControlled and p then
-      if p.networkLaneId~=nil then
-        writeLog("NETWORK_CAR id=%d lane=%d s=%.2f pos=(%.2f,%.2f,%.2f) speed=%.2f distance=%.2f height_error=%.2f steer=%.3f gas=%.3f brake=%.3f action=%s",
-          i,safeNumber(p.networkLaneId,-1),safeNumber(p.networkS),
-          safeNumber(car.position.x),safeNumber(car.position.y),safeNumber(car.position.z),
-          safeNumber(car.speedMs),safeNumber(p.networkDistance),safeNumber(p.networkHeightError),
-          safeNumber(p.steer),safeNumber(p.gas),safeNumber(p.brake),
-          tostring(p.trafficAction or "UNKNOWN"))
+      if state.trafficNetwork then
+        if p.networkLaneId~=nil then
+          writeLog("NETWORK_CAR id=%d lane=%d s=%.2f pos=(%.2f,%.2f,%.2f) speed=%.2f distance=%.2f height_error=%.2f steer=%.3f gas=%.3f brake=%.3f action=%s",
+            i,safeNumber(p.networkLaneId,-1),safeNumber(p.networkS),
+            safeNumber(car.position.x),safeNumber(car.position.y),safeNumber(car.position.z),
+            safeNumber(car.speedMs),safeNumber(p.networkDistance),safeNumber(p.networkHeightError),
+            safeNumber(p.steer),safeNumber(p.gas),safeNumber(p.brake),
+            tostring(p.trafficAction or "UNKNOWN"))
+        else
+          writeLog("NETWORK_CAR_NO_LANE id=%d pos=(%.2f,%.2f,%.2f) speed=%.2f",
+            i,safeNumber(car.position.x),safeNumber(car.position.y),safeNumber(car.position.z),
+            safeNumber(car.speedMs))
+        end
       elseif Driver and Driver.telemetryLine then
         writeLog(Driver.telemetryLine(i,car,p))
       end
