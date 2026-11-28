@@ -426,3 +426,8 @@ Additional local check: the environment's `texlua` executable was found and used
 
 - The importer regression now covers both raw editor exports (role defaults plus priorityOffset) and finalized exports (explicit total priority and speedLimit). It verifies that priorityOffset is not added twice and finalized speed limits are not replaced by role defaults.
 - GitHub Actions passed for commit db5fe1d8e9d68b77b5d0ba003a276ce985710970: Lua 5.1 syntax validation and all six regression suites succeeded.
+
+## 2026-11-28 player-car recycling guard
+
+- Open-route recycling now explicitly excludes car 0. Native Ctrl+8 adoption can still drive the player's car along a graph route, but the offscreen traffic recycler will not teleport that car back to the route entrance.
+- GitHub Actions passed for commit 14b8e2e4b839c5597cfbe56dee029daf01019667: Lua 5.1 syntax validation and all six regression suites succeeded.
