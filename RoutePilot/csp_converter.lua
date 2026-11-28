@@ -848,29 +848,102 @@ function Converter.load(log)
     visited[currentLane.id]=currentS
     routeLanes[#routeLanes+1]=currentLane.id
 
-    local nextEdge,nextScore,firstExit=nil,nil,math.huge
-    -- First prefer an authored directed junction transition. It is the
-    -- strongest topology signal and must never be replaced by a nearby lane.
-    for _,edge in ipairs(currentLane.outgoing or {}) do
-      local target=graph.lanes[edge.to]
-      if target and finite(edge.fromS) and finite(edge.toS) and
-        edge.fromS>=currentS-0.5 and
-        (not visited[target.id] or edge.toS>visited[target.id]+20.0 or
-          target.id==startLane.id) then
-        if edge.fromS<firstExit-2.0 then
-          firstExit=edge.fromS
-          nextEdge=nil
-          nextScore=nil
+    -- Junction polygons describe every legal movement through an
+    -- intersection, including side exits. They do NOT mean that the current
+    -- lane must leave at the first polygon it touches. Look ahead through the
+    -- directed graph and choose the continuation with the greatest reachable
+    -- road distance; this prevents a short ramp/return edge from truncating a
+    -- long through lane (the Shuto 136 -> 135 dead-end was exactly this case).
+    local function chooseBestJunctionEdge(originLane,originS)
+      local function copyVisits(source)
+        local result={}
+        for id,s in pairs(source) do result[id]=s end
+        return result
+      end
+      local frontier={{lane=originLane,s=originS,distance=0,
+        firstEdge=nil,visits=copyVisits(visited)}}
+      local bestEdge,bestDistance=nil,-math.huge
+      local sequence=0
+      local maxDepth,beamWidth=8,128
+      for depth=1,maxDepth do
+        local expanded={}
+        for _,state in ipairs(frontier) do
+          local consumed=copyVisits(state.visits)
+          local oldS=consumed[state.lane.id]
+          if not oldS or state.s>oldS then consumed[state.lane.id]=state.s end
+          local options={}
+          for _,edge in ipairs(state.lane.outgoing or {}) do
+            local target=graph.lanes[edge.to]
+            local previous=target and consumed[target.id] or nil
+            if target and finite(edge.fromS) and finite(edge.toS) and
+              edge.fromS>=state.s+0.5 and
+              (target.id==startLane.id or not previous or
+                edge.toS>previous+20.0) then
+              options[#options+1]=edge
+            end
+          end
+          if #options==0 then
+            local score=state.distance+math.max(0,state.lane.length-state.s)
+            if state.firstEdge and score>bestDistance then
+              bestDistance=score
+              bestEdge=state.firstEdge
+            end
+          else
+            for _,edge in ipairs(options) do
+              local target=graph.lanes[edge.to]
+              local first=state.firstEdge or edge
+              local distance=state.distance+
+                math.max(0,edge.fromS-state.s)+
+                math.max(0,finite(edge.gap) and edge.gap or 0)
+              -- Returning to the start lane at its origin (or its prefix)
+              -- closes a real directed loop. Do not expand that cycle again.
+              if target.id==startLane.id and edge.toS<=startS+20.0 then
+                local score=distance+math.max(0,startS-edge.toS)
+                if score>bestDistance then
+                  bestDistance=score
+                  bestEdge=first
+                end
+              else
+                local nextVisits=copyVisits(consumed)
+                expanded[#expanded+1]={lane=target,s=edge.toS,
+                  distance=distance,firstEdge=first,visits=nextVisits,
+                  order=sequence+1}
+                sequence=sequence+1
+              end
+            end
+          end
         end
-        if math.abs(edge.fromS-firstExit)<=2.0 then
-          local score=(finite(edge.alignment) and edge.alignment or 0)*100-
-            (finite(edge.gap) and edge.gap or 0)
-          if not nextScore or score>nextScore then
-            nextEdge=edge
-            nextScore=score
+        if #expanded==0 then break end
+        for _,state in ipairs(expanded) do
+          state.priority=state.distance+
+            math.max(0,state.lane.length-state.s)
+        end
+        table.sort(expanded,function(a,b)
+          if a.priority==b.priority then return a.order<b.order end
+          return a.priority>b.priority
+        end)
+        frontier={}
+        for i=1,math.min(beamWidth,#expanded) do
+          frontier[i]=expanded[i]
+        end
+        if depth==maxDepth then
+          for _,state in ipairs(frontier) do
+            local score=state.distance+
+              math.max(0,state.lane.length-state.s)
+            if state.firstEdge and score>bestDistance then
+              bestDistance=score
+              bestEdge=state.firstEdge
+            end
           end
         end
       end
+      return bestEdge,bestDistance
+    end
+
+    local nextEdge,lookaheadDistance=chooseBestJunctionEdge(currentLane,currentS)
+    if nextEdge then
+      trace("CSP_ROUTE_LOOKAHEAD from=%d chosen=%d reachable=%.1f",
+        currentLane.id,nextEdge.to,lookaheadDistance)
     end
 
     -- A common CSP export has long same-direction parallel lanes but only
