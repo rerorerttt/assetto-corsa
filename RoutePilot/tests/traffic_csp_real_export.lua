@@ -15,7 +15,6 @@ _G.vec3 = function(x,y,z)
   return setmetatable({x=x or 0,y=y or 0,z=z or 0},{__index=vectorMethods})
 end
 
-package.preload["traffic_csp_roads"] = function() return false end
 package.preload["shared/sim/surfaces"] = function() return false end
 
 local file=assert(io.open("RoutePilot/tests/fixtures/traffic_20.json","rb"))
@@ -45,6 +44,17 @@ assert(importer.graph.stats.intersectionLinks>0,
   "real CSP export produced no lane/intersection links")
 assert(importer.graph.stats.movements>0,
   "real CSP export produced no directed intersection movements")
+assert(importer.roads,"real CSP export did not produce road corridors: "..tostring(importer.roadsError))
+assert(importer.roads.stats.validLanes==25 and importer.roads.stats.groups>0,
+  "road corridor builder did not retain the imported lanes")
+for i=1,#importer.lanes do
+  local lane=importer.lanes[i]
+  local group=importer.roads.laneGroups[lane]
+  assert(group and group.boundaries.left and group.boundaries.right,
+    "lane "..tostring(lane.id).." has no generated road boundaries")
+  assert(#group.boundaries.left>=2 and #group.boundaries.right>=2,
+    "lane "..tostring(lane.id).." has incomplete road boundaries")
+end
 
 local main,highway
 for i=1,#importer.lanes do
