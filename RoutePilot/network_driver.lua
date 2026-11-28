@@ -96,23 +96,30 @@ local function laneChange(g,l,p,index,sim,speed)
  return best
 end
 local function junction(g,l,p,car,index,sim)
- local hx,hz=norm(car.look.x,car.look.z);local sx,sz=tangent(l,p.s)
- local headingAlignment=dot(hx,hz,sx,sz);local best,score
- for _,e in ipairs(l.outgoing or{})do if p.s>=e.fromS-6 and p.s<=e.fromS+10 then
-  local t=g.lanes[e.to]
-  if t then
-   local q=point(t,e.toS)
-   local routeAlignment=n(e.alignment,1)
-   local gap=dist(car.position,q)
-   if headingAlignment>-0.25 and routeAlignment>=-0.25 and gap<32 then
-    local block=occupancy(g,t.id,e.toS,index,sim,25)
-    if not block or block.gap>8 then
-     local v=routeAlignment*10+headingAlignment*2-gap*.03
-     if not score or v>score then best={id=t.id,s=e.toS};score=v end
+ local hx,hz=norm(car.look.x,car.look.z)
+ local best,score
+ -- Do not jump to a connected lane while the car is still approaching the
+ -- intersection. Require physical proximity to the outgoing source polyline
+ -- and a heading compatible with that lane's authored direction.
+ for _,e in ipairs(l.outgoing or{})do
+  if p.s>=e.fromS-1.5 and p.s<=e.fromS+5.0 then
+   local target=g.lanes[e.to]
+   if target then
+    local q=projectNear(target,car.position,e.toS,24)
+    if q and q.distance<=7.5 then
+     local headingAlignment=dot(hx,hz,q.tx,q.tz)
+     local routeAlignment=n(e.alignment,1)
+     if headingAlignment>=-0.15 and routeAlignment>=-0.25 then
+      local block=occupancy(g,target.id,q.s,index,sim,25)
+      if not block or block.gap>8 then
+       local value=headingAlignment*8+routeAlignment*4-q.distance
+       if not score or value>score then best={id=target.id,s=q.s};score=value end
+      end
+     end
     end
    end
   end
- end end
+ end
  return best
 end
 local function controls(i,steer,gas,brake)
@@ -136,7 +143,9 @@ function M.update(i,c,dt)
  local q=projectNear(l,c.position,p.networkS,max(35,speed*1.8+15))
  if not q or q.distance>18 then controls(i,0,0,1);p.projectionLost=true;p.trafficAction="NETWORK_PROJECTION_LOST";return end
  p.networkS=q.s;p.networkDistance=q.distance
- local sim=ac.getSim();local nextJ=junction(g,l,{s=p.networkS},c,i,sim)
+ local sim=ac.getSim()
+ p.networkTransitionCooldown=max(0,n(p.networkTransitionCooldown)-max(0,dt))
+ local nextJ=p.networkTransitionCooldown<=0 and junction(g,l,{s=p.networkS},c,i,sim) or nil
  if nextJ then
   local old,oldS=l.id,p.networkS
   l=g.lanes[nextJ.id];p.networkLaneId=l.id;p.networkS=nextJ.s
@@ -145,8 +154,8 @@ function M.update(i,c,dt)
    p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
    controls(i,0,0,0.65);p.projectionLost=true;p.trafficAction="NETWORK_JUNCTION_REACQUIRE";return
   end
-  q=targetProjection;p.networkS=q.s
-  H.log("NETWORK_JUNCTION id=%d from=%d to=%d",i,old,l.id)
+  q=targetProjection;p.networkS=q.s;p.networkTransitionCooldown=1.0
+  H.log("NETWORK_JUNCTION id=%d from=%d to=%d distance=%.2f",i,old,l.id,q.distance)
  end
  local lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
  if lead and lead.gap<max(32,speed*2) and (lead.speed<speed-1.0 or lead.speed<0) then local change=laneChange(g,l,{s=p.networkS},i,sim,speed)
@@ -164,7 +173,7 @@ function M.update(i,c,dt)
   end
  end
  if p.networkS>=l.length-1.5 and not l.loop then
-  local nextLane=junction(g,l,{s=p.networkS},c,i,sim)
+  local nextLane=p.networkTransitionCooldown<=0 and junction(g,l,{s=p.networkS},c,i,sim) or nil
   if nextLane then
    local old,oldS=l.id,p.networkS
    l=g.lanes[nextLane.id];p.networkLaneId=l.id;p.networkS=nextLane.s
@@ -173,7 +182,7 @@ function M.update(i,c,dt)
     p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
     controls(i,0,0,0.65);p.projectionLost=true;return
    end
-   q=targetProjection;p.networkS=q.s
+   q=targetProjection;p.networkS=q.s;p.networkTransitionCooldown=1.0
   else controls(i,0,0,1);p.trafficAction="NETWORK_END_OF_LANE";return end
  end
  local look=clamp(9+speed*.55,9,55);local aimS=l.loop and((p.networkS+look)%l.length)or min(l.length,p.networkS+look)
