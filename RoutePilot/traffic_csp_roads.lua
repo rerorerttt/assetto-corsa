@@ -107,19 +107,6 @@ local function pairMatches(a, b)
   return ca >= requiredCoverage and cb >= requiredCoverage and math.abs(da-db) <= 2.5
 end
 
-local function oppositeTopology(a, b)
-  if a.loop ~= b.loop then return false end
-  local ids = {}
-  for i = 1, #(a.graphLinks or {}) do ids[a.graphLinks[i].intersection] = true end
-  for i = 1, #(b.graphLinks or {}) do
-    if ids[b.graphLinks[i].intersection] then return true end
-  end
-  if a.loop and b.loop then return true end
-  if #a.points < 2 or #b.points < 2 then return false end
-  return dist2(a.points[1],b.points[#b.points]) <= 64 and
-    dist2(a.points[#a.points],b.points[1]) <= 64
-end
-
 local function oppositeMatch(a, b)
   if a.loop ~= b.loop then return false end
   local function coverage(src,dst)
