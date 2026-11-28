@@ -659,6 +659,63 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
 end
 
 
+
+-- Finds a reachable directed cycle beginning at startEdge. Dead-end branches
+-- are ignored; the longest reachable return candidate is preferred.
+function Graph.loopPath(graph, startEdge, maxVisited)
+  if not graph or not startEdge then return nil, 'missing_start_edge' end
+  if startEdge.wrap and startEdge.fromNode == startEdge.toNode then
+    return { startEdge }, startEdge.length or 0
+  end
+  local distances, previous, heap = { [startEdge.id] = 0 }, {}, {}
+  heapPush(heap, { edge = startEdge, cost = 0 })
+  local candidates, visited = {}, 0
+  maxVisited = maxVisited or 20000
+  while #heap > 0 and visited < maxVisited do
+    local item = heapPop(heap)
+    local edge, cost = item.edge, item.cost
+    if cost <= (distances[edge.id] or math.huge) + 1e-7 then
+      visited = visited + 1
+      if edge ~= startEdge and #edge.nextEdges > 0 then
+        candidates[#candidates+1] = { edge = edge, cost = cost }
+      end
+      for i = 1, #edge.nextEdges do
+        local nextEdge = edge.nextEdges[i]
+        local penalty = edge.transitionPenalty and edge.transitionPenalty[nextEdge.id] or 0
+        local nextCost = cost + math.max(0.1, nextEdge.length) + penalty
+        if nextCost < (distances[nextEdge.id] or math.huge) then
+          distances[nextEdge.id] = nextCost
+          previous[nextEdge.id] = edge
+          heapPush(heap, { edge = nextEdge, cost = nextCost })
+        end
+      end
+    end
+  end
+  table.sort(candidates, function(a,b) return a.cost > b.cost end)
+  local tries = math.min(#candidates, 48)
+  for i = 1, tries do
+    local candidate = candidates[i]
+    local backPath = Graph.shortestPath(graph, candidate.edge, startEdge, maxVisited)
+    if backPath and #backPath >= 2 then
+      local outPath, cursor = {}, candidate.edge
+      while cursor do
+        table.insert(outPath, 1, cursor)
+        if cursor == startEdge then break end
+        cursor = previous[cursor.id]
+      end
+      if outPath[1] == startEdge then
+        local combined = {}
+        for j = 1, #outPath do combined[#combined+1] = outPath[j] end
+        for j = 2, #backPath-1 do combined[#combined+1] = backPath[j] end
+        if #combined > 1 then
+          return combined, (distances[candidate.edge.id] or 0) + (backPath.totalCost or 0)
+        end
+      end
+    end
+  end
+  return nil, visited >= maxVisited and 'loop_search_limit' or 'no_directed_cycle'
+end
+
 Graph.sampleLane = lanePositionAt
 Graph.directionAt = laneDirectionAt
 
