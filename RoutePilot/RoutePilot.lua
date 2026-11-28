@@ -621,7 +621,7 @@ local function trySpawnTeleport(sim,dt)
       local carIndex=aiCars[order]
       local slot=chosen[order]
       if slot and spotIsClear(slot.position,carIndex) then
-        local ok,result=pcall(physics.setAICarPosition,carIndex,slot.position,slot.direction)
+        local ok,result=pcall(physics.setAICarPosition,carIndex,slot.position,vec3(-slot.direction.x,0,-slot.direction.z))
         if ok and result~=false then
           local section=slot.lane.length-slot.s
           for _,edge in ipairs(slot.lane.outgoing or {}) do
