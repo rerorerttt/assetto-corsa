@@ -77,14 +77,14 @@ local function nearest(g,car)
  end
  return best
 end
-local function attachIfDue(g,c,p,dt)
+local function attachIfDue(g,c,p,dt,index)
  if p.networkLaneId then return end
  p.networkAttachTimer=max(0,n(p.networkAttachTimer)-max(0,dt))
  if p.networkAttachTimer>0 then return end
  local q=nearest(g,c)
  if q then
   p.networkLaneId=q.id;p.networkS=q.s;p.networkAttachTimer=0.5
-  H.log("NETWORK_ATTACH id=%d lane=%d s=%.1f",c.index or -1,q.id,q.s)
+  H.log("NETWORK_ATTACH id=%d lane=%d s=%.1f",index or -1,q.id,q.s)
  else
   p.networkAttachTimer=1.0
  end
@@ -166,7 +166,7 @@ function M.prepareTraffic(sim,order,dt)
   local c=ac.getCar(i)
   if c and c.isActive then
    local p=S.p[i]or{};S.p[i]=p
-   attachIfDue(g,c,p,dt)
+   attachIfDue(g,c,p,dt,i)
    local l=g.lanes[p.networkLaneId]
    if l then
     local q=projectNear(l,c.position,p.networkS,max(35,n(c.speedMs)*1.8+15))
