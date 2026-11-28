@@ -664,8 +664,10 @@ end
 -- are ignored; the longest reachable return candidate is preferred.
 function Graph.loopPath(graph, startEdge, maxVisited, maxCost)
   if not graph or not startEdge then return nil, 'missing_start_edge' end
+  maxCost = maxCost or 20000
   if startEdge.wrap and startEdge.fromNode == startEdge.toNode then
-    return { startEdge }, startEdge.length or 0
+    if (startEdge.length or 0) <= maxCost then return { startEdge }, startEdge.length or 0 end
+    return nil, 'loop_too_long'
   end
 
   -- Reverse reachability identifies the strongly connected portion that can
