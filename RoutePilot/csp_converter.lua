@@ -827,54 +827,9 @@ function Converter.load(log)
       samples[#samples+1]={s=toS,p=pointAt(lane,toS)}
     end
 
-    local midS=(fromS+toS)*0.5
-    local pairCandidates,seenPairs={},{}
-    for _,edge in ipairs(lane.adjacent or {}) do
-      if midS>=edge.fromStart and midS<=edge.fromEnd and not seenPairs[edge.to] then
-        local candidate=graph.lanes[edge.to]
-        if candidate then
-          local source=pointAt(lane,midS)
-          local targetS=clamp((edge.toStart+edge.toEnd)*0.5,0,candidate.length)
-          local target=pointAt(candidate,targetS)
-          local gap=dist(source,target)
-          local a=tangentAt(lane,midS)
-          local b=tangentAt(candidate,targetS)
-          local alignment=a.x*b.x+a.z*b.z
-          local dy=math.abs(source.y-target.y)
-          if gap>=2.0 and gap<=7.5 and alignment>=0.94 and dy<=1.5 then
-            pairCandidates[#pairCandidates+1]={lane=candidate,edge=edge,hintS=targetS}
-            seenPairs[edge.to]=true
-          end
-        end
-      end
-    end
-
-    -- A road can have more than two authored traffic lines. Project every
-    -- parallel neighbour that overlaps this section, then put the racing line
-    -- midway between the outermost valid lines instead of choosing one at random.
-    local validPairs={}
-    for _,candidate in ipairs(pairCandidates) do
-      local rows={}
-      local hintS=candidate.hintS
-      local valid=true
-      for i=1,#samples do
-        local sample=samples[i]
-        local q=projectPartner(candidate.lane,sample.p,hintS,lane,sample.s)
-        if not q then valid=false;break end
-        rows[i]=q
-        hintS=q.s
-      end
-      if valid then
-        validPairs[#validPairs+1]={lane=candidate.lane,rows=rows}
-      end
-    end
-
-    if #validPairs>0 then
-      anyPassing=true
-      if not firstPairedLaneId then firstPairedLaneId=validPairs[1].lane.id end
-    end
-    -- Keep the driving reference on the exact authored CSP polyline.
-    -- Never average adjacent Traffic Tool lines into a synthetic centreline.
+    -- RoutePilot follows the authored directed line itself. Adjacent lines
+    -- remain separate traffic lanes; they are never averaged into a fabricated
+    -- centreline or used to move the spawn reference away from the source.
     for i=1,#samples do
       appendPoint(samples[i].p,-2.0,2.0)
     end
