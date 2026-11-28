@@ -21,6 +21,8 @@ if not okVehicleDynamics or type(VehicleDynamics) ~= "table" or
   VehicleDynamics = nil
 end
 local CFG, state, H
+local okNetworkDriver, NetworkDriver = pcall(require, "network_driver")
+if not okNetworkDriver or type(NetworkDriver) ~= "table" then NetworkDriver = nil end
 
 local BOUND_MARGIN = 0.4
 local RESCUE_SPEED = 1.5
@@ -57,6 +59,7 @@ function Driver.setup(cfg, st, helpers)
   state.routeMetricCount = #state.nodes
   state.routeMetricLoop = state.loopRoute
   state.playerTelemetry = nil
+  if NetworkDriver and NetworkDriver.setup then NetworkDriver.setup(cfg, st, helpers) end
 end
 
 local function refreshRouteMetrics()
@@ -1219,6 +1222,9 @@ local function coordinatorMove(record,targetLane,records,reason,otherIndex)
 end
 
 function Driver.prepareTraffic(sim,driveOrder,dt)
+  if state.trafficNetwork and NetworkDriver and NetworkDriver.prepareTraffic then
+    return NetworkDriver.prepareTraffic(sim,driveOrder,dt)
+  end
   refreshRouteMetrics()
   if not sim or not state.routeGeometry then return end
   local records={}
@@ -1906,6 +1912,9 @@ local function logSteeringDiagnostics(carIndex,car,p,dt,controlWriteOk)
 end
 
 function Driver.update(carIndex, car, dt)
+  if state.trafficNetwork and NetworkDriver and NetworkDriver.update then
+    return NetworkDriver.update(carIndex,car,dt)
+  end
   local p = state.p[carIndex]
   if not p then
     newPersonality(carIndex)
