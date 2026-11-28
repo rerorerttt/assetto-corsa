@@ -24,10 +24,13 @@ end
 
 local function nearestBoundaryPoint(position, points, loop)
   if not points or #points < 2 then return nil end
-  local bestDistance, bestPoint = math.huge, nil
-  local count = loop and #points or #points-1
-  for i = 1, count do
-    local a, b = points[i], points[i % #points + 1]
+  local n = #points
+  local count = loop and n or n-1
+  local step = math.max(1, math.floor(count/300))
+  local bestDistance, bestPoint, bestIndex = math.huge, nil, nil
+  local function testSegment(i)
+    local nextIndex = i % n + 1
+    local a, b = points[i], points[nextIndex]
     local vx, vy, vz = b.x-a.x, b.y-a.y, b.z-a.z
     local den = vx*vx+vy*vy+vz*vz
     if den > 1e-8 then
@@ -36,7 +39,20 @@ local function nearestBoundaryPoint(position, points, loop)
       local q = vec3(a.x+vx*t,a.y+vy*t,a.z+vz*t)
       local dx,dy,dz = position.x-q.x,position.y-q.y,position.z-q.z
       local d = dx*dx+dy*dy+dz*dz
-      if d < bestDistance then bestDistance,bestPoint=d,q end
+      if d < bestDistance then bestDistance,bestPoint,bestIndex=d,q,i end
+    end
+  end
+  for i = 1, count, step do testSegment(i) end
+  if bestIndex then
+    if loop then
+      for offset = -step, step do
+        local i = (bestIndex+offset-1)%count+1
+        testSegment(i)
+      end
+    else
+      for i = math.max(1,bestIndex-step), math.min(count,bestIndex+step) do
+        testSegment(i)
+      end
     end
   end
   return bestPoint, bestDistance < math.huge and math.sqrt(bestDistance) or nil
