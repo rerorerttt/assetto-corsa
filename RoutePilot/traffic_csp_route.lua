@@ -65,24 +65,19 @@ end
 
 local function laneBoundsAt(roads, lane, position, direction)
   local group = roads and roads.laneGroups and roads.laneGroups[lane]
-  if not group or not group.boundaries then return 3.0, -3.0 end
+  if not group or not group.boundariesVerified or not group.boundaries then return nil, nil end
   local tx,tz=direction.x,direction.z
   local leftX,leftZ=-tz,tx
   local leftPoint,leftDistance=nearestBoundaryPoint(position,group.boundaries.left,group.boundaryLoops.left)
   local rightPoint,rightDistance=nearestBoundaryPoint(position,group.boundaries.right,group.boundaryLoops.right)
-  local left,right=nil,nil
-  if leftPoint and leftDistance and leftDistance<=40 then
-    left=(leftPoint.x-position.x)*leftX+(leftPoint.z-position.z)*leftZ
+  if not leftPoint or not leftDistance or leftDistance>40 or
+      not rightPoint or not rightDistance or rightDistance>40 then
+    return nil, nil
   end
-  if rightPoint and rightDistance and rightDistance<=40 then
-    right=(rightPoint.x-position.x)*leftX+(rightPoint.z-position.z)*leftZ
-  end
-  local offset=group.laneOffsets[lane] or 0
-  local idealLeft=group.leftOffset+(group.leftBoundaryOffset or group.boundaryOffset)-offset
-  local idealRight=group.rightOffset-(group.rightBoundaryOffset or group.boundaryOffset)-offset
-  if not left or left<=0 then left=idealLeft end
-  if not right or right>=0 then right=idealRight end
-  return math.max(0.05,left), math.min(-0.05,right)
+  local left=(leftPoint.x-position.x)*leftX+(leftPoint.z-position.z)*leftZ
+  local right=(rightPoint.x-position.x)*leftX+(rightPoint.z-position.z)*leftZ
+  if left<=0.05 or right>=-0.05 then return nil, nil end
+  return left, right
 end
 
 local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
@@ -93,10 +88,12 @@ local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
     local p = Graph.sampleLane(edge.lane, d)
     local direction = Graph.directionAt(edge.lane, d)
     local left, right = laneBoundsAt(roads, edge.lane, p, direction)
+    if not left or not right then return false end
     local speedLimit=edge.lane.speedLimitExplicit and
       math.max(40,math.min(200,edge.lane.speedLimit or 200)) or 200
     appendPoint(route, p, left, right, speedLimit)
   end
+  return true
 end
 
 local function projectIntersectionPoint(point)
@@ -194,6 +191,9 @@ local function appendBezier(route, roads, movement)
 
   local leftA,rightA=laneBoundsAt(roads,movement.from.lane,p0,movement.fromDir)
   local leftB,rightB=laneBoundsAt(roads,movement.to.lane,p3,movement.toDir)
+  if not leftA or not rightA or not leftB or not rightB then
+    return false, 'unverified_road_boundaries'
+  end
   local halfWidth=math.max(0.05,math.min(3.5,leftA,-rightA,leftB,-rightB))
   local speedA=movement.from.lane.speedLimitExplicit and
     math.max(40,math.min(200,movement.from.lane.speedLimit or 200)) or 200
@@ -236,16 +236,22 @@ end
 local function appendMovement(route, roads, movement)
   if not movement then return true end
   if movement.seamContinuation then
-    appendLaneRange(route, roads, movement.fromEdge,
-      movement.from.from, movement.from.to)
-    appendLaneRange(route, roads, movement.toEdge,
-      movement.to.from, movement.to.to)
+    if not appendLaneRange(route, roads, movement.fromEdge,
+        movement.from.from, movement.from.to) then
+      return false, 'unverified_road_boundaries'
+    end
+    if not appendLaneRange(route, roads, movement.toEdge,
+        movement.to.from, movement.to.to) then
+      return false, 'unverified_road_boundaries'
+    end
     return true
   end
   if movement.continuation then
     local link = movement.from
     local edge = movement.fromEdge
-    appendLaneRange(route, roads, edge, link.from, link.to)
+    if not appendLaneRange(route, roads, edge, link.from, link.to) then
+      return false, 'unverified_road_boundaries'
+    end
     return true
   end
   return appendBezier(route, roads, movement)
@@ -291,13 +297,16 @@ function Routes.build(graph, roads, startEdge, startDistance, options)
   for i = 1, #path do
     local edge = path[i]
     local from = i == 1 and math.max(edge.from, startDistance or edge.from) or edge.from
-    appendLaneRange(route, roads, edge, from, edge.to)
+    if not appendLaneRange(route, roads, edge, from, edge.to) then
+      return nil, 'unverified_road_boundaries'
+    end
     local nextEdge = path[i+1] or (loopRoute and path[1] or nil)
     if nextEdge then
       local movement = edge.nextMovement and edge.nextMovement[nextEdge.id]
       if movement then
-        if not appendMovement(route, roads, movement) then
-          return nil, 'missing_intersection_curve'
+        local movementOK, movementError = appendMovement(route, roads, movement)
+        if not movementOK then
+          return nil, movementError or 'missing_intersection_curve'
         end
       else
         local exitPoint = Graph.sampleLane(edge.lane, edge.to)
