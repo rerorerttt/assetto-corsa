@@ -558,12 +558,14 @@ local function tryAddGraphTrafficCars(sim)
   local clearDistance=CFG.SAFE_RESPAWN_CLEAR or 20
   local added=0
   for _,index in ipairs(newCars) do
+    if added>=10 then break end
     local routeOrder={}
     for ri=1,#routes do routeOrder[ri]=ri end
     table.sort(routeOrder,function(a,b)
       if counts[a]~=counts[b] then return counts[a]<counts[b] end
-      if a==(trafficCSP.playerRouteIndex or 1) then return true end
-      if b==(trafficCSP.playerRouteIndex or 1) then return false end
+      local playerRoute=trafficCSP.playerRouteIndex or 1
+      if a==playerRoute then return b~=playerRoute end
+      if b==playerRoute then return false end
       return a<b
     end)
     local carAdded=false
