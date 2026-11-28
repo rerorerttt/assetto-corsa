@@ -837,8 +837,11 @@ function Converter.load(log)
     local sourceEnd=pointAt(currentLane,segmentEnd)
     local targetStart=pointAt(targetLane,nextEdge.toS)
     if targetLane.id==startLane.id then
-      local join=dist(sourceEnd,pointAt(startLane,startS))
-      if math.abs(nextEdge.toS-startS)<=20.0 and join<=12.0 then
+      local firstPoint=pointAt(startLane,startS)
+      local sourceJoin=dist(sourceEnd,firstPoint)
+      local targetJoin=dist(targetStart,firstPoint)
+      if math.abs(nextEdge.toS-startS)<=20.0 and
+        sourceJoin<=12.0 and targetJoin<=8.0 then
         routeLoop=true
       end
       break
