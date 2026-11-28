@@ -458,7 +458,7 @@ function Roads.build(lanes, log)
           -- Facing boundaries belong to the same physical side for opposing
           -- directions. Clip both corridors to leave a 0.5 m safety gap.
           if laneGap < normalGap + 0.5 then
-            local clipped=math.max(0.20,(laneGap-0.5)*0.5)
+            local clipped=math.max(0.05,(laneGap-0.5)*0.5)
             if laneGap <= 0.9 then opposingConflicts=opposingConflicts+1 end
             if side=='left' then
               local lineA,adjA,confA=makeBoundary(a.leftLane,1,clipped)
