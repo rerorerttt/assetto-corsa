@@ -995,10 +995,12 @@ render.on('main.track.transparent', function()
         local a=state.nodes[previousIndex]
         local b=state.nodes[nextIndex]
         render.debugLine(vec3(a.x,a.y+0.05,a.z),vec3(b.x,b.y+0.05,b.z),YELLOW)
-        local al,ar=boundsAt(previousIndex)
-        local bl,br=boundsAt(nextIndex)
-        render.debugLine(routeOffsetPoint(previousIndex,al),routeOffsetPoint(nextIndex,bl),RED)
-        render.debugLine(routeOffsetPoint(previousIndex,ar),routeOffsetPoint(nextIndex,br),RED)
+        if not state.loadedFromCSP then
+          local al,ar=boundsAt(previousIndex)
+          local bl,br=boundsAt(nextIndex)
+          render.debugLine(routeOffsetPoint(previousIndex,al),routeOffsetPoint(nextIndex,bl),RED)
+          render.debugLine(routeOffsetPoint(previousIndex,ar),routeOffsetPoint(nextIndex,br),RED)
+        end
         previousIndex=nextIndex
         accumulated=0
       end
@@ -1097,6 +1099,7 @@ local function drawMapInRect(q0,q1)
   -- A screen map does not benefit from drawing every sample on every UI frame.
   local stride=math.max(1,math.ceil(n/120))
   local lastIndex=state.loopRoute and n or math.max(1,n-1)
+  if not state.loadedFromCSP then
   for pass=1,2 do
     local prev
     local lastDrawn=0
@@ -1135,6 +1138,7 @@ local function drawMapInRect(q0,q1)
         ui.drawLine(prev,point,rgbm(0.55,0.05,0.05,1),3)
       end
     end
+  end
   end
   -- AI line: yellow, thick, decimated to the map's actual pixel resolution.
   do
