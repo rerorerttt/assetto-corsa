@@ -588,56 +588,110 @@ local function trySpawnCSPTraffic(sim,dt,route)
     return
   end
 
-  local routeCount=math.min(#routes,#aiCars)
-  local plans=nil
-  while routeCount>0 and not plans do
-    local carsByRoute={}
-    for ri=1,routeCount do carsByRoute[ri]={} end
-    for order=1,#aiCars do
-      local ri=(order-1)%routeCount+1
-      carsByRoute[ri][#carsByRoute[ri]+1]=aiCars[order]
-    end
-    local candidatePlans={}
-    local minGap=math.huge
-    local valid=true
-    for ri=1,routeCount do
-      local currentRoute=routes[ri]
-      local groupCars=carsByRoute[ri]
-      local startDistance=math.min(40.0,currentRoute.length*0.08)
-      local available=math.max(0,currentRoute.length-startDistance-10.0)
-      local gap=math.min(CFG.SPAWN_GAP,available/math.max(1,#groupCars))
-      if not currentRoute.loop or gap<CFG.SPAWN_MIN_GAP then
-        valid=false
-        break
-      end
-      minGap=math.min(minGap,gap)
-      for order=1,#groupCars do
-        local index=groupCars[order]
-        local sample=CSPRoutes.sample(currentRoute,startDistance+(order-1)*gap)
-        if not sample then
-          valid=false
-          break
-        end
-        candidatePlans[#candidatePlans+1]={
-          index=index,routeIndex=ri,sample=sample,route=currentRoute
-        }
-      end
-      if not valid then break end
-    end
-    if valid and #candidatePlans==#aiCars then
-      plans=candidatePlans
-      trafficCSP.graphSpawnGap=minGap
-    else
-      routeCount=routeCount-1
+  local spawnRoutes,routeStarts,routeAvailable,routeCapacities={},{},{},{}
+  for ri=1,#routes do
+    local currentRoute=routes[ri]
+    local startDistance=math.min(40.0,currentRoute.length*0.08)
+    local available=math.max(0,currentRoute.length-startDistance-10.0)
+    local capacity=currentRoute.loop and math.floor(available/CFG.SPAWN_MIN_GAP) or 0
+    if capacity>=1 then
+      spawnRoutes[#spawnRoutes+1]=currentRoute
+      routeStarts[#routeStarts+1]=startDistance
+      routeAvailable[#routeAvailable+1]=available
+      routeCapacities[#routeCapacities+1]=capacity
     end
   end
-  if not plans then
+  while #spawnRoutes>#aiCars do
+    spawnRoutes[#spawnRoutes]=nil
+    routeStarts[#routeStarts]=nil
+    routeAvailable[#routeAvailable]=nil
+    routeCapacities[#routeCapacities]=nil
+  end
+  if #spawnRoutes==0 then
     trafficCSP.graphSpawnFailed='insufficient_route_capacity'
     writeLog("CSP_SPAWN_FAILED reason=insufficient_route_capacity cars=%d routes=%d",
       #aiCars,#routes)
     flushLog()
     return
   end
+
+  routes=spawnRoutes
+  trafficCSP.previewRoutes=routes
+  trafficCSP.previewRoute=routes[1]
+  trafficCSP.playerRouteIndex=nil
+  for ri=1,#routes do
+    if routes[ri].playerAligned then trafficCSP.playerRouteIndex=ri; break end
+  end
+  trafficCSP.playerRouteIndex=trafficCSP.playerRouteIndex or 1
+
+  local routeCount=#routes
+  local carCounts={}
+  for ri=1,routeCount do carCounts[ri]=1 end
+  local remaining=#aiCars-routeCount
+  while remaining>0 do
+    local added=false
+    for ri=1,routeCount do
+      if carCounts[ri]<routeCapacities[ri] then
+        carCounts[ri]=carCounts[ri]+1
+        remaining=remaining-1
+        added=true
+        if remaining==0 then break end
+      end
+    end
+    if not added then break end
+  end
+  if remaining>0 then
+    trafficCSP.graphSpawnFailed='insufficient_route_capacity'
+    writeLog("CSP_SPAWN_FAILED reason=insufficient_route_capacity cars=%d capacity=%d",
+      #aiCars,#aiCars-remaining)
+    flushLog()
+    return
+  end
+
+  local carsByRoute={}
+  local carCursor=1
+  for ri=1,routeCount do
+    carsByRoute[ri]={}
+    for ci=1,carCounts[ri] do
+      carsByRoute[ri][#carsByRoute[ri]+1]=aiCars[carCursor]
+      carCursor=carCursor+1
+    end
+  end
+
+  local candidatePlans={}
+  local minGap=math.huge
+  local valid=true
+  for ri=1,routeCount do
+    local currentRoute=routes[ri]
+    local groupCars=carsByRoute[ri]
+    local gap=math.min(CFG.SPAWN_GAP,routeAvailable[ri]/math.max(1,#groupCars))
+    if gap<CFG.SPAWN_MIN_GAP then
+      valid=false
+      break
+    end
+    minGap=math.min(minGap,gap)
+    for order=1,#groupCars do
+      local index=groupCars[order]
+      local sample=CSPRoutes.sample(currentRoute,routeStarts[ri]+(order-1)*gap)
+      if not sample then
+        valid=false
+        break
+      end
+      candidatePlans[#candidatePlans+1]={
+        index=index,routeIndex=ri,sample=sample,route=currentRoute
+      }
+    end
+    if not valid then break end
+  end
+  local plans=valid and #candidatePlans==#aiCars and candidatePlans or nil
+  if not plans then
+    trafficCSP.graphSpawnFailed='insufficient_route_capacity'
+    writeLog("CSP_SPAWN_FAILED reason=invalid_route_spawn_plan cars=%d routes=%d",
+      #aiCars,routeCount)
+    flushLog()
+    return
+  end
+  trafficCSP.graphSpawnGap=minGap
 
   local backups,moved={},{}
   local failed=0
