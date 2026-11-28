@@ -84,6 +84,13 @@ assert(math.abs(firstTransitionPoint.x-expectedX) < 1e-5,
   string.format("CSP Bezier attributes/arc-length sampling mismatch: x=%.6f expected=%.6f",
     firstTransitionPoint.x, expectedX))
 
+-- An open route without an explicit target must never stop inside an
+-- intersection merely because the directed graph has no outgoing movement.
+edgeA.toNode={kind="intersection"}
+local unsafeRoute,unsafeError=Routes.build({edges={edgeA}},nil,edgeA,0,{minLength=1})
+assert(not unsafeRoute and unsafeError=="open_route_not_at_lane_end",
+  "open route ending at an intersection was not rejected")
+
 -- A CSP U-turn is two normalized Bezier segments joined at a midpoint
 -- displaced by ul * chord along (fromDir - toDir).
 local reverse = lane(3, vec3(10,0,10), vec3(10,0,0))
