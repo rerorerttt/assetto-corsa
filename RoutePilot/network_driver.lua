@@ -107,10 +107,11 @@ function M.update(i,c,dt)
  p.networkS=q.s;p.networkDistance=q.distance
  local sim=ac.getSim();local nextJ=junction(g,l,{s=p.networkS},c,i,sim)
  if nextJ then
-  local old=l.id
+  local old,oldS=l.id,p.networkS
   l=g.lanes[nextJ.id];p.networkLaneId=l.id;p.networkS=nextJ.s
   local targetProjection=project(l,c.position,p.networkS,35)
   if not targetProjection or targetProjection.distance>28 then
+   p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
    controls(i,0,0,0.65);p.projectionLost=true;p.trafficAction="NETWORK_JUNCTION_REACQUIRE";return
   end
   q=targetProjection;p.networkS=q.s
