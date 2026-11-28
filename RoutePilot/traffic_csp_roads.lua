@@ -52,6 +52,7 @@ local function nearestOnLane(p, lane)
 end
 
 local function sharedTopology(a, b)
+  if a.loop ~= b.loop then return false end
   local ids = {}
   for i = 1, #(a.graphLinks or {}) do
     local link = a.graphLinks[i]
@@ -63,7 +64,8 @@ local function sharedTopology(a, b)
   end
   -- Intersection-free stretches can still be the same road if both directed
   -- endpoints align; this deliberately rejects parallel roads side-by-side.
-  if a.loop or b.loop or #a.points < 2 or #b.points < 2 then return false end
+  if a.loop and b.loop then return true end
+  if #a.points < 2 or #b.points < 2 then return false end
   local a0, a1 = a.points[1], a.points[#a.points]
   local b0, b1 = b.points[1], b.points[#b.points]
   return dist2(a0, b0) <= 64 and dist2(a1, b1) <= 64
@@ -93,9 +95,16 @@ local function pairMatches(a, b)
     local total = math.ceil(n / step)
     return total > 0 and good / total or 0, good > 0 and sum/good or math.huge
   end
+  if a.loop and b.loop then
+    local lengthA, lengthB = a.totalLength or 0, b.totalLength or 0
+    if math.abs(lengthA-lengthB) > math.max(20, math.max(lengthA,lengthB)*0.20) then
+      return false
+    end
+  end
   local ca, da = coverage(a, b)
   local cb, db = coverage(b, a)
-  return ca >= 0.65 and cb >= 0.65 and math.abs(da-db) <= 2.5
+  local requiredCoverage = a.loop and 0.85 or 0.65
+  return ca >= requiredCoverage and cb >= requiredCoverage and math.abs(da-db) <= 2.5
 end
 
 local function median(values)
