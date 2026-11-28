@@ -53,6 +53,8 @@ local state = {
   playerAutopilotLast=false, steeringDiagnostics=false,
   trafficNetwork=nil, loadedFromCSP=false, cspImportPending=false,
   autoImportAccum=0, autoImportAttempts=0,
+  playerTeleportPending=false, playerTeleportWait=0, playerTeleportStable=0,
+  playerTeleportCandidateX=nil, playerTeleportCandidateZ=nil,
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -849,19 +851,48 @@ function script.update(dt)
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
-    -- Rebuild the directed CSP route when the player is teleported to another
-    -- part of a large network. The original route is intentionally rooted at
-    -- the player's position at import time; continuing to use it after a
-    -- multi-kilometre teleport leaves every AI on a stale route and can send
-    -- rescue/spawn logic to unrelated coordinates.
+    -- A teleport may expose a transient respawn pose for several physics
+    -- frames. Never build a CSP route from that intermediate position: wait
+    -- until the player has settled, otherwise nearest-lane acquisition can
+    -- select a nearby ramp/parallel carriageway and place the whole traffic
+    -- stream on the wrong geometry.
     if player and player.isActive and state.loaded and state.loadedFromCSP and
         not state.recLine and player.position then
       local lastX,lastZ=state.lastPlayerWorldX,state.lastPlayerWorldZ
-      if lastX~=nil and lastZ~=nil then
+      if lastX~=nil and lastZ~=nil and not state.playerTeleportPending then
         local dx,dz=player.position.x-lastX,player.position.z-lastZ
         local jump=math.sqrt(dx*dx+dz*dz)
         if jump>150.0 then
-          writeLog("PLAYER_TELEPORT_DETECTED jump=%.1f; rebuilding CSP route",jump)
+          state.playerTeleportPending=true
+          state.playerTeleportWait=0
+          state.playerTeleportStable=0
+          state.playerTeleportCandidateX=player.position.x
+          state.playerTeleportCandidateZ=player.position.z
+          state.spawnStable=0
+          writeLog("PLAYER_TELEPORT_PENDING jump=%.1f; waiting for settled pose",jump)
+        end
+      end
+
+      if state.playerTeleportPending then
+        state.playerTeleportWait=state.playerTeleportWait+dt
+        local cx,cz=state.playerTeleportCandidateX,state.playerTeleportCandidateZ
+        local dx=player.position.x-(cx or player.position.x)
+        local dz=player.position.z-(cz or player.position.z)
+        local moved=math.sqrt(dx*dx+dz*dz)
+        local speed=math.abs(safeNumber(player.speedMs))
+        local allowedMotion=math.max(2.5,speed*dt*1.5+0.75)
+        if moved<=allowedMotion then
+          state.playerTeleportStable=state.playerTeleportStable+dt
+        else
+          state.playerTeleportStable=0
+        end
+        state.playerTeleportCandidateX=player.position.x
+        state.playerTeleportCandidateZ=player.position.z
+
+        if state.playerTeleportStable>=0.75 then
+          writeLog("PLAYER_TELEPORT_SETTLED wait=%.2f stable=%.2f pos=(%.1f,%.1f,%.1f)",
+            state.playerTeleportWait,state.playerTeleportStable,
+            player.position.x,player.position.y,player.position.z)
           local oldState={
             nodes=state.nodes,boundsL=state.boundsL,boundsR=state.boundsR,
             trafficNetwork=state.trafficNetwork,loadedFromCSP=state.loadedFromCSP,
@@ -869,6 +900,8 @@ function script.update(dt)
             routeGeometry=state.routeGeometry,routeLength=state.routeLength,
             routeMetricCount=state.routeMetricCount,routeMetricLoop=state.routeMetricLoop,
             p=state.p,spawnHints=state.spawnHints,status=state.status,
+            spawnDone=state.spawnDone,spawnWait=state.spawnWait,
+            spawnStable=state.spawnStable,spawnLastRoster=state.spawnLastRoster,
           }
           local rebuilt=loadLine(true)
           if rebuilt then
@@ -877,12 +910,27 @@ function script.update(dt)
             state.spawnStable=0
             state.spawnLastRoster=""
             state.spawnDone=false
+            state.spawnPerformed=false
             writeLog("PLAYER_TELEPORT_ROUTE_REBUILT points=%d",#state.nodes)
-            flushLog()
           else
             for key,value in pairs(oldState) do state[key]=value end
             writeLog("PLAYER_TELEPORT_ROUTE_REBUILD_FAILED; retaining previous route")
           end
+          state.playerTeleportPending=false
+          state.playerTeleportWait=0
+          state.playerTeleportStable=0
+          state.playerTeleportCandidateX=nil
+          state.playerTeleportCandidateZ=nil
+          flushLog()
+        elseif state.playerTeleportWait>=5.0 then
+          writeLog("PLAYER_TELEPORT_REBUILD_CANCELLED reason=unstable_pose stable=%.2f",
+            state.playerTeleportStable)
+          state.playerTeleportPending=false
+          state.playerTeleportWait=0
+          state.playerTeleportStable=0
+          state.playerTeleportCandidateX=nil
+          state.playerTeleportCandidateZ=nil
+          flushLog()
         end
       end
       state.lastPlayerWorldX=player.position.x
@@ -904,7 +952,8 @@ function script.update(dt)
     end
     if state.recLine and player then addPoint(player.position) end
     if state.recBounds and player then updateBoundsRecording(player) end
-    if state.enabled and state.loaded and #state.nodes>=2 then
+    if state.enabled and state.loaded and #state.nodes>=2 and
+        not state.playerTeleportPending then
       trySpawnTeleport(sim,dt)
     end
     -- Ctrl+8 switches the player car into Assetto Corsa's native AI state.
@@ -1120,10 +1169,12 @@ render.on('main.track.transparent', function()
       -- distance cull only for the finished track (long range view)
       if isRec or flatDist(player.position,node)<CFG.DRAW_RANGE then
         render.debugLine(vec3(node.x,node.y+0.05,node.z),vec3(nx.x,nx.y+0.05,nx.z),YELLOW)
-        render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
-          vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
-        render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
-          vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+        if not state.loadedFromCSP then
+          render.debugLine(vec3(node.x-lz*al,node.y+0.05,node.z+lx*al),
+            vec3(nx.x-lz*al,nx.y+0.05,nx.z+lx*al),RED)
+          render.debugLine(vec3(node.x-lz*ar,node.y+0.05,node.z+lx*ar),
+            vec3(nx.x-lz*ar,nx.y+0.05,nx.z+lx*ar),RED)
+        end
       end
       if i2==toI then break end
       i2=(i2%n)+1
@@ -1279,25 +1330,28 @@ local function drawMapInRect(q0,q1)
       end
     end
   else
-  -- bounds: dark red, thick, min offset from the line
-  for pass=1,2 do
-    local prev
-    for i=1,n do
-      local node=state.nodes[i]
-      local nxt=state.nodes[(i%n)+1]
-      local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
-      local l,r=boundsAt(i)
-      local off=(pass==1) and l or r
-      if math.abs(off)*scale<minOff then
-        off=(off>=0 and 1 or -1)*(minOff/math.max(scale,0.0001))
+  -- Synthetic route boundaries are only for manually recorded lines.
+  -- CSP already supplies the real lane geometry; offset borders obscure it.
+  if not state.loadedFromCSP then
+    for pass=1,2 do
+      local prev
+      for i=1,n do
+        local node=state.nodes[i]
+        local nxt=state.nodes[(i%n)+1]
+        local lx,lz=normalize2(nxt.x-node.x,nxt.z-node.z)
+        local l,r=boundsAt(i)
+        local off=(pass==1) and l or r
+        if math.abs(off)*scale<minOff then
+          off=(off>=0 and 1 or -1)*(minOff/math.max(scale,0.0001))
+        end
+        local px,pz=node.x-lz*off,node.z+lx*off
+        local sx=mx+(px-cx)*scale
+        local sy=my+(pz-cz)*scale
+        if prev and segVisible(prev.x,prev.y,sx,sy) then
+          ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),3)
+        end
+        prev=vec2(sx,sy)
       end
-      local px,pz=node.x-lz*off,node.z+lx*off
-      local sx=mx+(px-cx)*scale
-      local sy=my+(pz-cz)*scale
-      if prev and segVisible(prev.x,prev.y,sx,sy) then
-        ui.drawLine(prev,vec2(sx,sy),rgbm(0.55,0.05,0.05,1),3)
-      end
-      prev=vec2(sx,sy)
     end
   end
   -- AI line: yellow, thick (manual-route fallback only).
