@@ -343,3 +343,11 @@ Release blockers:
 - Car 0 is now included in the CSP route group only when a player-aligned route was actually found; the adoption state also reflects this requirement. Other AI traffic can still use the available graph routes.
 - Static verification: confirmed there is no default-to-route-1 fallback, both player route assignment sites preserve a missing route index, and adoption requires a valid aligned route. In-game Ctrl+8 behavior remains to be tested.
 - Commit: `b13b32fe5b7da253d2520303d5b9410e5b3c4062`.
+
+
+## 2026-11-28 CSP lane sampling performance
+
+- Replaced repeated linear scans of each lane's cumulative arc-length array with binary search in `lanePositionAt()` and `laneDirectionAt()`. Route construction samples lanes at roughly two-metre intervals; the old implementation restarted at point 1 for every sample, making long-lane route building unnecessarily quadratic in the number of lane samples.
+- Added a degenerate-segment tangent fallback that searches the remaining segments with correct wraparound for both open and closed lanes.
+- Validation: source was fetched back and the binary-search paths verified. A randomized comparison across open and looped non-degenerate cumulative-distance arrays confirmed that the new segment selection matches the previous linear scan. No Lua/CSP runtime compilation was available.
+- Commits: `312987b00658612c8f3788d3e1ade99877bd5b92`, `6aa13a857b294f8b7b0a847b788565146cc2a8fb`.
