@@ -101,3 +101,18 @@ The current steering law still uses a fixed curvature-to-normalized-steer gain. 
 - Per-frame performance has not been benchmarked with 1/5/10/20+ cars. The speed-scaled replan interval increases planner work at very high speed and must be profiled in CSP.
 
 Static checks only. No Lua/LuaJIT compiler or Assetto Corsa/CSP runtime is available in this environment. None of the steering, high-speed preview, lane-transition, collision-avoidance or FPS changes is claimed as in-game verified. The next test must begin with one car on a genuinely straight Drag route, then repeat at increasing speed, and only after that test corners and traffic.
+
+
+## 2026-11-28 Shuto initial-spawn route-lock invalidation
+
+The Shuto trace contains a track-specific startup sequence that explains why cars placed correctly on the road subsequently lose their route:
+
+- At 19.55 s, `physics.setAICarPosition()` places the AI cars at recorded Shuto route coordinates (for example car 1 at `(-126.83, 6.15, 1510.39)`). The app also creates a route seed for the exact raw segment and interpolation parameter (`ROUTE_SEED ... progress=39.98`).
+- The first post-placement car snapshot is asynchronous. The trace then reports `ROUTE_REACQUIRE_TELEPORT jump=2642.4` for car 1, even though the spawn API had just placed it at the intended road coordinate. The delta is the stale pre-placement grid pose versus the new Shuto road pose, not an unexpected movement by the car.
+- `Driver.update()` treated that expected spawn transition as an arbitrary teleport and cleared `routeLocked`, `routeProgress` and, critically, `spawnSeeded`. The next projection then failed (`OFFTRACK_RECOVERY_BEGIN distance=999`), so the controller had no valid route lock. Nagoya does not expose the same failure when its initial grid-to-road displacement stays below the generic teleport threshold.
+
+Correction committed on this branch:
+- `RoutePilot.lua` now carries the exact requested spawn world position in each spawn hint.
+- `driver.lua` waits for the physics snapshot to reach that position before running generic teleport detection. During the short acknowledgement window it holds the car with the documented `combineAxis=false` control override, preserves the seeded segment/progress and emits one `SPAWN_WAIT_PHYSICS_POSITION` row. On acknowledgement it anchors the world-position history at the actual placed position and logs `SPAWN_POSITION_ACK`. A 1.5 s timeout is diagnostic and releases the seed rather than waiting forever.
+
+This is a source-and-trace-confirmed root cause for the Shuto-specific loss of the initial route seed. The checked-in trace predates the `combineAxis` correction and still contains the old per-frame `combineAxes` exception; it cannot validate the new code. No Lua compiler or Assetto Corsa runtime is available in this environment, so the patch is source-verified but not yet game-tested. The later world-origin jumps in that old trace occur after repeated controller exceptions and route-projection loss; RoutePilot contains no separate AI position-teleport call after initial placement, so their exact native AC/CSP reset mechanism is not proven by this trace.
