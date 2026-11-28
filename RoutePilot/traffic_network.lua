@@ -166,9 +166,12 @@ function Network.loadTrackTraffic()
   if not io or type(io.load) ~= "function" then
     return nil, "IO_LOAD_UNAVAILABLE"
   end
-  local okJson, json = pcall(require, "lib/json")
+  -- RoutePilot is a separate CSP app package: the CSP Traffic Tool's
+  -- private "lib/json" module is not on its package path. Use the decoder
+  -- bundled beside this app instead.
+  local okJson, json = pcall(require, "json")
   if not okJson or type(json) ~= "table" or type(json.decode) ~= "function" then
-    return nil, "JSON_LIBRARY_UNAVAILABLE"
+    return nil, "JSON_LIBRARY_UNAVAILABLE: " .. tostring(json)
   end
   local okPath, path = pcall(ac.getTrackDataFilename, "traffic.json")
   if not okPath or type(path) ~= "string" or path == "" then
