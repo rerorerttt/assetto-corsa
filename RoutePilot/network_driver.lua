@@ -143,7 +143,7 @@ function M.update(i,c,dt)
   if change then
    local old,oldS=l.id,p.networkS
    l=g.lanes[change.id];p.networkLaneId=l.id;p.networkS=change.s
-   local targetProjection=project(l,c.position,p.networkS,35)
+   local targetProjection=projectNear(l,c.position,p.networkS,35)
    if not targetProjection or targetProjection.distance>12 then
     p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
    else
@@ -158,7 +158,7 @@ function M.update(i,c,dt)
   if nextLane then
    local old,oldS=l.id,p.networkS
    l=g.lanes[nextLane.id];p.networkLaneId=l.id;p.networkS=nextLane.s
-   local targetProjection=project(l,c.position,p.networkS,35)
+   local targetProjection=projectNear(l,c.position,p.networkS,35)
    if not targetProjection or targetProjection.distance>28 then
     p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
     controls(i,0,0,0.65);p.projectionLost=true;return
