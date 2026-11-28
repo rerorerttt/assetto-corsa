@@ -652,85 +652,6 @@ local function walkLineSigned(startSeg,startT,distance,sign)
   end
   return nil
 end
-local function teleportHome(carIndex,car)
-  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
-    writeLog("RESCUE_FAILED id=%d reason=no_teleport_api",carIndex)
-    return false
-  end
-  if #state.nodes<2 or not car or not car.position then return false end
-
-  -- Recovery is anchored to the player's live position, never to the stranded
-  -- AI car. An AI that has fallen/frozen outside the map has no trustworthy
-  -- spatial reference; projecting that position onto a 200 km route can select
-  -- an unrelated segment (often the same remote segment for every AI).
-  local player=ac.getCar(0)
-  if not player or not player.isActive or not player.position or not player.look then
-    writeLog("RESCUE_FAILED id=%d reason=player_unavailable",carIndex)
-    return false
-  end
-
-  local playerState=state.playerTelemetry
-  local hintSeg=playerState and playerState.segIdx or 1
-  local seg,t,routeError=findNearestSeg(
-    player.position,hintSeg,true,player.look,true,true)
-  if not routeError or routeError>15.0 then
-    writeLog("RESCUE_FAILED id=%d reason=player_not_on_route error=%.1f limit=15.0",
-      carIndex,routeError or math.huge)
-    return false
-  end
-
-  -- Determine which way along the imported route is physically in front of
-  -- the player. This also handles routes whose node order is opposite to the
-  -- current driving direction.
-  local a,b=state.nodes[seg],segEnd(seg)
-  local tx,tz=normalize2(b.x-a.x,b.z-a.z)
-  local px,pz=normalize2(player.look.x,player.look.z)
-  local alignment=tx*px+tz*pz
-  if math.abs(alignment)<0.25 then
-    writeLog("RESCUE_FAILED id=%d reason=player_heading_ambiguous alignment=%.3f seg=%d",
-      carIndex,alignment,seg)
-    return false
-  end
-  local sign=alignment>=0 and 1 or -1
-  writeLog("RESCUE_PLAYER_ANCHOR id=%d player=(%.2f,%.2f,%.2f) seg=%d t=%.3f error=%.2f alignment=%.3f sign=%d",
-    carIndex,player.position.x,player.position.y,player.position.z,
-    seg,t,routeError,alignment,sign)
-
-  -- Every recovery point is sampled ahead of the player on the same route
-  -- branch. Never use the stranded AI's coordinates to choose a destination.
-  for distance=70+(carIndex-1)*32,230,10 do
-    local pos,sampleSeg,sampleT=walkLineSigned(seg,t,distance,sign)
-    if pos then
-      local nextPos=walkLineSigned(sampleSeg,sampleT,3.0,sign)
-      if nextPos then
-        local dx,dz=normalize2(nextPos.x-pos.x,nextPos.z-pos.z)
-        local safePos=vec3(pos.x,pos.y+0.15,pos.z)
-        if spotIsClear(safePos,carIndex) then
-          local ok,result=pcall(physics.setAICarPosition,carIndex,
-            safePos,vec3(-dx,0,-dz))
-          if ok and result~=false then
-            state.p[carIndex]=nil
-            state.spawnHints[carIndex]={segment=sampleSeg,parameter=sampleT,boost=true}
-            state.rescueWatch=state.rescueWatch or {}
-            state.rescueWatch[carIndex]={cooldown=3.0}
-            writeLog("RESCUE_FORWARD id=%d distance_ahead_player=%.1f player_route_error=%.1f seg=%d t=%.3f sign=%d pos=(%.2f,%.2f,%.2f)",
-              carIndex,distance,routeError,sampleSeg,sampleT,sign,
-              safePos.x,safePos.y,safePos.z)
-            flushLog()
-            return true
-          end
-          writeLog("RESCUE_FORWARD_FAILED id=%d distance_ahead_player=%.1f error=%s",
-            carIndex,distance,tostring(result))
-        end
-      end
-    end
-  end
-  writeLog("RESCUE_FAILED id=%d reason=no_clear_point_ahead_of_player player_route_error=%.1f",
-    carIndex,routeError)
-  flushLog()
-  return false
-end
-
 local function updateRescueWatchdog(carIndex,car,dt)
   if not car or not car.isActive or not car.isAIControlled then
     if state.rescueWatch then state.rescueWatch[carIndex]=nil end
@@ -780,16 +701,12 @@ local function updateRescueWatchdog(carIndex,car,dt)
   elseif offTrackT>=10.0 then reason="offtrack_10s"
   elseif w.gasStallT>=10.0 then reason="gas_no_progress_10s" end
   w.retryT=math.max(0,safeNumber(w.retryT)-dt)
-  if reason and w.retryT<=0 then
-    local rescued=teleportHome(carIndex,car)
-    writeLog("RESCUE_WATCHDOG id=%d reason=%s success=%s rollover=%.1f offtrack=%.1f gas_stall=%.1f speed=%.2f gas=%.2f",
-      carIndex,reason,tostring(rescued),w.rolloverT,offTrackT,w.gasStallT,speed,gas)
-    if rescued then
-      state.rescueWatch[carIndex]={cooldown=3.0}
-      return true
-    end
-    -- Keep the fault timers, but retry the forward-point scan only every two seconds.
-    w.retryT=2.0
+  if reason and not w.failureLogged then
+    w.failureLogged=true
+    writeLog("RESCUE_WATCHDOG_SUPPRESSED id=%d reason=%s rollover=%.1f offtrack=%.1f gas_stall=%.1f speed=%.2f gas=%.2f; no teleport, retain original failure",
+      carIndex,reason,w.rolloverT,offTrackT,w.gasStallT,speed,gas)
+  elseif not reason then
+    w.failureLogged=false
   end
   return false
 end
@@ -878,7 +795,7 @@ local function ensureDriver()
     segmentCount=segmentCount, segEnd=segEnd, walkLine=walkLine,
     findNearestSeg=findNearestSeg, lateralOf=lateralOf, boundsAt=boundsAt,
     getVertexCurvature=getVertexCurvature, carAheadFull=carAheadFull,
-    teleportHome=teleportHome, log=writeLog,
+    log=writeLog,
   })
   driverReady=true
   return true
