@@ -235,6 +235,10 @@ local function loadLine(retryOnly)
       reason:find("NO_CSP_LANE_NEAR_PLAYER",1,true)~=nil
     writeLog("CSP_IMPORT_FAILED ok=%s reason=%s pending=%s",
       tostring(ok),reason,tostring(state.cspImportPending))
+    if state.cspImportPending then
+      state.status="Ожидание ближайшей CSP-линии"
+      return false
+    end
   end
 
   if retryOnly then return false end
@@ -260,6 +264,8 @@ local function loadLine(retryOnly)
       state.loadedFromCSP=okCSP and flag==true
     end
     state.status=string.format("Загружено: %d точек",#loaded)
+    state.spawnDone=false; state.spawnWait=0; state.spawnStable=0
+    state.spawnLastRoster=""
     writeLog("LOAD_ROUTE points=%d track=%s",#loaded,getTrackTag())
     loadBounds(); flushLog()
     return true
