@@ -76,6 +76,10 @@ local function laneBoundsAt(roads, lane, position, direction)
   end
   local left=(leftPoint.x-position.x)*leftX+(leftPoint.z-position.z)*leftZ
   local right=(rightPoint.x-position.x)*leftX+(rightPoint.z-position.z)*leftZ
+  -- Boundary lines can belong to a wider shared multi-lane corridor. Keep
+  -- the local planning envelope bounded even if a distant edge is selected.
+  left=math.min(left,8.0)
+  right=math.max(right,-8.0)
   if left<1.25 or right>-1.25 then return nil, nil end
   return left, right
 end
