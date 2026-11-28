@@ -79,6 +79,11 @@ local function appendMovement(route, roads, movement)
   return appendBezier(route, movement)
 end
 
+function Routes.sample(route, distanceAlong)
+  if not route or not route.geometry then return nil end
+  return Geometry.sample(route.geometry, distanceAlong)
+end
+
 function Routes.build(graph, roads, startEdge, startDistance, options)
   options = options or {}
   if not graph or not startEdge then return nil, 'missing_start_edge' end
