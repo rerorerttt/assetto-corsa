@@ -56,6 +56,8 @@ local state = {
   playerTeleportPending=false, playerTeleportWait=0, playerTeleportStable=0,
   playerTeleportCandidateX=nil, playerTeleportCandidateZ=nil,
   playerRouteInvalid=false,
+  teleportDiagnostics=false, teleportDiagAccum=0,
+  teleportDiagSnapshots={}, teleportDiagApiAt={},
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -597,8 +599,24 @@ local function trySpawnTeleport(sim,dt)
     if position and direction then
       -- Keep the previously user-verified orientation. The SDK documents
       -- an explicit direction vector but does not define its sign convention.
-      local ok,result=pcall(physics.setAICarPosition,carIndex,
-        position,vec3(-direction.x,-direction.y,-direction.z))
+      local spawnDir=vec3(-direction.x,-direction.y,-direction.z)
+      local simNow=ac.getSim()
+      local spawnGameTime=simNow and safeNumber(simNow.gameTime) or 0
+      if state.teleportDiagnostics then
+        writeLog("TELEPORT_DIAG_API_CALL api=setAICarPosition id=%d target=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f,%.3f) before=(%.2f,%.2f,%.2f)",
+          carIndex,position.x,position.y,position.z,spawnDir.x,spawnDir.y,spawnDir.z,
+          (ac.getCar(carIndex).position.x),(ac.getCar(carIndex).position.y),(ac.getCar(carIndex).position.z))
+      end
+      local ok,result=pcall(physics.setAICarPosition,carIndex,position,spawnDir)
+      state.teleportDiagApiAt[carIndex]=spawnGameTime
+      if state.teleportDiagnostics then
+        local after=ac.getCar(carIndex)
+        local ap=after and after.position
+        writeLog("TELEPORT_DIAG_API_RETURN api=setAICarPosition id=%d pcall_ok=%s result=%s observed=(%.2f,%.2f,%.2f) target_error=%.2f",
+          carIndex,tostring(ok),tostring(result),
+          ap and ap.x or 0,ap and ap.y or 0,ap and ap.z or 0,
+          ap and flatDist(ap,position) or -1)
+      end
       if ok and result~=false then
         moved=moved+1
         state.spawnedCars[carIndex]=true
@@ -793,17 +811,83 @@ local function releaseCar(carIndex)
   state.p[carIndex]=nil
 end
 local driverReady=false
+local function teleportDiagSnapshot(car)
+  if not car or not car.position then return nil end
+  local p=car.position
+  local v=car.velocity or vec3(0,0,0)
+  return {
+    x=safeNumber(p.x),y=safeNumber(p.y),z=safeNumber(p.z),
+    vx=safeNumber(v.x),vy=safeNumber(v.y),vz=safeNumber(v.z),
+    speed=safeNumber(car.speedMs),active=car.isActive==true,
+    ai=car.isAIControlled==true,retired=car.isRetired==true,
+    pit=car.isInPit==true,pitlane=car.isInPitlane==true,
+    goingPits=car.isAIGoingToPits==true,aiLaps=safeNumber(car.aiLapsLeft,-1),
+    spline=safeNumber(car.splinePosition,-1),gas=safeNumber(car.gas),
+    brake=safeNumber(car.brake),steer=safeNumber(car.steer),
+    driven=safeNumber(car.drivenInRace,-1),lap=safeNumber(car.lapCount,-1)
+  }
+end
+local function updateTeleportDiagnostics(sim,dt)
+  if not state.teleportDiagnostics or not sim then return end
+  state.teleportDiagAccum=(state.teleportDiagAccum or 0)+dt
+  if state.teleportDiagAccum<0.10 then return end
+  state.teleportDiagAccum=state.teleportDiagAccum%0.10
+  state.teleportDiagSnapshots=state.teleportDiagSnapshots or {}
+  for i=0,(sim.carsCount or 0)-1 do
+    local car=ac.getCar(i)
+    if car and car.isActive then
+      state.teleportDiagSnapshots[i]=teleportDiagSnapshot(car)
+    else
+      state.teleportDiagSnapshots[i]=nil
+    end
+  end
+end
 local function installCarJumpTrace()
-  if state.carJumpTraceInstalled or type(ac.onCarJumped)~="function" then return end
+  if state.carJumpTraceInstalled then return end
   state.carJumpTraceInstalled=true
-  ac.onCarJumped(-1,function(carIndex)
-    local car=ac.getCar(carIndex)
-    if not car or not car.position then return end
-    writeLog("AC_CAR_JUMP_EVENT id=%d pos=(%.2f,%.2f,%.2f) speed=%.2f active=%s ai=%s",
-      carIndex,car.position.x,car.position.y,car.position.z,
-      safeNumber(car.speedMs),tostring(car.isActive),tostring(car.isAIControlled))
-    flushLog()
-  end)
+  if type(ac.onCarJumped)=="function" then
+    ac.onCarJumped(-1,function(carIndex)
+      local car=ac.getCar(carIndex)
+      if not car or not car.position then return end
+      if state.teleportDiagnostics then
+        local now=teleportDiagSnapshot(car)
+        local before=state.teleportDiagSnapshots and state.teleportDiagSnapshots[carIndex]
+        local dx=before and now.x-before.x or 0
+        local dy=before and now.y-before.y or 0
+        local dz=before and now.z-before.z or 0
+        local delta=before and math.sqrt(dx*dx+dy*dy+dz*dz) or -1
+        local sim=ac.getSim()
+        local gameTime=sim and safeNumber(sim.gameTime) or 0
+        local apiAt=state.teleportDiagApiAt and state.teleportDiagApiAt[carIndex]
+        local apiAge=apiAt and (gameTime-apiAt) or -1
+        writeLog("TELEPORT_DIAG_JUMP id=%d prev=(%.2f,%.2f,%.2f) now=(%.2f,%.2f,%.2f) delta=%.2f api_age=%.2f prev_speed=%.2f speed=%.2f active=%s ai=%s retired=%s pit=%s pitlane=%s going_pits=%s ai_laps=%d spline=%.4f gas=%.3f brake=%.3f steer=%.3f driven=%.1f lap=%d",
+          carIndex,before and before.x or 0,before and before.y or 0,before and before.z or 0,
+          now.x,now.y,now.z,delta,apiAge,before and before.speed or -1,
+          now.speed,tostring(now.active),tostring(now.ai),tostring(now.retired),
+          tostring(now.pit),tostring(now.pitlane),tostring(now.goingPits),
+          now.aiLaps,now.spline,now.gas,now.brake,now.steer,now.driven,now.lap)
+        state.teleportDiagSnapshots[carIndex]=now
+        flushLog()
+      else
+        writeLog("AC_CAR_JUMP_EVENT id=%d pos=(%.2f,%.2f,%.2f) speed=%.2f active=%s ai=%s",
+          carIndex,car.position.x,car.position.y,car.position.z,
+          safeNumber(car.speedMs),tostring(car.isActive),tostring(car.isAIControlled))
+      end
+    end)
+  end
+  if type(ac.onCarAIToggle)=="function" then
+    ac.onCarAIToggle(-1,function(carIndex,aiActive)
+      if not state.teleportDiagnostics then return end
+      local car=ac.getCar(carIndex)
+      local pos=car and car.position
+      writeLog("TELEPORT_DIAG_AI_TOGGLE id=%d ai=%s active=%s pos=(%.2f,%.2f,%.2f) retired=%s pit=%s pitlane=%s",
+        carIndex,tostring(aiActive),tostring(car and car.isActive),
+        pos and pos.x or 0,pos and pos.y or 0,pos and pos.z or 0,
+        tostring(car and car.isRetired),tostring(car and car.isInPit),
+        tostring(car and car.isInPitlane))
+      flushLog()
+    end)
+  end
   writeLog("AC_CAR_JUMP_TRACE_INSTALLED")
 end
 local function ensureDriver()
@@ -825,6 +909,7 @@ function script.update(dt)
     installCarJumpTrace()
     local sim=ac.getSim()
     if not sim then return end
+    updateTeleportDiagnostics(sim,dt)
     local player=ac.getCar(0)
     -- A teleport may expose a transient respawn pose for several physics
     -- frames. Never build a CSP route from that intermediate position: wait
@@ -1450,7 +1535,27 @@ function windowMain(dt)
       end)
       ui.tabItem("Dev", function()
         ui.text("Диагностика контроллера RoutePilot")
-        ui.text("Подробная телеметрия рулевого управления и динамики автомобиля.")
+        ui.text("Проверка внешних телепортаций, сбросов AC и состояния AI.")
+        if ui.button(state.teleportDiagnostics and "Логи телепортаций: ВКЛ" or "Логи телепортаций: ВЫКЛ",vec2(-0.5,28)) then
+          state.teleportDiagnostics=not state.teleportDiagnostics
+          state.teleportDiagAccum=0
+          state.teleportDiagSnapshots={}
+          writeLog("TELEPORT_DIAGNOSTICS %s sample_interval=0.10s",
+            state.teleportDiagnostics and "ON" or "OFF")
+          if state.teleportDiagnostics then
+            local simNow=ac.getSim()
+            if simNow then
+              for i=0,(simNow.carsCount or 0)-1 do
+                local c=ac.getCar(i)
+                if c and c.isActive then state.teleportDiagSnapshots[i]=teleportDiagSnapshot(c) end
+              end
+            end
+          end
+          flushLog()
+        end
+        ui.text(state.teleportDiagnostics and
+          "Фиксируются координаты до/после AC jump, переключения AI и состояние retired/pit/spline. Включите перед запуском трафика." or
+          "Выключено: дополнительный опрос машин не выполняется.")
         if ui.button(state.steeringDiagnostics and "ЛогиРуля: ВКЛ" or "ЛогиРуля: ВЫКЛ",vec2(-0.5,28)) then
           state.steeringDiagnostics=not state.steeringDiagnostics
           writeLog("STEERING_DIAGNOSTICS %s",state.steeringDiagnostics and "ON" or "OFF")
