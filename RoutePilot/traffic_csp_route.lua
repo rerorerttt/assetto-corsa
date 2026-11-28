@@ -63,13 +63,13 @@ local function laneBoundsAt(roads, lane, position, direction)
   if not group or not group.boundaries then return 3.0, -3.0 end
   local tx,tz=direction.x,direction.z
   local leftX,leftZ=-tz,tx
-  local leftPoint=nearestBoundaryPoint(position,group.boundaries.left,group.boundaryLoops.left)
-  local rightPoint=nearestBoundaryPoint(position,group.boundaries.right,group.boundaryLoops.right)
+  local leftPoint,leftDistance=nearestBoundaryPoint(position,group.boundaries.left,group.boundaryLoops.left)
+  local rightPoint,rightDistance=nearestBoundaryPoint(position,group.boundaries.right,group.boundaryLoops.right)
   local left,right=nil,nil
-  if leftPoint then
+  if leftPoint and leftDistance and leftDistance<=40 then
     left=(leftPoint.x-position.x)*leftX+(leftPoint.z-position.z)*leftZ
   end
-  if rightPoint then
+  if rightPoint and rightDistance and rightDistance<=40 then
     right=(rightPoint.x-position.x)*leftX+(rightPoint.z-position.z)*leftZ
   end
   local offset=group.laneOffsets[lane] or 0
