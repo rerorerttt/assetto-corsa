@@ -742,9 +742,9 @@ function Converter.load(log)
     samples[#samples+1]={s=toS,p=pointAt(lane,toS)}
 
     local midS=(fromS+toS)*0.5
-    local pairedLane,pairedEdge,pairScore=nil,nil,nil
+    local pairCandidates,seenPairs={},{}
     for _,edge in ipairs(lane.adjacent or {}) do
-      if midS>=edge.fromStart and midS<=edge.fromEnd then
+      if midS>=edge.fromStart and midS<=edge.fromEnd and not seenPairs[edge.to] then
         local candidate=graph.lanes[edge.to]
         if candidate then
           local source=pointAt(lane,midS)
@@ -755,42 +755,58 @@ function Converter.load(log)
           local b=tangentAt(candidate,targetS)
           local alignment=a.x*b.x+a.z*b.z
           local dy=math.abs(source.y-target.y)
-          local score=gap+(1-alignment)*12+dy*4
-          if gap>=2.0 and gap<=7.5 and alignment>=0.94 and dy<=1.5 and
-            (not pairScore or score<pairScore) then
-            pairedLane,pairedEdge,pairScore=candidate,edge,score
+          if gap>=2.0 and gap<=7.5 and alignment>=0.94 and dy<=1.5 then
+            pairCandidates[#pairCandidates+1]={lane=candidate,edge=edge,hintS=targetS}
+            seenPairs[edge.to]=true
           end
         end
       end
     end
 
-    local projected={}
-    local pairValid=pairedLane~=nil
-    local hintS=pairedEdge and clamp((pairedEdge.toStart+pairedEdge.toEnd)*0.5,
-      0,pairedLane.length) or nil
-    if pairValid then
+    -- A road can have more than two authored traffic lines. Project every
+    -- parallel neighbour that overlaps this section, then put the racing line
+    -- midway between the outermost valid lines instead of choosing one at random.
+    local validPairs={}
+    for _,candidate in ipairs(pairCandidates) do
+      local rows={}
+      local hintS=candidate.hintS
+      local valid=true
       for i=1,#samples do
         local sample=samples[i]
-        local q=projectPartner(pairedLane,sample.p,hintS,lane,sample.s)
-        if not q then pairValid=false;break end
-        projected[i]={x=(sample.p.x+q.x)*0.5,
-          y=(sample.p.y+q.y)*0.5,z=(sample.p.z+q.z)*0.5,
-          half=q.distance*0.5+1.75}
+        local q=projectPartner(candidate.lane,sample.p,hintS,lane,sample.s)
+        if not q then valid=false;break end
+        rows[i]=q
         hintS=q.s
       end
+      if valid then
+        validPairs[#validPairs+1]={lane=candidate.lane,rows=rows}
+      end
+    end
+
+    if #validPairs>0 then
+      anyPassing=true
+      if not firstPairedLaneId then firstPairedLaneId=validPairs[1].lane.id end
     end
     for i=1,#samples do
       local sample=samples[i]
-      if pairValid then
-        local q=projected[i]
-        appendPoint(q,-q.half,q.half)
+      if #validPairs>0 then
+        local tangent=tangentAt(lane,sample.s)
+        local minOffset,maxOffset=0,0
+        for j=1,#validPairs do
+          local q=validPairs[j].rows[i]
+          local offset=(q.x-sample.p.x)*(-tangent.z)+
+            (q.z-sample.p.z)*tangent.x
+          minOffset=math.min(minOffset,offset)
+          maxOffset=math.max(maxOffset,offset)
+        end
+        local centerOffset=(minOffset+maxOffset)*0.5
+        local half=(maxOffset-minOffset)*0.5+2.0
+        local center={x=sample.p.x-tangent.z*centerOffset,
+          y=sample.p.y,z=sample.p.z+tangent.x*centerOffset}
+        appendPoint(center,-half,half)
       else
         appendPoint(sample.p,-1.25,1.25)
       end
-    end
-    if pairValid then
-      anyPassing=true
-      if not firstPairedLaneId then firstPairedLaneId=pairedLane.id end
     end
   end
 
