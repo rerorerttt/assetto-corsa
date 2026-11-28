@@ -186,6 +186,10 @@ local function saveLine()
 end
 local function loadLine(retryOnly)
   state.trafficNetwork=nil
+  state.loadedFromCSP=false
+  state.loaded=false
+  state.nodes={};state.p={};state.boundsL={};state.boundsR={}
+  state.routeGeometry=nil
   local loaded=nil
   -- Prefer the CSP conversion; a saved RoutePilot line is the fallback.
   if CSPConverter then
