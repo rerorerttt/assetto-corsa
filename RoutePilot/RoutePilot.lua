@@ -650,6 +650,7 @@ local function trySpawnTeleport(sim,dt)
     writeLog("SPAWN_SKIPPED reason=player_off_route error=%.1f",routeError)
     spawnDiag("ABORT reason=player_off_route error=%.3f limit=25.0",routeError)
     state.spawnDone=true
+    flushLog()
     return
   end
   local count=#aiCars
@@ -661,6 +662,7 @@ local function trySpawnTeleport(sim,dt)
     writeLog("SPAWN_SKIPPED reason=insufficient_forward_route available=%.1f cars=%d",
       available,count)
     state.spawnDone=true
+    flushLog()
     return
   end
   local startDistance=routeDistance+gap
