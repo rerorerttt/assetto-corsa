@@ -622,6 +622,7 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
   local farthestEdge, farthestCost = nil, -1
   local terminalEdge, terminalCost = nil, -1
   maxVisited = maxVisited or 20000
+  maxCost = maxCost or 20000
   while #heap > 0 and visited < maxVisited do
     local item = heapPop(heap)
     local edge, cost = item.edge, item.cost
@@ -662,7 +663,7 @@ end
 
 -- Finds a reachable directed cycle beginning at startEdge. Dead-end branches
 -- are ignored; the longest reachable return candidate is preferred.
-function Graph.loopPath(graph, startEdge, maxVisited)
+function Graph.loopPath(graph, startEdge, maxVisited, maxCost)
   if not graph or not startEdge then return nil, 'missing_start_edge' end
   if startEdge.wrap and startEdge.fromNode == startEdge.toNode then
     return { startEdge }, startEdge.length or 0
@@ -706,6 +707,7 @@ function Graph.loopPath(graph, startEdge, maxVisited)
       if edge ~= startEdge and cost > farthestCost then
         farthestEdge, farthestCost = edge, cost
       end
+      if cost <= maxCost then
       for i = 1, #edge.nextEdges do
         local nextEdge = edge.nextEdges[i]
         if canReturn[nextEdge.id] then
@@ -717,6 +719,7 @@ function Graph.loopPath(graph, startEdge, maxVisited)
             heapPush(heap, { edge = nextEdge, cost = nextCost })
           end
         end
+      end
       end
     end
   end
