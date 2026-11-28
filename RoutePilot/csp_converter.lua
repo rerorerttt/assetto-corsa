@@ -628,6 +628,9 @@ end
 -- nearest authored lane, never a synthetic route/corridor. New graph-based
 -- driving code must consume loadNetwork() and traverse lane connections.
 function Converter.load(log)
+  local function trace(fmt,...)
+    if type(log)=="function" then pcall(log,fmt,...) end
+  end
   local graph,err=Converter.loadNetwork(log)
   if not graph then return nil,nil,nil,nil,err end
   local player=ac.getCar(0)
