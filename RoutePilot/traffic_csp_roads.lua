@@ -230,8 +230,8 @@ local function boundsOverlap(a, b)
     a.maxZ >= b.minZ and b.maxZ >= a.minZ
 end
 
-local function groupsShareIntersection(a, b)
-  local seen = {}
+local function sharedIntersections(a, b)
+  local seen, result = {}, {}
   for i = 1, #a.lanes do
     for j = 1, #(a.lanes[i].graphLinks or {}) do
       seen[a.lanes[i].graphLinks[j].intersection] = true
@@ -239,7 +239,25 @@ local function groupsShareIntersection(a, b)
   end
   for i = 1, #b.lanes do
     for j = 1, #(b.lanes[i].graphLinks or {}) do
-      if seen[b.lanes[i].graphLinks[j].intersection] then return true end
+      local inter = b.lanes[i].graphLinks[j].intersection
+      if seen[inter] and not result[inter] then
+        result[inter] = true
+      end
+    end
+  end
+  local list = {}
+  for inter in pairs(result) do list[#list+1] = inter end
+  return list
+end
+
+local function segmentNearIntersections(a, b, intersections)
+  local x, y, z = (a.x+b.x)*0.5, (a.y+b.y)*0.5, (a.z+b.z)*0.5
+  for i = 1, #intersections do
+    local inter = intersections[i]
+    if x >= inter.minX-5 and x <= inter.maxX+5 and
+        z >= inter.minZ-5 and z <= inter.maxZ+5 and
+        math.abs(y-inter.centerY) <= inter.yThreshold+2 then
+      return true
     end
   end
   return false
@@ -254,19 +272,33 @@ local function mergeBoundaryCrossings(lines)
     local countA = a.loop and #a.points or #a.points-1
     for j = i+1, #lines do
       local b = lines[j]
-      if a.group ~= b.group and groupsShareIntersection(a.group, b.group) then
+      local shared = a.group ~= b.group and sharedIntersections(a.group, b.group) or {}
+      if #shared > 0 then
         local boundsB = lineBounds(b.points)
         if boundsOverlap(boundsA, boundsB) then
           local countB = b.loop and #b.points or #b.points-1
+          local nearA, nearB = {}, {}
           for ai = 1, countA do
             local a1, a2 = a.points[ai], a.points[ai % #a.points + 1]
-            local aminX, amaxX = math.min(a1.x,a2.x), math.max(a1.x,a2.x)
-            local aminZ, amaxZ = math.min(a1.z,a2.z), math.max(a1.z,a2.z)
-            for bi = 1, countB do
-              local b1, b2 = b.points[bi], b.points[bi % #b.points + 1]
-              if math.max(aminX,math.min(b1.x,b2.x)) <= math.min(amaxX,math.max(b1.x,b2.x)) and
-                  math.max(aminZ,math.min(b1.z,b2.z)) <= math.min(amaxZ,math.max(b1.z,b2.z)) then
-                local ta, tb, point = segmentIntersection(a1,a2,b1,b2)
+            if segmentNearIntersections(a1, a2, shared) then
+              nearA[#nearA+1] = { index=ai, a=a1, b=a2 }
+            end
+          end
+          for bi = 1, countB do
+            local b1, b2 = b.points[bi], b.points[bi % #b.points + 1]
+            if segmentNearIntersections(b1, b2, shared) then
+              nearB[#nearB+1] = { index=bi, a=b1, b=b2 }
+            end
+          end
+          for ai = 1, #nearA do
+            local sa = nearA[ai]
+            local aminX, amaxX = math.min(sa.a.x,sa.b.x), math.max(sa.a.x,sa.b.x)
+            local aminZ, amaxZ = math.min(sa.a.z,sa.b.z), math.max(sa.a.z,sa.b.z)
+            for bi = 1, #nearB do
+              local sb = nearB[bi]
+              if math.max(aminX,math.min(sb.a.x,sb.b.x)) <= math.min(amaxX,math.max(sb.a.x,sb.b.x)) and
+                  math.max(aminZ,math.min(sb.a.z,sb.b.z)) <= math.min(amaxZ,math.max(sb.a.z,sb.b.z)) then
+                local ta, tb, point = segmentIntersection(sa.a,sa.b,sb.a,sb.b)
                 if ta then
                   local function addEvent(list, index, t, p)
                     for k = 1, #list do
@@ -274,8 +306,8 @@ local function mergeBoundaryCrossings(lines)
                     end
                     list[#list+1] = { index=index, t=t, point=p }
                   end
-                  addEvent(events[a.points], ai, ta, point)
-                  addEvent(events[b.points], bi, tb, point)
+                  addEvent(events[a.points], sa.index, ta, point)
+                  addEvent(events[b.points], sb.index, tb, point)
                   junctions = junctions + 1
                 end
               end
