@@ -32,6 +32,7 @@ _G.physics={
 
 local Importer=require("traffic_csp_import")
 local Graph=require("traffic_csp_graph")
+local Routes=require("traffic_csp_route")
 local importer=Importer.new()
 assert(importer:load(),"representative CSP export failed to import: "..tostring(importer.error))
 assert(importer.stats.lanes==25,"unexpected lane count in fixture")
@@ -61,6 +62,15 @@ for i=1,#importer.graph.edges do
   local path=Graph.loopPath(importer.graph,importer.graph.edges[i],2000,20000)
   if path then cycleStarts=cycleStarts+1 end
 end
+local openRoutes,bestOpenLength=0,0
+for i=1,#importer.graph.edges do
+  local route=Routes.build(importer.graph,nil,importer.graph.edges[i],
+    importer.graph.edges[i].from,{minLength=250})
+  if route and not route.loop then
+    openRoutes=openRoutes+1
+    bestOpenLength=math.max(bestOpenLength,route.length or 0)
+  end
+end
 for i=1,#importer.graph.edges do
   local edge=importer.graph.edges[i]
   local nextIDs={}
@@ -72,7 +82,7 @@ for i=1,#importer.graph.edges do
     edge.id,tostring(edge.lane.id),edge.from,edge.to,table.concat(nextIDs,",")))
 end
 print(string.format(
-  "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts",
+  "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts, %d valid open routes (max %.0f m)",
   importer.stats.usable,importer.stats.lanes,#importer.intersections,
   #importer.graph.edges,importer.graph.stats.intersectionLinks,
-  importer.graph.stats.movements,cycleStarts))
+  importer.graph.stats.movements,cycleStarts,openRoutes,bestOpenLength))
