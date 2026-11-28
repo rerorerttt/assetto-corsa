@@ -97,6 +97,8 @@ function M.prepareTraffic(sim,order,dt)
 end
 function M.update(i,c,dt)
  local g=S.trafficNetwork;local p=S.p[i]or{};S.p[i]=p;local speed=max(0,n(c.speedMs))
+ p.retireT=n(p.retireT)+max(0,dt)
+ if p.retireT>=2 then p.retireT=0;if physics and physics.preventAIFromRetiring then pcall(physics.preventAIFromRetiring,i)end end
  if not p.networkLaneId then local q=nearest(g,c);if q then p.networkLaneId=q.id;p.networkS=q.s end end
  local l=g.lanes[p.networkLaneId]
  if not l or p.networkS==nil then controls(i,0,0,1);p.trafficAction="NETWORK_NO_LANE";return end
@@ -125,10 +127,25 @@ function M.update(i,c,dt)
  local hx,hz=norm(c.look.x,c.look.z);local tx,tz=norm(dx,dz)
  local angle=atan2(hx*tz-hz*tx,clamp(dot(hx,hz,tx,tz),-1,1))
  local steer=clamp(atan2(5.4*math.sin(angle),max(1,sqrt(dx*dx+dz*dz)))/.55,-1,1)
- local cs=l.loop and((p.networkS+clamp(speed*1.4,12,45))%l.length)or min(l.length,p.networkS+clamp(speed*1.4,12,45))
- local ax,az=tangent(l,max(0,cs-3));local bx,bz=tangent(l,min(l.length,cs+3))
- local curvature=abs(atan2(ax*bz-az*bx,clamp(dot(ax,az,bx,bz),-1,1)))/6
- local target=min(75,curvature>.0001 and sqrt(8/curvature)or 75)
+ local maxSteerStep=max(0.05,n(CFG.STEER_RATE,4.5)*max(0,dt))
+ local previousSteer=n(p.networkSteer,steer)
+ steer=previousSteer+clamp(steer-previousSteer,-maxSteerStep,maxSteerStep)
+ if abs(steer)<0.002 then steer=0 end
+ p.networkSteer=steer
+ local target=75
+ -- Preview curvature far enough ahead to brake before, not at, a bend.
+ for aheadDistance=8,100,8 do
+  local cs=p.networkS+aheadDistance
+  if l.loop then cs=cs%l.length else cs=min(l.length,cs) end
+  local s0=max(0,cs-3);local s1=min(l.length,cs+3)
+  local ax,az=tangent(l,s0);local bx,bz=tangent(l,s1)
+  local curvature=abs(atan2(ax*bz-az*bx,clamp(dot(ax,az,bx,bz),-1,1)))/max(1,s1-s0)
+  if curvature>0.0001 then
+   local curveSpeed=sqrt(8.0/curvature)
+   local safeSpeed=sqrt(curveSpeed*curveSpeed+14.0*max(0,aheadDistance-5))
+   target=min(target,safeSpeed)
+  end
+ end
  if l.speedLimit then target=min(target,l.speedLimit/3.6)end
  if lead then target=min(target,sqrt(max(0,lead.speed^2+14*max(0,lead.gap-7))))end
  local err=target-speed;local gas=clamp(err*.35,0,1);local brake=clamp(-err*.55,0,1)
