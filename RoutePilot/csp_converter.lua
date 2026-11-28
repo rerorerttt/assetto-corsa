@@ -2,6 +2,7 @@
 -- Converts the directed CSP lane network into one RoutePilot centerline and
 -- one continuous lateral corridor. The source traffic.json is never modified.
 local Converter = {}
+local cachedGraph = nil
 
 local function finite(v)
   return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge
@@ -418,8 +419,12 @@ function Converter.load(log)
   if not ok or type(Network)~='table' or type(Network.loadTrackTraffic)~='function' then
     return nil,nil,nil,nil,'traffic_network module unavailable: '..tostring(Network)
   end
-  local graph, err = Network.loadTrackTraffic()
-  if not graph then return nil,nil,nil,nil,err end
+  if not cachedGraph then
+    local graph, err = Network.loadTrackTraffic()
+    if not graph then return nil,nil,nil,nil,err end
+    cachedGraph=graph
+  end
+  local graph=cachedGraph
   local player = ac.getCar(0)
   if not player or not player.position or not player.look then
     return nil,nil,nil,nil,'player car unavailable'
