@@ -233,7 +233,7 @@ local function loadLine(retryOnly)
         tostring(infoOrError.rejectReason),
         #(infoOrError.network and infoOrError.network.laneOrder or {}))
       flushLog()
-      return false
+      return true
     end
     if ok and type(nodes)=="table" and #nodes>=2 then
       state.nodes=nodes
