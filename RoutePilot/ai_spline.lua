@@ -89,15 +89,20 @@ function M.encode(nodes, loop)
   chunks[#chunks+1]=string.pack("<i4",count)
   for i=1,count do
     local prev=points[i==1 and (loop and count or 1) or i-1]
-    local next=points[i==count and (loop and 1 or count) or i+1]
-    local tx,tz=normalized(next.x-prev.x,next.z-prev.z)
+    local nextIndex=i==count and (loop and 1 or count) or i+1
+    local nextPoint=points[nextIndex]
+    local tx,tz=normalized(nextPoint.x-p.x,nextPoint.z-p.z)
     local radius=100000.0
     if loop or (i>1 and i<count) then
       local a=points[i==1 and count or i-1]
       local c=points[i==count and 1 or i+1]
-      radius=curveRadius(a,points[i],c)
+      radius=curveRadius(a,p,c)
     end
-    local length=cumulative[i]
+    -- AiPointExtra.length is the distance from this point to the NEXT
+    -- point, not cumulative spline distance. AiPoint.length above is
+    -- cumulative; confusing these two fields corrupts native AI progress
+    -- and can make cars jump to unrelated track coordinates.
+    local length=distance(p,nextPoint)
     -- AiPointExtra.Direction is a camber-side sign (+/-1), not a yaw angle.
     -- The forward vector carries the actual world-space route direction.
     chunks[#chunks+1]=string.pack("<ffffffffffffffffff",
