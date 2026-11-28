@@ -212,6 +212,21 @@ local function boundsOverlap(a, b)
     a.maxZ >= b.minZ and b.maxZ >= a.minZ
 end
 
+local function groupsShareIntersection(a, b)
+  local seen = {}
+  for i = 1, #a.lanes do
+    for j = 1, #(a.lanes[i].graphLinks or {}) do
+      seen[a.lanes[i].graphLinks[j].intersection] = true
+    end
+  end
+  for i = 1, #b.lanes do
+    for j = 1, #(b.lanes[i].graphLinks or {}) do
+      if seen[b.lanes[i].graphLinks[j].intersection] then return true end
+    end
+  end
+  return false
+end
+
 local function mergeBoundaryCrossings(lines)
   local events, junctions = {}, 0
   for i = 1, #lines do events[lines[i].points] = {} end
@@ -221,7 +236,7 @@ local function mergeBoundaryCrossings(lines)
     local countA = a.loop and #a.points or #a.points-1
     for j = i+1, #lines do
       local b = lines[j]
-      if a.group ~= b.group then
+      if a.group ~= b.group and groupsShareIntersection(a.group, b.group) then
         local boundsB = lineBounds(b.points)
         if boundsOverlap(boundsA, boundsB) then
           local countB = b.loop and #b.points or #b.points-1
