@@ -262,7 +262,12 @@ local function collectRoute(graph, player)
       if candidate.enter>=progress-1.0 then nextLink=candidate break end
     end
     if not nextLink then
-      appendLaneRange(raw,lane,progress,laneLength(lane))
+      local total=laneLength(lane)
+      appendLaneRange(raw,lane,progress,total)
+      if lane.id==start.id and lane.loop then
+        appendLaneRange(raw,lane,0,startProgress)
+        loop=true
+      end
       break
     end
     appendLaneRange(raw,lane,progress,nextLink.enter)
