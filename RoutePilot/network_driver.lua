@@ -35,8 +35,8 @@ local function project(l,pos,hint,window)
   lo,hi=first,#c-1
   target=min(l.length,hint+window)
   while lo<hi do
-   local mid=math.floor((lo+hi+1)*0.5)
-   if c[mid]<target then lo=mid else hi=mid-1 end
+   local mid=math.floor((lo+hi)*0.5)
+   if c[mid]<target then lo=mid+1 else hi=mid end
   end
   last=max(first,lo)
  end
