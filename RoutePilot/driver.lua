@@ -175,12 +175,7 @@ local function newPersonality(carIndex)
       p.routeLocked=true
       p.spawnSeeded=true
       p.segIdx=spawnHint.segment
-      if spawnHint.boost then
-        -- A speed setpoint, not a timed throttle pulse: accelerate normally
-        -- under the route planner until reaching traffic speed.
-        p.spawnLaunchActive=true
-        p.spawnLaunchTarget=30.0
-      end
+
       H.log("ROUTE_SEED id=%d seg=%d t=%.3f progress=%.2f boost=%s",
         carIndex,spawnHint.segment,spawnHint.parameter,seededProgress,
         tostring(spawnHint.boost==true))
@@ -1779,7 +1774,6 @@ local function calculateThrottle(p, speed, targetSpeed, dt)
   local cornerScale=1.0-CFG.TC_CORNER_CUT*lateralUse*lateralUse
   gas=gas*p.tractionScale*cornerScale
 
-  if speed<5 and not p.spawnLaunchActive then gas=math.min(gas,0.6) end
   if error>=0 then brake=0 end
   p.gas=clamp(gas,0,CFG.MAX_GAS)
   p.brake=clamp(brake,0,CFG.MAX_BRAKE)
@@ -2073,16 +2067,6 @@ function Driver.update(carIndex, car, dt)
 
   if not p.projectionLost then updateRacingPlan(carIndex,car,p,speed,dt) end
   local targetSpeed = (p.projectionLost or p.racingPlanBlocked) and 0 or planTargetSpeed(p,speed)
-  if p.spawnLaunchActive then
-    local launchTarget=clamp(safeNumber(p.spawnLaunchTarget,30.0),0,30.0)
-    if speed>=launchTarget-0.8 then
-      p.spawnLaunchActive=false
-      H.log("SPAWN_LAUNCH_REACHED id=%d speed=%.1f target=%.1f",
-        carIndex,speed,launchTarget)
-    elseif not p.projectionLost and not p.racingPlanBlocked then
-      targetSpeed=math.max(targetSpeed,launchTarget)
-    end
-  end
   if p.offTrackRecovering and not p.projectionLost then
     targetSpeed=math.min(targetSpeed,8.0)
   end
