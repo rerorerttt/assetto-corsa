@@ -1133,19 +1133,20 @@ function Converter.load(log)
     local dx,dz=first.x-last.x,first.z-last.z
     routeLength=routeLength+math.sqrt(dx*dx+dz*dz)
   end
-  -- AC v7 AI splines are always cyclic and contain no open-route flag.
-  -- Any non-loop CSP chain would make native AI jump from its last point
-  -- directly to its first point, regardless of its physical road geometry.
-  -- Do not publish such a chain as a usable route or spawn reference.
+  -- Keep the discovered authored geometry visible for diagnosis even when
+  -- it is not safe to assign as an AC v7 spline. Preview-only routes are
+  -- never marked loaded and must never be used for spawning or AI control.
+  local previewOnly=false
+  local rejectReason=nil
   if not routeLoop then
-    trace("CSP_ROUTE_REJECTED reason=AC_AI_SPLINE_REQUIRES_CLOSED_LOOP lanes=%d points=%d length=%.1f loop=false",
-      #routeLanes,#nodes,routeLength)
-    return nil,nil,nil,nil,"CSP_ROUTE_INCOMPLETE"
+    rejectReason="AC_AI_SPLINE_REQUIRES_CLOSED_LOOP"
+  elseif routeLength<500.0 then
+    rejectReason="closed_loop_too_short"
   end
-  if routeLength<500.0 then
-    trace("CSP_ROUTE_REJECTED reason=closed_loop_too_short lanes=%d points=%d length=%.1f required=500.0 loop=true",
-      #routeLanes,#nodes,routeLength)
-    return nil,nil,nil,nil,"CSP_ROUTE_INCOMPLETE"
+  if rejectReason then
+    previewOnly=true
+    trace("CSP_ROUTE_PREVIEW_ONLY reason=%s lanes=%d points=%d length=%.1f loop=%s",
+      rejectReason,#routeLanes,#nodes,routeLength,tostring(routeLoop))
   end
   if type(log)=="function" then
     pcall(log,"CSP_RACING_CORRIDOR lane=%d neighbour=%d paired=%s points=%d passing=%s",
@@ -1158,7 +1159,8 @@ function Converter.load(log)
     sourceLanes=graph.stats.validLanes,routeLanes=routeLanes,
     racingCorridor=true,pairedLane=firstPairedLaneId,passingEnabled=anyPassing,
     sourceTransitions=graph.stats.junctionTransitions,
-    laneChanges=graph.stats.laneChanges,network=graph
+    laneChanges=graph.stats.laneChanges,network=graph,
+    previewOnly=previewOnly,rejectReason=rejectReason
   }
 end
 
