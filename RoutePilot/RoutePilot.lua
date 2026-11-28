@@ -1087,29 +1087,39 @@ function script.update(dt)
         local lastError='no_lane_near_player'
         local attemptedCandidates=0
         trafficCSP.failedRouteEdges=trafficCSP.failedRouteEdges or {}
-        for ci=1,#candidates do
-          if #selectedRoutes>=4 then break end
-          local candidate=candidates[ci]
-          local group=trafficCSP.roads.laneGroups[candidate.edge.lane] or candidate.edge.lane
-          if not selectedGroups[group] and not trafficCSP.failedRouteEdges[candidate.edge.id] then
-            attemptedCandidates=attemptedCandidates+1
-            local route,routeError=CSPRoutes.build(
-              trafficCSP.graph,trafficCSP.roads,candidate.edge,candidate.along,
-              {minLength=250,loop=true,requireLoop=true})
-            if route then
-              local candidateDirection=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
-              route.playerAlignment=hx*candidateDirection.x+hz*candidateDirection.z
-              route.playerAligned=route.playerAlignment>=0.5
-              route.group=group
-              route.startCandidate=candidate
-              selectedRoutes[#selectedRoutes+1]=route
-              selectedGroups[group]=true
-            else
-              trafficCSP.failedRouteEdges[candidate.edge.id]=true
-              lastError=tostring(routeError)
+        local function collectCandidates(requireLoop)
+          for ci=1,#candidates do
+            if #selectedRoutes>=4 then break end
+            local candidate=candidates[ci]
+            local group=trafficCSP.roads.laneGroups[candidate.edge.lane] or candidate.edge.lane
+            local failureKey=(requireLoop and 'loop:' or 'open:')..tostring(candidate.edge.id)
+            if not selectedGroups[group] and not trafficCSP.failedRouteEdges[failureKey] then
+              attemptedCandidates=attemptedCandidates+1
+              local route,routeError=CSPRoutes.build(
+                trafficCSP.graph,trafficCSP.roads,candidate.edge,candidate.along,
+                requireLoop and
+                  {minLength=250,loop=true,requireLoop=true} or
+                  {minLength=250,loop=false})
+              if route then
+                local candidateDirection=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
+                route.playerAlignment=hx*candidateDirection.x+hz*candidateDirection.z
+                route.playerAligned=route.playerAlignment>=0.5
+                route.group=group
+                route.startCandidate=candidate
+                selectedRoutes[#selectedRoutes+1]=route
+                selectedGroups[group]=true
+              else
+                trafficCSP.failedRouteEdges[failureKey]=true
+                lastError=tostring(routeError)
+              end
             end
           end
         end
+        -- Prefer genuine directed cycles. Only if no loop can be built do
+        -- we fall back to long one-way routes; never invent a reverse link
+        -- or close an open road with a straight-line shortcut.
+        collectCandidates(true)
+        if #selectedRoutes==0 then collectCandidates(false) end
         if #selectedRoutes>0 then
           trafficCSPRouteAttempted=true
           trafficCSP.previewRoutes=selectedRoutes
