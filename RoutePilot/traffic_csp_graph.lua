@@ -699,7 +699,8 @@ function Graph.shortestPath(graph, startEdge, targetEdge, maxVisited)
       if targetEdge and edge == targetEdge then reached = edge; break end
       if not targetEdge then
         if cost > farthestCost then farthestEdge, farthestCost = edge, cost end
-        if #edge.nextEdges == 0 and cost > terminalCost then
+        if #edge.nextEdges == 0 and edge.toNode and
+            edge.toNode.kind == 'lane_end' and cost > terminalCost then
           terminalEdge, terminalCost = edge, cost
         end
       end
