@@ -961,15 +961,19 @@ function script.update(dt)
             candidates[#candidates+1]=candidate
           end
         end
-        addCandidate(sameCandidates[1])
-        local oppositeCandidates,otherCandidates={},{}
         local hx,hz=normalize2(player.look.x,player.look.z)
+        local firstSame=sameCandidates[1]
+        if firstSame then
+          local dir=CSPGraph.directionAt(firstSame.edge.lane,firstSame.along)
+          if hx*dir.x+hz*dir.z>=0.5 then addCandidate(firstSame) end
+        end
+        local oppositeCandidates,otherCandidates={},{}
         for ci=1,#allCandidates do
           local candidate=allCandidates[ci]
           local dir=CSPGraph.directionAt(candidate.edge.lane,candidate.along)
           local dot=hx*dir.x+hz*dir.z
           if dot < -0.5 then oppositeCandidates[#oppositeCandidates+1]=candidate
-          else otherCandidates[#otherCandidates+1]=candidate end
+          elseif dot > 0.5 then otherCandidates[#otherCandidates+1]=candidate end
         end
         for ci=1,#oppositeCandidates do addCandidate(oppositeCandidates[ci]) end
         for ci=1,#otherCandidates do addCandidate(otherCandidates[ci]) end
