@@ -288,7 +288,7 @@ Validation is static only. GitHub files were fetched back after the edits; no Lu
 
 ## 2026-11-28 CSP Traffic Tool graph integration (experimental)
 
-Working branch: `Routepilot_CSP_traffic_0.1`, created from `main`. Main is not modified.
+Working branch: `Routepilot_CSP_traffic_0.1_clean`, created from `main` as a clean one-commit snapshot. Main is not modified.
 
 Implemented in this branch:
 - Import the active track's `traffic.json`, preserve directed lanes/intersections, resample lane geometry, project it onto the physical track surface, reject invalid surface samples, and trim unsupported open-lane ends.
