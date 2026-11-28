@@ -52,6 +52,21 @@ local function polygonInfo(def)
   }
 end
 
+local function laneLength(lane)
+  local length = 0
+  for i = 2, #lane.points do
+    local a, b = lane.points[i - 1], lane.points[i]
+    local dx, dy, dz = b.x - a.x, b.y - a.y, b.z - a.z
+    length = length + math.sqrt(dx * dx + dy * dy + dz * dz)
+  end
+  if lane.loop and #lane.points > 2 then
+    local a, b = lane.points[#lane.points], lane.points[1]
+    local dx, dy, dz = b.x - a.x, b.y - a.y, b.z - a.z
+    length = length + math.sqrt(dx * dx + dy * dy + dz * dz)
+  end
+  return length
+end
+
 local function laneIntersectionIntervals(lane, inter)
   local pts = lane.points
   if #pts < 2 then return {} end
@@ -159,7 +174,7 @@ function Graph.build(lanes, intersectionDefs, log)
       if incoming.from > 0.5 then
         for b = 1, #inter.links do
           local outgoing = inter.links[b]
-          if incoming.lane ~= outgoing.lane and outgoing.to < (outgoing.lane.totalLength or math.huge) - 0.5 then
+          if incoming.lane ~= outgoing.lane and outgoing.to < outgoing.lane.totalLength - 0.5 then
             local fromID, toID = tonumber(incoming.lane.id), tonumber(outgoing.lane.id)
             if not disallowed(inter.definition, fromID, toID) then
               local movement = { intersection = inter, from = incoming, to = outgoing }
@@ -179,19 +194,7 @@ function Graph.build(lanes, intersectionDefs, log)
     local lane = lanes[i]
     if lane.valid then
       table.sort(lane.graphLinks, function(a, b) return a.from < b.from end)
-      local cursor, length = 0, lane.totalLength or 0
-      if length <= 0 then
-        for j = 2, #lane.points do
-          local a, b = lane.points[j - 1], lane.points[j]
-          local dx, dy, dz = b.x-a.x, b.y-a.y, b.z-a.z
-          length = length + math.sqrt(dx*dx+dy*dy+dz*dz)
-        end
-        if lane.loop and #lane.points > 2 then
-          local a, b = lane.points[#lane.points], lane.points[1]
-          local dx, dy, dz = b.x-a.x, b.y-a.y, b.z-a.z
-          length = length + math.sqrt(dx*dx+dy*dy+dz*dz)
-        end
-      end
+      local cursor, length = 0, lane.totalLength
       local previous = nil
       for j = 1, #lane.graphLinks do
         local link = lane.graphLinks[j]
