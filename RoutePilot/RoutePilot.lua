@@ -544,9 +544,8 @@ local function trySpawnTeleport(sim,dt)
   local roster=table.concat(aiCars,",")
   state.spawnedCars=state.spawnedCars or {}
   if #aiCars==0 then
-    if state.spawnWait>=CFG.SPAWN_WAIT_TIMEOUT then
-      state.spawnDone=true
-    end
+    -- The roster can become active after the app has loaded. Keep the spawn
+    -- gate closed instead of declaring success with zero placed cars.
     return
   end
   if roster~=state.spawnLastRoster then
@@ -556,7 +555,7 @@ local function trySpawnTeleport(sim,dt)
   end
   state.spawnStable=state.spawnStable+dt
   if state.spawnStable<CFG.SPAWN_STABLE_TIME then return end
-  -- teleport (in parallel with driving; adopted cars keep their personality)
+  -- Place the complete AI roster before enabling any RoutePilot controls.
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
     writeLog("SPAWN_WAIT reason=no_teleport_api")
     return
