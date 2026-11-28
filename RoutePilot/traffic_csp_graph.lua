@@ -464,7 +464,9 @@ function Graph.build(lanes, intersectionDefs, log)
     local inter = graph.intersections[i]
     for a = 1, #inter.links do
       local incoming = inter.links[a]
-      if incoming.inEdge and incoming.from > 0.5 then
+      -- A closed lane can enter its first intersection through the wrap edge
+      -- even when the intersection interval begins at distance zero.
+      if incoming.inEdge and (incoming.from > 0.5 or incoming.lane.loop) then
         for b = 1, #inter.links do
           local outgoing = inter.links[b]
           if outgoing.outEdge and outgoing.to < outgoing.lane.totalLength - 0.5 then
