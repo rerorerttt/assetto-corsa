@@ -77,7 +77,7 @@ local function laneBoundsAt(roads, lane, position, direction)
   local idealRight=group.rightOffset-(group.rightBoundaryOffset or group.boundaryOffset)-offset
   if not left or left<=0 then left=idealLeft end
   if not right or right>=0 then right=idealRight end
-  return math.max(0.20,left), math.min(-0.20,right)
+  return math.max(0.05,left), math.min(-0.05,right)
 end
 
 local function appendLaneRange(route, roads, edge, fromDistance, toDistance)
@@ -110,7 +110,7 @@ local function appendBezier(route, roads, movement)
     p3.z - movement.toDir.z*handle)
   local leftA,rightA=laneBoundsAt(roads,movement.from.lane,p0,movement.fromDir)
   local leftB,rightB=laneBoundsAt(roads,movement.to.lane,p3,movement.toDir)
-  local halfWidth=math.max(0.20,math.min(3.5,leftA,-rightA,leftB,-rightB))
+  local halfWidth=math.max(0.05,math.min(3.5,leftA,-rightA,leftB,-rightB))
   local steps = math.max(3, math.min(80, math.ceil(chord/1.2)))
   for i = 1, steps do
     local t = i/steps
