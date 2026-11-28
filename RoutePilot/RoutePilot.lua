@@ -173,7 +173,10 @@ local function saveLine()
     local ok,f=pcall(io.open,getLineFilePath(),"w")
     if ok and f then wroteFile=pcall(function() f:write(data) f:close() end) end
   end
-  if ac.storage then pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data) end
+  if ac.storage then
+    pcall(ac.storage,"RP_LINE_DATA_"..getTrackTag(),data)
+    pcall(ac.storage,"RP_CSP_LINE_DATA_"..getTrackTag(),state.loadedFromCSP==true)
+  end
   saveBounds()
   if wroteFile then
     state.status=string.format("Сохранено: %d точек",#state.nodes)
@@ -199,6 +202,10 @@ local function loadLine()
   if loaded then
     state.nodes=loaded; state.p={}; state.spawnHints={}; state.routeGeometry=nil; state.loaded=true
     state.loadedFromCSP=false
+    if ac.storage then
+      local okCSP,flag=pcall(ac.storage,"RP_CSP_LINE_DATA_"..getTrackTag())
+      state.loadedFromCSP=okCSP and flag==true
+    end
     if not state.spawnPerformed then
       state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
     end
