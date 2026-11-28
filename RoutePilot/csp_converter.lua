@@ -169,7 +169,7 @@ local function buildJunctionTransitions(graph)
   for _,id in ipairs(graph.laneOrder) do transitions[id]={} end
   for _,intersection in ipairs(graph.intersections) do
     local passages={}
-    local minX,maxX,minZ,maxZ=math.huge,-math.huge,-math.huge,math.huge
+    local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
     for _,p in ipairs(intersection.points) do
       minX=math.min(minX,p.x);maxX=math.max(maxX,p.x)
       minZ=math.min(minZ,p.z);maxZ=math.max(maxZ,p.z)
