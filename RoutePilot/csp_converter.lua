@@ -394,9 +394,15 @@ local function buildCorridor(graph, raw)
   local spatial = {}
   local function addSegmentCell(cx,cz,segment)
     local column=spatial[cx]
-    if not column then column={} spatial[cx]=column end
+    if not column then
+      column={}
+      spatial[cx]=column
+    end
     local bucket=column[cz]
-    if not bucket then bucket={} column[cz]=bucket end
+    if not bucket then
+      bucket={}
+      column[cz]=bucket
+    end
     bucket[#bucket+1]=segment
   end
   for _,id in ipairs(graph.laneOrder) do
