@@ -485,7 +485,7 @@ local function trySpawnTeleport(sim,dt)
   state.spawnStable=state.spawnStable+dt
   if state.spawnStable<CFG.SPAWN_STABLE_TIME then return end
   -- teleport (in parallel with driving; adopted cars keep their personality)
-  if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
+  if not physics or type(physics.setAICarPosition)~="function" then
     state.spawnDone=true; return
   end
   local metrics=buildSpawnRouteMetrics()
