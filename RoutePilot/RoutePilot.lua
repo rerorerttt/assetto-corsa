@@ -534,6 +534,7 @@ local function trySpawnTeleport(sim,dt)
     end
     table.sort(lanes,function(a,b) return a.id<b.id end)
     local useCount={}
+    local spawnGap=math.max(CFG.SPAWN_GAP,CFG.SAFE_RESPAWN_CLEAR*1.5,CFG.SPAWN_MIN_GAP)
     local moved,failed=0,0
     local function sampleLane(lane,distance)
       distance=clamp(distance,0,lane.length)
@@ -556,7 +557,7 @@ local function trySpawnTeleport(sim,dt)
           local laneIndex=((order+attempt-2)%#lanes)+1
           local lane=lanes[laneIndex]
           local slot=useCount[lane.id] or 0
-          local distance=math.min(lane.length-8,12+slot*math.max(CFG.SPAWN_GAP,CFG.SPAWN_MIN_GAP))
+          local distance=12+(slot*#lanes+(laneIndex-1))*spawnGap
           if distance>4 and distance<lane.length-3 then
             local position,direction=sampleLane(lane,distance)
             if position and direction and spotIsClear(position,carIndex) then
