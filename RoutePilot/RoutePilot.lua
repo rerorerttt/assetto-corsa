@@ -643,6 +643,10 @@ local function walkLineSigned(startSeg,startT,distance,sign)
   end
   return nil
 end
+local function markAppTeleport(carIndex)
+  state.appTeleportGuard=state.appTeleportGuard or {}
+  state.appTeleportGuard[carIndex]=0.75
+end
 local function teleportHome(carIndex,car)
   if type(physics)~="table" or type(physics.setAICarPosition)~="function" then
     writeLog("RESCUE_FAILED id=%d reason=no_teleport_api",carIndex)
@@ -724,10 +728,6 @@ local function teleportHome(carIndex,car)
 end
 
 -- Reinsert an AI immediately when AC/CSP resets it to the session/grid spawn.
-local function markAppTeleport(carIndex)
-  state.appTeleportGuard=state.appTeleportGuard or {}
-  state.appTeleportGuard[carIndex]=0.75
-end
 if type(ac.onCarJumped)=="function" then
   ac.onCarJumped(-1,function(carIndex)
     if not carIndex or carIndex<=0 then return end
@@ -902,14 +902,14 @@ local function ensureDriver()
   return true
 end
 function script.update(dt)
+  if not dt or dt<=0 then return end
+  dt=math.min(dt,0.05)
   state.appTeleportGuard=state.appTeleportGuard or {}
   for index,remaining in pairs(state.appTeleportGuard) do
     remaining=remaining-dt
     if remaining<=0 then state.appTeleportGuard[index]=nil
     else state.appTeleportGuard[index]=remaining end
   end
-  if not dt or dt<=0 then return end
-  dt=math.min(dt,0.05)
   local ok,err=pcall(function()
     local sim=ac.getSim()
     if not sim then return end
