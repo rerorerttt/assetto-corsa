@@ -27,6 +27,11 @@ local function point(x, z)
   return vec3(x, 0, z)
 end
 
+local loopPoints={}
+for i=0,35 do
+  local angle=i*math.pi/18
+  loopPoints[#loopPoints+1]=point(30*math.cos(angle),30*math.sin(angle))
+end
 local lane = {
   id = 17,
   name = "seam-loop",
@@ -35,16 +40,13 @@ local lane = {
   params = {},
   speedLimit = 90,
   speedLimitExplicit = true,
-  points = {
-    point(-4, 0), point(40, 0), point(40, 40),
-    point(-40, 40), point(-40, 0)
-  }
+  points = loopPoints
 }
 
 local intersection = {
   id = 1,
   points = {
-    { -5, 0, -5 }, { 5, 0, -5 }, { 5, 0, 5 }, { -5, 0, 5 }
+    { 25, 0, -5 }, { 35, 0, -5 }, { 35, 0, 5 }, { 25, 0, 5 }
   }
 }
 
