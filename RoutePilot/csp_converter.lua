@@ -213,8 +213,7 @@ local function selectTransition(graph, currentLane, link, laneLinks, visited)
   -- they are NOT an allow-list. CSP compatibility is controlled separately
   -- by disallowedTrajectories and its geometric intersection rules.
   local disallowed={}
-  local source=link.intersection.source
-  local forbidden=source and source.disallowedTrajectories
+  local forbidden=link.intersection.disallowedTrajectories
   if type(forbidden)=='table' then
     for i=1,#forbidden do
       local item=forbidden[i]
