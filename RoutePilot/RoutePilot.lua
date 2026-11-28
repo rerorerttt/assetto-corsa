@@ -576,7 +576,7 @@ local function trySpawnTeleport(sim,dt)
       if ok and result~=false then
         moved=moved+1
         state.p[carIndex]=nil
-        state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
+        state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter,boost=true}
         writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
           carIndex,position.x,position.y,position.z,direction.x,direction.z,
           routeSegment,routeParameter)
