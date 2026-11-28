@@ -104,7 +104,8 @@ function Network.build(data)
     local intersection = intersections[i]
     if type(intersection) == "table" then
       local record = { id = intersection.id, name = intersection.name,
-        points = {}, transitions = 0 }
+        points = {}, transitions = 0, source = intersection,
+        trajectoryAttributes = type(intersection.trajectoryAttributes) == "table" and intersection.trajectoryAttributes or {} }
       if type(intersection.points) == "table" then
         for j = 1, #intersection.points do
           local p = point3(intersection.points[j])
