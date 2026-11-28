@@ -956,7 +956,8 @@ function script.update(dt)
       for _,i in ipairs(driveOrder) do
         local car=ac.getCar(i)
         if car and car.isActive and car.isAIControlled then
-          local rescued=updateRescueWatchdog(i,car,dt)
+          local rescued=false
+          if not state.trafficNetwork then rescued=updateRescueWatchdog(i,car,dt) end
           if not rescued then
             local okc,erc=pcall(Driver.update,i,car,dt)
             if not okc then
