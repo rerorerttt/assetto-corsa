@@ -1112,13 +1112,17 @@ function Converter.load(log)
     local dx,dz=first.x-last.x,first.z-last.z
     routeLength=routeLength+math.sqrt(dx*dx+dz*dz)
   end
-  -- Open directed fragments are not complete traffic routes. In particular,
-  -- a few hundred metres of a highway lane ending at a junction is unsafe:
-  -- AI spline recovery can reach its terminus and fall back to the stock
-  -- track line. Require at least 500 m of authored forward coverage before
-  -- exposing a non-loop route to spawning or native AI.
-  if not routeLoop and routeLength<500.0 then
-    trace("CSP_ROUTE_REJECTED reason=insufficient_forward_coverage lanes=%d points=%d length=%.1f required=500.0 loop=false",
+  -- AC v7 AI splines are always cyclic and contain no open-route flag.
+  -- Any non-loop CSP chain would make native AI jump from its last point
+  -- directly to its first point, regardless of its physical road geometry.
+  -- Do not publish such a chain as a usable route or spawn reference.
+  if not routeLoop then
+    trace("CSP_ROUTE_REJECTED reason=AC_AI_SPLINE_REQUIRES_CLOSED_LOOP lanes=%d points=%d length=%.1f loop=false",
+      #routeLanes,#nodes,routeLength)
+    return nil,nil,nil,nil,"CSP_ROUTE_INCOMPLETE"
+  end
+  if routeLength<500.0 then
+    trace("CSP_ROUTE_REJECTED reason=closed_loop_too_short lanes=%d points=%d length=%.1f required=500.0 loop=true",
       #routeLanes,#nodes,routeLength)
     return nil,nil,nil,nil,"CSP_ROUTE_INCOMPLETE"
   end
