@@ -804,7 +804,13 @@ function Graph.nearestEdges(graph, position, heading, maxDistance, maxCount)
     local points, cumulative = lane.points, lane.cumulative
     local count = lane.loop and #points or #points-1
     local edgeBest, edgeAlong = math.huge, nil
-    for j = 1, count do
+    local first=laneSegmentAt(lane,edge.from)
+    local last=laneSegmentAt(lane,edge.to)
+    if not lane.loop then
+      first=math.min(first or count,count)
+      last=math.min(last or count,count)
+    end
+    for j = first or 1, last or count do
       local a, b = points[j], points[j % #points + 1]
       local d0, d1 = cumulative[j] or 0, cumulative[j+1] or lane.totalLength
       local lo, hi = math.max(d0, edge.from), math.min(d1, edge.to)
