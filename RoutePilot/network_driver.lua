@@ -132,7 +132,7 @@ local function clearLaneCrossing(src,dst,srcS,dstS)
  -- can sit between two parallel CSP lines. Test the crossing against the
  -- track's physical mesh at several points before allowing a lane change.
  if not physics or type(physics.raycastTrack)~="function" or not vec3 then return false end
- local offsets={0,5,10}
+ local offsets={0,8}
  for _,offset in ipairs(offsets)do
   local ss=src.loop and((srcS+offset)%src.length)or min(src.length,srcS+offset)
   local ts=dst.loop and((dstS+offset)%dst.length)or min(dst.length,dstS+offset)
@@ -140,7 +140,7 @@ local function clearLaneCrossing(src,dst,srcS,dstS)
   local dx,dy,dz=b.x-a.x,b.y-a.y,b.z-a.z
   local length=sqrt(dx*dx+dy*dy+dz*dz)
   if length<1.8 or length>6.5 or abs(dy)>0.8 then return false end
-  local heights={0.45,0.95}
+  local heights={0.65,1.15}
   for _,height in ipairs(heights)do
    local origin=vec3(a.x,a.y+height,a.z)
    local direction=vec3(dx/length,dy/length,dz/length)
@@ -160,8 +160,9 @@ local function laneChange(g,l,p,index,sim,speed)
    if target then
     local src=point(l,p.s)
     local q=projectNear(target,src,(e.toStart+e.toEnd)*.5,(e.toEnd-e.toStart)*.5+10)
+    local sx,sz=tangent(l,p.s)
     if q and q.distance>=2.2 and q.distance<=5.5 and abs(q.heightError or 0)<=0.8 and
-        dot(q.tx,q.tz,(select(1,tangent(l,p.s))),(select(2,tangent(l,p.s))))>=0.98 then
+        dot(q.tx,q.tz,sx,sz)>=0.98 then
      local ahead,behind=occupancy(g,target.id,q.s,index,sim,max(45,speed*2.8))
      local safeAhead=not ahead or ahead.gap>max(24,speed*1.5)
      local safeBehind=not behind or behind.gap>max(16,speed*1.0)
@@ -273,10 +274,12 @@ function M.update(i,c,dt)
  end
  local lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
  p.networkLaneChangeCooldown=max(0,n(p.networkLaneChangeCooldown)-max(0,dt))
+ p.networkLaneChangeScanTimer=max(0,n(p.networkLaneChangeScanTimer)-max(0,dt))
  -- Change lanes only to the closest same-direction CSP neighbour, and only
  -- when a leader blocks the current lane. Physical raycasts reject fences
- -- and other track meshes between the two yellow lane lines.
- if lead and lead.gap<max(28,speed*1.5) and p.networkLaneChangeCooldown<=0 then
+ -- and other track meshes between the two yellow lane lines. Scans are throttled.
+ if lead and lead.gap<max(28,speed*1.5) and p.networkLaneChangeCooldown<=0 and p.networkLaneChangeScanTimer<=0 then
+  p.networkLaneChangeScanTimer=0.6
   local change=laneChange(g,l,{s=p.networkS},i,sim,speed)
   if change then
    local old=l.id
