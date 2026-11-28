@@ -393,23 +393,39 @@ local function buildCorridor(graph, raw)
     for _, id in ipairs(graph.laneOrder) do
       local lane = graph.lanes[id]
       local pr = project(lane.points,p,tx,tz)
-      if pr and pr.distance <= 11.0 then
-        local ox,oz=pr.point.x-p.x,pr.point.z-p.z
-        local lateral=ox*nx+oz*nz
-        if math.abs(lateral) >= 1.0 and math.abs(lateral) <= 11.0 then
-          offsets[#offsets+1]=lateral
+      if pr and pr.distance <= 8.0 then
+        local alignment=pr.tx*tx+pr.tz*tz
+        local heightDelta=math.abs((pr.point.y or p.y)-(p.y or pr.point.y))
+        if alignment>=0.75 and heightDelta<=2.5 then
+          local ox,oz=pr.point.x-p.x,pr.point.z-p.z
+          local lateral=ox*nx+oz*nz
+          if math.abs(lateral) >= 1.0 and math.abs(lateral) <= 8.0 then
+            offsets[#offsets+1]=lateral
+          end
         end
       end
     end
     table.sort(offsets)
-    -- Keep only the contiguous lane group around the reference lane.
+    -- Expand independently from the reference lane on each side. The old
+    -- ascending single pass visited the far-left offsets first and discarded
+    -- them, so multi-lane corridors became asymmetrical and shifted sideways.
     local lo,hi=0,0
-    for j=1,#offsets do
-      if offsets[j] < 0 and offsets[j] >= lo-5.5 then lo=offsets[j] end
-      if offsets[j] > 0 and offsets[j] <= hi+5.5 then hi=offsets[j] end
+    for j=#offsets,1,-1 do
+      local value=offsets[j]
+      if value<0 then
+        if value>=lo-5.5 then lo=value else break end
+      end
     end
-    local laneCount=math.max(1,math.floor((hi-lo)/3.0+0.25)+1)
-    local width=laneCount==1 and 6.0 or laneCount*3.0
+    for j=1,#offsets do
+      local value=offsets[j]
+      if value>0 then
+        if value<=hi+5.5 then hi=value else break end
+      end
+    end
+    local laneCount=math.max(1,math.floor((hi-lo)/3.0+0.5)+1)
+    -- CSP traffic lanes are lane centre-lines, not road edges. Estimate the
+    -- corridor from the connected same-direction lane group at 3 m per lane.
+    local width=laneCount*3.0
     records[i]={point=p,shift=(lo+hi)*0.5,half=width*0.5,nx=nx,nz=nz}
   end
 
