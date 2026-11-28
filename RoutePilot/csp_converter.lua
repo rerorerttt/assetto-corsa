@@ -662,15 +662,116 @@ function Converter.load(log)
   end
   if not best then return nil,nil,nil,nil,"NO_VALID_CSP_LANES" end
   local lane=best.lane
-  local nodes={}
+  -- The authored yellow CSP lines delimit the usable racing corridor. Build
+  -- its centreline between the nearest same-direction adjacent line pair.
+  -- If no such neighbour exists, the authored line itself is the racing line
+  -- and the narrow fallback bounds deliberately disable passing.
+  local pairedLane,pairedEdge,pairScore=nil,nil,nil
+  local sourcePoint=pointAt(lane,lane.cumulative[best.segment])
+  local sourceTangent=tangentAt(lane,lane.cumulative[best.segment])
+  for _,edge in ipairs(lane.adjacent or {}) do
+    local candidate=graph.lanes[edge.to]
+    if candidate and best.s>=edge.fromStart and best.s<=edge.fromEnd then
+      local lo=max(0,edge.toStart-12)
+      local hi=min(candidate.length,edge.toEnd+12)
+      local targetS=clamp((edge.toStart+edge.toEnd)*0.5,lo,hi)
+      local targetPoint=pointAt(candidate,targetS)
+      local targetTangent=tangentAt(candidate,targetS)
+      local gap=dist(sourcePoint,targetPoint)
+      local alignment=sourceTangent.x*targetTangent.x+
+        sourceTangent.z*targetTangent.z
+      local dy=abs(sourcePoint.y-targetPoint.y)
+      local score=gap+(1-alignment)*12+dy*4
+      if gap>=2.0 and gap<=7.5 and alignment>=0.94 and dy<=1.5 and
+          (not pairScore or score<pairScore) then
+        pairedLane,pairedEdge,pairScore=candidate,edge,score
+      end
+    end
+  end
+  local nodes,boundsL,boundsR={},{},{}
+  local startS=lane.cumulative[best.segment]
+  local previousTargetS=nil
+  local pairValid=pairedLane~=nil
+  local function projectPartner(pos,hintS)
+    local candidate=pairedLane
+    local first,last=1,#candidate.points-1
+    if hintS then
+      local lo,hi=1,#candidate.cumulative-1
+      local target=max(0,hintS-24)
+      while lo<hi do local mid=math.floor((lo+hi)*0.5)
+        if candidate.cumulative[mid+1]<target then lo=mid+1 else hi=mid end end
+      first=lo;lo,hi=first,#candidate.cumulative-1
+      target=min(candidate.length,hintS+24)
+      while lo<hi do local mid=math.floor((lo+hi)*0.5)
+        if candidate.cumulative[mid]<target then lo=mid+1 else hi=mid end end
+      last=max(first,lo)
+    end
+    local bestQ,bestD=nil,nil
+    for si=first,last do
+      local a,b=candidate.points[si],candidate.points[si+1]
+      local vx,vz=b.x-a.x,b.z-a.z
+      local ll=vx*vx+vz*vz
+      if ll>1e-8 then
+        local t=clamp(((pos.x-a.x)*vx+(pos.z-a.z)*vz)/ll,0,1)
+        local x,z=a.x+vx*t,a.z+vz*t
+        local dx,dz=pos.x-x,pos.z-z
+        local y=a.y+(b.y-a.y)*t
+        local distance2=dx*dx+dz*dz
+        local tx,tz=norm(vx,vz)
+        local sourceTx,sourceTz=tangentAt(lane,lane.cumulative[si] or startS).x,
+          tangentAt(lane,lane.cumulative[si] or startS).z
+        local alignment=sourceTx*tx+sourceTz*tz
+        local score=distance2+(1-alignment)*(1-alignment)*16+
+          (pos.y-y)*(pos.y-y)*4
+        if alignment>=0.94 and abs(pos.y-y)<=1.5 and
+            (not bestD or score<bestD) then
+          bestD=score
+          bestQ={x=x,y=y,z=z,s=candidate.cumulative[si]+math.sqrt(ll)*t,
+            distance=math.sqrt(distance2),tx=tx,tz=tz}
+        end
+      end
+    end
+    return bestQ
+  end
   for i=best.segment,#lane.points do
     local p=lane.points[i]
-    nodes[#nodes+1]=vec3(p.x,p.y,p.z)
+    local centreX,centreY,centreZ=p.x,p.y,p.z
+    local halfWidth=1.25
+    if pairValid then
+      local q=projectPartner(p,previousTargetS)
+      if not q or q.distance<2.0 or q.distance>7.5 then
+        pairValid=false
+      else
+        previousTargetS=q.s
+        centreX=(p.x+q.x)*0.5
+        centreY=(p.y+q.y)*0.5
+        centreZ=(p.z+q.z)*0.5
+        halfWidth=q.distance*0.5
+      end
+    end
+    nodes[#nodes+1]=vec3(centreX,centreY,centreZ)
+    boundsL[#boundsL+1]=-halfWidth
+    boundsR[#boundsR+1]=halfWidth
+  end
+  if not pairValid then
+    -- Never create a partial/tearing midpoint route. A single authored line
+    -- remains the racing trajectory and has no passing corridor.
+    nodes,boundsL,boundsR={},{},{}
+    for i=best.segment,#lane.points do
+      local p=lane.points[i]
+      nodes[#nodes+1]=vec3(p.x,p.y,p.z)
+      boundsL[#boundsL+1]=-1.25
+      boundsR[#boundsR+1]=1.25
+    end
   end
   if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_LANE_TOO_SHORT" end
-  return nodes,false,{}, {},{
+  trace("CSP_RACING_CORRIDOR lane=%d neighbour=%d paired=%s points=%d passing=%s",
+    lane.id,pairedLane and pairedLane.id or -1,tostring(pairValid),#nodes,
+    tostring(pairValid))
+  return nodes,lane.loop,boundsL,boundsR,{
     sourceLanes=graph.stats.validLanes,routeLanes={lane.id},
-    sourceTransitions=graph.stats.junctionTransitions,
+    racingCorridor=true,pairedLane=pairValid and pairedLane.id or nil,
+    passingEnabled=pairValid,sourceTransitions=graph.stats.junctionTransitions,
     laneChanges=graph.stats.laneChanges,network=graph
   }
 end
