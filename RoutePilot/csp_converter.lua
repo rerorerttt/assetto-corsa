@@ -752,157 +752,184 @@ function Converter.load(log)
   local currentLane,currentS=startLane,startS
   local routeLoop=false
   local maxHops=#graph.laneOrder+1
-  for hop=1,maxHops do
-    if visited[currentLane.id] then break end
-    visited[currentLane.id]=true
-    routeLanes[#routeLanes+1]=currentLane.id
 
-    local nextEdge,nextScore,firstExit=nil,nil,math.huge
-    -- First prefer an authored directed junction transition. It is the
-    -- strongest topology signal and must never be replaced by a nearby lane.
-    for _,edge in ipairs(currentLane.outgoing or {}) do
+  -- A junction edge is not automatically a continuation. CSP exports many
+  -- short connector lanes which immediately point back to the lane they came
+  -- from. Taking the first such edge truncates a multi-kilometre route after
+  -- a few hundred metres. Require a meaningful forward exit on the target.
+  local function targetHasForwardContinuation(target,entryS,sourceId,sourceFromS)
+    if target.loop then return true end
+    for _,edge in ipairs(target.outgoing or {}) do
+      if edge.fromS>=entryS+20.0 and
+        (edge.to~=sourceId or edge.toS>=sourceFromS+20.0) then
+        return true
+      end
+    end
+    for _,edge in ipairs(target.adjacent or {}) do
+      if edge.fromEnd>=entryS+20.0 and
+        (edge.to~=sourceId or (edge.toEnd or -math.huge)>=sourceFromS+20.0) then
+        return true
+      end
+    end
+    return false
+  end
+
+  -- Search for a complete directed circuit before committing to a route.
+  -- This keeps the imported path continuous and prevents every car from
+  -- reaching an arbitrary short connector/branch terminus.
+  local searchNodes=0
+  local searchLimit=12000
+  local searchMaxHops=80
+  local function routeCandidates(lane,fromS,visited)
+    local candidates={}
+    for _,edge in ipairs(lane.outgoing or {}) do
       local target=graph.lanes[edge.to]
       if target and finite(edge.fromS) and finite(edge.toS) and
-        edge.fromS>=currentS-0.5 and
-        (not visited[target.id] or target.id==startLane.id) then
-        if edge.fromS<firstExit-2.0 then
-          firstExit=edge.fromS
-          nextEdge=nil
-          nextScore=nil
+        edge.fromS>=fromS-0.5 then
+        local closesToStart=edge.to==startLane.id and
+          (target.loop or edge.toS<startS-20.0 or math.abs(edge.toS-startS)<=20.0)
+        if (not visited[edge.to] or closesToStart) and
+          (closesToStart or targetHasForwardContinuation(
+            target,edge.toS,lane.id,edge.fromS)) then
+          candidates[#candidates+1]=edge
         end
+      end
+    end
+    if #candidates>0 then
+      table.sort(candidates,function(a,b)
+        if math.abs(a.fromS-b.fromS)>2.0 then return a.fromS<b.fromS end
+        local sa=(finite(a.alignment) and a.alignment or 0)*100-
+          (finite(a.gap) and a.gap or 0)
+        local sb=(finite(b.alignment) and b.alignment or 0)*100-
+          (finite(b.gap) and b.gap or 0)
+        return sa>sb
+      end)
+      local firstExit=candidates[1].fromS
+      local filtered={}
+      for _,edge in ipairs(candidates) do
         if math.abs(edge.fromS-firstExit)<=2.0 then
-          local score=(finite(edge.alignment) and edge.alignment or 0)*100-
-            (finite(edge.gap) and edge.gap or 0)
-          if not nextScore or score>nextScore then
-            nextEdge=edge
-            nextScore=score
-          end
+          filtered[#filtered+1]=edge
         end
       end
+      return filtered
     end
 
-    -- A common CSP export has long same-direction parallel lanes but only
-    -- sparse intersection polygons. If no forward junction exists, continue
-    -- through an explicitly detected same-direction lane-change interval.
-    -- This is a real graph edge (same heading, sustained overlap), not a
-    -- nearest-lane guess and never permits a jump to opposing traffic.
-    if not nextEdge then
-      local bestExtent=-math.huge
-      for _,edge in ipairs(currentLane.adjacent or {}) do
-        local target=graph.lanes[edge.to]
-        local fromEnd=finite(edge.fromEnd) and edge.fromEnd or nil
-        local toEnd=finite(edge.toEnd) and edge.toEnd or nil
-        if target and fromEnd and toEnd and fromEnd>=currentS+8.0 and
-          (not visited[target.id] or target.id==startLane.id) then
-          local sourceEnd=pointAt(currentLane,fromEnd)
-          local targetEnd=pointAt(target,clamp(toEnd,0,target.length))
-          local gap=dist(sourceEnd,targetEnd)
-          local ta=tangentAt(currentLane,fromEnd)
-          local tb=tangentAt(target,clamp(toEnd,0,target.length))
-          local alignment=ta.x*tb.x+ta.z*tb.z
-          if gap>=1.5 and gap<=9.0 and alignment>=0.94 then
-            local extent=fromEnd-math.max(currentS,edge.fromStart or currentS)
-            if extent>bestExtent then
-              bestExtent=extent
-              nextEdge={from=currentLane.id,to=target.id,
-                fromS=fromEnd,toS=clamp(toEnd,0,target.length),
-                gap=gap,alignment=alignment,kind="lane_change"}
-            end
-          end
-        end
+    local adjacent={}
+    for _,edge in ipairs(lane.adjacent or {}) do
+      local target=graph.lanes[edge.to]
+      local fromEnd=finite(edge.fromEnd) and edge.fromEnd or nil
+      local toStart=finite(edge.toStart) and edge.toStart or nil
+      if target and fromEnd and toStart and fromEnd>=fromS+8.0 and
+        not visited[target.id] and
+        targetHasForwardContinuation(target,toStart,lane.id,fromEnd) then
+        local extent=fromEnd-math.max(fromS,edge.fromStart or fromS)
+        adjacent[#adjacent+1]={from=lane.id,to=target.id,fromS=fromEnd,
+          toS=clamp(toStart,0,target.length),gap=dist(
+            pointAt(lane,fromEnd),pointAt(target,clamp(toStart,0,target.length))),
+          alignment=1,kind="lane_change",_extent=extent}
       end
     end
+    table.sort(adjacent,function(a,b) return a._extent>b._extent end)
+    return adjacent
+  end
 
-    local segmentEnd=nextEdge and clamp(nextEdge.fromS,currentS,currentLane.length) or currentLane.length
-    if nextEdge then
-      trace("CSP_ROUTE_STEP from=%d s=%.1f to=%d toS=%.1f kind=%s gap=%.1f",
-        currentLane.id,currentS,nextEdge.to,nextEdge.toS,
-        tostring(nextEdge.kind or "junction"),nextEdge.gap or 0)
-    else
-      trace("CSP_ROUTE_TERMINUS lane=%d s=%.1f length=%.1f loop=%s junctions=%d adjacent=%d",
-        currentLane.id,currentS,currentLane.length,tostring(currentLane.loop),
-        #(currentLane.outgoing or {}),#(currentLane.adjacent or {}))
+  local function findCircuit(lane,sPos,visited,path,depth)
+    searchNodes=searchNodes+1
+    if searchNodes>searchLimit or depth>searchMaxHops then return nil end
+    local options=routeCandidates(lane,sPos,visited)
+    for _,edge in ipairs(options) do
+      local target=graph.lanes[edge.to]
+      if target then
+        path[#path+1]=edge
+        local closesToStart=edge.to==startLane.id and
+          (target.loop or edge.toS<startS-20.0 or
+            math.abs(edge.toS-startS)<=20.0)
+        if closesToStart then return path end
+        if not visited[target.id] then
+          visited[target.id]=true
+          local result=findCircuit(target,clamp(edge.toS,0,target.length),
+            visited,path,depth+1)
+          if result then return result end
+          visited[target.id]=nil
+        end
+        path[#path]=nil
+      end
     end
-    appendLaneSegment(currentLane,currentS,segmentEnd)
-    if not nextEdge then
-      -- A closed authored lane can be looped only when this route began on
-      -- that same lane. Append its wrapped prefix so the closing geometry
-      -- follows the actual directed polyline instead of cutting across space.
-      if currentLane.loop and currentLane.id==startLane.id and
-        #routeLanes==1 and startS>0.25 then
-        appendLaneSegment(currentLane,0,startS)
+    return nil
+  end
+
+  local plannedRoute=findCircuit(startLane,startS,{[startLane.id]=true},{},0)
+  if plannedRoute then
+    for _,edge in ipairs(plannedRoute) do
+      local sourceLane=graph.lanes[edge.from]
+      local targetLane=graph.lanes[edge.to]
+      if not sourceLane or not targetLane then break end
+      routeLanes[#routeLanes+1]=sourceLane.id
+      local segmentEnd=clamp(edge.fromS,currentS,sourceLane.length)
+      appendLaneSegment(sourceLane,currentS,segmentEnd)
+      local sourceEnd=pointAt(sourceLane,segmentEnd)
+      local targetStart=pointAt(targetLane,edge.toS)
+      local gap=dist(sourceEnd,targetStart)
+      if gap>0.15 and gap<=18.0 then
+        local steps=math.max(1,math.ceil(gap/3.0))
+        for step=1,steps-1 do
+          local t=step/steps
+          appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
+            y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
+            z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
+        end
+      end
+      if edge.to==startLane.id then
+        if edge.toS<startS-20.0 then
+          appendLaneSegment(startLane,edge.toS,startS)
+        elseif startLane.loop and edge.toS>startS+20.0 then
+          appendLaneSegment(startLane,edge.toS,startLane.length)
+          appendLaneSegment(startLane,0,startS)
+        end
         routeLoop=true
-      elseif currentLane.loop and currentLane.id==startLane.id and
-        #routeLanes==1 then
-        routeLoop=true
+        trace("CSP_ROUTE_CLOSED via_lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f search_nodes=%d",
+          startLane.id,edge.toS,startS,gap,edge.alignment or 0,searchNodes)
+        break
       end
-      break
+      currentLane=targetLane
+      currentS=clamp(edge.toS,0,targetLane.length)
     end
-
-    local targetLane=graph.lanes[nextEdge.to]
-    if not targetLane then break end
-    local sourceEnd=pointAt(currentLane,segmentEnd)
-    local targetStart=pointAt(targetLane,nextEdge.toS)
-    if targetLane.id==startLane.id then
-      -- A valid directed return to the starting lane may connect to its
-      -- opposite endpoint (e.g. lane 10 -> connector lane 9 -> lane 10).
-      -- In that case the missing prefix of the starting lane is the main
-      -- body of the circuit. Omitting it leaves only the short connector,
-      -- so every AI reaches the artificial route end and loses projection.
-      local joinGap=dist(sourceEnd,targetStart)
-      local sourceTangent=tangentAt(currentLane,segmentEnd)
-      local targetTangent=tangentAt(startLane,nextEdge.toS)
-      local joinAlignment=sourceTangent.x*targetTangent.x+
-        sourceTangent.z*targetTangent.z
-      local samePoint=math.abs(nextEdge.toS-startS)<=20.0
-      local wrapsToPrefix=nextEdge.toS<startS-20.0
-      if joinGap<=18.0 and joinAlignment>=0.50 then
-        if joinGap>0.15 then
-          local steps=math.max(1,math.ceil(joinGap/3.0))
-          for step=1,steps-1 do
-            local t=step/steps
-            appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
-              y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
-              z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
-          end
+  else
+    trace("CSP_ROUTE_CYCLE_NOT_FOUND search_nodes=%d limit=%d; using bounded forward route",
+      searchNodes,searchLimit)
+    for hop=1,maxHops do
+      if visited[currentLane.id] then break end
+      visited[currentLane.id]=true
+      routeLanes[#routeLanes+1]=currentLane.id
+      local options=routeCandidates(currentLane,currentS,visited)
+      local nextEdge=options[1]
+      if not nextEdge then
+        trace("CSP_ROUTE_TERMINUS lane=%d s=%.1f length=%.1f loop=%s junctions=%d adjacent=%d",
+          currentLane.id,currentS,currentLane.length,tostring(currentLane.loop),
+          #(currentLane.outgoing or {}),#(currentLane.adjacent or {}))
+        appendLaneSegment(currentLane,currentS,currentLane.length)
+        break
+      end
+      local segmentEnd=clamp(nextEdge.fromS,currentS,currentLane.length)
+      appendLaneSegment(currentLane,currentS,segmentEnd)
+      local sourceEnd=pointAt(currentLane,segmentEnd)
+      local targetLane=graph.lanes[nextEdge.to]
+      if not targetLane then break end
+      local targetStart=pointAt(targetLane,nextEdge.toS)
+      local gap=dist(sourceEnd,targetStart)
+      if gap>0.15 and gap<=18.0 then
+        local steps=math.max(1,math.ceil(gap/3.0))
+        for step=1,steps-1 do
+          local t=step/steps
+          appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
+            y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
+            z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
         end
-        if wrapsToPrefix then
-          appendLaneSegment(startLane,nextEdge.toS,
-            math.max(nextEdge.toS,startS-0.25))
-          routeLoop=true
-          trace("CSP_ROUTE_CLOSED via_lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
-            startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
-        elseif samePoint then
-          routeLoop=true
-          trace("CSP_ROUTE_CLOSED via_lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
-            startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
-        else
-          trace("CSP_ROUTE_RETURN_NOT_CLOSED lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
-            startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
-        end
-      else
-        trace("CSP_ROUTE_RETURN_REJECTED lane=%d return_s=%.1f start_s=%.1f join=%.2f alignment=%.2f",
-          startLane.id,nextEdge.toS,startS,joinGap,joinAlignment)
       end
-      break
+      currentLane=targetLane
+      currentS=clamp(nextEdge.toS,0,targetLane.length)
     end
-    if visited[targetLane.id] then break end
-
-    -- Bridge only the small authored junction gap; this is a directed
-    -- transition from the source lane to its declared destination, never a
-    -- nearest-line jump or a transition onto opposing traffic.
-    local gap=dist(sourceEnd,targetStart)
-    if gap>0.15 and gap<=18.0 then
-      local steps=math.max(1,math.ceil(gap/3.0))
-      for step=1,steps-1 do
-        local t=step/steps
-        appendPoint({x=sourceEnd.x+(targetStart.x-sourceEnd.x)*t,
-          y=sourceEnd.y+(targetStart.y-sourceEnd.y)*t,
-          z=sourceEnd.z+(targetStart.z-sourceEnd.z)*t},-2.0,2.0)
-      end
-    end
-    currentLane=targetLane
-    currentS=clamp(nextEdge.toS,0,targetLane.length)
+    appendLaneSegment(currentLane,currentS,currentLane.length)
   end
 
   if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_ROUTE_TOO_SHORT" end
