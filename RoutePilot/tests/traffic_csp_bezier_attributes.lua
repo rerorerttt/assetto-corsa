@@ -84,4 +84,24 @@ assert(math.abs(firstTransitionPoint.x-expectedX) < 1e-5,
   string.format("CSP Bezier attributes/arc-length sampling mismatch: x=%.6f expected=%.6f",
     firstTransitionPoint.x, expectedX))
 
-print("PASS: intersection route uses CSP cb/ce attributes with arc-length sampling")
+-- A CSP U-turn is two normalized Bezier segments joined at a midpoint
+-- displaced by ul * chord along (fromDir - toDir).
+local reverse = lane(3, vec3(10,0,10), vec3(10,0,0))
+local reverseEdge = {id=3,lane=reverse,from=0,to=10,length=10,nextEdges={}}
+local uTurn = {
+  from={lane=a}, to={lane=reverse},
+  fromEdge=edgeA,toEdge=reverseEdge,
+  fromPos=vec3(10,0,0),toPos=vec3(10,0,10),
+  fromDir=vec3(0,0,1),toDir=vec3(0,0,-1),
+  attributes={cb=0.1,ce=0.9,ul=0.3}
+}
+edgeA.nextMovement = {[reverseEdge.id]=uTurn}
+local uTurnRoute, uTurnError = Routes.build({edges={edgeA,reverseEdge}}, nil,
+  edgeA, 0, {targetEdge=reverseEdge,minLength=1})
+assert(uTurnRoute, "CSP U-turn route build failed: "..tostring(uTurnError))
+local maxTurnZ = -math.huge
+for i=7,#uTurnRoute.nodes do maxTurnZ=math.max(maxTurnZ,uTurnRoute.nodes[i].z) end
+assert(maxTurnZ > 10.7 and maxTurnZ < 12.2,
+  string.format("CSP ul midpoint offset was not applied: maxZ=%.3f",maxTurnZ))
+
+print("PASS: intersection route preserves CSP cb/ce arc-length curves and ul U-turn geometry")
