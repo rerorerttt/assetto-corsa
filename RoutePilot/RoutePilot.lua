@@ -924,9 +924,9 @@ end
 -- Finished track ("Показать линии"): the whole route at long distance.
 render.on('main.track.transparent', function()
   local n=#state.nodes
-  if n<2 then return end
   local isRec=state.recLine or state.recBounds
-  if not (state.showWorldLines or isRec) then return end
+  if n<2 and not state.showCSPRoads then return end
+  if not (state.showWorldLines or isRec or state.showCSPRoads) then return end
   local ok=pcall(function()
     local player=ac.getCar(0)
     if not player then return end
@@ -968,6 +968,7 @@ render.on('main.track.transparent', function()
         end
       end
     end
+    if n<2 then return end
     local seg=select(1,findNearestSeg(player.position,1))
     local fromI,toI=1,n
     if isRec then
