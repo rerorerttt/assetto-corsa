@@ -55,4 +55,4 @@ assert(wrongDeckImport:load(), "wrong-deck sample should not abort the import")
 assert(wrongDeckImport.stats.invalid == 1 and not wrongDeckImport.lanes[1].valid,
   "surface projection more than 1.5 m from source height must be rejected")
 
-print("PASS: importer rejects vertically mismatched surface projections")
+print("PASS: importer validates surface height and raw/finalized lane metadata")
