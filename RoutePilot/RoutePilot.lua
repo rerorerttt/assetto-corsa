@@ -24,6 +24,8 @@ local okConverter, CSPConverter = pcall(require, "csp_converter")
 if not okConverter or type(CSPConverter) ~= "table" or
     type(CSPConverter.load) ~= "function" then CSPConverter = nil end
 local okDriver, Driver = pcall(require, "driver")
+local okAiSpline, AiSpline = pcall(require, "ai_spline")
+if not okAiSpline or type(AiSpline)~="table" or type(AiSpline.write)~="function" then AiSpline=nil end
 if not okDriver or type(Driver) ~= "table" or not Driver.update then Driver = nil end
 
 local CFG = {
@@ -58,6 +60,7 @@ local state = {
   playerRouteInvalid=false,
   teleportDiagnostics=false, teleportDiagAccum=0,
   teleportDiagSnapshots={}, teleportDiagApiAt={},
+  nativeSplinePath=nil, nativeSplineSignature=nil, nativeSplineApplied={}, nativeSplineRetryAt={},
 }
 local logger=nil
 if Logger and type(Logger.new)=="function" then
@@ -104,6 +107,79 @@ local function getLineFilePath()
 end
 local function getBoundsFilePath()
   return string.gsub(getLineFilePath(),"%.txt$","_bounds.txt")
+end
+
+-- Replace the stock track fast_lane for every controlled AI car with a spline
+-- generated from the exact RoutePilot route. The stock fastline remains present
+-- for AC/CSP startup compatibility, but is no longer the active per-car spline.
+local function nativeSplineSignature()
+  local n=#state.nodes
+  if n<3 then return nil end
+  local a,b=state.nodes[1],state.nodes[n]
+  return table.concat({n,state.loopRoute and 1 or 0,
+    string.format("%.3f,%.3f,%.3f",a.x,a.y,a.z),
+    string.format("%.3f,%.3f,%.3f",b.x,b.y,b.z)},":")
+end
+
+local function ensureNativeSplineFile()
+  if not AiSpline then return nil,"ai_spline_module_unavailable" end
+  local signature=nativeSplineSignature()
+  if not signature then return nil,"route_not_ready" end
+  if state.nativeSplinePath and state.nativeSplineSignature==signature then
+    return state.nativeSplinePath
+  end
+  local path=string.gsub(getLineFilePath(),"%.txt$","_routepilot.ai")
+  local ok,err,meta,bytes=AiSpline.write(path,state.nodes,state.loopRoute)
+  if not ok then
+    writeLog("NATIVE_SPLINE_WRITE_FAIL path=%s reason=%s",path,tostring(err))
+    return nil,err
+  end
+  state.nativeSplinePath=path
+  state.nativeSplineSignature=signature
+  state.nativeSplineApplied={}
+  state.nativeSplineRetryAt={}
+  writeLog("NATIVE_SPLINE_FILE_READY path=%s version=%d points=%d length=%.1f bytes=%d",
+    path,safeNumber(meta and meta.version,7),safeNumber(meta and meta.count),
+    safeNumber(meta and meta.length),safeNumber(bytes))
+  return path
+end
+
+local function claimNativeSpline(carIndex)
+  if state.nativeSplineApplied[carIndex] then return true end
+  if type(physics)~="table" or type(physics.setAISpline)~="function" then
+    if not state.nativeSplineApiMissingLogged then
+      state.nativeSplineApiMissingLogged=true
+      writeLog("NATIVE_SPLINE_BLOCKED reason=setAISpline_api_unavailable")
+    end
+    return false
+  end
+  local now=0
+  local sim=ac.getSim()
+  if sim then
+    now=safeNumber(sim.gameTime)
+    if sim.customAISplinesAllowed==false then
+      local last=safeNumber(state.nativeSplineRetryAt[carIndex],-100)
+      if now-last>=2 then
+        state.nativeSplineRetryAt[carIndex]=now
+        writeLog("NATIVE_SPLINE_BLOCKED id=%d reason=session_permission_denied",carIndex)
+      end
+      return false
+    end
+  end
+  local path,err=ensureNativeSplineFile()
+  if not path then return false end
+  local last=safeNumber(state.nativeSplineRetryAt[carIndex],-100)
+  if now-last<0.5 then return false end
+  state.nativeSplineRetryAt[carIndex]=now
+  local ok,result=pcall(physics.setAISpline,carIndex,path,nil)
+  if ok and result==true then
+    state.nativeSplineApplied[carIndex]=true
+    writeLog("NATIVE_SPLINE_ASSIGNED id=%d path=%s stock_fastline_replaced=true",carIndex,path)
+    return true
+  end
+  writeLog("NATIVE_SPLINE_ASSIGN_FAIL id=%d path=%s pcall_ok=%s result=%s",
+    carIndex,path,tostring(ok),tostring(result))
+  return false
 end
 local function serializeNodes(nodes)
   local out={}
@@ -209,6 +285,8 @@ local function loadLine(retryOnly)
       pcall(CSPConverter.load, writeLog)
     if ok and type(nodes)=="table" and #nodes>=2 then
       state.nodes=nodes
+      state.nativeSplinePath=nil; state.nativeSplineSignature=nil
+      state.nativeSplineApplied={}; state.nativeSplineRetryAt={}
       state.trafficNetwork=type(infoOrError)=="table" and infoOrError.network or nil
       state.loopRoute=loop==true
       state.boundsL=type(boundsL)=="table" and boundsL or {}
@@ -264,6 +342,8 @@ local function loadLine(retryOnly)
   end
   if loaded then
     state.nodes=loaded; state.p={}; state.spawnHints={}; state.spawnedCars={}
+    state.nativeSplinePath=nil; state.nativeSplineSignature=nil
+    state.nativeSplineApplied={}; state.nativeSplineRetryAt={}
     state.routeGeometry=nil; state.loaded=true
     state.loadedFromCSP=false
     if ac.storage then
@@ -596,7 +676,7 @@ local function trySpawnTeleport(sim,dt)
     if state.spawnedCars[carIndex] then already=already+1 else
     local position,direction,routeSegment,routeParameter=
       sampleSpawnRoute(metrics,startDistance+(order-1)*gap)
-    if position and direction then
+    if position and direction and claimNativeSpline(carIndex) then
       -- Keep the previously user-verified orientation. The SDK documents
       -- an explicit direction vector but does not define its sign convention.
       local spawnDir=vec3(-direction.x,-direction.y,-direction.z)
@@ -1056,6 +1136,7 @@ function script.update(dt)
       for i=0,sim.carsCount-1 do
         local car=ac.getCar(i)
         local shouldDrive=car and car.isActive and car.isAIControlled
+        if shouldDrive then shouldDrive=claimNativeSpline(i) end
         if state.loadedFromCSP and not state.spawnDone then shouldDrive=false end
         if i==0 then shouldDrive=shouldDrive and playerAI end
         if shouldDrive then
