@@ -402,7 +402,7 @@ Additional local check: the environment's `texlua` executable was found and used
 
 ## 2026-11-28 representative CSP export regression
 
-- Added the committed track-20 CSP Traffic Tool export as RoutePilot/tests/fixtures/traffic_20.json and a CI import test. The test exercises the actual 64 KB JSON export, Catmull-Rom lane resampling, surface projection plumbing with a deterministic road-level raycast stub, lane-role defaults, priorities, and speed limits.
-- Verified that all 25 lanes import as usable and all 14 intersection definitions are retained; the Main role resolves to 80 km/h / priority 0 and the Highway role to 90 km/h / priority 4.
-- GitHub Actions run for commit b857ba54692ef537c56ec384468aa0d01dc17daf passed: Lua 5.1 syntax validation and all five synthetic/fixture regression tests succeeded.
-- The fixture test intentionally disables graph and road-boundary builders and stubs physical raycasts. It proves compatibility with this real exported JSON shape, not real CSP track projection, graph connectivity, lane boundaries, or vehicle behavior.
+- Added the committed track-20 CSP Traffic Tool export as RoutePilot/tests/fixtures/traffic_20.json and a CI import test. The test exercises the actual 64 KB JSON export, Catmull-Rom lane resampling, surface projection plumbing with a deterministic road-level raycast stub, lane-role defaults, priorities, and speed limits. The actual directed graph builder is enabled; only road-boundary construction is disabled.
+- Verified that all 25 lanes import as usable, all 14 intersection definitions are retained, and the graph produces 31 lane/intersection links and 25 directed movements. The Main role resolves to 80 km/h / priority 0 and the Highway role to 90 km/h / priority 4.
+- GitHub Actions run for commit d87562a9de21a2e1845bd69d71632723c68dd039 passed: Lua 5.1 syntax validation and all five synthetic/fixture regression tests succeeded.
+- The fixture test stubs physical raycasts at the source lane heights and disables road-boundary construction. It proves compatibility with this real exported JSON shape and exercises graph connectivity on that fixture, but does not validate real CSP surface hits, physical lane boundaries, or vehicle behavior.
