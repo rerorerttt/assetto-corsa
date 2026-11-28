@@ -248,7 +248,21 @@ function M.update(i,c,dt)
   end
  end
  local err=target-speed;local gas=clamp(err*.35,0,1);local brake=clamp(-err*.55,0,1)
- if speed<5 then gas=min(gas,.65)end;if err>=0 then brake=0 end
+ -- A one-shot launch pulse gives freshly spawned traffic a natural initial
+ -- acceleration. It ends as soon as the section-based target is reached or
+ -- the short launch window expires; normal traffic control then takes over.
+ local boostTimer=n(p.networkSpawnBoostTimer)
+ if boostTimer>0 then
+  boostTimer=max(0,boostTimer-max(0,dt))
+  local boostTarget=n(p.networkSpawnBoostTarget)
+  if boostTarget>0 and speed<boostTarget-0.8 then
+   gas=1;brake=0;p.trafficAction="NETWORK_SPAWN_ACCEL"
+  else
+   boostTimer=0
+  end
+  p.networkSpawnBoostTimer=boostTimer
+ end
+ if speed<5 and boostTimer<=0 then gas=min(gas,.65)end;if err>=0 and boostTimer<=0 then brake=0 end
  p.networkLaneId=l.id;p.networkS=p.networkS;p.routeProgress=p.networkS;p.routeLocked=true
  p.networkDistance=q.distance;p.networkHeightError=q.heightError;p.lineDist=q.distance;p.segIdx=q.segment or 1;p.latOff=0
  p.targetSpeed=target;p.steer=steer;p.gas=gas;p.brake=brake
