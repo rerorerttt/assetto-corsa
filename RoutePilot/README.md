@@ -1,6 +1,6 @@
-# RoutePilot 0.9.2 — CSP Traffic Tool converter and traffic avoidance
+# RoutePilot 0.10.0 — directed CSP lane-network controller
 
-CSP Lua app for Assetto Corsa. Records a route from the player's car and uses it to control AI cars without relying on the track's stock AI fast lane.
+CSP Lua app for Assetto Corsa. When a CSP Traffic Tool network is available, AI cars follow its authored directed lanes and use only graph connections for junction routing and lane changes. Manual RoutePilot routes remain available as a fallback.
 
 ## Install
 
@@ -20,7 +20,11 @@ Enable RoutePilot in Content Manager's Lua Apps list and open it in a session.
 
 ## Automatic CSP Traffic Tool conversion
 
-If no saved RoutePilot line exists for the current track/layout, RoutePilot automatically reads the track's original CSP `traffic.json` and converts its directed lane network into one RoutePilot route. The converter detects lane passages through CSP intersection polygons, follows the intersection trajectory links, joins the selected directed path with smooth junction connectors, and derives one outer driving corridor from nearby parallel lanes. Internal boundaries between adjacent lanes are discarded. A single-lane corridor is 6 m wide; a multi-lane corridor is 3 m per detected lane. RoutePilot's existing lane-offset and overtaking controller then generates and reserves passing lines inside that corridor. The source `traffic.json` is read-only and is never rewritten. Automatic CSP conversion takes priority; a saved RoutePilot line is used only when CSP conversion is unavailable or fails.
+RoutePilot reads the current track's original CSP `traffic.json` without modifying it. Every valid authored lane is retained with its original point order, coordinates, lane ID and loop flag. The converter does not merge lanes into a centreline and does not import or generate road boundaries. Malformed or duplicate lane records are counted and reported rather than silently substituted.
+
+The runtime graph contains directed junction transitions extracted from CSP intersection polygons and filtered by `disallowedTrajectories`. It also contains separate lane-change links only where two source lanes remain side-by-side over a continuous distance and their tangents confirm the same travel direction. Opposing-direction lanes are not valid lane-change targets. AI cars are attached to a nearby lane in the direction of travel, spawned across available source lanes, follow that lane's original geometry, and can switch only through its recorded graph links. At junctions they can continue only through an outgoing directed transition. The map and optional world overlay display all imported lanes with arrows showing their authored direction; boundaries are omitted.
+
+The graph-based controller is an experimental replacement for the legacy single-route controller in CSP mode. It uses local lane projection, forward curvature preview, same-lane following and occupancy checks before lane changes. Manual recorded routes continue to use the legacy controller when no usable CSP network is loaded.
 
 ## First use
 
@@ -41,7 +45,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 ## Changelog
 
-- 0.9.2: automatic read-only CSP Traffic Tool conversion into one RoutePilot centerline and an outer driving corridor; generated corridor width feeds the existing passing-slot coordinator.
+- 0.10.0: experimental full directed CSP lane graph, source-lane visualization, distributed lane spawning, graph-only junction routing and same-direction adjacent-lane changes. No generated road boundaries or merged centreline.
 
 - 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
 - 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
@@ -69,7 +73,7 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 
 ## Known limitations
 
-- Passing still requires enough physical width for the complete vehicle footprints plus a safety margin; the controller searches the available safe corridor rather than requiring two pre-defined 2.7 m lanes.
+- The directed CSP network controller has not yet been validated in Assetto Corsa/CSP. Its junction extraction, lane-change links, spawn placement, steering calibration and traffic clearances require in-game testing on Shuto and other multi-carriageway layouts. Source changes and repository commits are not proof of correct runtime behavior.\n- The graph controller currently uses a separate lightweight following/steering loop; it does not yet reuse the legacy controller's full reservation coordinator, traction estimator or rescue behavior.\n- Passing still requires enough physical width for the complete vehicle footprints plus a safety margin; the controller searches the available safe corridor rather than requiring two pre-defined 2.7 m lanes.
 - The arc-length route geometry and path follower are source-implemented but have not yet been validated in Assetto Corsa/CSP. Normalized steering response still needs in-game calibration from trace telemetry.
 - Near-field occupancy and leader detection classify each car against its own route tangent. Opposing-direction vehicles use local geometry and closing-speed braking; long-range reservations still need in-game validation on shared ovals and hairpins.
 - If a locked route projection is lost, the driver currently fails safe by braking rather than attempting an unverified global branch reacquisition.
