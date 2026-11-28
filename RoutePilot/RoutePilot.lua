@@ -545,7 +545,6 @@ local function trySpawnCSPTraffic(sim,dt,route)
   for ri=1,#routes do
     if routes[ri].playerAligned then trafficCSP.playerRouteIndex=ri; break end
   end
-  trafficCSP.playerRouteIndex=trafficCSP.playerRouteIndex or 1
   trafficCSP.previewRoute=routes[1]
   trafficCSP.graphSpawnWait=(trafficCSP.graphSpawnWait or 0)+dt
   local aiCars={}
@@ -1193,7 +1192,7 @@ function script.update(dt)
     end
 
     local playerRoutePilotActive = state.enabled and (#state.nodes>=2 or useCSPRoute) and
-      Driver and playerAI or false
+      Driver and playerAI and (not useCSPRoute or trafficCSP.playerRouteIndex~=nil) or false
     if playerRoutePilotActive and not state.playerAutopilotLast then
       writeLog("PLAYER_AUTOPILOT_ADOPT source=AC_NATIVE_CTRL8")
     elseif not playerRoutePilotActive and state.playerAutopilotLast then
@@ -1231,7 +1230,7 @@ function script.update(dt)
         for ri=1,#routes do routeOrders[ri]={} end
         for _,i in ipairs(driveOrder) do
           local ri=trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[i] or nil
-          if i==0 and playerAI then ri=trafficCSP.playerRouteIndex or 1 end
+          if i==0 and playerAI then ri=trafficCSP.playerRouteIndex end
           if ri and routeOrders[ri] then routeOrders[ri][#routeOrders[ri]+1]=i end
         end
 
@@ -1252,7 +1251,7 @@ function script.update(dt)
             local savedOther={}
             for idx,person in pairs(state.p) do
               local assigned=trafficCSP.graphCarRoute and trafficCSP.graphCarRoute[idx] or nil
-              if idx==0 and playerAI then assigned=trafficCSP.playerRouteIndex or 1 end
+              if idx==0 and playerAI then assigned=trafficCSP.playerRouteIndex end
               if assigned~=ri then
                 savedOther[idx]={
                   routeProgress=person.routeProgress,
