@@ -304,7 +304,11 @@ local function collectRoute(graph, player)
     local targetLink=transition.link
     local targetKey=tostring(nextLink.intersection.id)..':'..tostring(target.id)
     if target.id==lane.id then
-      -- Same-lane continuation through the junction is a valid CSP graph edge.
+      -- Same-lane continuation is valid. A different link on that same lane
+      -- means the lane re-enters this intersection (e.g. a closed circuit).
+      if targetLink~=nextLink then
+        bezierConnector(raw,lane,nextLink.enter,target,targetLink.exit)
+      end
       progress=targetLink.exit
     else
       if visited[targetKey] then
@@ -317,6 +321,9 @@ local function collectRoute(graph, player)
       progress=targetLink.exit
     end
     if lane.id==start.id and progress<=startProgress+1.0 then
+      if progress<startProgress-0.5 then
+        appendLaneRange(raw,lane,progress,startProgress)
+      end
       loop=true
       break
     end
