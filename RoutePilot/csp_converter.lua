@@ -97,15 +97,21 @@ local function buildIntersectionLinks(graph)
     if #poly>=3 then
       -- Match CSP FlatPolyShape's vertical gate. A 2D-only polygon test
       -- incorrectly linked roads passing above/below a junction.
-      local minY,maxY=math.huge,-math.huge
+      local minX,maxX,minY,maxY,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge,math.huge,-math.huge
       for pi=1,#poly do
-        local y=poly[pi].y or 0
+        local p=poly[pi]
+        local y=p.y or 0
+        minX=math.min(minX,p.x); maxX=math.max(maxX,p.x)
         minY=math.min(minY,y); maxY=math.max(maxY,y)
+        minZ=math.min(minZ,p.z); maxZ=math.max(maxZ,p.z)
       end
       local centerY=(minY+maxY)*0.5
       local yThreshold=5.0+(maxY-minY)
       for _,id in ipairs(graph.laneOrder) do
         local lane=graph.lanes[id]
+        local box=lane.aabb
+        if box and box.maxX>=minX and box.minX<=maxX and
+            box.maxZ>=minZ and box.minZ<=maxZ then
         local cumulative=0
         local activeStart,activeEnd=nil,nil
         local function flushInterval()
@@ -119,7 +125,10 @@ local function buildIntersectionLinks(graph)
         for si=1,#lane.points-1 do
           local p1,p2=lane.points[si],lane.points[si+1]
           local segLen=math.sqrt(dist2(p1,p2))
-          local verticallyValid=math.abs((p1.y or 0)-centerY)<=yThreshold and
+          local segmentOverlaps=math.max(p1.x,p2.x)>=minX and math.min(p1.x,p2.x)<=maxX and
+            math.max(p1.z,p2.z)>=minZ and math.min(p1.z,p2.z)<=maxZ
+          local verticallyValid=segmentOverlaps and
+            math.abs((p1.y or 0)-centerY)<=yThreshold and
             math.abs((p2.y or 0)-centerY)<=yThreshold
           if verticallyValid then
             local cuts={0,1}
@@ -151,6 +160,7 @@ local function buildIntersectionLinks(graph)
           cumulative=cumulative+segLen
         end
         flushInterval()
+        end
       end
     end
   end
