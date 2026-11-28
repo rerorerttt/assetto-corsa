@@ -58,11 +58,13 @@ local function roadGroupFor(lane)
     leftOffset=0,rightOffset=0,leftBoundaryOffset=3,rightBoundaryOffset=3}
 end
 local roads={laneGroups={[a]=roadGroupFor(a),[b]=roadGroupFor(b)}}
+local intersection={points={{5,0,-5},{15,0,-5},{15,0,15},{5,0,15}}}
 local movement = {
   from={lane=a}, to={lane=b},
   fromEdge=edgeA,toEdge=edgeB,
   fromPos=vec3(10,0,0),toPos=vec3(10,0,10),
   fromDir=vec3(0,0,1),toDir=vec3(1,0,0),
+  intersection=intersection,
   attributes={cb=0.1,ce=0.9}
 }
 edgeA.nextMovement = {[edgeB.id]=movement}
@@ -99,6 +101,21 @@ assert(math.abs(firstTransitionPoint.x-expectedX) < 1e-5,
   string.format("CSP Bezier attributes/arc-length sampling mismatch: x=%.6f expected=%.6f",
     firstTransitionPoint.x, expectedX))
 
+-- Intersection projection must reject a raycast hit on another vertical
+-- deck instead of silently snapping the trajectory by more than 1.5 m.
+physics.raycastTrack=function(origin,direction,length,filter,normal)
+  normal.y=1
+  return 0.25
+end
+local wrongDeckRoute,wrongDeckError=Routes.build({edges={edgeA,edgeB}},roads,
+  edgeA,0,{targetEdge=edgeB,minLength=1})
+assert(not wrongDeckRoute and wrongDeckError=="intersection_surface_projection_failed",
+  "intersection trajectory accepted a vertically mismatched surface")
+physics.raycastTrack=function(origin,direction,length,filter,normal)
+  normal.y=1
+  return 2
+end
+
 -- An open route without an explicit target must never stop inside an
 -- intersection merely because the directed graph has no outgoing movement.
 edgeA.toNode={kind="intersection"}
@@ -116,6 +133,7 @@ local uTurn = {
   fromEdge=edgeA,toEdge=reverseEdge,
   fromPos=vec3(10,0,0),toPos=vec3(10,0,10),
   fromDir=vec3(0,0,1),toDir=vec3(0,0,-1),
+  intersection=intersection,
   attributes={cb=0.1,ce=0.9,ul=0.3}
 }
 edgeA.nextMovement = {[reverseEdge.id]=uTurn}
