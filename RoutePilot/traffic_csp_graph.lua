@@ -234,6 +234,64 @@ function Graph.build(lanes, intersectionDefs, log)
     end
   end
 
+  -- Recreate CSP Traffic Tool's polygon-side ordering. This provides stable
+  -- lane ranks for turn restrictions without merging nearby road geometry.
+  for i = 1, #graph.intersections do
+    local inter = graph.intersections[i]
+    inter.sides = {}
+    for j = 1, #inter.links do
+      local link = inter.links[j]
+      if link.fromSide then
+        local side = inter.sides[link.fromSide] or { entries = {}, exits = {} }
+        inter.sides[link.fromSide] = side
+        side.entries[#side.entries + 1] = link
+      end
+      if link.toSide then
+        local side = inter.sides[link.toSide] or { entries = {}, exits = {} }
+        inter.sides[link.toSide] = side
+        side.exits[#side.exits + 1] = link
+      end
+    end
+    for sideIndex, side in pairs(inter.sides) do
+      local ex, ey, ez, xx, xy, xz = 0, 0, 0, 0, 0, 0
+      local edx, edy, edz, xdx, xdy, xdz = 0, 0, 0, 0, 0, 0
+      for j = 1, #side.entries do
+        local link = side.entries[j]
+        ex, ey, ez = ex + link.fromPos.x, ey + link.fromPos.y, ez + link.fromPos.z
+        edx, edy, edz = edx + link.fromDir.x, edy + link.fromDir.y, edz + link.fromDir.z
+      end
+      for j = 1, #side.exits do
+        local link = side.exits[j]
+        xx, xy, xz = xx + link.toPos.x, xy + link.toPos.y, xz + link.toPos.z
+        xdx, xdy, xdz = xdx + link.toDir.x, xdy + link.toDir.y, xdz + link.toDir.z
+      end
+      if #side.entries > 0 then
+        side.centerEntries = vec3(ex/#side.entries, ey/#side.entries, ez/#side.entries)
+        local l = math.sqrt(edx*edx+edy*edy+edz*edz)
+        side.entryDir = l > 1e-6 and vec3(edx/l, edy/l, edz/l) or side.entries[1].fromDir
+      end
+      if #side.exits > 0 then
+        side.centerExits = vec3(xx/#side.exits, xy/#side.exits, xz/#side.exits)
+        local l = math.sqrt(xdx*xdx+xdy*xdy+xdz*xdz)
+        side.exitDir = l > 1e-6 and vec3(xdx/l, xdy/l, xdz/l) or side.exits[1].toDir
+      end
+      if #side.entries > 0 and side.centerExits then
+        table.sort(side.entries, function(a, b)
+          return (a.fromPos.x-side.centerExits.x)^2 + (a.fromPos.z-side.centerExits.z)^2 <
+            (b.fromPos.x-side.centerExits.x)^2 + (b.fromPos.z-side.centerExits.z)^2
+        end)
+        for j = 1, #side.entries do side.entries[j].entryRank = j end
+      end
+      if #side.exits > 0 and side.centerEntries then
+        table.sort(side.exits, function(a, b)
+          return (a.toPos.x-side.centerEntries.x)^2 + (a.toPos.z-side.centerEntries.z)^2 <
+            (b.toPos.x-side.centerEntries.x)^2 + (b.toPos.z-side.centerEntries.z)^2
+        end)
+        for j = 1, #side.exits do side.exits[j].exitRank = j end
+      end
+    end
+  end
+
   local nextNodeID, nextEdgeID = 0, 0
   local function addNode(kind, position, owner)
     nextNodeID = nextNodeID + 1
