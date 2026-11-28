@@ -61,6 +61,16 @@ for i=1,#importer.graph.edges do
   local path=Graph.loopPath(importer.graph,importer.graph.edges[i],2000,20000)
   if path then cycleStarts=cycleStarts+1 end
 end
+for i=1,#importer.graph.edges do
+  local edge=importer.graph.edges[i]
+  local nextIDs={}
+  for j=1,#edge.nextEdges do
+    local nextEdge=edge.nextEdges[j]
+    nextIDs[#nextIDs+1]=tostring(nextEdge.id).."(L"..tostring(nextEdge.lane.id)..")"
+  end
+  print(string.format("GRAPH_EDGE %d lane=%s range=%.1f-%.1f next=%s",
+    edge.id,tostring(edge.lane.id),edge.from,edge.to,table.concat(nextIDs,",")))
+end
 print(string.format(
   "PASS: real CSP export imported %d/%d lanes, %d intersections, %d edges, %d links, %d movements, %d loop starts",
   importer.stats.usable,importer.stats.lanes,#importer.intersections,
