@@ -971,13 +971,24 @@ function Converter.load(log)
   end
 
   if #nodes<2 then return nil,nil,nil,nil,"SELECTED_CSP_ROUTE_TOO_SHORT" end
+  local routeLength=0
+  for i=2,#nodes do
+    local dx,dz=nodes[i].x-nodes[i-1].x,nodes[i].z-nodes[i-1].z
+    routeLength=routeLength+math.sqrt(dx*dx+dz*dz)
+  end
+  if routeLoop then
+    local first,last=nodes[1],nodes[#nodes]
+    local dx,dz=first.x-last.x,first.z-last.z
+    routeLength=routeLength+math.sqrt(dx*dx+dz*dz)
+  end
   if type(log)=="function" then
     pcall(log,"CSP_RACING_CORRIDOR lane=%d neighbour=%d paired=%s points=%d passing=%s",
       startLane.id,firstPairedLaneId or -1,tostring(anyPassing),#nodes,tostring(anyPassing))
-    pcall(log,"CSP_ROUTE_CHAIN lanes=%d points=%d loop=%s transitions=%d",
-      #routeLanes,#nodes,tostring(routeLoop),math.max(0,#routeLanes-1))
+    pcall(log,"CSP_ROUTE_CHAIN lanes=%d points=%d length=%.1f loop=%s transitions=%d",
+      #routeLanes,#nodes,routeLength,tostring(routeLoop),math.max(0,#routeLanes-1))
   end
   return nodes,routeLoop,boundsL,boundsR,{
+    routeLength=routeLength,
     sourceLanes=graph.stats.validLanes,routeLanes=routeLanes,
     racingCorridor=true,pairedLane=firstPairedLaneId,passingEnabled=anyPassing,
     sourceTransitions=graph.stats.junctionTransitions,
