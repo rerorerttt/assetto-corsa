@@ -741,76 +741,11 @@ function Converter.load(log)
     end
     samples[#samples+1]={s=toS,p=pointAt(lane,toS)}
 
-    local midS=(fromS+toS)*0.5
-    local pairCandidates,seenPairs={},{}
-    for _,edge in ipairs(lane.adjacent or {}) do
-      if midS>=edge.fromStart and midS<=edge.fromEnd and not seenPairs[edge.to] then
-        local candidate=graph.lanes[edge.to]
-        if candidate then
-          local source=pointAt(lane,midS)
-          local targetS=clamp((edge.toStart+edge.toEnd)*0.5,0,candidate.length)
-          local target=pointAt(candidate,targetS)
-          local gap=dist(source,target)
-          local a=tangentAt(lane,midS)
-          local b=tangentAt(candidate,targetS)
-          local alignment=a.x*b.x+a.z*b.z
-          local dy=math.abs(source.y-target.y)
-          if gap>=2.0 and gap<=7.5 and alignment>=0.94 and dy<=1.5 then
-            pairCandidates[#pairCandidates+1]={lane=candidate,edge=edge,hintS=targetS}
-            seenPairs[edge.to]=true
-          end
-        end
-      end
-    end
-
-    -- A road can have more than two authored traffic lines. Project every
-    -- parallel neighbour that overlaps this section, then put the racing line
-    -- midway between the outermost valid lines instead of choosing one at random.
-    local validPairs={}
-    for _,candidate in ipairs(pairCandidates) do
-      local rows={}
-      local hintS=candidate.hintS
-      local valid=true
-      for i=1,#samples do
-        local sample=samples[i]
-        local q=projectPartner(candidate.lane,sample.p,hintS,lane,sample.s)
-        if not q then valid=false;break end
-        rows[i]=q
-        hintS=q.s
-      end
-      if valid then
-        validPairs[#validPairs+1]={lane=candidate.lane,rows=rows}
-      end
-    end
-
-    if #validPairs>0 then
-      anyPassing=true
-      if not firstPairedLaneId then firstPairedLaneId=validPairs[1].lane.id end
-    end
+    -- Keep every generated RoutePilot point on the exact authored
+    -- Traffic Tool polyline. Never average adjacent yellow lines into a
+    -- synthetic centreline: spawn and recovery use this same geometry.
     for i=1,#samples do
-      local sample=samples[i]
-      if #validPairs>0 then
-        local tangent=tangentAt(lane,sample.s)
-        local minOffset,maxOffset=0,0
-        for j=1,#validPairs do
-          local q=validPairs[j].rows[i]
-          local offset=(q.x-sample.p.x)*(-tangent.z)+
-            (q.z-sample.p.z)*tangent.x
-          minOffset=math.min(minOffset,offset)
-          maxOffset=math.max(maxOffset,offset)
-        end
-        local centerOffset=(minOffset+maxOffset)*0.5
-        local half=(maxOffset-minOffset)*0.5+2.0
-        local center={x=sample.p.x-tangent.z*centerOffset,
-          y=sample.p.y,z=sample.p.z+tangent.x*centerOffset}
-        appendPoint(center,-half,half)
-      else
-        -- One authored line is one logical traffic lane, not a
-        -- physically narrow 2.5 m corridor. Keep enough body clearance for
-        -- ordinary cars while the coordinator still resolves exactly one
-        -- lane, so overtaking remains disabled.
-        appendPoint(sample.p,-2.0,2.0)
-      end
+      appendPoint(samples[i].p,-2.0,2.0)
     end
   end
 
