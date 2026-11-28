@@ -216,14 +216,34 @@ function Graph.build(lanes, intersectionDefs, log)
         local intervals = laneIntersectionIntervals(lane, inter)
         for k = 1, #intervals do
           local span = intervals[k]
-          if span.to - span.from >= 1.0 then
+          local fromOffset, toOffset = 0, 0
+          local entryOffsets = inter.definition.entryOffsets
+          if type(entryOffsets) == 'table' then
+            for oi = 1, #entryOffsets do
+              local item = entryOffsets[oi]
+              if type(item) == 'table' and tonumber(item.lane) == tonumber(lane.id) and
+                  type(item.offsets) == 'table' then
+                fromOffset = tonumber(item.offsets[1]) or 0
+                toOffset = tonumber(item.offsets[2]) or 0
+                break
+              end
+            end
+          end
+          local from = math.max(0, math.min(lane.totalLength, span.from + fromOffset))
+          local to = math.max(0, math.min(lane.totalLength, span.to + toOffset))
+          if to - from >= 1.0 then
+            local fromOrigPos = lanePositionAt(lane, span.from)
+            local toOrigPos = lanePositionAt(lane, span.to)
+            local fromFits = lane.loop or from > 0.1
+            local toFits = lane.loop or to < lane.totalLength - 0.1
             local link = {
-              intersection = inter, lane = lane, from = span.from, to = span.to,
+              intersection = inter, lane = lane, from = from, to = to,
               fromSide = span.fromSide, toSide = span.toSide,
-              fromPos = lanePositionAt(lane, span.from),
-              toPos = lanePositionAt(lane, span.to),
-              fromDir = laneDirectionAt(lane, span.from),
-              toDir = laneDirectionAt(lane, span.to)
+              fromOrigPos = fromOrigPos, toOrigPos = toOrigPos,
+              fromPos = fromFits and lanePositionAt(lane, from) or nil,
+              toPos = toFits and lanePositionAt(lane, to) or nil,
+              fromDir = fromFits and laneDirectionAt(lane, from) or nil,
+              toDir = toFits and laneDirectionAt(lane, to) or nil
             }
             inter.links[#inter.links + 1] = link
             lane.graphLinks[#lane.graphLinks + 1] = link
@@ -241,12 +261,12 @@ function Graph.build(lanes, intersectionDefs, log)
     inter.sides = {}
     for j = 1, #inter.links do
       local link = inter.links[j]
-      if link.fromSide then
+      if link.fromSide and link.fromPos and link.fromDir then
         local side = inter.sides[link.fromSide] or { entries = {}, exits = {} }
         inter.sides[link.fromSide] = side
         side.entries[#side.entries + 1] = link
       end
-      if link.toSide then
+      if link.toSide and link.toPos and link.toDir then
         local side = inter.sides[link.toSide] or { entries = {}, exits = {} }
         inter.sides[link.toSide] = side
         side.exits[#side.exits + 1] = link
@@ -380,7 +400,7 @@ function Graph.build(lanes, intersectionDefs, log)
         local continuation = {
           intersection = inter, from = link, to = link,
           fromEdge = link.inEdge, toEdge = link.outEdge,
-          fromPos = link.fromPos, toPos = link.toPos,
+          fromPos = link.fromOrigPos, toPos = link.toOrigPos,
           fromDir = link.fromDir, toDir = link.toDir,
           continuation = true, priority = 0
         }
