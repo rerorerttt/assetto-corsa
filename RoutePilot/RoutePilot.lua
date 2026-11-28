@@ -30,7 +30,7 @@ if not okCSPGraph or type(CSPGraph) ~= "table" or type(CSPGraph.nearestEdge) ~= 
     type(CSPGraph.sampleLane) ~= "function" or type(CSPGraph.directionAt) ~= "function" then CSPGraph = nil end
 local okCSPRoutes, CSPRoutes = pcall(require, "traffic_csp_route")
 if not okCSPRoutes or type(CSPRoutes) ~= "table" or type(CSPRoutes.build) ~= "function" or
-    type(CSPRoutes.sample) ~= "function" then CSPRoutes = nil end
+    type(CSPRoutes.sample) ~= "function" or type(CSPRoutes.project) ~= "function" then CSPRoutes = nil end
 
 local CFG = {
   LOOKAHEAD_BASE=10.0, LOOKAHEAD_SPEED=0.55, LOOKAHEAD_MIN=10.0, LOOKAHEAD_MAX=85.0,
