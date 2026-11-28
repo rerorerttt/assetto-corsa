@@ -24,12 +24,9 @@ If no saved RoutePilot line exists for the current track/layout, RoutePilot auto
 
 ## First use
 
-1. Drive the desired route with the player car.
-2. Press **Начать запись маршрута** before driving.
-3. Drive one full lap and press **Остановить запись**.
-4. Keep **Замкнутый маршрут (круг)** enabled for a lap route.
-5. Press **Сохранить маршрут этой трассы**.
-6. Add AI cars to the session and press **Запустить автопилот**.
+1. If the track has a CSP Traffic Tool `traffic.json`, RoutePilot imports it automatically when no saved RoutePilot line exists.
+2. Wait for the status to show the converted point count, then add AI cars and start the autopilot.
+3. Manual recording remains available as an override: press **Начать запись маршрута**, drive the route, stop recording, and save it for this track/layout.
 
 Routes are stored separately by full track ID using CSP `ac.storage` and are autoloaded when the app starts on a track with a saved route.
 
@@ -43,6 +40,8 @@ Routes are stored separately by full track ID using CSP `ac.storage` and are aut
 - Applies to every active AI-controlled car, including car 0 while Assetto Corsa's native Ctrl+8 autopilot is active. Manual player control remains untouched.
 
 ## Changelog
+
+- 0.9.2: automatic read-only CSP Traffic Tool conversion into one RoutePilot centerline and an outer driving corridor; generated corridor width feeds the existing passing-slot coordinator.
 
 - 0.2.1: fixed route autoload — Lua apps have no `script.onSessionStart` callback, so autoload now happens on the first `script.update` call.
 - 0.2.0: car-following collision avoidance, minimum-distance slider, slowing-car counter.
