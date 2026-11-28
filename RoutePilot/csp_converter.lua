@@ -6,7 +6,7 @@ local makeLane
 local okJSON, JSON = pcall(require, "routepilot_json")
 if not okJSON or type(JSON) ~= "table" then JSON = nil end
 
-local CACHE_VERSION = 1
+local CACHE_VERSION = 2
 local runtimeGraph = nil
 local discoveryAttempted = false
 
@@ -33,18 +33,33 @@ local function saveNetworkCache(graph, log)
   if not JSON or not io or type(io.save) ~= "function" then return false end
   local path, folder = trackCachePath()
   if not path then return false end
-  local alreadyThere=false
-  if type(io.fileExists) == "function" then
-    local ok, exists = pcall(io.fileExists, path)
-    alreadyThere=ok and exists==true
+  local existingPresent=false
+  local existingCurrent=false
+  if type(io.fileExists)=="function" then
+    local ok,exists=pcall(io.fileExists,path)
+    existingPresent=ok and exists==true
   end
-  if not alreadyThere and type(io.load)=="function" then
-    local ok, existing=pcall(io.load,path,"")
-    alreadyThere=ok and type(existing)=="string" and existing~=""
+  if type(io.load)=="function" then
+    local ok,existing=pcall(io.load,path,"")
+    if ok and type(existing)=="string" and existing~="" then
+      existingPresent=true
+      local decodedOK,decoded=pcall(JSON.decode,existing)
+      existingCurrent=decodedOK and type(decoded)=="table" and
+        decoded.version==CACHE_VERSION and type(decoded.lanes)=="table"
+      if not existingCurrent and type(log)=="function" then
+        pcall(log,"CSP_CACHE_STALE_REBUILD path=%s old_version=%s new_version=%d",
+          path,tostring(decodedOK and type(decoded)=="table" and decoded.version or "invalid"),
+          CACHE_VERSION)
+      end
+    end
   end
-  if alreadyThere then
-    if type(log)=="function" then pcall(log,"CSP_CACHE_KEEP path=%s",path) end
+  if existingCurrent then
+    if type(log)=="function" then pcall(log,"CSP_CACHE_KEEP path=%s version=%d",path,CACHE_VERSION) end
     return true
+  end
+  if existingPresent and type(io.load)~="function" then
+    if type(log)=="function" then pcall(log,"CSP_CACHE_PRESERVE_UNREADABLE path=%s",path) end
+    return false
   end
   if type(io.createDir) == "function" then pcall(io.createDir, folder) end
   local payload = {version=CACHE_VERSION, lanes={}, stats=graph.stats}
@@ -674,7 +689,8 @@ function Converter.load(log)
             math.sqrt(dx*dx+dz*dz)<80 and
             (not bestScore or score<bestScore) then
             bestScore=score
-            best={lane=lane,segment=i,t=t}
+            best={lane=lane,segment=i,t=t,planar=math.sqrt(dx*dx+dz*dz),
+              vertical=math.abs(dy),alignment=alignment}
           end
         end
       end
@@ -687,8 +703,17 @@ function Converter.load(log)
     trace("CSP_ACQUIRE_FAILED reason=no_same_deck_forward_lane")
     return nil,nil,nil,nil,"NO_CSP_LANE_NEAR_PLAYER"
   end
-  trace("CSP_ACQUIRE_SELECTED lane=%d segment=%d t=%.3f planar=%.2f score=%.2f",
-    best.lane.id,best.segment,best.t,math.sqrt(math.max(0,bestScore)),bestScore)
+  trace("CSP_ACQUIRE_SELECTED lane=%d segment=%d t=%.3f planar=%.2f vertical=%.2f alignment=%.3f score=%.2f",
+    best.lane.id,best.segment,best.t,best.planar,best.vertical,best.alignment,bestScore)
+  -- A lane centreline should be close to the player's actual road position.
+  -- An 80 m discovery radius is only a broad spatial-index prefilter; it is
+  -- never a valid acquisition tolerance. A distant parallel road, ramp or
+  -- stale cache entry must not become the spawn/AI spline reference.
+  if best.planar>4.5 or best.vertical>2.5 then
+    trace("CSP_ACQUIRE_REJECT reason=player_not_on_lane lane=%d planar=%.2f vertical=%.2f max_planar=4.50 max_vertical=2.50",
+      best.lane.id,best.planar,best.vertical)
+    return nil,nil,nil,nil,"NO_CSP_LANE_NEAR_PLAYER"
+  end
 
   local nodes,boundsL,boundsR={},{},{}
   local routeLanes,visited={},{}
@@ -1086,6 +1111,16 @@ function Converter.load(log)
     local first,last=nodes[1],nodes[#nodes]
     local dx,dz=first.x-last.x,first.z-last.z
     routeLength=routeLength+math.sqrt(dx*dx+dz*dz)
+  end
+  -- Open directed fragments are not complete traffic routes. In particular,
+  -- a few hundred metres of a highway lane ending at a junction is unsafe:
+  -- AI spline recovery can reach its terminus and fall back to the stock
+  -- track line. Require at least 500 m of authored forward coverage before
+  -- exposing a non-loop route to spawning or native AI.
+  if not routeLoop and routeLength<500.0 then
+    trace("CSP_ROUTE_REJECTED reason=insufficient_forward_coverage lanes=%d points=%d length=%.1f required=500.0 loop=false",
+      #routeLanes,#nodes,routeLength)
+    return nil,nil,nil,nil,"CSP_ROUTE_INCOMPLETE"
   end
   if type(log)=="function" then
     pcall(log,"CSP_RACING_CORRIDOR lane=%d neighbour=%d paired=%s points=%d passing=%s",
