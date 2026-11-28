@@ -119,7 +119,14 @@ local function laneDirectionAt(lane, distance)
   -- Degenerate duplicate samples are skipped without changing the distance map.
   local segmentCount=lane.loop and n or n-1
   for offset=1,segmentCount-1 do
-    local nextIndex=(i+offset-1)%segmentCount+1
+    local nextIndex
+    if lane.loop then
+      nextIndex=(i+offset-1)%segmentCount+1
+    elseif i+offset<=segmentCount then
+      nextIndex=i+offset
+    else
+      nextIndex=i-offset
+    end
     local p,q=points[nextIndex],points[nextIndex%n+1]
     if p and q then
       dx,dy,dz=q.x-p.x,q.y-p.y,q.z-p.z
