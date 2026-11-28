@@ -1012,6 +1012,23 @@ render.on('main.track.transparent', function()
             vec3(last.x,last.y+0.05,last.z),YELLOW)
         end
       end
+      -- The actual RoutePilot racing line is the midpoint between paired
+      -- traffic lines; draw it distinctly from the source lane centrelines.
+      local routeStride=math.max(1,math.ceil((#state.nodes-1)/900))
+      local previous
+      for i=1,#state.nodes,routeStride do
+        local current=state.nodes[i]
+        if previous then
+          render.debugLine(vec3(previous.x,previous.y+0.12,previous.z),
+            vec3(current.x,current.y+0.12,current.z),rgbm(0.0,0.9,1.0,1.0))
+        end
+        previous=current
+      end
+      local last=state.nodes[#state.nodes]
+      if previous and previous~=last then
+        render.debugLine(vec3(previous.x,previous.y+0.12,previous.z),
+          vec3(last.x,last.y+0.12,last.z),rgbm(0.0,0.9,1.0,1.0))
+      end
       return
     end
     local seg=select(1,findNearestSeg(player.position,1))
@@ -1139,6 +1156,23 @@ local function drawMapInRect(q0,q1)
         if prev and segVisible(prev.x,prev.y,point.x,point.y) then
           ui.drawLine(prev,point,rgbm(1.0,0.78,0.12,0.90),2)
         end
+      end
+    end
+    local routeStride=math.max(1,math.ceil((n-1)/1400))
+    local prev
+    for i=1,n,routeStride do
+      local node=state.nodes[i]
+      local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+      if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+        ui.drawLine(prev,point,rgbm(0.0,0.9,1.0,1.0),3)
+      end
+      prev=point
+    end
+    if n>1 then
+      local node=state.nodes[n]
+      local point=vec2(mx+(node.x-cx)*scale,my+(node.z-cz)*scale)
+      if prev and segVisible(prev.x,prev.y,point.x,point.y) then
+        ui.drawLine(prev,point,rgbm(0.0,0.9,1.0,1.0),3)
       end
     end
   else
