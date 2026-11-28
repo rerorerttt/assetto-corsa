@@ -785,12 +785,25 @@ end
 local function releaseCar(carIndex)
   local ok,controls=pcall(ac.overrideCarControls,carIndex)
   if ok and controls then
-    controls.combineAxis=false
+    controls.combineAxes=true
     controls.steer=0; controls.gas=0; controls.brake=0; controls.handbrake=0
   end
   state.p[carIndex]=nil
 end
 local driverReady=false
+local function installCarJumpTrace()
+  if state.carJumpTraceInstalled or type(ac.onCarJumped)~="function" then return end
+  state.carJumpTraceInstalled=true
+  ac.onCarJumped(-1,function(carIndex)
+    local car=ac.getCar(carIndex)
+    if not car or not car.position then return end
+    writeLog("AC_CAR_JUMP_EVENT id=%d pos=(%.2f,%.2f,%.2f) speed=%.2f active=%s ai=%s",
+      carIndex,car.position.x,car.position.y,car.position.z,
+      safeNumber(car.speedMs),tostring(car.isActive),tostring(car.isAIControlled))
+    flushLog()
+  end)
+  writeLog("AC_CAR_JUMP_TRACE_INSTALLED")
+end
 local function ensureDriver()
   if driverReady or not Driver then return Driver~=nil end
   if type(Driver.setup)~="function" then return false end
@@ -807,6 +820,7 @@ function script.update(dt)
   if not dt or dt<=0 then return end
   dt=math.min(dt,0.05)
   local ok,err=pcall(function()
+    installCarJumpTrace()
     local sim=ac.getSim()
     if not sim then return end
     local player=ac.getCar(0)
