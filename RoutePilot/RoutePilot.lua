@@ -537,6 +537,7 @@ local function trySpawnCSPTraffic(sim,dt,route)
   if not trafficCSP or trafficCSP.graphSpawnDone then return end
   local routes=trafficCSP.previewRoutes or (route and {route}) or {}
   if #routes==0 then return end
+  table.sort(routes,function(a,b) return (a.length or 0)>(b.length or 0) end)
   trafficCSP.graphSpawnWait=(trafficCSP.graphSpawnWait or 0)+dt
   local aiCars={}
   for i=1,sim.carsCount-1 do
