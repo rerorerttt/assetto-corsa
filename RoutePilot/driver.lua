@@ -2245,7 +2245,8 @@ function Driver.telemetryLine(i, car, p)
     safeNumber(p.trafficTargetOffset),tostring(p.trafficReason or "unknown"),mode,
     safeNumber(p.coordinatedLane,-1),safeNumber(p.coordinatorLaneCount,1),
     safeNumber(p.offTrackT),p.controlWriteOk and 1 or 0,
-    p.projectionLost and 1 or 0,tostring(p.racingPlanFailure or p.racingPlanFallback or "NONE"),\n     safeNumber(p.networkLaneId,-1),safeNumber(p.networkS))
+    p.projectionLost and 1 or 0,tostring(p.racingPlanFailure or p.racingPlanFallback or "NONE"),
+     safeNumber(p.networkLaneId,-1),safeNumber(p.networkS))
 end
 
 return Driver
