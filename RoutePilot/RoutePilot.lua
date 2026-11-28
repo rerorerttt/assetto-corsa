@@ -570,11 +570,40 @@ local function trySpawnTeleport(sim,dt)
         position,vec3(-direction.x,-direction.y,-direction.z))
       if ok and result~=false then
         moved=moved+1
-        state.p[carIndex]=nil
+        -- Preserve the original RoutePilot spawn point and heading. Store only
+        -- the temporary launch pulse; the network driver attaches the car to
+        -- the nearest authored CSP lane on its next coordinator pass.
+        local sectionLength=0
+        local prevX,prevZ=nil,nil
+        local seg=routeSegment
+        for step=0,math.min(segmentCount()-1,100) do
+          local idx=seg+step
+          if state.loopRoute then idx=((idx-1)%segmentCount())+1
+          elseif idx>segmentCount() then break end
+          local a=state.nodes[idx]
+          local b=segEnd(idx)
+          if a and b then
+            local dx,dz=b.x-a.x,b.z-a.z
+            local length=math.sqrt(dx*dx+dz*dz)
+            local tx,tz=normalize2(dx,dz)
+            if prevX then
+              local alignment=clamp(prevX*tx+prevZ*tz,-1,1)
+              if math.acos(alignment)>0.12 and sectionLength>0 then break end
+            end
+            sectionLength=sectionLength+length
+            prevX,prevZ=tx,tz
+            if sectionLength>=300 then break end
+          end
+        end
+        local boostKmh=40+160*clamp(sectionLength/300,0,1)
+        local variation=0.90+0.20*(math.abs(math.sin(carIndex*12.9898+routeSegment*78.233))%1)
+        boostKmh=clamp(boostKmh*variation,40,200)
+        state.p[carIndex]={networkSpawnBoostTarget=boostKmh/3.6,
+          networkSpawnBoostTimer=4.0,networkAttachTimer=0}
         state.spawnHints[carIndex]={segment=routeSegment,parameter=routeParameter}
-        writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f",
+        writeLog("SPAWN_CAR id=%d pos=(%.2f,%.2f,%.2f) dir=(%.3f,%.3f) route_seg=%d route_t=%.3f section=%.1f boost=%.1fkmh",
           carIndex,position.x,position.y,position.z,direction.x,direction.z,
-          routeSegment,routeParameter)
+          routeSegment,routeParameter,sectionLength,boostKmh)
       else failed=failed+1 end
     else failed=failed+1 end
   end
@@ -1220,7 +1249,7 @@ local function drawMapInRect(q0,q1)
   -- Draw every authored CSP traffic line. No boundaries and no merged centreline.
   if state.trafficNetwork then
     local laneIds=state.trafficNetwork.laneOrder or {}
-    local perLaneBudget=math.max(16,math.floor(5000/math.max(1,#laneIds)))
+    local perLaneBudget=math.max(2,math.floor(1800/math.max(1,#laneIds)))
     for _,laneId in ipairs(laneIds) do
       local lane=state.trafficNetwork.lanes[laneId]
       local points=lane and lane.points or {}
