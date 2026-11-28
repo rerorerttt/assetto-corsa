@@ -135,9 +135,13 @@ function M.update(i,c,dt)
  if p.networkS>=l.length-1.5 and not l.loop then
   local nextLane=junction(g,l,{s=p.networkS},c,i,sim)
   if nextLane then
+   local old,oldS=l.id,p.networkS
    l=g.lanes[nextLane.id];p.networkLaneId=l.id;p.networkS=nextLane.s
    local targetProjection=project(l,c.position,p.networkS,35)
-   if not targetProjection or targetProjection.distance>28 then controls(i,0,0,0.65);p.projectionLost=true;return end
+   if not targetProjection or targetProjection.distance>28 then
+    p.networkLaneId=old;p.networkS=oldS;l=g.lanes[old]
+    controls(i,0,0,0.65);p.projectionLost=true;return
+   end
    q=targetProjection;p.networkS=q.s
   else controls(i,0,0,1);p.trafficAction="NETWORK_END_OF_LANE";return end
  end
