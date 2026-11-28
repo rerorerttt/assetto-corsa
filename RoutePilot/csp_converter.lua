@@ -7,6 +7,9 @@ local okJSON, JSON = pcall(require, "routepilot_json")
 if not okJSON or type(JSON) ~= "table" then JSON = nil end
 
 local CACHE_VERSION = 1
+-- A CSP traffic lane is treated as a lane centreline; extend each outer
+-- centreline by half a standard 3.5 m lane to recover the usable road corridor.
+local PASSING_LANE_HALF_WIDTH = 1.75
 local runtimeGraph = nil
 local discoveryAttempted = false
 
@@ -773,7 +776,7 @@ function Converter.load(log)
         if not q then pairValid=false;break end
         projected[i]={x=(sample.p.x+q.x)*0.5,
           y=(sample.p.y+q.y)*0.5,z=(sample.p.z+q.z)*0.5,
-          half=q.distance*0.5}
+          half=q.distance*0.5+PASSING_LANE_HALF_WIDTH}
         hintS=q.s
       end
     end
