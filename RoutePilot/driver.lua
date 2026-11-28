@@ -923,7 +923,7 @@ local function coordinatorLaneGeometry(seg,car)
   local width=right-left
   if width<=0.1 then return {left=(left+right)*0.5,right=(left+right)*0.5,
     count=1,centers={(left+right)*0.5}} end
-  local count=clamp(math.floor((width+1.0)/4.0),1,4)
+  local count=clamp(math.floor((width+0.5)/3.2),1,4)
   local carWidth=math.max(1.5,safeNumber(car and car.aabbSize and car.aabbSize.x,2.0))
   while count>1 and width/count<carWidth+0.55 do count=count-1 end
   local slotWidth=width/count
