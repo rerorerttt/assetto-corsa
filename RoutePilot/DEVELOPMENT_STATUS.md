@@ -319,3 +319,11 @@ Release blockers:
 - Route discovery now retains additional same-direction candidates as fallbacks. Previously it tried only the single nearest same-direction edge; if that edge produced an invalid loop, other valid lanes in the same direction were never considered.
 - Static verification: fetched the committed file back and confirmed alignment tagging, aligned-first ordering, player-route-index use in both route assignment sites, and same-direction fallback discovery. No Lua compiler or Assetto Corsa/CSP runtime is available here; in-game Ctrl+8 route tracking still requires telemetry validation.
 - Commits: `26a71e334c448e7a78bace470c6b717a39c50823`, `1bf3387e945b283c3594dac2dbc2abfe4681727e`.
+
+
+## 2026-11-28 CSP spawn transaction safety
+
+- Added a pre-teleport validation pass for the entire CSP traffic spawn plan. Every destination is checked against the player and all active cars that are not part of the relocation transaction, then checked against every earlier destination in the same plan.
+- Cars being moved are excluded at their old positions so their current grid placement does not falsely block the transaction. A destination conflict rejects the whole plan before any car is moved and retries with fewer route groups; the existing all-or-nothing teleport/rollback remains intact.
+- Static verification: confirmed obstacle checks, pairwise destination checks, transaction rejection, and route-count fallback in the committed source. This does not replace an in-game spawn test; CSP teleport behavior and real vehicle footprints still need runtime confirmation.
+- Commit: `3d73bcb9e09473ec954628842beca79a823b6a4d`.
