@@ -1042,6 +1042,13 @@ function script.update(dt)
         end
         trafficCSP.graphDriverModeActive=true
       else
+        if trafficCSP.graphDriverModeActive then
+          for _,person in pairs(state.p) do
+            person.routeProgress=nil
+            person.routeLocked=false
+            person.segIdx=1
+          end
+        end
         trafficCSP.graphDriverModeActive=false
       end
     end
