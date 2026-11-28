@@ -120,29 +120,78 @@ local function appendBezier(route, roads, movement)
   local p0, p3 = movement.fromPos, movement.toPos
   if not p0 or not p3 then return false end
   local chord = distance(p0, p3)
+  if chord < 0.1 then return false end
   local directionDot = movement.fromDir.x*movement.toDir.x +
     movement.fromDir.y*movement.toDir.y + movement.fromDir.z*movement.toDir.z
-  local handleFactor = directionDot < -0.5 and 0.22 or (directionDot < 0.5 and 0.30 or 0.42)
   local attributes = type(movement.attributes) == 'table' and movement.attributes or nil
-  local cb = attributes and tonumber(attributes.cb) or nil
-  local ce = attributes and tonumber(attributes.ce) or nil
-  if not cb or cb ~= cb or cb == math.huge or cb == -math.huge then cb = handleFactor end
-  if not ce or ce ~= ce or ce == math.huge or ce == -math.huge then ce = handleFactor end
-  -- CSP Traffic Tool stores normalized Bezier handle lengths as fractions of
-  -- the entry/exit chord. Keep those values instead of replacing authored
-  -- turn trajectories with a generic direction-based curve.
-  cb = math.max(0.05, math.min(1.5, cb))
-  ce = math.max(0.05, math.min(1.5, ce))
-  local handleA = math.max(1.0, math.min(12.0, chord*cb))
-  local handleB = math.max(1.0, math.min(12.0, chord*ce))
-  local p1 = vec3(
-    p0.x + movement.fromDir.x*handleA,
-    p0.y + movement.fromDir.y*handleA,
-    p0.z + movement.fromDir.z*handleA)
-  local p2 = vec3(
-    p3.x - movement.toDir.x*handleB,
-    p3.y - movement.toDir.y*handleB,
-    p3.z - movement.toDir.z*handleB)
+  local cb = attributes and tonumber(attributes.cb) or 0.5
+  local ce = attributes and tonumber(attributes.ce) or 0.5
+  if cb ~= cb or cb == math.huge or cb == -math.huge then cb = 0.5 end
+  if ce ~= ce or ce == math.huge or ce == -math.huge then ce = 0.5 end
+  cb = math.max(0.02, math.min(2.0, cb))
+  ce = math.max(0.02, math.min(2.0, ce))
+
+  local curveSegments = {}
+  local function addCurveSegment(a, dirA, b, dirB, handleA, handleB)
+    local segmentChord = distance(a, b)
+    local c1 = vec3(
+      a.x + dirA.x*segmentChord*handleA,
+      a.y + dirA.y*segmentChord*handleA,
+      a.z + dirA.z*segmentChord*handleA)
+    local c2 = vec3(
+      b.x - dirB.x*segmentChord*handleB,
+      b.y - dirB.y*segmentChord*handleB,
+      b.z - dirB.z*segmentChord*handleB)
+    local points, lengths = {}, { [1] = 0 }
+    points[1] = a
+    local total = 0
+    local previous = a
+    -- CSP's BezierCurveNormalized uses 30 base samples to build a
+    -- distance-normalized trajectory. Mirror that arc-length parameterization
+    -- before resampling the route at its own approximately 1.2 m spacing.
+    for sample = 1, 30 do
+      local t = sample/30
+      local u = 1-t
+      local point = vec3(
+        u*u*u*a.x + 3*u*u*t*c1.x + 3*u*t*t*c2.x + t*t*t*b.x,
+        u*u*u*a.y + 3*u*u*t*c1.y + 3*u*t*t*c2.y + t*t*t*b.y,
+        u*u*u*a.z + 3*u*u*t*c1.z + 3*u*t*t*c2.z + t*t*t*b.z)
+      total = total + distance(previous, point)
+      points[sample+1] = point
+      lengths[sample+1] = total
+      previous = point
+    end
+    curveSegments[#curveSegments+1] = { points = points, lengths = lengths, length = total }
+  end
+
+  if directionDot < -0.8 then
+    -- Match CSP's two-part U-turn trajectory rather than folding a 180-degree
+    -- reversal into one cubic, which can cut through the island or curb.
+    local uTurnSize = attributes and tonumber(attributes.ul) or nil
+    if not uTurnSize or uTurnSize ~= uTurnSize or
+        uTurnSize == math.huge or uTurnSize == -math.huge then
+      uTurnSize = chord < 5 and 5 or math.min(4, 0.7*chord)
+    else
+      uTurnSize = uTurnSize*chord
+    end
+    local halfwayDir = vec3((p3.x-p0.x)/chord,(p3.y-p0.y)/chord,(p3.z-p0.z)/chord)
+    local halfway = vec3(
+      (p3.x+p0.x)*0.5 + (movement.fromDir.x-movement.toDir.x)*uTurnSize,
+      (p3.y+p0.y)*0.5 + (movement.fromDir.y-movement.toDir.y)*uTurnSize,
+      (p3.z+p0.z)*0.5 + (movement.fromDir.z-movement.toDir.z)*uTurnSize)
+    addCurveSegment(p0, movement.fromDir, halfway, halfwayDir, cb, 0.5)
+    addCurveSegment(halfway, halfwayDir, p3, movement.toDir, 0.5, ce)
+  else
+    addCurveSegment(p0, movement.fromDir, p3, movement.toDir, cb, ce)
+  end
+
+  local totalLength = 0
+  for i = 1, #curveSegments do
+    curveSegments[i].startDistance = totalLength
+    totalLength = totalLength + curveSegments[i].length
+  end
+  if totalLength < 0.1 then return false end
+
   local leftA,rightA=laneBoundsAt(roads,movement.from.lane,p0,movement.fromDir)
   local leftB,rightB=laneBoundsAt(roads,movement.to.lane,p3,movement.toDir)
   local halfWidth=math.max(0.05,math.min(3.5,leftA,-rightA,leftB,-rightB))
@@ -151,14 +200,32 @@ local function appendBezier(route, roads, movement)
   local speedB=movement.to.lane.speedLimitExplicit and
     math.max(40,math.min(200,movement.to.lane.speedLimit or 200)) or 200
   local speedLimit=math.min(speedA,speedB)
-  local steps = math.max(3, math.min(80, math.ceil(chord/1.2)))
+  local steps = math.max(3, math.min(120, math.ceil(totalLength/1.2)))
+
+  local function pointAtArcDistance(target)
+    local segmentIndex = #curveSegments
+    for i = 1, #curveSegments do
+      local segment = curveSegments[i]
+      if target <= segment.startDistance + segment.length or i == #curveSegments then
+        segmentIndex = i
+        break
+      end
+    end
+    local segment = curveSegments[segmentIndex]
+    local localDistance = math.max(0, math.min(segment.length, target-segment.startDistance))
+    local lo, hi = 1, #segment.lengths-1
+    while lo < hi do
+      local mid = math.floor((lo+hi)*0.5)
+      if segment.lengths[mid+1] < localDistance then lo = mid+1 else hi = mid end
+    end
+    local d0,d1=segment.lengths[lo],segment.lengths[lo+1]
+    local t=d1-d0>1e-8 and (localDistance-d0)/(d1-d0) or 0
+    local a,b=segment.points[lo],segment.points[lo+1]
+    return vec3(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,a.z+(b.z-a.z)*t)
+  end
+
   for i = 1, steps do
-    local t = i/steps
-    local u = 1-t
-    local p = vec3(
-      u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
-      u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y,
-      u*u*u*p0.z + 3*u*u*t*p1.z + 3*u*t*t*p2.z + t*t*t*p3.z)
+    local p = pointAtArcDistance(totalLength*i/steps)
     local projected=projectIntersectionPoint(p)
     if not projected then return false end
     appendPoint(route, projected, halfWidth, -halfWidth, speedLimit)
