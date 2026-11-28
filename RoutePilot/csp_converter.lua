@@ -753,51 +753,6 @@ function Converter.load(log)
     boundsL[#boundsL+1]=left
     boundsR[#boundsR+1]=right
   end
-  local function projectPartner(candidate,pos,hintS,sourceLane,sourceS)
-    local first,last=1,#candidate.points-1
-    if hintS then
-      local c=candidate.cumulative
-      local lo,hi=1,#c-1
-      local target=math.max(0,hintS-28)
-      while lo<hi do
-        local mid=math.floor((lo+hi)*0.5)
-        if c[mid+1]<target then lo=mid+1 else hi=mid end
-      end
-      first=lo
-      lo,hi=first,#c-1
-      target=math.min(candidate.length,hintS+28)
-      while lo<hi do
-        local mid=math.floor((lo+hi)*0.5)
-        if c[mid]<target then lo=mid+1 else hi=mid end
-      end
-      last=math.max(first,lo)
-    end
-    local st=tangentAt(sourceLane,sourceS)
-    local bestQ,bestScore=nil,nil
-    for i=first,last do
-      local a,b=candidate.points[i],candidate.points[i+1]
-      local vx,vz=b.x-a.x,b.z-a.z
-      local ll=vx*vx+vz*vz
-      if ll>1e-8 then
-        local t=clamp(((pos.x-a.x)*vx+(pos.z-a.z)*vz)/ll,0,1)
-        local x,z=a.x+vx*t,a.z+vz*t
-        local y=a.y+(b.y-a.y)*t
-        local dx,dz=pos.x-x,pos.z-z
-        local dy=pos.y-y
-        local tx,tz=norm(vx,vz)
-        local alignment=st.x*tx+st.z*tz
-        local distance=math.sqrt(dx*dx+dz*dz)
-        local score=dx*dx+dz*dz+(1-alignment)*(1-alignment)*16+dy*dy*4
-        if alignment>=0.94 and math.abs(dy)<=1.5 and
-          distance>=2.0 and distance<=7.5 and
-          (not bestScore or score<bestScore) then
-          bestScore=score
-          bestQ={x=x,y=y,z=z,s=candidate.cumulative[i]+math.sqrt(ll)*t,distance=distance}
-        end
-      end
-    end
-    return bestQ
-  end
   local function appendLaneSegment(lane,fromS,toS)
     fromS=clamp(fromS,0,lane.length)
     toS=clamp(toS,fromS,lane.length)
