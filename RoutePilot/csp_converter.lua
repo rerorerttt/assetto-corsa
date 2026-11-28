@@ -873,30 +873,10 @@ function Converter.load(log)
       anyPassing=true
       if not firstPairedLaneId then firstPairedLaneId=validPairs[1].lane.id end
     end
+    -- Keep the driving reference on the exact authored CSP polyline.
+    -- Never average adjacent Traffic Tool lines into a synthetic centreline.
     for i=1,#samples do
-      local sample=samples[i]
-      if #validPairs>0 then
-        local tangent=tangentAt(lane,sample.s)
-        local minOffset,maxOffset=0,0
-        for j=1,#validPairs do
-          local q=validPairs[j].rows[i]
-          local offset=(q.x-sample.p.x)*(-tangent.z)+
-            (q.z-sample.p.z)*tangent.x
-          minOffset=math.min(minOffset,offset)
-          maxOffset=math.max(maxOffset,offset)
-        end
-        local centerOffset=(minOffset+maxOffset)*0.5
-        local half=(maxOffset-minOffset)*0.5+2.0
-        local center={x=sample.p.x-tangent.z*centerOffset,
-          y=sample.p.y,z=sample.p.z+tangent.x*centerOffset}
-        appendPoint(center,-half,half)
-      else
-        -- One authored line is one logical traffic lane, not a
-        -- physically narrow 2.5 m corridor. Keep enough body clearance for
-        -- ordinary cars while the coordinator still resolves exactly one
-        -- lane, so overtaking remains disabled.
-        appendPoint(sample.p,-2.0,2.0)
-      end
+      appendPoint(samples[i].p,-2.0,2.0)
     end
   end
 
