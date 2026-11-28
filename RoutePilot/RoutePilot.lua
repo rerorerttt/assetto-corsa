@@ -197,9 +197,8 @@ local function loadLine(retryOnly)
       state.p={}; state.spawnHints={}; state.routeGeometry=nil
       state.loaded=true; state.loadedFromCSP=true; state.cspImportPending=false
       state.status=string.format("CSP: конвертировано %d точек",#nodes)
-      if not state.spawnPerformed then
-        state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
-      end
+      state.spawnPerformed=false
+      state.spawnDone=false; state.spawnWait=0; state.spawnStable=0; state.spawnLastRoster=""
       writeLog("CSP_IMPORT_SUCCESS points=%d loop=%s route_lanes=%s",
         #nodes,tostring(state.loopRoute),
         type(infoOrError)=="table" and #infoOrError.routeLanes or -1)
