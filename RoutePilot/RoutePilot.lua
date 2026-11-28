@@ -785,7 +785,6 @@ end
 local function releaseCar(carIndex)
   local ok,controls=pcall(ac.overrideCarControls,carIndex)
   if ok and controls then
-    controls.combineAxes=true
     controls.steer=0; controls.gas=0; controls.brake=0; controls.handbrake=0
   end
   state.p[carIndex]=nil
