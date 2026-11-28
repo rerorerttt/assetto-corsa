@@ -150,6 +150,7 @@ function Importer:load()
       role = src.role,
       priority = finite(tonumber(src.priority)) and tonumber(src.priority) or 0,
       speedLimit = finite(tonumber(src.speedLimit)) and tonumber(src.speedLimit) or 90,
+      speedLimitExplicit = finite(tonumber(src.speedLimit)),
       params = type(src.params) == 'table' and src.params or {},
       source = src,
       points = {},
