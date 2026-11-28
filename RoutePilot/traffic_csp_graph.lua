@@ -704,7 +704,7 @@ function Graph.loopPath(graph, startEdge, maxVisited, maxCost)
     local edge, cost = item.edge, item.cost
     if cost <= (distances[edge.id] or math.huge) + 1e-7 then
       visited = visited + 1
-      if edge ~= startEdge and cost > farthestCost then
+      if cost <= maxCost and edge ~= startEdge and cost > farthestCost then
         farthestEdge, farthestCost = edge, cost
       end
       if cost <= maxCost then
