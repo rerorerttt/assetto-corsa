@@ -139,7 +139,7 @@ function M.update(i,c,dt)
   H.log("NETWORK_JUNCTION id=%d from=%d to=%d",i,old,l.id)
  end
  local lead=occupancy(g,l.id,p.networkS,i,sim,max(100,speed*3+30))
- if lead and lead.gap<max(32,speed*2)then local change=laneChange(g,l,{s=p.networkS},i,sim,speed)
+ if lead and lead.gap<max(32,speed*2) and (lead.speed<speed-1.0 or lead.speed<0) then local change=laneChange(g,l,{s=p.networkS},i,sim,speed)
   if change then
    local old,oldS=l.id,p.networkS
    l=g.lanes[change.id];p.networkLaneId=l.id;p.networkS=change.s
