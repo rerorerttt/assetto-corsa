@@ -1724,6 +1724,13 @@ function windowMain(dt)
           ui.text(string.format("CSP Traffic: %s | полосы %d | пригодны %d | без поверхности %d",
             trafficCSP.loaded and "импортирован" or (trafficCSP.error or "ожидание"),
             s.lanes or 0, s.usable or 0, s.invalid or 0))
+          ui.text(string.format("Границы поверхности: подтверждены %d | не подтверждены %d",
+            s.bounded or 0, s.unbounded or 0))
+          if trafficCSP.roads and trafficCSP.roads.stats then
+            local rs=trafficCSP.roads.stats
+            ui.text(string.format("CSP Roads: коридоры %d | границы подтверждены %d | отклонены %d | коррекция стен %d",
+              rs.groups or 0,rs.verifiedGroups or 0,rs.unverifiedGroups or 0,rs.wallAdjusted or 0))
+          end
           if trafficCSP.graph and trafficCSP.graph.stats then
             local g = trafficCSP.graph.stats
             ui.text(string.format("CSP Graph: перекрёстки %d | связи %d | переходы %d | сегменты %d | без связей %d",
