@@ -141,22 +141,33 @@ function Importer:load()
   self.data = data
   self.intersections = type(data.intersections) == 'table' and data.intersections or {}
   self.areas = type(data.areas) == 'table' and data.areas or {}
+  local laneRoles = type(data.rules) == 'table' and type(data.rules.laneRoles) == 'table' and data.rules.laneRoles or {}
   self.stats.lanes = #data.lanes
 
   for i = 1, #data.lanes do
     local src = data.lanes[i]
     local malformedLane = type(src) ~= 'table'
     if malformedLane then src = {} end
-    local priority = tonumber(src.priorityOffset)
-    if not finite(priority) then priority = tonumber(src.priority) end
+    local roleIndex = tonumber(src.role) or 3
+    local roleDefinition = type(laneRoles[roleIndex]) == 'table' and laneRoles[roleIndex] or nil
+    local priority = tonumber(src.priority)
+    if not finite(priority) then
+      priority = tonumber(roleDefinition and roleDefinition.priority) or 0
+      local priorityOffset = tonumber(src.priorityOffset)
+      if finite(priorityOffset) then priority = priority + priorityOffset end
+    end
+    local sourceSpeedLimit = tonumber(src.speedLimit)
+    local roleSpeedLimit = tonumber(roleDefinition and roleDefinition.speedLimit)
+    local speedLimit = finite(sourceSpeedLimit) and sourceSpeedLimit or
+      (finite(roleSpeedLimit) and roleSpeedLimit or 90)
     local lane = {
       id = src.id,
       name = src.name or ('Lane ' .. tostring(src.id or i)),
       loop = src.loop == true,
-      role = src.role,
+      role = roleIndex,
       priority = finite(priority) and priority or 0,
-      speedLimit = finite(tonumber(src.speedLimit)) and tonumber(src.speedLimit) or 90,
-      speedLimitExplicit = finite(tonumber(src.speedLimit)),
+      speedLimit = speedLimit,
+      speedLimitExplicit = finite(sourceSpeedLimit) or finite(roleSpeedLimit),
       params = type(src.params) == 'table' and src.params or {},
       source = src,
       points = {},
