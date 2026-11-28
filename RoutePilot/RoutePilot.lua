@@ -1164,8 +1164,9 @@ function script.update(dt)
     end
     state.playerAutopilotLast = playerRoutePilotActive == true
 
-    -- Adopt active AI cars directly. No native AI spline is installed:
-    -- driver.lua overwrites their physical controls every update.
+    -- Do not let the stock track fast_lane drive these cars. The CSP SDK
+    -- exposes no per-car "disable AI behaviour" switch: setAINoInput() parks
+    -- the car. A valid RoutePilot spline must be accepted before controls run.
     if state.enabled and #state.nodes>=2 and Driver and ensureDriver() then
       local driveOrder={}
       for i=0,sim.carsCount-1 do
